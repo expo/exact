@@ -190,24 +190,28 @@ impl<D: DataSource> Runner<D> {
                 }
                 p.waited()
                     && !self.held_for_agent(p)
-                    && (!self.data_timer_held(p.ticket) || self.reply_can_wake(p))
+                    && (self.data_reply_can_land(p) || self.reply_can_wake(p))
             })
     }
 
+    fn data_reply_can_land(&self, p: &PendingReq) -> bool {
+        !p.parked && !self.data_timer_held(p.ticket)
+    }
+
     fn reply_can_wake(&self, wait: &PendingReq) -> bool {
-        self.data_has_wake(wait.ticket)
+        (wait.parked || self.data_has_wake(wait.ticket))
             && (self.pending.iter().any(|p| {
                 p.ticket != wait.ticket
                     && p.module == wait.module
-                    && p.reask_at.is_none()
+                    && p.waited()
                     && !self.held_for_agent(p)
-                    && self.data_reply_can_land(p.ticket, p.continuation.is_some())
+                    && self.data_reply_can_land(p)
             }) || self.background_ticket().is_some()
                 || self.module_work_effects()
                 || self
                     .tool_tickets()
                     .iter()
-                    .any(|(_, t)| self.data_reply_can_land(*t, true))
+                    .any(|(_, t)| !self.data_timer_held(*t))
                 || !self.mapper_turn_tickets().is_empty())
     }
 

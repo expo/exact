@@ -93,6 +93,10 @@ async function answer(source: string, args: any[], _store: unknown, storage: Sto
     case "starter":
       shared = fetch("https://fixture.exact.test/shared").then(() => "shared");
       return shared;
+    case "join": return shared;
+    case "held":
+      await fetch("https://fixture.exact.test/held", { exactHeld: true } as RequestInit);
+      return "held reply";
     // Whichever comes first: another answer's fetch, or its own long timer.
     case "racer":
       return Promise.race([shared!, sleep(10000).then(() => "slept")]);

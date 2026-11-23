@@ -1219,6 +1219,10 @@ impl<D: DataSource> Host<D> {
         if let Some(canvas) = self.turn.canvas {
             (canvas.frame)(self);
         }
+        self.commit_advance(a)
+    }
+
+    fn commit_advance(&mut self, a: exact_runner::Advanced) -> String {
         let error = a.error.map(|e| format!("{e:?}"));
         self.in_inert_entry(|host| host.commit(&a.receipts, error))
     }

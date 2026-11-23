@@ -110,12 +110,17 @@ impl<D: DataSource> Runner<D> {
             })
     }
 
-    /// An ordinary request may reply before its own race timer. A parked
-    /// fixture reply and an unreleased timer continuation need the clock.
-    pub(in crate::runner) fn data_reply_can_land(&self, ticket: u64, continuation: bool) -> bool {
-        self.fixture_due(Some(ticket))
-            .is_none_or(|at| at <= self.now_ms)
-            && (!continuation || !self.data_timer_held(ticket))
+    /// A released continuation is runnable while its outcome is with the host
+    /// (LLP 1027.000 D1). If it waits again, its next round supplies the deadline.
+    pub(in crate::runner) fn data_work_released(&mut self, token: u64) {
+        self.clock.data.wakes.retain(|(_, t, _)| *t != token);
+        if let Some(p) = self
+            .pending
+            .iter_mut()
+            .find(|p| p.continuation == Some(token))
+        {
+            p.parked = false;
+        }
     }
 
     /// When request `ticket`'s answer's timer is due, while that is ahead.
@@ -124,7 +129,14 @@ impl<D: DataSource> Runner<D> {
         let data = &self.clock.data;
         let held = (data.held.iter().chain(&self.requests))
             .filter(|r| r.ticket == ticket)
-            .filter_map(|r| due(r).or(r.request.wake_ms.map(|ms| ms as f64)));
+            .filter_map(|r| {
+                due(r).or_else(|| {
+                    r.request
+                        .continuation
+                        .and(r.request.wake_ms)
+                        .map(|ms| ms as f64)
+                })
+            });
         let wakes = (data.wakes.iter())
             .filter(|(t, _, _)| *t == ticket)
             .map(|(_, _, at)| *at);

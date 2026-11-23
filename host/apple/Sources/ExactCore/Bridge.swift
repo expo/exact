@@ -919,7 +919,8 @@ package final class Runtime {
     package func landThenFirst(queuesOnly: Bool = false) -> Batch {
         on {
             let length = exact_advance(rt, 0, queuesOnly ? 4 : 3)
-            return length == 0 ? Self.busy : read(length).made(by: .advance)
+            guard length != 0 else { return Batch(ops: [], timers: false, motion: false, clock: nil, error: nil) }
+            return read(length).made(by: .advance)
         }
     }
     /// A timer advance on the owner, not waited for (LLP 1072.000): what is

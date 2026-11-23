@@ -5,10 +5,15 @@ use exact_plan::Value;
 use exact_runner::exact_canvas::{Context2d, DrawError, Frame};
 use exact_runner::{DataError, DataSource};
 
-struct Tile;
+struct Tile {
+    wants_frame: bool,
+}
 impl DataSource for Tile {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
+    fn query(&mut self, source: &str, args: &[Value]) -> Result<Value, DataError> {
+        match (source, args) {
+            ("save", [value]) => Ok(value.clone()),
+            _ => Err(DataError::UnknownSource(source.into())),
+        }
     }
     fn canvas_surfaces(&self) -> Vec<(String, usize)> {
         vec![("tile".into(), 0)]
@@ -21,7 +26,7 @@ impl DataSource for Tile {
         frame: &Frame,
     ) -> Result<bool, DrawError> {
         ctx.fill_rect(0., 0., frame.width, frame.height);
-        Ok(false)
+        Ok(self.wants_frame)
     }
 }
 
@@ -79,7 +84,13 @@ fn a_sessions_display_scale_leaves_another_sessions_canvases_alone() {
         let mut bridge = Bridge::<Tile>::new();
         bridge.canvas_display(scale, MEMORY);
         let ops = on(&mut bridge, |b| {
-            b.boot(&plan, Tile, Hooks::none(), 390.0, 844.0)
+            b.boot(
+                &plan,
+                Tile { wants_frame: false },
+                Hooks::none(),
+                390.0,
+                844.0,
+            )
         });
         (bridge, ops)
     };
@@ -104,4 +115,47 @@ fn a_sessions_display_scale_leaves_another_sessions_canvases_alone() {
         (1.5, 150, 1),
     );
     kept(&on(&mut a, Bridge::canvas_draw), 3.0, 1);
+}
+
+#[test]
+fn draining_a_queue_leaves_the_canvass_next_frame_for_the_display() {
+    let plan = contract::compile(
+        r#"component App
+  mutation saved as shape number queue
+  action saveBoth
+    send saved = save(1)
+    send saved = save(2)
+  view
+    column
+      button press=saveBoth testId="save"
+        text "Save"
+      canvas surface=tile() width=100 height=50
+"#,
+    )
+    .unwrap()
+    .encode();
+    let mut bridge = Bridge::new();
+    bridge.boot(&plan, Tile { wants_frame: true }, Hooks::none(), 390., 844.);
+    let runner = bridge.host.as_ref().unwrap().runner();
+    assert!(runner.canvas_wants_frame());
+    let view = runner.kernel().find_by_test_id("save")[0];
+    let view = runner.kernel().node_by_key(view).unwrap().id;
+    assert!(on(&mut bridge, |b| b.dispatch(view, 0, 0, 10.)).is_empty());
+    let answer = |bridge: &Bridge<Tile>| {
+        bridge
+            .host
+            .as_ref()
+            .unwrap()
+            .runner()
+            .slot("saved")
+            .cloned()
+    };
+    assert_eq!(answer(&bridge), Some(Value::some(Value::Number(1.))));
+    let drained = on(&mut bridge, |b| b.advance(0., 4));
+    assert_eq!(answer(&bridge), Some(Value::some(Value::Number(2.))));
+    assert!(drained.is_empty(), "the queue drain drew a canvas frame");
+    assert!(
+        !on(&mut bridge, |b| b.frame(10.)).is_empty(),
+        "the display still owes the frame"
+    );
 }

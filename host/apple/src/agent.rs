@@ -12,11 +12,14 @@ impl<D: DataSource> Host<D> {
             4 => self.runner.land_then_first(true),
             _ => self.runner.land_then(),
         };
-        if mode == 4 && a.receipts.is_empty() && a.error.is_none() {
-            String::new()
-        } else {
-            self.advanced(a)
+        if mode == 4 {
+            return if a.receipts.is_empty() && a.error.is_none() {
+                String::new()
+            } else {
+                self.commit_advance(a)
+            };
         }
+        self.advanced(a)
     }
 
     /// Action endings are delivery, separate from the agent's recent history.

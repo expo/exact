@@ -163,6 +163,60 @@ final class QuitHoldTests: XCTestCase {
         XCTAssertEqual(session.clock, 0)
     }
 
+    func testAgentDisconnectDrainsTheClosedWindowAfterItsRouteIsRemoved() throws {
+        let session = try saveSession("closed-queue", count: 2)
+        let idle = try frozenSession("idle-window", "component App\n  view\n    text \"Idle\"\n")
+        func window(_ session: ExactSession) -> NSWindow {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 500),
+                                  styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = session.presenter.viewport
+            return window
+        }
+        let closing = window(session), remaining = window(idle)
+        let routes = Agent.routes, exiting = Agent.exiting
+        let hold = QuitHold(every: 60, pending: { session.finishOnClose(queuedOnly: true) }, end: {})
+        let observer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: closing, queue: nil) { _ in
+            Agent.route("closing", nil)
+        }
+        defer {
+            NotificationCenter.default.removeObserver(observer)
+            Agent.exiting?.release()
+            Agent.exiting = exiting
+            Agent.routes = routes
+            hold.release()
+            remaining.close()
+            idle.destroy()
+            session.destroy()
+        }
+        Agent.routes = [("closing", session), ("idle", idle)]
+        try press(session, "save")
+        XCTAssertEqual(derive(session, "answer"), 0, "the first save is in flight")
+        XCTAssertTrue(hold.hold())
+        closing.close()
+        XCTAssertEqual(Agent.routes.map(\.0), ["idle"])
+
+        let connection = Pipe()
+        var disconnected = false
+        Thread {
+            Agent.serve(fd: connection.fileHandleForReading.fileDescriptor, quit: { disconnected = true })
+        }.start()
+        try connection.fileHandleForWriting.close()
+        waitFor("the driver disconnect to drain the closed window", cap: 5) { disconnected }
+        XCTAssertEqual(derive(session, "answer"), 2)
+        XCTAssertEqual(session.clock, 0)
+    }
+
+    func testQueueLandingWithNothingDueReturnsAnEmptyBatch() throws {
+        let session = try frozenSession("empty-queue", "component App\n  view\n    text \"Idle\"\n")
+        defer { session.destroy() }
+        let batch = session.runtime.landThenFirst(queuesOnly: true)
+        XCTAssertFalse(batch.busy)
+        XCTAssertNil(batch.error)
+        XCTAssertNil(batch.clock)
+        XCTAssertTrue(batch.ops.isEmpty)
+    }
+
     func testClosingWithAQueuedGetLeavesAnUnrelatedThenDue() throws {
         let pages = try FramePages()
         let session = try frozenSession("close-queue-only", """

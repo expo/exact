@@ -27,7 +27,7 @@ public extension ExactSession {
         var state = finishState()
         if state["queuedMutationWork"] as? Bool == true, clock != nil || ExactEnv.agentFreezes {
             let batch = runtime.landThenFirst(queuesOnly: true)
-            if !batch.busy, !batch.held {
+            if batch.clock != nil {
                 applyUnlessEmpty(batch)
                 state = finishState()
             }

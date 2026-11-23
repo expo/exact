@@ -7,7 +7,7 @@
 use exact_js::Module;
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
-use exact_runner::{DataSource, FailureKind, Outcome, Placement, RequestOut, Runner};
+use exact_runner::{DataSource, Dispatch, FailureKind, Outcome, Placement, RequestOut, Runner};
 
 const HBC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/timers.hbc"));
 const APP: &str = "test.timers";
@@ -20,6 +20,7 @@ component App
   resource spun = spin(n) as shape string
   mutation result as shape string
   mutation waited as shape string
+  mutation joined as shape string
   action sleep(label: string, ms: number)
     send result = slept(label, ms)
   action order
@@ -46,6 +47,10 @@ component App
     send result = postTimeout(n, how)
   action starter
     send waited = starter()
+  action join
+    send joined = join()
+  action held
+    send waited = held()
   action racer
     send result = racer()
   action raceFetch
@@ -506,8 +511,7 @@ fn an_answer_racing_another_answers_fetch_wakes_on_the_fetch() {
     assert_eq!(r.data_timer_due_ms(), None);
 }
 
-#[test]
-fn a_queue_holds_close_when_another_answers_fetch_can_end_its_timer_wait() {
+fn queue_plan() -> Plan {
     let src = SRC
         .replace(
             "mutation result as shape string",
@@ -517,7 +521,23 @@ fn a_queue_holds_close_when_another_answers_fetch_can_end_its_timer_wait() {
             "  action raceFetch",
             "  action save\n    send result = save()\n  action raceFetch",
         );
-    let plan = contract::compile(&src).unwrap();
+    contract::compile(&src).unwrap()
+}
+
+fn queue_runner() -> Runner<Module> {
+    Runner::boot(
+        queue_plan(),
+        module(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_queue_holds_close_when_another_answers_fetch_can_end_its_timer_wait() {
+    let plan = queue_plan();
     let root = super::storage::Root::new();
     let mut module = unloaded_module();
     module.set_budget_ms(f64::INFINITY);
@@ -550,6 +570,18 @@ fn a_queue_holds_close_when_another_answers_fetch_can_end_its_timer_wait() {
         "the outstanding GET can resume the queue"
     );
     r.fulfill(fetches[0].ticket, ok()).unwrap();
+    let released = r.release_work();
+    let [(token, Dispatch::Again)] = released.as_slice() else {
+        panic!("the GET released the queue's continuation");
+    };
+    let ticket = PARKED
+        .with(|parked| parked.borrow_mut().remove(token))
+        .unwrap();
+    assert!(
+        r.queued_must_finish(),
+        "the released continuation still has to land"
+    );
+    r.fulfill(ticket, Dispatch::again_outcome()).unwrap();
     pump(&mut r);
     assert_eq!(result(&r, "result"), said("shared"));
     r.land_then();
@@ -558,6 +590,59 @@ fn a_queue_holds_close_when_another_answers_fetch_can_end_its_timer_wait() {
     assert_eq!(std::fs::read(root.0.join("data/saved")).unwrap(), [1]);
     assert_eq!(r.now_ms(), 0.);
     assert!(!r.queued_must_finish());
+}
+
+#[test]
+fn a_server_held_get_does_not_hold_close_for_a_timer_waiting_queue() {
+    let mut r = queue_runner();
+    r.act("held", vec![]).unwrap();
+    let fetches = pump(&mut r);
+    assert_eq!(r.held_requests(), [("waited".into(), fetches[0].ticket)]);
+    r.act("sleep", vec![Value::str("queued"), Value::Number(100.)])
+        .unwrap();
+    assert!(pump(&mut r).is_empty());
+    assert_eq!(r.data_timer_due_ms(), Some(100.));
+    assert!(
+        !r.queued_must_finish(),
+        "the server is holding the only GET"
+    );
+    seek(&mut r, 100.);
+    assert_eq!(result(&r, "result"), said("queued after 100"));
+}
+
+#[test]
+fn two_waiters_on_one_delayed_fetch_do_not_hold_close() {
+    let mut r = queue_runner();
+    r.act("starter", vec![]).unwrap();
+    let fetches = pump(&mut r);
+    let ticket = fetches[0].ticket;
+    r.delay_fetch_fixture(ticket, r.now_ms(), 500, None);
+    r.fulfill(ticket, ok()).unwrap();
+    r.act("racer", vec![]).unwrap();
+    r.act("join", vec![]).unwrap();
+    assert!(pump(&mut r).is_empty());
+    assert_eq!(r.pending().len(), 3, "the GET and both waiters are pending");
+    assert_eq!(r.data_timer_due_ms(), Some(500.));
+    assert!(
+        !r.queued_must_finish(),
+        "neither waiter can resume before a clock advance"
+    );
+    seek(&mut r, 500.);
+    assert_eq!(result(&r, "result"), said("shared"));
+    assert_eq!(result(&r, "joined"), said("shared"));
+}
+
+#[test]
+fn a_queue_racing_its_own_fetch_holds_close_before_requests_are_taken() {
+    let mut r = queue_runner();
+    r.act("raceFetch", vec![]).unwrap();
+    assert!(
+        r.queued_must_finish(),
+        "the fetch can reply before its timer"
+    );
+    let fetches = pump(&mut r);
+    assert_eq!(fetches[0].request.wake_ms, Some(100));
+    assert!(r.queued_must_finish());
 }
 
 /// A timer raced against its answer's own fetch wins when it comes due

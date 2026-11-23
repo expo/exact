@@ -287,6 +287,7 @@ struct PendingReq {
     args: Vec<Value>,
     /// The source's continuation token, when the request is one.
     continuation: Option<u64>,
+    parked: bool,
     /// The module's own ticket for the fetch this request is
     /// ([`crate::Request::fetch`]): what an app's abort names it by.
     fetch: Option<u64>,
