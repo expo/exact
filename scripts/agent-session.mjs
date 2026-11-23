@@ -34,7 +34,7 @@ import { AWAY } from './agent-wire.mjs';
 import { openAttached } from './agent-attach.mjs';
 import { openStdio } from './agent-stdio.mjs';
 import { appShareTarget, driverShare, webShareLocation } from './share-target.mjs';
-import { heldClock, inFlightNote, untilClock } from './agent-held.mjs';
+import { attachedClock, heldClock, inFlightNote, untilClock } from './agent-held.mjs';
 import { film } from './agent-film.mjs';
 import { developmentLaunchEnvironment } from '../host/apple/devices.mjs';
 import { bakeOutput, executableName, linuxBinary, resolveApp, webDist as defaultWebDist } from './app.mjs';
@@ -894,8 +894,8 @@ export async function open({
     const refuse = (op, why) => async () => { throw new Error(`${op}: ${why}`); };
     const ungranted = (op) => refuse(op, 'input-not-granted: an attached session reads; input needs Allow Agent Input, which this build does not offer yet');
     for (const [method, op] of [['tap', 'tap'], ['type', 'type'], ['pointer', 'tap'], ['prefer', 'prefer'], ['resize', 'resize'], ['closeWindow', 'close'], ['back', 'back'], ['background', 'background']]) s[method] = ungranted(op);
-    s.clock = refuse('clock', 'live-clock: an attached app keeps its own wall clock: it is never taken, seeked, settled or landed (its waits come with LLP 1012.000 piece 4)');
-    s.film = refuse('screenshot', 'film of an attached app is not built yet (LLP 1012.000 piece 4)');
+    s.clock = (spec = 'settle') => attachedClock(s, spec);
+    s.film = refuse('screenshot', 'film of an attached app is not built yet: it would sample the wall clock (LLP 1012.000 D3)');
   }
   // Platform timing and Android's reader start on a live host clock; seed the driver's relative seeks where the host
   // handed time over (LLP 1080.000 §12; LLP 1107 D1). Headless Android starts at zero, so the same read keeps its seek
