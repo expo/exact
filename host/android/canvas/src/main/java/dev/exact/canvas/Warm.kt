@@ -70,7 +70,8 @@ internal class Warm {
          * [Player] does most, so the GPU pipelines a first screen needs are made then, not inside its frame. HWUI
          * keeps them in its cache on disk, saved seconds after a launch; with none (an install's first launch, or after
          * the app's cache was cleared) a moto g57 power's first screen made 15 in ~160 ms. Small
-         * frames, most common first, until [stop]: one in flight delays the first picture by its own few pipelines.
+         * frames until [stop], one in flight delaying the first picture by its own few pipelines; first those that
+         * saved Jetchat's first screen the most pipelines on the moto.
          */
         fun launch() = Thread({
             try { frames() } catch (e: Exception) { android.util.Log.w("exact", "warm launch: $e") }
@@ -101,17 +102,17 @@ internal class Warm {
                 val c = beginRecording(); c.drawRect(all, fill); endRecording()
             }
             val frames = listOf<(Canvas) -> Unit>(
-                { c -> c.drawRect(1.5f, 1.5f, 62.5f, 62.5f, fill); c.drawRoundRect(all, 12f, 12f, fill); c.drawText("Ag", 0f, 40f, text) },
-                { c -> c.drawBitmap(hard, null, RectF(0.5f, 0.5f, 63.5f, 63.5f), image); c.drawBitmap(soft, 0f, 0f, null); c.drawBitmap(soft, null, all, null) },
-                { c -> c.save(); c.clipPath(circle); c.drawBitmap(hard, null, all, image); c.restore(); c.drawOval(all, fill)
-                    c.save(); c.clipPath(bubble); c.drawBitmap(hard, null, all, image); c.restore() },
                 { c -> c.drawPath(bubble, fill); c.drawPath(convex, fill); c.drawPath(concave, fill) },
-                { c -> c.drawOval(all, stroke); c.drawDoubleRoundRect(all, 12f, 12f, RectF(3f, 3f, 61f, 61f), 9f, 9f, fill); c.drawBitmap(mask, null, all, fill) },
-                { c -> fill.shader = gradient; c.drawRect(all, fill); c.drawRoundRect(all, 12f, 12f, fill); fill.shader = null
-                    c.saveLayerAlpha(all, 128); c.drawRect(all, fill); c.drawOval(all, stroke); c.restore() },
                 { c -> c.drawLines(floatArrayOf(0f, 0f, 64f, 64f, 64f, 0f, 0f, 64f), stroke)
                     c.drawPoints(floatArrayOf(32f, 32f), Paint(stroke).apply { strokeCap = Paint.Cap.ROUND; strokeWidth = 64f })
                     c.drawText("\uD83D\uDE00", 0f, 40f, text); child.alpha = 0.5f; c.drawRenderNode(child) },
+                { c -> c.drawRect(1.5f, 1.5f, 62.5f, 62.5f, fill); c.drawRoundRect(all, 12f, 12f, fill); c.drawText("Ag", 0f, 40f, text) },
+                { c -> c.save(); c.clipPath(circle); c.drawBitmap(hard, null, all, image); c.restore(); c.drawOval(all, fill)
+                    c.save(); c.clipPath(bubble); c.drawBitmap(hard, null, all, image); c.restore() },
+                { c -> c.drawBitmap(hard, null, RectF(0.5f, 0.5f, 63.5f, 63.5f), image); c.drawBitmap(soft, 0f, 0f, null); c.drawBitmap(soft, null, all, null) },
+                { c -> c.drawOval(all, stroke); c.drawDoubleRoundRect(all, 12f, 12f, RectF(3f, 3f, 61f, 61f), 9f, 9f, fill); c.drawBitmap(mask, null, all, fill) },
+                { c -> fill.shader = gradient; c.drawRect(all, fill); c.drawRoundRect(all, 12f, 12f, fill); fill.shader = null
+                    c.saveLayerAlpha(all, 128); c.drawRect(all, fill); c.drawOval(all, stroke); c.restore() },
             )
             try {
                 for (draw in frames) {
