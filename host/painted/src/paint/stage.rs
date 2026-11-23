@@ -525,7 +525,7 @@ impl Painter {
     /// under the parent's current child space.
     pub(super) fn replay_kept(
         &mut self,
-        scene: &Scene<'_>,
+        walk: &Walk<'_, '_>,
         kept: &[(usize, usize)],
         at: usize,
         space: Transform,
@@ -558,7 +558,8 @@ impl Painter {
                     &mut painter.text.borrow_mut(),
                     posed,
                     Some(tape::Live {
-                        scene,
+                        scene: walk.scene,
+                        scroll_grids: &walk.scroll_grids,
                         viewport: painter.viewport,
                         scale: painter.scale,
                     }),
@@ -625,9 +626,8 @@ impl Painter {
                     || !matches!(oy, Overflow::Visible | Overflow::Clip)
                 {
                     let d = walk.scene.scroll.get(&id).copied().unwrap_or_default();
-                    let scroll_grid = self.scroll_grid(kernel, &node, grid);
-                    let d = self.child_scroll_offset(d, scroll_grid);
-                    scroll_grids.push((id, scroll_grid));
+                    let d = grid::scroll_offset(d, grid);
+                    scroll_grids.push((id, grid));
                     offset = (offset.0 + d.0, offset.1 + d.1);
                 }
                 let zoom = self.zoom_children(kernel, &node, Transform::identity(), offset);
@@ -644,7 +644,13 @@ impl Painter {
             };
             let posed = space::mul3(&unplace, &posed);
             let kept = self.kept.routes.get(&replay.key)?;
-            let mut bounds = kept.tape.bounds_in(walk.scene, self.scale, posed);
+            let live = tape::Live {
+                scene: walk.scene,
+                scroll_grids: &scroll_grids,
+                viewport: self.viewport,
+                scale: self.scale,
+            };
+            let mut bounds = kept.tape.bounds_in(live, posed);
             if let Some(pane) = replay.pane {
                 let matrix = space::mul3(&unplace, &space::mul3(&space, &affine(pane.ts)));
                 if let Some(clip) = space::mapped_bounds(&matrix, pane.rect) {
@@ -661,7 +667,7 @@ impl Painter {
                     }
                     _ => space::mul3(&unplace, &affine(*at)),
                 };
-                if let Some(b) = bar.bounds_in(walk.scene, self.scale, matrix) {
+                if let Some(b) = bar.bounds_in(live, matrix) {
                     bounds = Some(rows::union(bounds, b));
                 }
             }
@@ -731,6 +737,7 @@ impl Painter {
                             *ts,
                             Some(tape::Live {
                                 scene: walk.scene,
+                                scroll_grids: &walk.scroll_grids,
                                 viewport: self.viewport,
                                 scale: self.scale,
                             }),

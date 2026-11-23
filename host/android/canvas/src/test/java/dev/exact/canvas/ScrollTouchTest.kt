@@ -40,7 +40,6 @@ class ScrollTouchTest {
         val moved = HashMap<Int, Float>()
         var logicalY = 0f
         var scale = 1f
-        var maxY = 500f
         val answers = ArrayDeque<(IntArray) -> Unit>()
         @Implementation fun __constructor__(hwbuf: Boolean, fast: Boolean, priority: Int, intent: (String) -> String?) {}
         @Implementation fun under(x: Float, y: Float, done: (IntArray) -> Unit) { answers.addLast(done) }
@@ -51,7 +50,7 @@ class ScrollTouchTest {
         @Implementation fun touching(on: Boolean) { touching.add(on) }
         @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
             moved[id] = (moved[id] ?: 0f) + dx + dy
-            logicalY = (logicalY + dy / scale).coerceIn(0f, maxY)
+            logicalY = (logicalY + dy / scale).coerceIn(0f, 500f)
             Host.told.add("move $id")
         }
         @Implementation fun answer(waitMs: Long, f: () -> Unit) = false
@@ -236,20 +235,18 @@ class ScrollTouchTest {
 
     private fun checkPendingPlacement(
         scale: Float, start: Float, travel: Float, recorded: Float, repainted: Float,
-        logicalMax: Float = 500f, paintedEnd: Float = logicalMax * scale,
     ) {
         val touchSlop = slop
         activity.resources.displayMetrics.density = scale
         thread.logicalY = start
         thread.scale = scale
-        thread.maxY = logicalMax
+        val logicalMax = 500f
         val group = RenderNode("group")
         ReflectionHelpers.getField<HashMap<Int, RenderNode>>(view, "groups")[1] = group
         val scrolling = view.scrolling()
         fun told(now: Float, drawn: Float) {
             scrolling.told(intArrayOf(
-                1, 6, 0, 0, now.toBits(), 0, drawn.toBits(),
-                0, logicalMax.toBits(), 0, paintedEnd.toBits(),
+                scale.toBits(), 1, 6, 0, 0, now.toBits(), 0, drawn.toBits(), 0, logicalMax.toBits(),
             ))
         }
         told(start, recorded)
@@ -283,10 +280,6 @@ class ScrollTouchTest {
 
     @Test fun aDragAt275PredictsThePainterFromLogicalPoints() {
         checkPendingPlacement(2.75f, 0f, 0.4921875f, 0f, 0f)
-    }
-
-    @Test fun aDragToTheLogicalEndUsesThePaintedEndpoint() {
-        checkPendingPlacement(1f, 99.25f, 1f, 99f, 101f, 100.25f, 101f)
     }
 
     @Test fun theUpsOwnSampleMovesNothing() {
@@ -517,7 +510,7 @@ class ScrollTouchTest {
     }
     private fun refreshable(refreshing: Boolean = false) = scroller(1, 0f).also { it[1] = 2 or 16 or (if (refreshing) 32 else 0) }
     private fun statement(refreshing: Boolean) =
-        view.scrolling().told(intArrayOf(1, 2 or 16 or (if (refreshing) 32 else 0), 0, 0, 0, 0, 0, 0, 500f.toBits(), 0, 0))
+        view.scrolling().told(intArrayOf(1f.toBits(), 1, 2 or 16 or (if (refreshing) 32 else 0), 0, 0, 0, 0, 0, 0, 500f.toBits()))
 
     @Test fun aPullPastTheThresholdSendsRefreshAndTurnsUntilRefreshingEnds() {
         down(300f); answer(reply(refreshable()))
@@ -632,7 +625,7 @@ class ScrollTouchTest {
         val r = pull()!!
         assertTrue(r.turning)
         // The app takes the list away while it refreshes: the statement no longer has it.
-        view.scrolling().told(intArrayOf(2, 2, 0, 0, 0, 0, 0, 0, 500f.toBits(), 0, 0))
+        view.scrolling().told(intArrayOf(1f.toBits(), 2, 2, 0, 0, 0, 0, 0, 0, 500f.toBits()))
         assertNull(pull())
         assertFalse("its animator does not run on, holding the view", r.turning)
     }

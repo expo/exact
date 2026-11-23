@@ -114,29 +114,6 @@ impl Fit {
 }
 
 impl Painter {
-    pub(super) fn child_scroll_offset(
-        &self,
-        scroll: (f32, f32),
-        grid: Option<grid::ScrollGrid>,
-    ) -> PaintOffset {
-        grid.map_or_else(
-            || (f64::from(scroll.0), f64::from(scroll.1)),
-            |grid| grid.points(scroll),
-        )
-    }
-
-    pub(super) fn scroll_grid(
-        &self,
-        kernel: &Kernel,
-        node: &NodeRef<'_>,
-        scale: Option<f32>,
-    ) -> Option<grid::ScrollGrid> {
-        let scale = scale?;
-        let max =
-            ScrollBounds::capture(node, kernel, self.scrollbars.limits.get(&node.id).copied()).max;
-        Some(grid::ScrollGrid::new(node.frame, max, scale))
-    }
-
     /// The zoom `node`'s child is drawn at, when `node` is a zoomable
     /// container: what the presenter set, else the range's nearest to 1.
     pub(crate) fn zoom_of(&self, node: &NodeRef<'_>) -> Option<f32> {

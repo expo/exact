@@ -244,7 +244,7 @@ fn flags(p: &mut Presenter<()>, list: ViewId) -> i32 {
 /// Scroller `list`'s flags in the statement after a frame, when there is one.
 fn stated(p: &mut Presenter<()>, list: ViewId) -> Option<i32> {
     let words = p.reader_scrollers(&[], 1.)?;
-    Some(words.chunks(11).find(|s| s[0] == list as i32).unwrap()[1])
+    Some(words.chunks(9).find(|s| s[0] == list as i32).unwrap()[1])
 }
 
 #[test]

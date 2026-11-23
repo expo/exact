@@ -179,8 +179,8 @@ object Native {
     /** A wheel turned [dy] points toward the end with `ctrl` held at ([x], [y]) px: a zoom about the pointer. */
     @JvmStatic external fun zoomWheel(x: Float, y: Float, dy: Float)
     /** What exact2 tells the reader of the scrollers it knows, when that is not what this last returned (else
-     * null): eleven numbers each: id, flags, revision, then pairs of float bits for its current offset in points,
-     * its recorded offset in pixels, its logical maximum in points and its painted endpoint in pixels. The revision
+     * null). The producer's scale as float bits, then nine words each: id, flags, revision, and pairs of float bits
+     * for its current offset in points, recorded offset in pixels, and logical maximum in points. The revision
      * moves on when the app scrolled it (a `scrollTop` write, a reveal): the reader then takes this offset and ends
      * its fling. A scroller the reader knew that is not among them is gone. */
     @JvmStatic external fun scrollers(): IntArray?

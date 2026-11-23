@@ -63,7 +63,7 @@ fn press(p: &mut Presenter<Rows>, name: &str) {
 fn revision(p: &mut Presenter<Rows>, port: ViewId) -> u32 {
     let words = p.reader_scrollers(&[], 1.).unwrap();
     words
-        .chunks_exact(11)
+        .chunks_exact(9)
         .find(|w| w[0] as ViewId == port)
         .unwrap()[2] as u32
 }

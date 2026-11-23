@@ -142,7 +142,7 @@ impl<D: DataSource> Presenter<D> {
         self.brush.composition = self.ime_paint();
         self.alert_sync();
         self.prepare_overlay();
-        if self.brush.scrollbars.enabled || self.brush.uses_pixel_grid() {
+        if self.brush.scrollbars.enabled {
             self.brush.scrollbars.limits = self.collection_scroll_limits();
         }
         self.brush.placements = self.surfaces.placements(&self.host, true);

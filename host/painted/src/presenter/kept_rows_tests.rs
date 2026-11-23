@@ -225,7 +225,7 @@ impl Backend for Keeps {
     fn row_local(&self) -> bool {
         !self.heard.borrow().viewport_row_coordinates
     }
-    fn group_begin(&mut self, _: ViewId, _: (f32, f32), _: Option<crate::paint::grid::ScrollGrid>) {
+    fn group_begin(&mut self, _: ViewId, _: (f32, f32)) {
         let mut heard = self.heard.borrow_mut();
         heard.group_depth += 1;
         heard.max_group_depth = heard.max_group_depth.max(heard.group_depth);

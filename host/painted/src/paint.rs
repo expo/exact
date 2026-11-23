@@ -489,7 +489,7 @@ struct Walk<'a, 'b> {
     scene: &'b Scene<'a>,
     /// Offscreen boxes can cover the frame's scrollbars too.
     scrollbar_cover: bool,
-    scroll_grids: Vec<(ViewId, Option<grid::ScrollGrid>)>,
+    scroll_grids: Vec<(ViewId, Option<f32>)>,
     hit_space: Option<(Transform, Option<Rect4>)>,
     boxes: Vec<PaintedBox>,
     text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
@@ -839,11 +839,11 @@ impl Painter {
         let space = Transform::from_translate(-page.0 as f32, -page.1 as f32);
         let last = self.stage_after(scene.roots);
         for (at, root) in scene.roots.iter().enumerate() {
-            self.replay_kept(walk.scene, &kept, at, space);
+            self.replay_kept(&walk, &kept, at, space);
             self.node(&mut walk, *root, Transform::identity(), page, None);
             self.paint_stage(&mut walk, *root, Some(*root) == last);
         }
-        self.replay_kept(walk.scene, &kept, scene.roots.len(), space);
+        self.replay_kept(&walk, &kept, scene.roots.len(), space);
         self.paint_sheets(&mut walk);
         self.paint_ghost(&mut walk);
         self.paint_alert(&mut walk);
@@ -1316,10 +1316,10 @@ impl Painter {
         let scrolls = !matches!(ox, Overflow::Visible | Overflow::Clip)
             || !matches!(oy, Overflow::Visible | Overflow::Clip);
         let child_offset = if scrolls {
-            let grid = self.scroll_grid(walk.scene.kernel, node, self.grid());
+            let grid = self.grid();
             walk.scroll_grids.push((node.id, grid));
             let scroll = walk.scene.scroll.get(&node.id).copied().unwrap_or_default();
-            let (sx, sy) = self.child_scroll_offset(scroll, grid);
+            let (sx, sy) = grid::scroll_offset(scroll, grid);
             (offset.0 + sx, offset.1 + sy)
         } else {
             offset

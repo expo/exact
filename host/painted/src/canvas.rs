@@ -282,7 +282,7 @@ thread_local! {
     /// The last finished recording and the pictures it introduced.
     pub(crate) static FINISHED: RefCell<Option<Vec<u32>>> = const { RefCell::new(None) };
     /// The last finished recording's scrollers and the offsets drawn at.
-    static GROUPS: RefCell<Vec<crate::paint::grid::RecordedScroll>> = const { RefCell::new(Vec::new()) };
+    static GROUPS: RefCell<Vec<(u32, (f32, f32))>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Pictures the reader has not fetched yet, by id: one map for the process,
@@ -992,12 +992,7 @@ impl Backend for Recorder {
         }
     }
 
-    fn group_begin(
-        &mut self,
-        id: ViewId,
-        scroll: (f32, f32),
-        grid: Option<crate::paint::grid::ScrollGrid>,
-    ) {
+    fn group_begin(&mut self, id: ViewId, scroll: (f32, f32)) {
         // The clips around the rows stay where they are when the rows move:
         // written before the group, never inside it.
         if !self.clips.is_empty() {
@@ -1007,13 +1002,7 @@ impl Backend for Recorder {
         self.ops.extend([GROUP_BEGIN, id]);
         // The group records on a fresh Canvas, independently of the outer matrix.
         self.matrix = None;
-        if let Some(grid) = grid {
-            let at = grid.pixels(scroll);
-            GROUPS.with(|g| {
-                g.borrow_mut()
-                    .push(crate::paint::grid::RecordedScroll { id, grid, at })
-            });
-        }
+        GROUPS.with(|g| g.borrow_mut().push((id, scroll)));
     }
 
     fn group_end(&mut self) {
@@ -1159,7 +1148,7 @@ pub struct CanvasHost<D: DataSource> {
 struct Painted {
     still: crate::presenter::still::Still,
     scroll: std::collections::BTreeMap<ViewId, (f32, f32)>,
-    groups: Vec<crate::paint::grid::RecordedScroll>,
+    groups: Vec<(u32, (f32, f32))>,
 }
 
 /// At most this many frames move the last paint before one paints again:
@@ -1376,7 +1365,12 @@ impl<D: DataSource + Default> CanvasHost<D> {
         if !same {
             return None;
         }
-        let ops = scroll::shift_groups(&painted.scroll, p.scroll_offsets(), &painted.groups)?;
+        let ops = scroll::shift_groups(
+            &painted.scroll,
+            p.scroll_offsets(),
+            &painted.groups,
+            self.scale,
+        )?;
         self.p.moved_without_paint();
         self.moved += 1;
         self.moved_at = at;

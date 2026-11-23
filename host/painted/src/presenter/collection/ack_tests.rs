@@ -60,7 +60,7 @@ fn attach(p: &mut Presenter<()>) {
 fn revision(p: &mut Presenter<()>, port: ViewId) -> u32 {
     let words = p.reader_scrollers(&[], 1.).unwrap();
     words
-        .chunks_exact(11)
+        .chunks_exact(9)
         .find(|w| w[0] as ViewId == port)
         .unwrap()[2] as u32
 }

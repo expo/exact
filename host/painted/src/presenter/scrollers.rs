@@ -631,16 +631,14 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// What the reader is told after a frame of the scrollers it knows, when
-    /// that is not what it was last told (`None`): eleven words a scroller.
-    /// Id, flags, revision, then pairs of float bits: current logical offset
-    /// in points, recorded offset in pixels, logical maximum in points, and
-    /// painted endpoint in pixels. A scroller the
-    /// reader knew that is not in a statement is gone (its node went, or a
-    /// driver took it over): the reader forgets it.
+    /// that is not what it was last told (`None`): nine words per scroller.
+    /// Id, flags, revision, then pairs of float bits for the current logical
+    /// offset in points, recorded offset in pixels, and logical maximum in
+    /// points. An omitted scroller is gone: the reader forgets it.
     #[cfg(any(target_os = "android", test))]
-    pub(crate) fn reader_scrollers(
+    pub fn reader_scrollers(
         &mut self,
-        drawn: &[crate::paint::grid::RecordedScroll],
+        drawn: &[(ViewId, (f32, f32))],
         scale: f32,
     ) -> Option<Vec<i32>> {
         if self.reader.tracked.is_empty() {
@@ -649,31 +647,21 @@ impl<D: DataSource> Presenter<D> {
         }
         let limits = self.collection_scroll_limits();
         let ids: Vec<ViewId> = self.reader.tracked.keys().copied().collect();
-        let mut out = Vec::with_capacity(ids.len() * 11);
+        let mut out = Vec::with_capacity(ids.len() * 9);
         for id in ids {
             let Some(mut s) = self.scroller(id, &limits) else {
                 self.reader.tracked.remove(&id);
                 continue;
             };
             let rev = self.reader_revision(&s);
-            let painted = drawn.iter().find(|g| g.id == id);
+            let painted = drawn.iter().find(|(owner, _)| *owner == id);
             s.node = painted.is_some();
-            let (at, end) = painted.map_or(
-                ((s.offset.0 * scale, s.offset.1 * scale), (0., 0.)),
-                |group| {
-                    (
-                        (group.at.0 as f32, group.at.1 as f32),
-                        (group.grid.end.0 as f32, group.grid.end.1 as f32),
-                    )
-                },
-            );
+            let at = painted.map_or((s.offset.0 * scale, s.offset.1 * scale), |(_, at)| {
+                let pixel = |v| crate::paint::grid::device_pixel(v, scale) as f32;
+                (pixel(at.0), pixel(at.1))
+            });
             out.extend([id as i32, self.reader_flags(&s), rev as i32]);
-            out.extend(
-                [
-                    s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1, end.0, end.1,
-                ]
-                .map(bits),
-            );
+            out.extend([s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1].map(bits));
         }
         if out == self.reader.last && scale == self.reader.last_scale {
             return None;

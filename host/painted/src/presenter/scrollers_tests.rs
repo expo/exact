@@ -69,7 +69,7 @@ const PAGE_OF_SCROLLERS: &str = r#"component App
 /// it is, where its rows were painted, and its farthest offset.
 fn told(words: &[i32], id: ViewId) -> (i32, i32, [f32; 6]) {
     let s = words
-        .chunks(11)
+        .chunks_exact(9)
         .find(|s| s[0] == id as i32)
         .unwrap_or_else(|| panic!("scroller {id} is not in {words:?}"));
     (
@@ -270,15 +270,7 @@ fn the_reader_moves_a_scroller_and_is_told_where_it_is() {
         .collect();
     assert_eq!(px, [0., 0., 0., 600., 0., 360., 800., 240.]);
     assert_eq!(words[14], page as i32);
-    let drawn = [crate::paint::grid::RecordedScroll {
-        id: page,
-        grid: crate::paint::grid::ScrollGrid {
-            scale: 2.,
-            max: (0., 1020.),
-            end: (0., 2040.),
-        },
-        at: (0., 0.),
-    }];
+    let drawn = [(page, (0., 0.))];
     // The first statement is whole: both scrollers, where they are.
     let all = p.reader_scrollers(&drawn, 2.).unwrap();
     assert_eq!(told(&all, page), (2 | 4, 0, [0., 0., 0., 0., 0., 1020.]));

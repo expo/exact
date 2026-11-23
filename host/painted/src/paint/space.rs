@@ -577,7 +577,7 @@ pub(super) fn sticky(
     id: ViewId,
     offset: PaintOffset,
     grid: Option<f32>,
-    scroll_grids: &[(ViewId, Option<grid::ScrollGrid>)],
+    scroll_grids: &[(ViewId, Option<f32>)],
 ) -> PaintOffset {
     let kernel = scene.kernel;
     let Some(node) = kernel
@@ -595,7 +595,7 @@ pub(super) fn sticky_displacement(
     scene: &Scene<'_>,
     node: &NodeRef<'_>,
     grid: Option<f32>,
-    scroll_grid: Option<grid::ScrollGrid>,
+    scroll_grid: Option<f32>,
 ) -> PaintOffset {
     let kernel = scene.kernel;
     let Some((c, scroller)) = kernel
@@ -619,12 +619,19 @@ pub(super) fn sticky_displacement(
 pub(super) fn sticky_owner_grid(
     scene: &Scene<'_>,
     node: &NodeRef<'_>,
-    scroll_grids: &[(ViewId, Option<grid::ScrollGrid>)],
-) -> Option<Option<grid::ScrollGrid>> {
+    scroll_grids: &[(ViewId, Option<f32>)],
+) -> Option<Option<f32>> {
     let scroller = scene
         .kernel
         .node(scene.kernel.sticky_constraint(node.key)?.scroller)?;
-    let id = if effective_overflow(&scroller) == (Overflow::Visible, Overflow::Visible)
+    scroll_grid(&scroller, scroll_grids)
+}
+
+pub(super) fn scroll_grid(
+    scroller: &NodeRef<'_>,
+    scroll_grids: &[(ViewId, Option<f32>)],
+) -> Option<Option<f32>> {
+    let id = if effective_overflow(scroller) == (Overflow::Visible, Overflow::Visible)
         && scroller.parent.is_none()
     {
         crate::presenter::PAGE
@@ -640,7 +647,7 @@ pub(super) fn sticky_owner_grid(
 pub(super) fn sticky_scroll(
     scene: &Scene<'_>,
     scroller: &NodeRef<'_>,
-    grid: Option<grid::ScrollGrid>,
+    grid: Option<f32>,
 ) -> (f32, f32) {
     let scroll = if effective_overflow(scroller) != (Overflow::Visible, Overflow::Visible) {
         scene
@@ -653,8 +660,6 @@ pub(super) fn sticky_scroll(
     } else {
         (0.0, 0.0)
     };
-    grid.map_or(scroll, |g| {
-        let (x, y) = g.points(scroll);
-        (x as f32, y as f32)
-    })
+    let (x, y) = grid::scroll_offset(scroll, grid);
+    (x as f32, y as f32)
 }

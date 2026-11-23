@@ -41,7 +41,7 @@ import kotlin.math.sign
  *   takes exact2's offset and ends the fling that was moving it. A scroller that statement leaves out is gone.
  */
 internal class Scrolling(private val view: ExactView) {
-    /** One scroller as exact2 told it, in the view's pixels. */
+    /** One scroller as exact2 told it. */
     class Scroller(val id: Int) {
         /** Bit 0: it scrolls sideways; bit 1: up and down; bit 2: its rows are a node the reader moves; bit 3: no indicator;
          * bit 4: it hears `refresh`; bit 5: its `refreshing` is true; bits 6 and 7: what a drag of it does to the
@@ -59,8 +59,8 @@ internal class Scrolling(private val view: ExactView) {
         var nowX = 0f; var nowY = 0f; var maxX = 0f; var maxY = 0f
         /** Current and farthest logical offsets, in points. */
         var pointsX = 0f; var pointsY = 0f; var maxPointsX = 0f; var maxPointsY = 0f
-        /** The offset of the recording and the painted endpoint, in device pixels. */
-        var drawnX = 0f; var drawnY = 0f; var endX = 0f; var endY = 0f
+        /** The offset of the recording, in device pixels. */
+        var drawnX = 0f; var drawnY = 0f
         /** What the reader moved it by that no stream it has taken includes yet. */
         var pendX = 0f; var pendY = 0f
         /** The reader has moved it: its rows are placed here, not by exact2's moves. */
@@ -413,9 +413,9 @@ internal class Scrolling(private val view: ExactView) {
         while (i + 11 <= end) {
             val s = scrollers.getOrPut(w[i]) { Scroller(w[i]) }
             if (!s.told) { s.rev = w[i + 2]; s.nowX = f(w[i + 3]); s.nowY = f(w[i + 4]); s.maxX = f(w[i + 5]); s.maxY = f(w[i + 6]) }
-            // A queued hit reply can predate the latest statement: its policy is only a fallback.
+            // A queued hit reply can predate the latest statement.
             val policy = (if (s.told) s.flags else w[i + 1]) and SAID
-            s.flags = (s.flags and 3) or (w[i + 1] and 4) or policy
+            s.flags = (s.flags and 3) or policy
             s.port.set(f(w[i + 7]), f(w[i + 8]), f(w[i + 7]) + f(w[i + 9]), f(w[i + 8]) + f(w[i + 10]))
             links.add(Link(s, w[i + 1] and 1 != 0, w[i + 1] and 2 != 0, w[i + 1] and ZOOM_FLAG != 0, w[i + 1] and DOUBLE_TAP_FLAG != 0))
             i += 11
@@ -645,7 +645,6 @@ internal class Scrolling(private val view: ExactView) {
                 points = (points + delta / scale).coerceIn(0f, max)
             }
         }
-        if (max > 0f && points >= max) return if (sideways) s.endX else s.endY
         return paintedOffset(points * scale)
     }
 
@@ -668,15 +667,14 @@ internal class Scrolling(private val view: ExactView) {
 
     /** exact2's statement with a stream ([Native.scrollers]). */
     fun told(w: IntArray) {
-        scale = Device.scale(view.context)
-        var i = 0
+        scale = f(w[0])
+        var i = 1
         while (i + STATEMENT_WORDS <= w.size) {
             val s = scrollers.getOrPut(w[i]) { Scroller(w[i]) }
             s.flags = w[i + 1]
             s.pointsX = f(w[i + 3]); s.pointsY = f(w[i + 4])
             s.drawnX = f(w[i + 5]); s.drawnY = f(w[i + 6])
             s.maxPointsX = f(w[i + 7]); s.maxPointsY = f(w[i + 8])
-            s.endX = f(w[i + 9]); s.endY = f(w[i + 10])
             s.nowX = s.pointsX * scale; s.nowY = s.pointsY * scale
             s.maxX = s.maxPointsX * scale; s.maxY = s.maxPointsY * scale
             if (s.told && w[i + 2] != s.rev) {
@@ -695,9 +693,9 @@ internal class Scrolling(private val view: ExactView) {
         }
         // A scroller the statement no longer has is gone (its node went, or a driver took it over): what the reader
         // kept for it goes with it.
-        val count = w.size / STATEMENT_WORDS
+        val count = (w.size - 1) / STATEMENT_WORDS
         if (scrollers.size <= count) return
-        for (s in scrollers.values.filter { s -> s.told && (0 until count).none { w[it * STATEMENT_WORDS] == s.id } }) {
+        for (s in scrollers.values.filter { s -> s.told && (0 until count).none { w[1 + it * STATEMENT_WORDS] == s.id } }) {
             scrollers.remove(s.id)
             sent.removeAll { it.s === s }
             s.clearBar(); s.clearPull()
@@ -1050,12 +1048,12 @@ internal class Scrolling(private val view: ExactView) {
     private fun f(bits: Int) = java.lang.Float.intBitsToFloat(bits)
 
     internal companion object {
-        private const val STATEMENT_WORDS = 11
+        private const val STATEMENT_WORDS = 9
         /** A touch's answer: the scroller zooms, and a double tap there zooms it (`presenter/scrollers.rs`). */
         const val ZOOM_FLAG = 256
         const val DOUBLE_TAP_FLAG = 512
         /** The bits of a scroller's flags its statement is the authority on, and a hit answer only before one. */
-        const val SAID = 8 or 16 or 32 or 192
+        const val SAID = 4 or 8 or 16 or 32 or 192
 
         /** How long after a pull sent `refresh` an app that set no `refreshing` keeps the indicator turning: the iOS
          * host's wait for UIKit's control (`ScrollViewIOS.swift`). */

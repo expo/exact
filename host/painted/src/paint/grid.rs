@@ -64,75 +64,26 @@ fn round_device_pixel(pixels: f64) -> f64 {
     ((pixels * 64.0).round() / 64.0 + 0.5).floor()
 }
 
-/// Drawn scroll offsets for one port. Gesture travel stays in layout points.
-#[derive(Clone, Copy)]
-pub struct ScrollGrid {
-    pub(crate) scale: f32,
-    pub(crate) max: (f32, f32),
-    pub(crate) end: (f64, f64),
-}
-
-impl ScrollGrid {
-    pub(super) fn new(frame: Frame, max: (f32, f32), scale: f32) -> Self {
-        let trailing = |start: f32, size: f32, port: f64, max: f32| {
-            (device_pixel(start + (size + max), scale) - port).max(0.)
-        };
-        let [x, y, w, h] = pixel_box(frame, scale);
-        Self {
-            scale,
-            max,
-            end: (
-                trailing(frame.x, frame.width, x + w, max.0),
-                trailing(frame.y, frame.height, y + h, max.1),
-            ),
-        }
-    }
-
-    pub(crate) fn pixels(self, offset: (f32, f32)) -> (f64, f64) {
-        let axis = |at, max, end| {
-            if max > 0. && at >= max {
-                end
-            } else {
-                device_pixel(at, self.scale)
-            }
-        };
-        (
-            axis(offset.0, self.max.0, self.end.0),
-            axis(offset.1, self.max.1, self.end.1),
-        )
-    }
-
-    pub(super) fn points(self, offset: (f32, f32)) -> PaintOffset {
-        let (x, y) = self.pixels(offset);
-        (x / f64::from(self.scale), y / f64::from(self.scale))
-    }
-}
-
-pub(super) fn page_scroll_grid(scale: Option<f32>) -> Vec<(ViewId, Option<ScrollGrid>)> {
+pub(super) fn page_scroll_grid(scale: Option<f32>) -> Vec<(ViewId, Option<f32>)> {
     scale
         .into_iter()
-        .map(|s| {
-            (
-                crate::presenter::PAGE,
-                Some(ScrollGrid::new(Frame::default(), (0., 0.), s)),
-            )
-        })
+        .map(|s| (crate::presenter::PAGE, Some(s)))
         .collect()
 }
 
 #[cfg(any(target_os = "android", test))]
-#[derive(Clone, Copy)]
-pub(crate) struct RecordedScroll {
-    pub(crate) id: ViewId,
-    pub(crate) grid: ScrollGrid,
-    pub(crate) at: (f64, f64),
+pub(crate) fn pixel_delta(from: (f32, f32), to: (f32, f32), scale: f32) -> (f32, f32) {
+    let axis = |from, to| (device_pixel(from, scale) - device_pixel(to, scale)) as f32;
+    (axis(from.0, to.0), axis(from.1, to.1))
 }
 
-#[cfg(any(target_os = "android", test))]
-impl RecordedScroll {
-    pub(crate) fn shift(self, offset: (f32, f32)) -> (f32, f32) {
-        let to = self.grid.pixels(offset);
-        ((self.at.0 - to.0) as f32, (self.at.1 - to.1) as f32)
+pub(super) fn scroll_offset((x, y): (f32, f32), grid: Option<f32>) -> PaintOffset {
+    match grid {
+        Some(scale) => (
+            device_pixel(x, scale) / f64::from(scale),
+            device_pixel(y, scale) / f64::from(scale),
+        ),
+        None => (f64::from(x), f64::from(y)),
     }
 }
 
@@ -216,6 +167,11 @@ impl BoxPaint {
 }
 
 impl Painter {
+    #[cfg(test)]
+    pub(crate) fn enable_test_pixel_grid(&mut self) {
+        self.pixel_grid = true;
+    }
+
     pub(super) fn without_grid<T>(
         &mut self,
         suspend: bool,
@@ -226,10 +182,6 @@ impl Painter {
         let result = draw(self);
         self.grid_suspended = previous;
         result
-    }
-
-    pub(crate) fn uses_pixel_grid(&self) -> bool {
-        self.pixel_grid
     }
 
     /// The display's scale, when this painter draws on its pixels.
@@ -280,14 +232,8 @@ impl Painter {
         }
     }
 
-    pub(super) fn drawn_scroll(&self, (x, y): (f32, f32)) -> PaintOffset {
-        match self.grid() {
-            Some(s) => (
-                device_pixel(x, s) / f64::from(s),
-                device_pixel(y, s) / f64::from(s),
-            ),
-            None => (f64::from(x), f64::from(y)),
-        }
+    pub(super) fn drawn_scroll(&self, scroll: (f32, f32)) -> PaintOffset {
+        scroll_offset(scroll, self.grid())
     }
 }
 

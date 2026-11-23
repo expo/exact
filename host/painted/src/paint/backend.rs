@@ -478,13 +478,7 @@ pub trait Backend {
     fn row_free(&mut self, _id: u32) {}
     /// The rows of scroller `id`, painted at its `scroll` offset, follow
     /// until [`Backend::group_end`].
-    fn group_begin(
-        &mut self,
-        _id: ViewId,
-        _scroll: (f32, f32),
-        _grid: Option<super::grid::ScrollGrid>,
-    ) {
-    }
+    fn group_begin(&mut self, _id: ViewId, _scroll: (f32, f32)) {}
     /// The scroller's rows end.
     fn group_end(&mut self) {}
     /// Image node `id`'s picture (or none, not yet decoded) is drawn until

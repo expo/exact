@@ -89,7 +89,7 @@ impl Painter {
         let kept = self.kept_places(walk, Some(node), &children);
         let (last, count) = (self.stage_after(&children), children.len());
         for (at, child) in children.into_iter().enumerate() {
-            self.replay_kept(walk.scene, &kept, at, space);
+            self.replay_kept(walk, &kept, at, space);
             if wrap || Self::is_row_section(walk, sections.as_deref(), child) {
                 self.wrapped(walk, child, ts, child_offset, child_rect);
             } else if rows {
@@ -99,7 +99,7 @@ impl Painter {
             }
             self.paint_stage(walk, child, Some(child) == last);
         }
-        self.replay_kept(walk.scene, &kept, count, space);
+        self.replay_kept(walk, &kept, count, space);
         if group {
             self.group_end(walk);
         }

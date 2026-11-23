@@ -83,7 +83,7 @@ struct RowFrame {
 struct RowSticky {
     node: NodeKey,
     grid: Option<f32>,
-    scroll_grid: Option<grid::ScrollGrid>,
+    scroll_grid: Option<f32>,
     shift: PaintOffset,
 }
 
@@ -612,11 +612,7 @@ impl Painter {
             return;
         }
         let scroll = walk.scene.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
-        self.backend.group_begin(
-            id,
-            scroll,
-            walk.scroll_grids.last().and_then(|(_, grid)| *grid),
-        );
+        self.backend.group_begin(id, scroll);
         self.rows
             .groups
             .push((id, walk.boxes.len(), walk.boxes.len()));

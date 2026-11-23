@@ -85,14 +85,14 @@ class HostedTouchTest {
             @Implementation @JvmStatic fun scrollers(): IntArray? {
                 if (deltas.isEmpty()) return null
                 val scale = Device.scale(org.robolectric.RuntimeEnvironment.getApplication())
-                return (0 until reply[1]).flatMap { n ->
+                return intArrayOf(scale.toBits()) + (0 until reply[1]).flatMap { n ->
                     val i = 3 + 11 * n
                     val moved = deltas.filter { it.first == reply[i] }
                     listOf(reply[i], reply[i + 1], reply[i + 2],
                         ((Float.fromBits(reply[i + 3]) + moved.sumOf { it.second.toDouble() }.toFloat()) / scale).toBits(),
                         ((Float.fromBits(reply[i + 4]) + moved.sumOf { it.third.toDouble() }.toFloat()) / scale).toBits(),
                         0, 0, (Float.fromBits(reply[i + 5]) / scale).toBits(),
-                        (Float.fromBits(reply[i + 6]) / scale).toBits(), 0, 0)
+                        (Float.fromBits(reply[i + 6]) / scale).toBits())
                 }.toIntArray()
             }
             @Implementation @JvmStatic fun scrollDrag(id: Int, ended: Boolean, vx: Float, vy: Float, rest: Boolean, restX: Float, restY: Float, flings: Boolean) {}
@@ -863,7 +863,7 @@ class HostedTouchTest {
         val shown = requireNotNull(indicator.parent)
         assertNotSame("the indicator is in the root's overlay, not among its children", f.parent, shown)
         assertTrue(indicator.spinning)
-        scrolling.told(intArrayOf(9, 2 or 16 or 32, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits(), 0, 0))
+        scrolling.told(intArrayOf(1f.toBits(), 9, 2 or 16 or 32, 0, 0, 0, 0, 0, 500f.toBits(), 500f.toBits()))
         Engine.reply[4] = 2 or 16 or 32
         Engine.reply[Engine.reply.lastIndex] = 7
         Engine.takesLongPress = true
