@@ -73,7 +73,9 @@ function readyWindow(app, user, wmSize) {
   if (!/\bmStayOn=true\b/.test(power)) throw new Error('Android stay-on is inactive. Connect the device to power and check its screen timeout policy.');
   const wake = power.match(/\bmLastWakeTime=(\d+)/)?.[1], sleep = power.match(/\bmLastSleepTime=(\d+)/)?.[1];
   const focus = focusedWindow(app, user, display);
-  const window = windows.split(/^\s*Window #\d+ /m).find(w => w.startsWith(`${focus}:`)) ?? '';
+  const windowDump = windows.split(/^WINDOW MANAGER WINDOWS\b/m)[1] ?? '';
+  const window = windowDump.split(/^[ \t]{0,2}(?:Window #\d+ |(?=\S))/m)
+    .find(w => w.startsWith(`${focus}:`)) ?? '';
   const session = window.match(/\bmSession=Session\{\S+ (\d+):u(\d+)a\d+\}/);
   const pid = Number(session?.[1]);
   if (!pid || session[2] !== user || wake == null || sleep == null) {
@@ -81,7 +83,7 @@ function readyWindow(app, user, wmSize) {
   }
   const size = displaySize(wmSize, display);
   const config = window.match(/^[ \t]*mFullConfiguration=(.*)$/m)?.[1] ?? '';
-  const frame = window.match(/\bFrames: [^\n]*\bframe=(\S+)/)?.[1];
+  const frame = window.match(/^[ \t]*Frames:[^\r\n]*(?:[ \t]frame=|\r?\n[ \t]*mFrame=)(\S+)/m)?.[1];
   if (!config.includes('mWindowingMode=fullscreen') || frame !== `[0,0][${size.join(',')}]`) {
     throw new Error(`${app}: expected a full-screen window at ${size.join('×')}, found frame ${frame ?? 'unknown'}`);
   }
@@ -167,9 +169,10 @@ function measure(app, p, drive, checkReady) {
   gfx(' reset');
   const c0 = cpu(p), t0 = Date.now();
   drive();
-  const secs = (Date.now() - t0) / 1000, c1 = cpu(p), frames = gfxCounters(gfx());
+  const secs = (Date.now() - t0) / 1000;
+  const c1 = cpu(p), frames = gfxCounters(gfx()), pssMB = pss(p);
   checkReady();
-  return { secs, cpuMsPerS: (c1.proc - c0.proc) / secs, mainMsPerS: (c1.main - c0.main) / secs, pssMB: pss(p), ...frames };
+  return { secs, cpuMsPerS: (c1.proc - c0.proc) / secs, mainMsPerS: (c1.main - c0.main) / secs, pssMB, ...frames };
 }
 
 function checkSeriesGeometry(app, device, { size, orientation }) {
@@ -192,18 +195,34 @@ async function scenario(app, name, round, device, wmSize, user) {
     }
     return { runs, orientation: device.orientation };
   }
-  launch(app, user, name === 'live' ? '--es live 1' : '');
+  launch(app, user);
   sleep(5000);
-  const before = ready();
+  let before = ready();
   checkSeriesGeometry(app, device, before);
-  const { pid, size, orientation } = before;
-  const checkFocus = () => {
-    const display = defaultDisplay(sh('dumpsys window displays'));
-    if (focusedWindow(app, user, display) !== before.focus || displayRotation(display) !== before.rotation) {
-      throw new Error('The focused window changed during the drive');
-    }
-  };
   try {
+    const remote = `/data/local/tmp/heavy-list-${crypto.randomUUID()}`;
+    let bounds, endpoints;
+    if (name !== 'rest') {
+      const xml = `${remote}.xml`;
+      bounds = listBounds(sh(`uiautomator dump ${xml} >/dev/null && cat ${xml} && rm ${xml}`), pkg(app));
+      endpoints = swipeEndpoints(before.size, bounds);
+    }
+    // Live updates keep UI Automator from reaching idle. Both launches have the same list layout.
+    if (name === 'live') {
+      launch(app, user, '--es live 1');
+      sleep(5000);
+      const live = ready();
+      checkSeriesGeometry(app, device, live);
+      if (live.rotation !== before.rotation) throw new Error('The display rotated after the list bounds were read');
+      before = live;
+    }
+    const { pid, size, orientation } = before;
+    const checkFocus = () => {
+      const display = defaultDisplay(sh('dumpsys window displays'));
+      if (focusedWindow(app, user, display) !== before.focus || displayRotation(display) !== before.rotation) {
+        throw new Error('The focused window changed during the drive');
+      }
+    };
     const since = sh('date +%s.%N').trim();
     if (!/^\d+\.\d{9}$/.test(since)) throw new Error('Cannot read the device clock for focus checks');
     const checkReady = () => {
@@ -217,10 +236,6 @@ async function scenario(app, name, round, device, wmSize, user) {
       if (/\binput_focus\s*\(/.test(events)) throw new Error('Input focus changed during the drive');
     };
     if (name === 'rest') return { ...measure(app, pid, () => sleep(10_000), checkReady), orientation };
-    const remote = `/data/local/tmp/heavy-list-${crypto.randomUUID()}`;
-    const xml = `${remote}.xml`;
-    const bounds = listBounds(sh(`uiautomator dump ${xml} >/dev/null && cat ${xml} && rm ${xml}`), pkg(app));
-    const endpoints = swipeEndpoints(size, bounds);
     const sample = name === 'blank'
       ? await blank(app, round, size, device.density, bounds, `${remote}.mp4`, file =>
         recordBlank(file, () => flings(endpoints, checkFocus, [[24000, 8]], 1200), checkReady))
@@ -228,7 +243,7 @@ async function scenario(app, name, round, device, wmSize, user) {
     return { ...sample, orientation };
   } catch (error) {
     console.warn(`${app} ${name} round ${round}: discarded sample (${error.message})`);
-    return { orientation, error: error.message };
+    return { orientation: before.orientation, error: error.message };
   }
 }
 
@@ -249,7 +264,6 @@ async function recordBlank(file, drive, checkReady) {
     sleep(1500);
     drive();
     sleep(1000);
-    checkReady();
   } finally {
     try {
       // The file argument distinguishes this recorder if Android has reused its PID.
@@ -260,6 +274,7 @@ async function recordBlank(file, drive, checkReady) {
     await rec.exited;
   }
   if (rec.exitCode !== 0) throw new Error(`screenrecord exited with status ${rec.exitCode}`);
+  checkReady();
   return output;
 }
 
@@ -272,8 +287,13 @@ export function recordingCrop(encoded, recorder, [W, H]) {
   if (!w || !h || x + w > width || y + h > height) {
     throw new Error(`Recorded content ${w}×${h} at (${x},${y}) falls outside the encoded ${width}×${height} video`);
   }
-  // The recorder truncates one side of the aspect-preserving projection to an integer pixel.
-  if (Math.abs(w * H - h * W) >= Math.max(W, H)) {
+  // screenrecord projects in float32, then truncates the fitted side to an integer pixel.
+  const aspect = Math.fround(H / W);
+  const fittedHeight = Math.trunc(Math.fround(width * aspect));
+  const matchesProjection = height > fittedHeight
+    ? w === width && h === fittedHeight
+    : w === Math.trunc(Math.fround(height / aspect)) && h === height;
+  if (Math.abs(w * H - h * W) >= Math.max(W, H) && !matchesProjection) {
     throw new Error(`Recorded content ${w}×${h} does not match the display aspect ratio ${W}×${H}`);
   }
   return `crop=${w}:${h}:${x}:${y}:exact=1`;
