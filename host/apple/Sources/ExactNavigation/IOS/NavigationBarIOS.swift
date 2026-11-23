@@ -1353,13 +1353,13 @@ extension NavigationHost {
             return made.bar
         }
         let dimmed = c.navigationController?.navigationBar.tintAdjustmentMode == .dimmed
-        let image = i.badge?.image(dimmed: dimmed) ?? i.symbol.flatMap { FaceSymbol.image($0, points: FaceSymbol.barItemPoints) }
+        let image = i.image(dimmed: dimmed)
         // The same control as last time, still a menu or not and still a
         // picture or words: its item is kept and changed, as a hand-built
         // bar's is, so the glass animates what changed (a heart filling).
         if let made = c.barItemsMade[i.id], made.item.menu == i.menu, (made.bar.image != nil) == (image != nil) {
             c.barPresses.append(made.press)
-            if let image, made.item.symbol != i.symbol || made.item.badge != i.badge {
+            if let image, !made.item.hasSameImage(as: i) {
                 if #available(iOS 17.0, tvOS 17.0, *), image.isSymbolImage {
                     made.bar.setSymbolImage(image, contentTransition: .replace)
                 } else { made.bar.image = image }

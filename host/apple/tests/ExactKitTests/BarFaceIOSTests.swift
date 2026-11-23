@@ -7,7 +7,7 @@ import XCTest
 
 /// A header button's face in the bar: a badge (`BadgeFace`, LLP 1075.003
 /// §9.6) is the item's drawn image, and a native button's title is UIKit's,
-/// in its authored font. Any other face is hosted (LLP 1141.004 D1).
+/// in its authored font (LLP 1141.004 D1).
 final class BarFaceIOSTests: XCTestCase {
     private func button(_ children: [[String: Any]], in p: Presenter = Presenter()) -> (Presenter, NodeView) {
         var ops: [[String: Any]] = [
@@ -47,6 +47,29 @@ final class BarFaceIOSTests: XCTestCase {
         let pixel = try XCTUnwrap(SharePictureCase.rgba(try XCTUnwrap(dark.image.cgImage), x: 4, y: 4))
         XCTAssertGreaterThan(pixel.2, 240, "the installed image itself is blue in dark mode")
         XCTAssertLessThan(pixel.0, 15)
+    }
+
+    func testBadgeTextSizeAndWeightChangeItsImage() throws {
+        let p = Presenter()
+        defer { p.reset() }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [255, 255, 255, 255]]],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "AB"],
+             "style": ["text_color": [0, 0, 0, 255]]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+        ]))
+        let box = try XCTUnwrap(p.views[1]), text = try XCTUnwrap(p.views[2])
+        let plain = try XCTUnwrap(BadgeFace(box: box))
+        text.style["font_size"] = .number(24)
+        text.style["written"] = .array([.string("font_size")])
+        let large = try XCTUnwrap(BadgeFace(box: box))
+        text.style["font_weight"] = .number(800)
+        text.style["written"] = .array([.string("font_size"), .string("font_weight")])
+        let heavy = try XCTUnwrap(BadgeFace(box: box))
+        for (before, after) in [(plain, large), (large, heavy)] {
+            XCTAssertNotEqual(before.source, after.source)
+            XCTAssertNotEqual(try XCTUnwrap(before.image.pngData()), try XCTUnwrap(after.image.pngData()))
+        }
     }
 
     func testABadgeOnAGlassButtonKeepsItsOwnGlass() throws {

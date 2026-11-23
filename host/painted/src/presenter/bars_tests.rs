@@ -380,6 +380,34 @@ fn a_link_item_follows_its_href() {
     assert_eq!(top(&mut p).title, "History");
 }
 
+#[test]
+fn a_button_with_a_link_opens_its_dialog_in_the_page_and_the_bar() {
+    let source = LINKED.replace(
+        "link href=\"/history\"",
+        "button href=\"/history\" commandfor=\"details\" command=\"show-modal\" width=100 height=48",
+    ) + r#"          dialog id="details" role="alertdialog" aria-label="Details" testId="details"
+            text "Details about this item."
+            button commandfor="details" command="close"
+              text "OK"
+"#;
+    let page = source.replace("header display=", "header appearance=\"none\" display=");
+    let (mut p, _) = barred(&page);
+    p.frame();
+    let button = id(&p, "history");
+    let (x, y, w, h) = p.rect_of(button).expect("the page's button");
+    assert_eq!(p.press_at(x + w / 2., y + h / 2., 0.), Some(button));
+    p.run_commands(|| Nothing);
+    assert_eq!(p.surface().unwrap().node, id(&p, "details"));
+
+    let (mut p, _) = barred(&source);
+    let dialog = id(&p, "details");
+    touch(&mut p, TOP, Some("history"));
+    assert_eq!(
+        (p.surface().map(|s| s.node), top(&mut p).title.as_str()),
+        (Some(dialog), "Inbox")
+    );
+}
+
 /// A press on the link goes where the page sends it, a listener above it,
 /// before the link is followed.
 #[test]

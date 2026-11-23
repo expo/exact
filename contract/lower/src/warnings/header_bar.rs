@@ -40,7 +40,7 @@ fn part(node: Visit<'_>) -> Part {
         return Part::Doubt;
     };
     // A popover or dialog shows over the page when opened, not in the bar.
-    if literal(attrs, "display") == Some("none") || has(attrs, "popover") || tag == "dialog" {
+    if literal(attrs, "display") == Some("none") || top_layer(tag, attrs).is_some() {
         return Part::Hidden;
     }
     if computed(attrs, "role") || computed(attrs, "display") {
@@ -75,6 +75,16 @@ fn part(node: Visit<'_>) -> Part {
         "input" if literal(attrs, "type") == Some("search") => Part::Search,
         t if BOXES.contains(&t) => Part::Box,
         _ => Part::Other,
+    }
+}
+
+fn top_layer(tag: &str, attrs: &[Attr]) -> Option<&'static str> {
+    if tag == "dialog" {
+        Some("a dialog")
+    } else if has(attrs, "popover") {
+        Some("a popover")
+    } else {
+        None
     }
 }
 
@@ -124,12 +134,44 @@ fn holds_heading(node: Visit<'_>) -> bool {
         .any(|(k, ())| matches!(part(k), Part::Heading))
 }
 
-/// A box with a literal fill: before the heading, the title's avatar.
 fn filled(node: Visit<'_>) -> bool {
     let Some((_, _, attrs)) = node.element() else {
         return false;
     };
     has(attrs, "background-color") || has(attrs, "background")
+}
+
+/// `BadgeFace` reads a filled box for shown words, a symbol or a picture.
+fn badge_face(node: Visit<'_>) -> bool {
+    fn content(node: Visit<'_>, visible: bool) -> bool {
+        node.children().any(|child| {
+            let Some((tag, positional, attrs)) = child.element() else {
+                return true;
+            };
+            if matches!(part(child), Part::Hidden) {
+                return false;
+            }
+            let visible = match literal(attrs, "visibility") {
+                Some("visible") => true,
+                Some("hidden" | "collapse") => false,
+                _ => visible || computed(attrs, "visibility"),
+            };
+            (visible && matches!(tag, "text" | "image") && has_face_source(positional))
+                || content(child, visible)
+        })
+    }
+    let visible = node.element().is_some_and(|(_, _, attrs)| {
+        !matches!(literal(attrs, "visibility"), Some("hidden" | "collapse"))
+    });
+    filled(node) && content(node, visible)
+}
+
+fn has_face_source(positional: &[Expr]) -> bool {
+    match positional.first() {
+        Some(Expr::Str(s, _)) => !s.is_empty(),
+        Some(_) => true,
+        None => false,
+    }
 }
 
 /// A passive box of texts and symbol images, one of each at least: a
@@ -224,7 +266,8 @@ impl Place {
 /// What the walk of one header has seen.
 #[derive(Default)]
 struct Bar<'a> {
-    headings: usize,
+    /// The fewest and most headings on any path through the header.
+    headings: (usize, usize),
     /// The last heading counted: the bar's title when it is the one.
     title: Option<Visit<'a>>,
     /// An `if`, `for`, `match`, use or slot, or a computed role: the
@@ -257,9 +300,6 @@ struct Bar<'a> {
     /// what the iOS bar draws of them (`refuse`).
     buttons: Vec<Visit<'a>>,
     statuses: Vec<Visit<'a>>,
-    /// The headings of each arm of each `if` or `match` in the header, each
-    /// arm read alone (`walk_region`).
-    arm_headings: Vec<usize>,
 }
 
 /// A route's `header` that is not the bar, in `lower-header-no-bar`'s words (LLP 1115.000 D5.2).
@@ -519,7 +559,8 @@ fn face(button: Visit<'_>) -> Option<&'static str> {
 
 /// Why a badge (a filled box, a button's one child) is not one the bar draws:
 /// it holds one text, symbol or picture, and writes its fill, corners, size
-/// and layout, no border, shadow or fade; the part its type, colour, fit.
+/// and layout. It draws text in its size, weight and colour, a symbol in
+/// its colour, and a picture in its fit.
 fn badge(boxed: Visit<'_>) -> Option<&'static str> {
     let Some((_, _, attrs)) = boxed.element() else {
         return None;
@@ -534,17 +575,25 @@ fn badge(boxed: Visit<'_>) -> Option<&'static str> {
         .collect();
     match parts[..] {
         [only] if matches!(only.element(), Some(("text" | "image", _, _))) => {
-            let Some((_, _, attrs)) = only.element() else {
+            let Some((tag, positional, attrs)) = only.element() else {
                 return None;
             };
-            let ok = attrs
-                .iter()
-                .all(|a| sits(&a.name) || BADGE_PART_ROWS.contains(&a.name.as_str()));
+            let rows: &[&str] = match (tag, positional.first()) {
+                ("text", _) => &["color", "font-size", "font-weight"],
+                (_, Some(Expr::Str(_, _))) if symbol(only) => &["color"],
+                (_, Some(Expr::Str(_, _))) => &["object-fit"],
+                _ => &["color", "object-fit"],
+            };
+            let ok = attrs.iter().all(|a| {
+                sits(&a.name)
+                    || matches!(a.name.as_str(), "aria-label" | "alt")
+                    || rows.contains(&a.name.as_str())
+            });
             let plain = only.children().next().is_none()
                 && !has(attrs, "markup")
                 && !has(attrs, "href")
                 && !has(attrs, "press");
-            (!ok || !plain).then_some("is a badge whose text, symbol or picture writes more than its type, colour and fit")
+            (!ok || !plain).then_some("is a badge whose part writes more than the text's size and weight, the text or symbol's colour, or the picture's fit")
         }
         [only] if matches!(part(only), Part::Doubt) => None,
         _ => Some("is a badge holding more than one text, symbol or picture"),
@@ -583,7 +632,6 @@ const BADGE_ROWS: &[&str] = &[
     "background-color",
     "background",
     "border-radius",
-    "corner-shape",
     "display",
     "flex-direction",
     "align-items",
@@ -591,22 +639,6 @@ const BADGE_ROWS: &[&str] = &[
     "overflow",
     "aspect-ratio",
 ];
-/// What a badge's part may write besides where it sits.
-const BADGE_PART_ROWS: &[&str] = &[
-    "font",
-    "font-size",
-    "font-weight",
-    "font-family",
-    "font-style",
-    "font-variant-numeric",
-    "color",
-    "object-fit",
-    "object-position",
-    "border-radius",
-    "aria-label",
-    "alt",
-];
-
 /// The first part of a readout that the bar does not draw, and why: it holds
 /// words, symbols, dots and boxes, and one `progress`; nothing that presses,
 /// no field, no picture.
@@ -643,25 +675,13 @@ impl Bar<'_> {
     /// No heading, and nothing but buttons, readouts, a search field and a
     /// tablist: the bar with no title.
     fn untitled(&self) -> bool {
-        self.headings == 0
-            && self.placed
-            && !self.avatar
-            && self.unplaced.is_empty()
-            && self.hosted.is_empty()
-    }
-
-    /// A heading in each arm of a choice, and none outside it: one heading
-    /// whichever arm shows.
-    fn armed(&self) -> bool {
-        self.headings == 0
-            && !self.arm_headings.is_empty()
-            && self.arm_headings.iter().all(|h| *h == 1)
+        self.headings == (0, 0) && self.placed && self.unplaced.is_empty() && self.hosted.is_empty()
     }
 
     /// Whether the header is the bar: one heading, or none and only what the
     /// bar places.
     fn is_the_bar(&self) -> bool {
-        self.headings == 1 || self.untitled() || self.armed()
+        self.headings == (1, 1) || self.untitled()
     }
 }
 
@@ -672,23 +692,22 @@ fn check_header(header: Visit<'_>, content: &[Visit<'_>], out: &mut Vec<LowerErr
         if !bar.doubt {
             out.push(LowerError {
                 id: "lower-header-no-bar",
-                message: if bar.headings == 0 && bar.placed {
-                    let what = match bar.unplaced.first().or(bar.hosted.first()) {
-                        Some((_, what)) => what.trim_end_matches(',').trim_end_matches(", before the heading").to_string(),
-                        None => "its filled box".into(),
-                    };
+                message: if let ((0, 0), true, Some((_, what))) =
+                    (bar.headings, bar.placed, bar.unplaced.first().or(bar.hosted.first()))
+                {
+                    let what = what.trim_end_matches(',').trim_end_matches(", before the heading");
                     format!("this route's `header` holds no heading, and {what} in it is not a bar item, so on iOS it is not the navigation bar: {NOT_THE_BAR} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items; or, for a bar with no title, move what is not a button below the `header`: a header of buttons alone is the bar{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
-                } else if bar.headings == 0 {
+                } else if bar.headings == (0, 0) {
                     format!("this route's `header` holds no heading, so on iOS it is not the navigation bar: {NOT_THE_BAR} Give it one `text role=\"heading\"` (`aria-level=1` for a large title) — its buttons become the bar's items{OR_NO_BAR} (docs/recipes/navigation-stack.md)")
                 } else {
-                    format!("this route's `header` holds {} headings, so on iOS it is not the navigation bar: {NOT_THE_BAR} Keep one `text role=\"heading\"` and make the others plain `text` (the first text after the heading is the bar's subtitle), or move them below the `header`{OR_NO_BAR} (docs/recipes/navigation-stack.md)", bar.headings)
+                    format!("this route's `header` holds {} headings, so on iOS it is not the navigation bar: {NOT_THE_BAR} Keep one `text role=\"heading\"` and make the others plain `text` (the first text after the heading is the bar's subtitle), or move them below the `header`{OR_NO_BAR} (docs/recipes/navigation-stack.md)", bar.headings.0)
                 },
                 span: header.span(),
             });
         }
         return;
     }
-    if let (1, Some(title)) = (bar.headings, bar.title) {
+    if let ((1, 1), Some(title)) = (bar.headings, bar.title) {
         title::title_twice(title, content, out);
     }
     // Beside a tablist's segments the title has no room for a line of
@@ -747,8 +766,7 @@ impl<'a> Bar<'a> {
     /// counts against another. After it, each place is `Place::join` of the
     /// arms'.
     fn arms(&mut self, choice: Visit<'a>, state: (bool, bool, bool)) {
-        let mut ends = Vec::new();
-        for arm in choice.regions() {
+        let [first, second] = choice.regions().map(|arm| {
             let mut one = Bar {
                 passed: self.passed,
                 subtitle: self.subtitle,
@@ -757,18 +775,20 @@ impl<'a> Bar<'a> {
                 ..Bar::default()
             };
             walk_region(arm, state, &mut one);
-            self.hosted.extend(one.hosted);
-            self.readouts.extend(one.readouts);
-            self.buttons.extend(one.buttons);
-            self.statuses.extend(one.statuses);
-            self.unplaced.extend(one.unplaced);
-            self.arm_headings.push(one.headings);
-            self.arm_headings.extend(one.arm_headings);
-            ends.push([one.passed, one.subtitle, one.search, one.tablist]);
-        }
-        let join = |i: usize| Place::join(ends.iter().map(|e| e[i]));
-        (self.passed, self.subtitle, self.search, self.tablist) =
-            (join(0), join(1), join(2), join(3));
+            self.hosted.append(&mut one.hosted);
+            self.readouts.append(&mut one.readouts);
+            self.buttons.append(&mut one.buttons);
+            self.statuses.append(&mut one.statuses);
+            self.unplaced.append(&mut one.unplaced);
+            one
+        });
+        self.headings.0 += first.headings.0.min(second.headings.0);
+        self.headings.1 += first.headings.1.max(second.headings.1);
+        self.placed |= first.placed || second.placed;
+        self.passed = Place::join([first.passed, second.passed]);
+        self.subtitle = Place::join([first.subtitle, second.subtitle]);
+        self.search = Place::join([first.search, second.search]);
+        self.tablist = Place::join([first.tablist, second.tablist]);
     }
 }
 
@@ -795,7 +815,8 @@ impl<'a> Bar<'a> {
             Part::Doubt => bar.doubt = true,
             Part::Hidden => {}
             Part::Heading => {
-                bar.headings += 1;
+                bar.headings.0 += 1;
+                bar.headings.1 += 1;
                 bar.title = Some(node);
                 bar.passed = Place::Taken;
             }
@@ -856,15 +877,10 @@ impl<'a> Bar<'a> {
                     bar.statuses.push(k);
                 }
             }
-            Part::Box
-                if bar.passed != Place::Taken
-                    && !bar.avatar
-                    && filled(node)
-                    && !holds_heading(node) =>
-            {
+            Part::Box if holds_placed(node) => return true,
+            Part::Box if title && bar.passed != Place::Taken && !bar.avatar && badge_face(node) => {
                 bar.avatar = true;
             }
-            Part::Box if holds_placed(node) => return true,
             // A box with nothing in it lays the bar's items out (a spacer).
             Part::Box if empty_box(node) => {}
             // A plain box after the heading, the subtitle free, is read for
@@ -949,23 +965,80 @@ fn mac_draws(readout: Visit<'_>) -> bool {
     }
 }
 
-/// Whether a toolbar item shows all of a button's face (`HeaderMac.showable`):
-/// words, symbols, dots in boxes, and at most one picture.
+/// `HeaderMac.showable` accepts a badge, a painted face or a toolbar item
+/// of text and at most one image.
 fn mac_button(button: Visit<'_>) -> bool {
-    fn all(node: Visit<'_>, pictures: &mut usize) -> bool {
-        node.children().all(|k| match part(k) {
-            Part::Text | Part::Hidden | Part::Doubt => true,
-            Part::Box => all(k, pictures),
-            Part::Other if symbol(k) => true,
-            Part::Other if matches!(k.element(), Some(("image", _, _))) => {
-                *pictures += 1;
-                true
-            }
-            _ => false,
-        })
+    fn text_only(node: Visit<'_>) -> bool {
+        matches!(part(node), Part::Doubt)
+            || matches!(node.element(), Some(("text", _, _))) && node.children().all(text_only)
     }
-    let mut pictures = 0;
-    all(button, &mut pictures) && pictures <= 1
+
+    let mut images = 0;
+    let ordinary = button.children().all(|child| {
+        if matches!(child.element(), Some(("image", _, _))) && child.children().next().is_none() {
+            images += 1;
+            true
+        } else {
+            text_only(child)
+        }
+    });
+    if ordinary && images <= 1 {
+        return true;
+    }
+    let mut shown = button
+        .children()
+        .filter(|k| !matches!(part(*k), Part::Hidden));
+    (shown.next().is_some_and(badge_face) && shown.next().is_none())
+        || mac_painted(button, false) == Some(true)
+}
+
+/// `MacBarFace` needs a sized dot or nonempty text with an authored font.
+fn mac_painted(node: Visit<'_>, inherited_font: bool) -> Option<bool> {
+    fn writes_font(attrs: &[Attr]) -> bool {
+        ["font", "font-family", "font-size", "font-weight", "class"]
+            .iter()
+            .any(|name| has(attrs, name))
+    }
+    let font = inherited_font || node.element().is_some_and(|(_, _, a)| writes_font(a));
+    node.children().try_fold(false, |painted, child| {
+        let qualifies = match part(child) {
+            Part::Hidden => false,
+            Part::Doubt => true,
+            Part::Text => child.element().is_some_and(|(_, positional, attrs)| {
+                (font || writes_font(attrs)) && has_face_source(positional)
+            }),
+            Part::Box if mac_dot(child) => true,
+            Part::Box => mac_painted(child, font)?,
+            Part::Other if symbol(child) => false,
+            _ => return None,
+        };
+        Some(painted || qualifies)
+    })
+}
+
+fn mac_dot(node: Visit<'_>) -> bool {
+    let Some((_, _, attrs)) = node.element() else {
+        return false;
+    };
+    let positive = |name| {
+        attrs
+            .iter()
+            .rev()
+            .find(|a| a.name == name)
+            .is_some_and(|a| match &a.value {
+                Expr::Number(n, _) => *n > 0.,
+                Expr::Str(s, _) => s
+                    .strip_suffix("px")
+                    .unwrap_or(s)
+                    .parse::<f64>()
+                    .is_ok_and(|n| n > 0.),
+                _ => true,
+            })
+    };
+    (has(attrs, "class") || filled(node) && positive("width") && positive("height"))
+        && node
+            .children()
+            .all(|child| matches!(part(child), Part::Hidden))
 }
 
 /// Whether the Mac's toolbar may show a tablist as its segments
@@ -1043,7 +1116,16 @@ fn mac_refusal(header: Visit<'_>) -> Option<(Span, &'static str)> {
                     }
                     continue;
                 }
-                Part::Hidden | Part::Doubt => continue,
+                Part::Hidden => {
+                    let layer = k.element()
+                        .filter(|(_, _, attrs)| literal(attrs, "display") != Some("none"))
+                        .and_then(|(tag, _, attrs)| top_layer(tag, attrs));
+                    if let Some(what) = layer {
+                        return Some((k.span(), what));
+                    }
+                    continue;
+                }
+                Part::Doubt => continue,
                 Part::Search if opted_out(k) => "a search field the app draws (`appearance=\"none\"`)",
                 Part::Search if at[SEARCH] == Place::Taken => "a second search field",
                 Part::Tablist if at[TABLIST] == Place::Taken => "a second tablist",
@@ -1080,9 +1162,7 @@ fn mac_refusal(header: Visit<'_>) -> Option<(Span, &'static str)> {
                 Part::Pressable if has_press(k) && holds_heading(k) => "a pressable title",
                 Part::Pressable if opted_out(k) => "a button that writes `appearance=\"none\"`",
                 Part::Pressable if mac_button(k) => continue,
-                Part::Pressable => {
-                    "a button whose face holds more than words, symbols, dots and one picture"
-                }
+                Part::Pressable => "a button without a supported toolbar face",
                 Part::Box => match walk(k.children(), at) {
                     Some(found) => return Some(found),
                     None => continue,

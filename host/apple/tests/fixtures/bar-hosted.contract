@@ -9,6 +9,9 @@ routes nav
     history "/history"
       about "/history/about"
 
+style StopInk
+  color="-exact-system-red"
+
 component BarHosted
   state retried = 0
   state noted = 0
@@ -27,7 +30,7 @@ component BarHosted
         column navigationKey=`${e.id}` position="absolute" inset=0
           header display="flex" align-items="center" press=pressHeader
             if e.name == "home"
-              row role="status" testId="sync-status"
+              row role="status" padding=8 testId="sync-status"
                 text (retried == 0 ? "Ready" : "Retrying") font-size=13 testId="sync-text"
             text (e.name == "home" ? "Inbox" : e.name == "history" ? "History" : "About") role="heading" aria-level=2 flex=1
             if e.name == "home"
@@ -39,8 +42,9 @@ component BarHosted
             if e.name == "history"
               link href="/history/about" aria-label="About" testId="about-link"
                 image "symbol:info" width=20 height=20
-              button buttonStyle="glass" press=note color="-exact-system-red" testId="stop"
-                text "Stop"
+              button buttonStyle="glass" press=note color="-exact-system-blue" testId="stop"
+                image "symbol:stop"
+                text "Stop" class=StopInk
               button press=note background-color="-exact-fill" testId="note-button"
                 text "Note"
           text `${noted}` testId="noted"

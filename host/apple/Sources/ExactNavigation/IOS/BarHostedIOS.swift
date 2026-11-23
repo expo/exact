@@ -63,9 +63,16 @@ final class HostedItemView: UIView {
             readout = nil
             return
         }
-        let element = readout ?? UIAccessibilityElement(accessibilityContainer: self)
         let label = node.accessibleName
+        guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            readout = nil
+            return
+        }
+        let element = readout ?? UIAccessibilityElement(accessibilityContainer: self)
         if element.accessibilityLabel != label { element.accessibilityLabel = label }
+        let text = node.authoredLabel == nil ? "" : node.accessibleText
+        let value = text.isEmpty ? nil : text
+        if element.accessibilityValue != value { element.accessibilityValue = value }
         if readout == nil {
             element.accessibilityTraits = .staticText
             element.accessibilityFrameInContainerSpace = bounds
@@ -133,6 +140,7 @@ final class BarHosted: LiftedNodes {
     private struct Hosted {
         let item: UIBarButtonItem
         let view: HostedItemView
+        let parentID: UInt32
         weak var route: RouteController?
         var room: CGSize
         /// The name the overflow menu's entry was made from (`name`).
@@ -163,7 +171,7 @@ final class BarHosted: LiftedNodes {
         view.stand.addSubview(node)
         NodeView.containerMoves -= 1
         presenter.flats.containerChanged(parent.id)
-        let entry = Hosted(item: UIBarButtonItem(customView: view), view: view, route: c, room: room(in: c))
+        let entry = Hosted(item: UIBarButtonItem(customView: view), view: view, parentID: parent.id, route: c, room: room(in: c))
         hosted[i.id] = entry
         style(i)
         _ = view.refit()
@@ -232,8 +240,13 @@ final class BarHosted: LiftedNodes {
                 node.removeFromSuperview()
             }
         }
-        if let parent, !hosted.values.contains(where: { $0.view.stand.parent === parent }) { homes[parent.id] = nil }
+        if !hosted.values.contains(where: { $0.parentID == entry.parentID }) { homes[entry.parentID] = nil }
         presenter.owners.publish()
+    }
+
+    func reset() {
+        for id in hosted.keys { release(id) }
+        homes.removeAll()
     }
 
     private func putBack(_ node: NodeView, into parent: NodeView) {
@@ -250,7 +263,7 @@ final class BarHosted: LiftedNodes {
     // MARK: LiftedNodes
 
     func parent(of view: UIView) -> NodeView? { (view.superview as? HostedStand)?.parent }
-    func heldApart(_ view: UIView) -> Bool { parent(of: view) != nil }
+    func pressBox(crossing view: UIView, from start: UIView) -> UIView? { parent(of: view) == nil ? nil : view }
 
     func holds(_ node: NodeView, under parent: NodeView) -> Bool {
         guard let entry = hosted[node.id] else { return false }
@@ -299,7 +312,9 @@ final class LiftedPair: LiftedNodes {
     let first: any LiftedNodes, second: any LiftedNodes
     init(_ first: any LiftedNodes, _ second: any LiftedNodes) { (self.first, self.second) = (first, second) }
     func parent(of view: UIView) -> NodeView? { first.parent(of: view) ?? second.parent(of: view) }
-    func heldApart(_ view: UIView) -> Bool { first.heldApart(view) || second.heldApart(view) }
+    func pressBox(crossing view: UIView, from start: UIView) -> UIView? {
+        first.pressBox(crossing: view, from: start) ?? second.pressBox(crossing: view, from: start)
+    }
     func holds(_ node: NodeView, under parent: NodeView) -> Bool { first.holds(node, under: parent) || second.holds(node, under: parent) }
     func children(_ parent: NodeView, _ ids: [UInt32], _ want: [NodeView]) {
         first.children(parent, ids, want)

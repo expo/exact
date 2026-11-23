@@ -4574,8 +4574,9 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   fitting the words). The button's own fill, border and padding give way to the bar's
   glass. A button whose one child is a filled box holding one text, one symbol or one
   picture (an avatar, a badge) is UIKit's item too, drawn from the box without the
-  capsule; the box writes its fill, corners, size and layout, the part its type, colour
-  and fit. On a button that says `backgroundMaterial="glass"` (or `"glass-clear"`) the
+  capsule. The box writes its fill, `border-radius`, size and layout. Text takes
+  `font-size` and `font-weight`, and text and symbols take `color`. On a button that says
+  `backgroundMaterial="glass"` (or `"glass-clear"`) the
   badge sits in a glass capsule of its own. A picture (`image url`, an avatar's photo)
   fills the box by its `object-fit`, clipped to its corners; until it loads the face is
   the box's fill. Leave the font unsaid for an ordinary Edit or Done.

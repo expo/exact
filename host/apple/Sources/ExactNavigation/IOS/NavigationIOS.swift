@@ -1213,6 +1213,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         presenter.modalHost.reset()
         for nav in presentedNavigations { retireNavigation(nav, preserving: false) }
         for c in controllers.values { end(c) }
+        #if os(iOS)
+        barHosted.reset()
+        #endif
         retireTabs()
         #if os(iOS)
         tabAccessoryNoted = []

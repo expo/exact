@@ -383,9 +383,8 @@ package protocol NavigationHosting: AnyObject {
 package protocol LiftedNodes: AnyObject {
     /// The parent a lifted node, or a view in its place, is under in the authored tree.
     func parent(of view: UIView) -> NodeView?
-    /// Whether UIKit holds `view` away from its parent's box, so a press that
-    /// bubbles to the parent lands in the lifted view's box.
-    func heldApart(_ view: UIView) -> Bool
+    /// The release bounds for a press that bubbles out of a lifted view.
+    func pressBox(crossing view: UIView, from start: UIView) -> UIView?
     /// Whether `parent` lifted `node`, which `parent`'s children op then leaves where it is.
     func holds(_ node: NodeView, under parent: NodeView) -> Bool
     /// A children op on `parent`, before the presenter places it.
