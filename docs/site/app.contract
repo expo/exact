@@ -2,7 +2,7 @@
 // tools/gen.ts turns ../*.md into content/<route>.ts and content/nav.ts from constants/navigation.ts;
 // app.ts imports one page's module per route, so a reader downloads only the page it reads.
 // Each route waits for the reader before its runtime loads.
-use Page, Nav, Moved, Markdown, Address, Viewport, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
+use Page, Nav, Moved, Markdown, Address, Viewport, ToolAnswer, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
 use Sidebar, Tabs from "./components/sidebar.contract"
 use Article from "./components/article.contract"
 
@@ -250,7 +250,54 @@ component App
   derive from = page.movedFrom.includes(searchParam(top(nav), "from")) ? searchParam(top(nav), "from") : ""
   derive slashless = top(nav).name == "notfound" and top(nav).url.length > 1 and top(nav).url.endsWith("/") ? top(nav).url.slice(0, top(nav).url.length - 1) : ""
   derive destination = moved.go != "" ? moved.go : slashless
+  state askedTool = ""
+  state askedPath = ""
+  state askedText = ""
+  state askedCount = 0
+  state missed = false
+  resource answered = answerTool(askedTool, askedPath, askedText, askedCount) as shape ToolAnswer else empty()
+  tool search_docs reads "Searches the Exact docs and returns the matching sections as JSON, each with a title and a path. Pass a path to get_page_markdown to read a result." = toolSearch
+    returns answered.text
+    fails when answered.failed
+  tool get_page_markdown reads "Returns a page of the Exact docs as Markdown. With a section, it returns only the parts under the headings that match, each with its parent headings." = toolMarkdown
+    returns answered.text
+    fails when answered.failed
+  tool get_page_info reads "Returns the path, the title, the description, the date of the last change and the headings of a page of the Exact docs as JSON, without the page's text. Use it to find a section before reading the page with get_page_markdown." = toolInfo
+    returns answered.text
+    fails when answered.failed
+  tool get_site_overview reads "Returns llms.txt: an index of every page of the Exact docs, each with its Markdown URL and a short description." = toolOverview
+    returns answered.text
+    fails when answered.failed
+  tool list_sections reads "With an empty area, returns each area of the sidebar with the names of its sections as JSON. With an area, returns the pages of that area, or of one of its sections, each with a title and a path." = toolSections
+    returns answered.text
+    fails when answered.failed
+  tool navigate_page writes additive closed "Opens a page of the Exact docs in this tab." = toolNavigate
+    returns missed ? "No page is at that path. search_docs and list_sections return the paths of the pages." : `Opened ${top(nav).url}.`
+    fails when missed
+  action askTool(tool: string, path: string, text: string, count: number)
+    askedTool = tool
+    askedPath = path
+    askedText = text
+    askedCount = count
+  action toolSearch(query: string, limit: number)
+    askTool("search_docs", "", query, limit)
+  action toolMarkdown(path: string, section: string)
+    askTool("get_page_markdown", path == "" ? top(nav).url : path, section, 0)
+  action toolInfo(path: string)
+    askTool("get_page_info", path == "" ? top(nav).url : path, "", 0)
+  action toolOverview
+    askTool("get_site_overview", "", "", 0)
+  action toolSections(area: string, section: string)
+    askTool("list_sections", area, section, 0)
+  action toolNavigate(path: string)
+    let miss = top(go(nav, path)).name == "notfound"
+    missed = miss
+    if not miss
+      openPage(path)
   action follow(url: string)
+    close("search")
+    openPage(url)
+  action openPage(url: string)
     menu = false
     copied = false
     linked = false
@@ -258,7 +305,6 @@ component App
     voted = ""
     visible = []
     active = ""
-    close("search")
     let next = go(nav, url)
     nav = next
     // sidebar scrolling must not cancel the router's pending fragment scroll.

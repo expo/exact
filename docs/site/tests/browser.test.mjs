@@ -232,6 +232,43 @@ test('Open in AI uses the public page or its repository source', () => withPage(
   expect(prompt).not.toContain('docs.exact.example');
 }));
 
+test('a page offers its tools to a browser\'s agent, and each tool answers a call', () => withPage({}, async page => {
+  await page.addInitScript(() => {
+    window.offered = [];
+    Object.defineProperty(Document.prototype, 'modelContext', {
+      configurable: true,
+      value: { registerTool: tool => { window.offered.push(tool); return Promise.resolve(); } },
+    });
+  });
+  const hit = { objectID: '1', url: 'https://exact.expo.dev/recipes/website#a-deep-link', hierarchy: { lvl0: 'Recipes', lvl1: 'Recipe: a website', lvl2: 'A deep link' } };
+  await page.route('https://*.algolia.net/**', route => route.fulfill({
+    json: { hits: [hit] },
+    headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' },
+  }));
+  await visit(page, '/start');
+  await page.waitForFunction(() => window.offered.length === 6);
+  expect(await page.evaluate(() => window.offered.map(tool => [tool.name, tool.annotations.readOnlyHint]))).toEqual([
+    ['search_docs', true], ['get_page_markdown', true], ['get_page_info', true], ['get_site_overview', true], ['list_sections', true], ['navigate_page', false]]);
+  const call = (name, input) => page.evaluate(([name, input]) => window.offered.find(tool => tool.name === name).execute(input), [name, input]);
+
+  expect(await call('search_docs', { query: 'deep link', limit: 3 })).toMatchObject({
+    outcome: 'ok', value: JSON.stringify([{ title: 'Recipes > Recipe: a website > A deep link', path: '/recipes/website#a-deep-link' }]) });
+  expect((await call('get_page_markdown', { path: '', section: '' })).value).toStartWith('# Start here: building an app with Exact');
+  expect((await call('get_page_markdown', { path: `${origin}/recipes/website.md`, section: 'a deep link' })).value).toStartWith('# Recipe: a website\n## A deep link');
+  expect(JSON.parse((await call('get_page_info', { path: '/recipes/website/' })).value)).toMatchObject({
+    path: '/recipes/website', title: 'Recipe: a website', headings: expect.arrayContaining([{ level: 2, text: 'A deep link' }]) });
+  expect((await call('get_site_overview', {})).value).toBe(readFileSync(resolve(dist, 'llms.txt'), 'utf8'));
+  expect(JSON.parse((await call('list_sections', { area: '', section: '' })).value).map(area => area.area)).toEqual(['home', 'learn', 'reference']);
+  expect(JSON.parse((await call('list_sections', { area: 'home', section: 'Get started' })).value)[0]).toEqual({
+    section: 'Get started', title: 'Start here: building an app with Exact', path: '/start' });
+  expect(await call('get_page_markdown', { path: '/no-such-page', section: '' })).toMatchObject({ outcome: 'failed', value: expect.stringContaining('No page is at /no-such-page') });
+
+  expect(await call('navigate_page', { path: '/recipes/website' })).toMatchObject({ outcome: 'ok', value: 'Opened /recipes/website.' });
+  await page.getByTestId('h-a-deep-link').waitFor();
+  expect(await call('navigate_page', { path: '/no-such-page' })).toMatchObject({ outcome: 'failed' });
+  expect(new URL(page.url()).pathname).toBe('/recipes/website');
+}));
+
 for (const mode of ['default', '--loopback', '--lan']) {
   test(`start serves the published site on the requested port (${mode})`, async () => {
     const fixture = mkdtempSync(resolve(import.meta.dir, '../../../target/docs-start-'));

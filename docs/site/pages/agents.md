@@ -45,6 +45,25 @@ Each page has these actions, at the top of the page and in the rail beside it:
 - **Claude, ChatGPT and Cursor:** open a new chat that reads the page.
 - **Claude Code and Codex:** open the app with a prompt that reads the page.
 
+## WebMCP tools
+
+Each page offers six tools to an agent that controls the browser, through [WebMCP](https://webmachinelearning.github.io/webmcp/) (`document.modelContext`). The site has no MCP server: an agent without a browser reads the Markdown pages and `llms.txt`.
+
+| Tool | Input | Result |
+| --- | --- | --- |
+| `search_docs` | `query`, `limit` (1 to 20) | The matching sections as JSON, each with a `title` and a `path` |
+| `get_page_markdown` | `path`, `section` | The page as Markdown, or only the parts under the headings that match `section` |
+| `get_page_info` | `path` | The page's `path`, `title`, `description`, `modificationDate` and `headings` as JSON |
+| `get_site_overview` | None | The content of `/llms.txt` |
+| `list_sections` | `area`, `section` | The sidebar's areas with the names of their sections, or the pages of one area or section, as JSON |
+| `navigate_page` | `path` | Opens the page in the tab |
+
+Every input is required, and an empty string stands for one left out: an empty `path` is the current page, an empty `section` is the whole page or every section of the area, and an empty `area` lists the areas. A `path` starts with `/`, as in `/recipes/money`. The tools that read a page also take a URL of these docs, as `llms.txt` writes them.
+
+A call answers with an object. When `outcome` is `ok`, `value` holds the result as a string. For input the tool cannot answer, such as a path with no page, `outcome` is `failed` and `value` says why. Only `navigate_page` changes what the tab shows.
+
+The site declares these tools as any Exact app does: [Recipe: tools an agent or the system calls](../../recipes/tools.md).
+
 ## Terminal lookups
 
 An app that `bun scripts/exact.mjs new` makes has an `AGENTS.md` and a `CLAUDE.md` that tell its agent where to look. From the app's folder, these commands answer without the website:

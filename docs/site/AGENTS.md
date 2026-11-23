@@ -75,6 +75,22 @@ the index is the Algolia Crawler's: it crawls the deployed site from `sitemap.xm
 and writes DocSearch records (`hierarchy.lvl0` to `lvl6`, `content`, `url`), so nothing here
 holds a write key. Its configuration lives in the Algolia dashboard (Data sources, Crawler).
 
+## WebMCP tools
+
+`app.contract` declares six tools for a browser's agent, and `intents.tools` in `app.json` holds
+each one's title and the words for its parameters (`../recipes/tools.md`). `pages/agents.md` lists
+them for readers.
+
+- A tool that reads writes what it asks for to state, and the resource `answered` (`answerTool`
+  in `app.ts`) holds the answer. The call ends when that resource settles. A tool whose action
+  has a `send` is not read-only for the agent (`readOnlyHint`).
+- `app.ts` can fetch only `/assets/` files from the site's own origin. The tools read
+  `/assets/markdown/<route>.md` and `/assets/llms.txt`, a copy of `/llms.txt` that
+  `tools/postbuild.ts` writes.
+- A tool's parameters are all required, each a string, a number or a bool, so an empty string
+  stands for one left out.
+- `tests/browser.test.mjs` gives the page a stand-in `document.modelContext` and calls each tool.
+
 ## Descriptions
 
 A page's description is in `llms.txt`, `sitemap.md`, the page's head and the top of its Markdown.

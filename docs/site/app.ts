@@ -90,14 +90,18 @@ const missing: Page = {
 
 const words = (s: string) => s.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
 
+const cleaned = (url: string) => {
+  const path = url.split(/[?#]/)[0].replace(/^\/+/, '/').replace(/\/index\.html$/, '/').replace(/\.(html|md)$/, '');
+  return path.length > 1 ? path.replace(/\/+$/, '') : path;
+};
+
 // The not-found page's URL, as expo/docs' getRedirectPath reads it: no query or fragment, no index.html, .html
 // or .md, no trailing slash. A listed old path gives its page; a page's own path (reached with a trailing slash
 // or an extension) gives itself. Else the pages sharing the most words with the URL are suggested, as
 // expo/docs' worker/url-recovery.ts suggests them.
 function resolve(url: string): Result<'resolveMoved'> {
   if (!url) return { to: '', go: '', suggestions: [] };
-  const path = url.split(/[?#]/)[0].replace(/^\/+/, '/').replace(/\/index\.html$/, '/').replace(/\.(html|md)$/, '');
-  const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
+  const clean = cleaned(url);
   const go = (to: string) => ({ to, go: `${to}?from=${encodeURIComponent(clean)}`, suggestions: [] });
   if (moved.redirects[clean]) return go(moved.redirects[clean]);
   if (clean !== url && moved.pages.some(p => p.path === clean)) return { to: clean, go: clean, suggestions: [] };
@@ -111,6 +115,114 @@ function resolve(url: string): Result<'resolveMoved'> {
   return { to: '', go: '', suggestions };
 }
 
+const searchHits = async (body: Record<string, unknown>) => {
+  const response = await fetch(`${SEARCH_HOST}/1/indexes/${search.index}/query`, {
+    method: 'POST',
+    headers: { 'X-Algolia-Application-Id': search.appId, 'X-Algolia-API-Key': search.searchKey },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`Search answered ${response.status}.`);
+  return ((await response.json()) as { hits: DocSearchHit[] }).hits;
+};
+
+async function textAt(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`${url} answered ${response.status}.`);
+  return await response.text();
+}
+
+function pageAt(given: string) {
+  const here = new URL(import.meta.url);
+  const url = (given.startsWith('/') || /^https?:\/\//.test(given)) && URL.canParse(given, here) ? new URL(given, here) : null;
+  if (!url || ![here.origin, moved.origin].includes(url.origin)) throw new Error('path must start with "/", or be a URL of these docs.');
+  const clean = cleaned(url.pathname);
+  const path = moved.redirects[clean] ?? (clean === '/index' ? '/' : clean);
+  const page = moved.pages.find(page => page.path === path);
+  if (!page) throw new Error(`No page is at ${clean}. search_docs and list_sections return the paths of the pages.`);
+  return page;
+}
+
+const markdownAt = (route: string) => textAt(`/assets/markdown/${route}.md`);
+
+function outline(markdown: string) {
+  const lines = markdown.split('\n');
+  const headings: { level: number; text: string; line: number }[] = [];
+  let fenced = false;
+  lines.forEach((line, index) => {
+    if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+    const heading = fenced ? null : /^(#{1,6})\s+(.+?)\s*#*$/.exec(line);
+    if (heading) headings.push({ level: heading[1].length, text: heading[2], line: index });
+  });
+  return { lines, headings };
+}
+
+const isoDate = (date: string) => {
+  const time = Date.parse(`${date} UTC`);
+  return Number.isNaN(time) ? date : new Date(time).toISOString().slice(0, 10);
+};
+
+const plain = (heading: string) => heading.replaceAll('`', '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+function sectionsOf(markdown: string, section: string, path: string) {
+  const { lines, headings } = outline(markdown);
+  const found = headings.flatMap((heading, index) => {
+    if (plain(heading.text) !== plain(section)) return [];
+    const parents: string[] = [];
+    let level = heading.level;
+    for (const earlier of headings.slice(0, index).reverse()) {
+      if (earlier.level < level) {
+        parents.unshift(lines[earlier.line]);
+        level = earlier.level;
+      }
+    }
+    const end = headings.slice(index + 1).find(next => next.level <= heading.level)?.line ?? lines.length;
+    return [[...parents, ...lines.slice(heading.line, end)].join('\n').trimEnd()];
+  });
+  if (!found.length) throw new Error(`No heading on ${path} is "${section}". get_page_info returns the headings of a page.`);
+  return found.join('\n\n');
+}
+
+function sectionsIn(area: string, section: string) {
+  const inArea = (id: string) => nav.groups.filter(group => group.tab === id);
+  if (!area) return nav.tabs.map(tab => ({ area: tab.id, sections: inArea(tab.id).map(group => group.title) }));
+  if (!nav.tabs.some(tab => tab.id === area)) throw new Error(`No area is "${area}". The areas: ${nav.tabs.map(tab => tab.id).join(', ')}.`);
+  const groups = inArea(area).filter(group => !section || group.title === section);
+  if (!groups.length) throw new Error(`No section of ${area} is "${section}". Its sections: ${inArea(area).map(group => group.title).join(', ')}.`);
+  return groups.flatMap(group =>
+    group.items.map(item => {
+      const parent = group.items.find(other => other.route === item.parent);
+      return { section: group.title, ...(parent && { group: parent.title }), title: item.title, path: item.href };
+    }),
+  );
+}
+
+async function searchResults(query: string, limit: number) {
+  if (!query.trim()) throw new Error('query must not be empty.');
+  if (!Number.isInteger(limit) || limit < 1 || limit > 20) throw new Error('limit must be a whole number from 1 to 20.');
+  const hits = await searchHits({ query: query.trim(), hitsPerPage: limit });
+  return hits.map(hit => {
+    const url = new URL(hit.url);
+    return { title: ['lvl0', ...LEVELS].map(level => hit.hierarchy[level]).filter(Boolean).join(' > '), path: `${url.pathname}${url.hash}` };
+  });
+}
+
+const tools: Record<string, (path: string, text: string, count: number) => Promise<string>> = {
+  search_docs: async (_path, query, limit) => JSON.stringify(await searchResults(query, limit)),
+  get_page_markdown: async (given, section) => {
+    const { path, route } = pageAt(given);
+    const markdown = await markdownAt(route);
+    return section ? sectionsOf(markdown, section, path) : markdown;
+  },
+  get_page_info: async given => {
+    const { path, route } = pageAt(given);
+    const { title, description, updated } = (await pages[route]()).default as Page;
+    const { headings } = outline(await markdownAt(route));
+    return JSON.stringify({ path, title, description, modificationDate: isoDate(updated), headings: headings.map(({ level, text }) => ({ level, text })) });
+  },
+  get_site_overview: () => textAt('/assets/llms.txt'),
+  list_sections: async (area, section) => JSON.stringify(sectionsIn(area, section)),
+};
+
 const sources: Sources = {
   // Only a route with no page is missing. A page whose module fails to download rejects, so the
   // reader is told and can try again.
@@ -122,14 +234,17 @@ const sources: Sources = {
   resolveMoved: async ([url]): Promise<Result<'resolveMoved'>> => resolve(url),
   searchDocs: async ([query]): Promise<Result<'searchDocs'>> => {
     if (query.trim().length < 2) return [];
-    const response = await fetch(`${SEARCH_HOST}/1/indexes/${search.index}/query`, {
-      method: 'POST',
-      headers: { 'X-Algolia-Application-Id': search.appId, 'X-Algolia-API-Key': search.searchKey },
-      body: JSON.stringify({ query, hitsPerPage: 20, attributesToSnippet: ['content:24'], highlightPreTag: MARK_START, highlightPostTag: MARK_END }),
-    });
-    if (!response.ok) throw new Error(`Search answered ${response.status}.`);
-    const { hits } = (await response.json()) as { hits: DocSearchHit[] };
+    const hits = await searchHits({ query, hitsPerPage: 20, attributesToSnippet: ['content:24'], highlightPreTag: MARK_START, highlightPostTag: MARK_END });
     return groupedByPage(hits.map(searchHit));
+  },
+  answerTool: async ([tool, path, text, count]): Promise<Result<'answerTool'>> => {
+    const read = tools[tool];
+    if (!read) return { failed: false, text: '' };
+    try {
+      return { failed: false, text: await read(path, text, count) };
+    } catch (error) {
+      return { failed: true, text: error instanceof Error ? error.message : String(error) };
+    }
   },
   fetchMarkdown: async ([route]): Promise<Result<'fetchMarkdown'>> => {
     const response = await fetch(`/assets/markdown/${route}.md`);

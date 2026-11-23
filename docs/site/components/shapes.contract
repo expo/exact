@@ -148,6 +148,10 @@ shape Address
 shape Viewport
   width: number
 
+shape ToolAnswer
+  failed: bool
+  text: string
+
 shape SearchPart
   id: string
   text: string
