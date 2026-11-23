@@ -7,11 +7,11 @@ command-line tools. Set `JAVA_HOME` to the JDK (or put both `java` and
 `javac` on PATH), and `ANDROID_HOME` to the SDK. `ANDROID_NDK_HOME` can
 select an NDK explicitly; otherwise Exact finds one under the SDK.
 
-In the EAS production environment, create `EXACT_KEYSTORE` as a secret
-file variable containing your upload keystore. Create secret strings
+In EAS production, create `EXACT_KEYSTORE` as a secret file variable
+containing the upload keystore that signs the bundle. Create secret strings
 `EXACT_KEYSTORE_PASSWORD`, `EXACT_KEY_ALIAS` and `EXACT_KEY_PASSWORD`.
 The [reference](../reference.md#import-an-ios-signing-identity-on-a-ci-worker)
-also names the fields for EAS-managed credentials.
+covers EAS-managed credentials.
 
 Create `.eas/build/eas-android.yml`:
 
@@ -49,12 +49,13 @@ missing packages and compiler paths.
 Gradle uses Exact's settings repositories even if a worker init script adds
 project repositories.
 
-`EXACT_VERSION` becomes `versionName`; the resolved number becomes
-`versionCode`. A bundle requires all four signing inputs and bakes
-production update trust (LLP 1030.003 D6, D8). With `deploy.store.android`
-absent or `"0"` the APK has no update store, so it needs no update signing
-keys or receipt; every change ships as a new build. At `"A"` it needs both
-(LLP 1030.006).
+`EXACT_VERSION` becomes `versionName` and the resolved number becomes
+`versionCode`. The bundle requires all four upload credentials and bakes
+production trust (LLP 1030.003 D6, D8). With `deploy.store.android`
+absent or `"0"`, every change ships as a new build. At `"A"`, the bake needs
+public verification keys in `deploy.signing.keys` and `EXACT_UPDATE_RECEIPT`
+for an existing stream or `EXACT_UPDATE_GENESIS=1` for a new one (LLP 1030.006).
+Keep the private publishing key off EAS.
 For an APK, set `EXACT_UPDATE_TRUST=production` and use
 `android --release --no-install --json`; its path is
 `target/android/app/outputs/apk/release/app-release.apk`. Neither command
