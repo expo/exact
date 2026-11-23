@@ -310,8 +310,8 @@ test('WebMCP reads headings after an inline code span that starts with three bac
   const path = '/reference/developer/generate-typescript-data-source-types';
   const info = await call('get_page_info', { path });
   const section = await call('get_page_markdown', { path, section: 'Notifications' });
-  expect(JSON.parse(info.value).headings).toContainEqual({ level: 3, text: 'Notifications' });
-  expect(section).toMatchObject({ outcome: 'ok', value: expect.stringContaining('\n### Notifications\n') });
+  expect(JSON.parse(info.value).headings).toContainEqual({ level: 2, text: 'Notifications' });
+  expect(section).toMatchObject({ outcome: 'ok', value: expect.stringContaining('\n## Notifications\n') });
 }));
 
 test('WebMCP page info uses metadata and headings from one build', () => withPage({}, async page => {
