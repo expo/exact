@@ -1,0 +1,14 @@
+```prompt Show a long article or document
+Make the Exact app in this folder show a document longer than a screen (an article, a help page, a Markdown note, a transcript) as one text per block. Use https://github.com/expo/exact/blob/main/docs/recipes/long-text.md as the source for each step. The Exact checkout has the same page at docs/recipes/long-text.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say which document, whether it is Markdown or plain text, and whether app.ts or a server holds it, ask me before you write code.
+3. Split the document into blocks in app.ts or on the server, at the boundaries the source marks, and return each block with an `id`. Never put the whole document in one `text`: past a length Apple does not document, iOS and macOS set a text without kerning, ligatures or Arabic joining.
+4. For Markdown, a block is what a Markdown parser calls one. A fenced code block or a list can hold blank lines and is one block: do not split at every blank line. For plain text, a block is a paragraph: split at blank lines, or at single line breaks where the text has no blank lines. A line break can be `\n`, `\r\n` or U+2029.
+5. Never split inside a paragraph, however long it is. Footnotes are numbered within one text: write the numbers into the source before you split, or keep a document with footnotes in one text.
+6. In app.contract, read the blocks as a resource and draw a `scroll` that holds a `column` with a `gap`. In the column, write a `for` over the blocks with `key` set to the block's id, and one `text` for each block. A Markdown block takes `markup="markdown"`.
+7. Give each block a `testId` from its id. Add a test in app.test.contract with a document that has a code block or a list with a blank line in it: after `clock data`, expect the last block (`expect tree has`) and no block after it (`expect tree missing`).
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me which document the app shows, where it is split and how many blocks it has, what the tests and checks reported, and the launch command for each target platform.
+```

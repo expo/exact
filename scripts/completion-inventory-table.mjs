@@ -182,7 +182,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/unload.rs", "Presenter::before_unload"],
     ["painted:host/painted/src/presenter/wheel.rs", "Presenter::wheel_at"],
     ["painted:host/painted/src/surface_controls.rs",
-      "Presenter::blur Presenter::dispatch_press Presenter::focusable Presenter::forget_pads Presenter::handler_target Presenter::hardware_key " +
+      "Presenter::blur Presenter::dispatch_press Presenter::focusable Presenter::forget_pads Presenter::handler_target Presenter::hardware_key Presenter::in_hidden_mover Presenter::listener_parent " +
       "Presenter::hardware_key_typing Presenter::hardware_pad Presenter::has_gamepad_input Presenter::mouse_press_target Presenter::press_at Presenter::press_target"],
     ["painted:host/painted/src/surfaces.rs", "Surfaces::sync"],
     ["painted:host/painted/src/transform_binding.rs", "Host::dispatch_transform_held"],
@@ -856,9 +856,10 @@ export const classifications = [
     ["runner:runner/src/store/presence.rs", "Store::adopt_occupancy#revision:1 Store::set_locked#revision:1"],
   ]),
   group("replies", ["one-shot", "subscription", "durable operation"], "current presenter/reader session; a request may pump several completion families", "UI-owned",
-    "host/painted/src/agent.rs serve and agent/stdio.rs handle_request pump the current Presenter, then dispatch hold/picker answers and frame work. canvas/jni_agent.rs run calls agent_with_reader, which installs set_agent_turn only for the agent call and restores it afterward; pump.rs and commands.rs use that callback to hand out requests and admit queued reader answers.", [
+    "host/painted/src/agent.rs serve and agent/stdio.rs handle_request pump the current Presenter, then dispatch hold/picker answers and frame work; agent/attached.rs passive answers an attached session's reads with no pump. canvas/jni_agent.rs run calls agent_with_reader, which installs set_agent_turn only for the agent call and restores it afterward; pump.rs and commands.rs use that callback to hand out requests and admit queued reader answers.", [
     ["painted:host/painted/src/agent.rs", "serve"],
     ["painted:host/painted/src/agent/stdio.rs", "handle handle_for_window"],
+    ["painted:host/painted/src/agent/attached.rs", "passive"],
     ["painted:host/painted/src/canvas/agent.rs", "after_turn CanvasHost::agent_with_reader next_stream waiting"],
     ["painted:host/painted/src/canvas/jni_agent.rs", "run"],
     ["painted:host/painted/src/presenter/requests.rs", "Presenter::agent_reader_turn Presenter::set_agent_turn"],

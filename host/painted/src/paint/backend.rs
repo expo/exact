@@ -337,6 +337,9 @@ pub trait Backend {
         _direct: bool,
     ) {
     }
+    /// A video alive and shown nowhere, in a hidden `portal` mover (LLP
+    /// 1013.002 D5): a reader that hosts players keeps its player.
+    fn held_video(&mut self, _id: ViewId, _props: &str) {}
     /// An audio player whose element has no visible controls to place.
     fn boxless_audio(&mut self, id: ViewId, props: &str) {
         self.native(

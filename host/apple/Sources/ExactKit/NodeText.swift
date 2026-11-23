@@ -16,6 +16,10 @@ extension NodeView {
     }
 
     package var isParagraph: Bool { kind == "text" }
+    /// An `input` or a `textarea`: its overflow is its editor's, which scrolls
+    /// its own text, as a web `<textarea>`'s inner editor does. A scroll view
+    /// of the node's would lie over the editor and take its touches and clicks.
+    var isTextControl: Bool { kind == "input" || kind == "textarea" }
 
     // A walk of the node tree says what it walks (LLP 1072 T13). A reader
     // (names, focus, the agent, derived reads of a header or a menu) walks the

@@ -125,16 +125,22 @@ const ONE = { receivers: 'receiver', services: 'service', queries: 'query', acti
 
 const escape = (s) => s.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
-/** The application meta-data a package's configuration may become (LLP 1133.021 §9 item 7, D18): by interface and
- * configuration key, the meta-data name. The Maps SDK reads its key from `com.google.android.geo.API_KEY`. */
-export const CONFIG_META = { '@exact/maps': { apiKey: 'com.google.android.geo.API_KEY' } };
+/** The `<meta-data>` names a package's configuration key may fill (LLP 1133.021 §9 item 7), for a vendor SDK that reads
+ * its key from the manifest by its own name: Google's Maps SDK, `com.google.android.geo.API_KEY` ([set
+ * up](https://developers.google.com/maps/documentation/android-sdk/config)). An interface opts a key in with
+ * `"metadata": "<name>"` in its `config.android` declaration. */
+export const CONFIG_METADATA = new Set(['com.google.android.geo.API_KEY']);
 
-/** The `<meta-data>` lines `config` (`packageConfig`'s map, extension to values) carries under [CONFIG_META]. */
-export function configMetaData(config) {
-  const lines = [];
-  for (const [name, keys] of Object.entries(CONFIG_META)) {
-    const values = config.get(name.split('/').at(-1)) ?? {};
-    for (const [key, meta] of Object.entries(keys)) if (typeof values[key] === 'string') lines.push(`        <meta-data android:name="${meta}" android:value="${escape(values[key])}" />`);
+/** The `<meta-data>` lines `configs` (`packageConfigs`' entries) fill. Throws, naming the package, for a name not on
+ * [CONFIG_METADATA] and for a name two packages fill. */
+export function configMetaData(configs) {
+  const lines = [], filled = new Map();
+  for (const { name, declared, values } of configs) for (const [key, d] of Object.entries(declared)) {
+    if (d.metadata === undefined) continue;
+    if (!CONFIG_METADATA.has(d.metadata)) throw new Error(`${name}'s exact.json: its android configuration key ${key} fills <meta-data> ${JSON.stringify(d.metadata)}, which is not on the list (scripts/android-manifest.mjs CONFIG_METADATA)`);
+    if (filled.has(d.metadata)) throw new Error(`${name} and ${filled.get(d.metadata)} both fill <meta-data> ${d.metadata}; an app binds one of them`);
+    filled.set(d.metadata, name);
+    if (values[key] !== undefined) lines.push(`        <meta-data android:name="${d.metadata}" android:value="${escape(String(values[key]))}" />`);
   }
   return lines;
 }

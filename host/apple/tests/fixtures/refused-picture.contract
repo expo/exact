@@ -1,0 +1,10 @@
+use photoLibraryStatus, PhotoLibraryStatus from "@exact/photos"
+
+component App
+  resource status = photoLibraryStatus() as shape PhotoLibraryStatus else empty()
+  action cancel(key: string)
+    preventDefault()
+  view
+    column
+      image "photos:probe" width=40 height=40
+      textarea testId="editor" value="a" keycapture=cancel rows=3

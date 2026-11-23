@@ -112,10 +112,13 @@ internal fun mux(part: File, file: File): Boolean {
         val track = muxer.addTrack(format)
         muxer.start()
         val info = MediaCodec.BufferInfo()
+        // The whole array, each frame at its offset: the muxer reads a heap buffer from its array's start plus the
+        // info's offset, and not from a slice's own offset.
+        val all = ByteBuffer.wrap(bytes)
         frames.forEachIndexed { i, (start, size) ->
             // 1,024 samples a frame (AAC-LC): the times are rebuilt from the count.
-            info.set(0, size, i * 1024L * 1_000_000L / rate, MediaCodec.BUFFER_FLAG_KEY_FRAME)
-            muxer.writeSampleData(track, ByteBuffer.wrap(bytes, start, size).slice(), info)
+            info.set(start, size, i * 1024L * 1_000_000L / rate, MediaCodec.BUFFER_FLAG_KEY_FRAME)
+            muxer.writeSampleData(track, all, info)
         }
         muxer.stop()
     } finally {
