@@ -2723,10 +2723,22 @@ driver is connected. **Detach Agent** in the same menu ends it, and so does send
 background. The picture is UIKit's snapshot of the app's window, without the indicator. The
 driver names a simulator that runs the app when the selected one does not.
 
+`bun scripts/agent.mjs web --app <app> --attach tree state logs layout` reads a tab of the app's
+running JS-target dev loop (`bun exact.mjs web`) the same way, in the person's own browser. The
+person presses **⌥⇧A** in the tab, which shows a pairing code that works once, for two minutes; the
+driver asks for it on a terminal, or reads the first line of stdin (`… --attach tree < code.txt`, or
+piped), and presents it on the loop's attach channel; then the tab asks the person to **Allow**. **Agent Attached** shows in the tab's corner
+while the driver is connected; **Detach**, ⌥⇧A again, a reload, loading another page or closing the tab
+ends it, and a code from before a reload is refused. The channel takes only a connection from this
+machine naming the loop by a loopback name, and no browser page. A tab is only read: it cannot take
+its own picture, and nothing a page does is a person's input, so `screenshot`, `tap`, `type` and
+`call` are refused `unsupported`. A tab the driver opened (`?agent`), a game's wasm loop and a
+release build have no attach.
+
 Only a Mac app or an iOS simulator app that `host/apple/build.mjs` builds to run carries the
 listener; a release, archive, embedded, physical-device or Apple TV build has none of it, and the
-driver refuses Android, Windows, Linux, the web, tvOS, watchOS and a physical iPhone before it
-runs any platform tool.
+driver refuses Android, Windows, Linux, tvOS, watchOS and a physical iPhone before it runs any
+platform tool.
 
 ### Inspect work and native presentation
 
