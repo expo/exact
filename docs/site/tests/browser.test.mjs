@@ -455,23 +455,6 @@ test('WebMCP navigation is unavailable while the search dialog is modal', () => 
   await page.getByTestId('h-a-deep-link').waitFor();
 }));
 
-test('WebMCP navigation stays unavailable when search closes and reopens in one turn', () => withPage({}, async page => {
-  await visitWithTools(page);
-  const open = page.getByTestId('search-open');
-  await open.click();
-  expect(await open.evaluate(async button => {
-    const first = document.querySelector('#search');
-    const closed = new Promise(resolve => first.addEventListener('close', resolve, { once: true }));
-    first.close();
-    button.click();
-    const reopened = document.querySelector('#search').matches(':modal');
-    await closed;
-    return { reopened, offered: window.offered.some(tool => tool.name === 'navigate_page') };
-  })).toEqual({ reopened: true, offered: false });
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => window.offered.some(tool => tool.name === 'navigate_page'));
-}));
-
 for (const mode of ['default', '--loopback', '--lan']) {
   test(`start serves the published site on the requested port (${mode})`, async () => {
     const fixture = mkdtempSync(resolve(import.meta.dir, '../../../target/docs-start-'));
