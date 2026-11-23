@@ -51,6 +51,7 @@ package protocol ImageLoader: AnyObject {
     func reset()
     /// The first batch was applied.
     func bootPass()
+    var hasRefusedPictures: Bool { get }
     /// A batch ended: pictures it held back may be asked again.
     func readmitPictures()
     /// A bar started drawing an image in a hidden header.

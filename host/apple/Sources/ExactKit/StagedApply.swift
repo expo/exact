@@ -228,6 +228,7 @@ extension StagePlan {
     /// The navigation roots' tabs a batch carries replace those shown, so
     /// two that carry them keep their order.
     func disjoint(_ other: Batch) -> Bool {
+        if other.hasStoreEffects { return false }
         if other.rootTabs != nil, batch.rootTabs != nil { return false }
         if other.routeInspectors != nil, batch.routeInspectors != nil { return false }
         if let theirs = other.controlReads, theirs.contains(where: { structural.contains($0.key) || reads[$0.key]?.isDisjoint(with: $0.value.parts) == false }) { return false }
@@ -364,9 +365,29 @@ extension ExactSession {
 
     /// Every batch the session applies comes here (`order`).
     package func apply(_ batch: Batch) { order(PendingBatch(batch: batch)) }
+    #if os(macOS)
+    func applyAppKitEvent(_ batch: Batch) { order(PendingBatch(batch: batch, presentation: .appKitEvent)) }
+    #endif
     /// `apply` for a batch that may change nothing (`applyUnlessEmptyNow`).
     func applyUnlessEmpty(_ batch: Batch, scrolled: Bool = false, resized: Bool = false) {
-        order(PendingBatch(batch: batch, unlessEmpty: true, scrolled: scrolled, resized: resized))
+        order(PendingBatch(batch: batch, presentation: .unlessEmpty, scrolled: scrolled, resized: resized))
+    }
+
+    func presentation(for batch: Batch, published: Published) -> PendingBatch.Presentation? {
+        if case .advance = published { return .unlessEmpty }
+        #if os(macOS)
+        if batch.hasStoreEffects || batch.layoutProvisional || batch.replacesTree {
+            if case .reply = published { return .appKitEvent }
+            return .full
+        }
+        #endif
+        return changesNothing(batch) && clockUnchanged(batch) ? nil : .full
+    }
+
+    func canSkipAppKitPresentation(_ batch: Batch) -> Bool {
+        stage == nil && !pending.contains { $0.batch.sequence < batch.sequence }
+            && clock == nil && !ExactEnv.agentFreezes && clockUnchanged(batch)
+            && !batch.layoutProvisional && !batch.replacesTree && rasters?.hasRefusedPictures != true
     }
 
     /// Batches apply in the order the runtime made them (`Batch.sequence`,
@@ -482,7 +503,8 @@ extension ExactSession {
             entry.batch = plan.withheld(entry.batch) { [unowned self] in presenter.views[$0]?.style }
         }
         inCoversChain(entry.cause) {
-            if entry.unlessEmpty { applyUnlessEmptyNow(entry.batch, scrolled: entry.scrolled, resized: entry.resized, beside: stage) } else { applyNow(entry.batch, beside: stage) }
+            if entry.presentation == .full { applyNow(entry.batch, beside: stage) }
+            else { applyUnlessEmptyNow(entry.batch, presentation: entry.presentation, scrolled: entry.scrolled, resized: entry.resized, beside: stage) }
             entry.landed?()
         }
     }
@@ -577,8 +599,10 @@ extension ExactSession {
 /// caller does once it has applied (a publication's landing) or if it is
 /// dropped (a reset's).
 struct PendingBatch {
+    enum Presentation { case full, unlessEmpty, appKitEvent }
     var batch: Batch
-    var unlessEmpty = false, scrolled = false, resized = false
+    var presentation: Presentation = .full
+    var scrolled = false, resized = false
     /// A frame's tick or a timer's advance, as the bridge read it: no path to `order` can leave it off.
     var clock: Batch.ClockWork? { batch.clockWork }
     var landed: (() -> Void)? = nil
@@ -615,6 +639,8 @@ struct BatchFootprint {
     /// `holds`: whether a live node is a child of another, as `StagePlan.restructured` asks.
     init(_ batch: Batch, holds: (UInt32, UInt32) -> Bool) {
         restructured = StagePlan.restructured(batch.ops, holds: holds)
+        // Store callbacks and window archives follow all earlier presentations.
+        movable = !batch.hasStoreEffects
         let sampling = batch.clockWork == .tick && batch.seq == nil
         // A native control's state, as the runtime made it with the batch, and the roots' tabs, which replace all.
         for (id, read) in batch.controlReads ?? [:] { written[id, default: []].formUnion(read.parts) }

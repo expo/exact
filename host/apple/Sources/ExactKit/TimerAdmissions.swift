@@ -35,7 +35,7 @@ final class TimerAdmissions {
     }
     weak var session: ExactSession?
     private(set) var enabled = false
-    private var waits: [Double] = []
+    private(set) var waits: [Double] = []
     private var wake: Timer?
     private var observer: CFRunLoopObserver?
     private var generation = 0

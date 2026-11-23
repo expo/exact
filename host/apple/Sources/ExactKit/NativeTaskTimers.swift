@@ -113,7 +113,8 @@ extension ExactSession {
             && batch.canvasOwed == canvasOwed && batch.canvas == frames.canvas2d && batch.frames == frames.tasks
     }
     func clockUnchanged(_ batch: Batch) -> Bool {
-        batch.timerDueMs == timerDue && taskTimers.matches(batch.nativeTimers) && !taskTimers.hasReady
+        batch.timerDueMs == timerDue && batch.landing == timerLanding && taskTimers.matches(batch.nativeTimers)
+            && !taskTimers.hasReady && batch.timerWaits == timerAdmissions.waits
     }
     func updateTimerState(_ batch: Batch) {
         taskTimers.update(batch.nativeTimers, epoch: generation, enabled: clock == nil && !ExactEnv.agentFreezes && state != .destroyed)

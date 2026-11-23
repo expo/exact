@@ -736,17 +736,8 @@ public final class ExactSession {
             if case .fill(let view) = next.kind { landedFill(view) }
         }
         takeEventResults(&batch)
-        let advance: Bool = if case .advance = next.kind { true } else { false }
-        let empty = !advance && changesNothing(batch)
-        #if os(macOS)
-        let reply: Bool = if case .reply = next.kind { true } else { false }
-        let hasStoreEffects = batch.stored || !batch.announced.isEmpty || batch.windowState != nil
-        let emptyReply = reply && empty && !batch.layoutProvisional && !batch.replacesTree
-        #else
-        let hasStoreEffects = false, emptyReply = false
-        #endif
-        guard hasStoreEffects || !empty || !clockUnchanged(batch) else { logSkipped(batch); return landed() }
-        wait(PendingBatch(batch: batch, unlessEmpty: advance || emptyReply, landed: landed, dropped: { finished(); stale() }))
+        guard let presentation = presentation(for: batch, published: next.kind) else { logSkipped(batch); return landed() }
+        wait(PendingBatch(batch: batch, presentation: presentation, landed: landed, dropped: { finished(); stale() }))
     }
 
     /// A stale slice can land inside a commit, before its replacement tree, so the work that waited runs after it.
@@ -1079,21 +1070,20 @@ public final class ExactSession {
 
     /// Land earlier owner batches first (T4), then skip presentation if nothing changed.
     /// Native controls and the agent's animation clock can require a full `apply`.
-    func applyUnlessEmptyNow(_ batch: Batch, scrolled: Bool, resized: Bool, beside plan: StagePlan? = nil) {
+    func applyUnlessEmptyNow(_ batch: Batch, presentation: PendingBatch.Presentation, scrolled: Bool, resized: Bool, beside plan: StagePlan?) {
         guard !batch.busy, !batch.held else { return }
         guard !applying else { applyNow(batch, beside: plan); return }
         if !landing, ownerInFlight, hasPublished() {
             // What the slices leave owed is asked after this batch, as in `apply`.
             holdingReports = true; landFill(before: batch.sequence == 0 ? .max : batch.sequence); holdingReports = false
             guard state != .destroyed else { return }
-            guard stage === plan else { return applyUnlessEmpty(batch, scrolled: scrolled, resized: resized) } // a slice it landed staged
+            guard stage === plan else { return order(PendingBatch(batch: batch, presentation: presentation, scrolled: scrolled, resized: resized)) }
         }
         guard !fillInFlight, !tickInFlight, !advanceInFlight, !canvasInFlight, noticesInFlight == 0, changesNothing(batch) else { applyNow(batch, beside: plan); return }
+        if presentation == .appKitEvent, !canSkipAppKitPresentation(batch) { return applyNow(batch, beside: plan) }
         // Its transactions are reported once (LLP 1079 D3): account for them, at no presentation cost.
-        sampler?.batch(batch.seq, ms: 0); logSkipped(batch); relayStore(batch)
-        #if os(macOS)
-        defer { app.replacements.changed() }
-        #endif
+        sampler?.batch(batch.seq, ms: 0); logSkipped(batch)
+        defer { if presentation == .appKitEvent { app.replacements.changed() } }
         followRunner(batch)
         // Fixed roots can emit no operations while their viewport changes.
         if resized {
@@ -1107,6 +1097,7 @@ public final class ExactSession {
         runWaitingWork()
         drainReports()
         workEnded()
+        relayStore(batch)
         advanceIfDue()
     }
 

@@ -241,6 +241,13 @@ final class StoreRefreshTests: XCTestCase {
     }
 
     #if os(macOS)
+    private func publishReply(_ reply: Batch, to session: ExactSession) {
+        session.repliesInFlight += 1
+        session.replySubmissions.append(0)
+        session.publish(.reply, RuntimeCompletion(lease: session.runtime.completionLease, batch: reply))
+        session.landPublished()
+    }
+
     func testAnEmptyReplyRefreshesTheOtherWindow() throws {
         _ = NSApplication.shared
         let fixture = try isolatedStore()
@@ -263,34 +270,149 @@ final class StoreRefreshTests: XCTestCase {
         let node = try XCTUnwrap(try peer.snapshot().nodes.values.first { $0.props["testId"] == "favourite" })
         try peer.press(node.id)
 
-        writer.clock = 0
-        func publish(_ reply: Batch) {
-            writer.repliesInFlight += 1
-            writer.replySubmissions.append(0)
-            writer.publish(.reply, RuntimeCompletion(lease: writer.runtime.completionLease, batch: reply))
-            writer.drainFill()
-        }
+        let applied = writer.appliedBatches
         var write = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
         write.stored = true
-        publish(write)
+        publishReply(write, to: writer)
+        XCTAssertEqual(writer.appliedBatches, applied)
         waitFor("the other window displays the saved preference") { control.title == "Favourite" }
 
-        waitForMainQueue()
-        reader.drainFill()
-        var topic = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
-        topic.announced = ["store-reply-test"]
-        for kind in ["reply", "tick"] {
-            let delivered = expectation(description: "the other window handles the topic from a \(kind)")
-            reader.onLandForTests = { [weak reader] publication, _ in
-                guard case .reply = publication else { return }
-                reader?.onLandForTests = nil
-                delivered.fulfill()
+        let listener = fixture.app.makeSession(label: "store-topic-listener")
+        defer { listener.destroy() }
+        XCTAssertNil(listener.boot(plan: try fixturePlan("NOTIFICATION_ACTIONS"), size: size).error)
+        for value in ["reply", "tick"] {
+            var topic = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
+            topic.announced = [#"exact-state:{"extension":"notifications","state":{"source":"\#(value)"}}"#]
+            if value == "reply" {
+                publishReply(topic, to: writer)
+                XCTAssertEqual(writer.appliedBatches, applied)
+            } else {
+                writer.publishTickForTests(topic)
+                writer.landPublished()
             }
-            if kind == "reply" { publish(topic) }
-            else { writer.publishTickForTests(topic); writer.drainFill() }
-            wait(for: [delivered], timeout: 5)
-            reader.onLandForTests = nil
+            waitFor("the other window handles the topic from a \(value)", cap: 5) {
+                let data = Data(listener.agent(#"{"op":"state"}"#).utf8)
+                let state = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                let extensions = state?["extensions"] as? [String: [String: Any]]
+                let implementation = extensions?["notifications"]?["implementation"] as? [String: String]
+                return implementation?["source"] == value
+            }
         }
+    }
+
+    func testWindowStateCallbackCanDestroyTheSessionWithFramesRunning() {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "store-callback")
+        defer { session.destroy() }
+        var batch = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
+        batch.frames = true
+        session.apply(batch)
+        XCTAssertNotNil(session.frames.link)
+        let applied = session.appliedBatches
+        batch.windowState = ["tab": "A"]
+        session.windowStateDidChange = { [unowned session] in
+            XCTAssertEqual(session.newestApplied?.windowState, ["tab": "A"])
+            session.destroy()
+        }
+        publishReply(batch, to: session)
+        XCTAssertEqual(session.windowState, ["tab": "A"])
+        XCTAssertEqual(session.state, .destroyed)
+        XCTAssertNil(session.frames.link, "the callback's teardown is final")
+        XCTAssertEqual(session.appliedBatches, applied)
+    }
+
+    func testAClockOnlyReplyArmsItsDeadline() {
+        let session = ExactApp.shared.makeSession(label: "reply-deadline")
+        defer { session.destroy() }
+        let due = session.now() + 60_000
+        let applied = session.appliedBatches
+        var reply = Batch(ops: [], timers: true, motion: false, clock: nil, error: nil, timerDueMs: due)
+        publishReply(reply, to: session)
+        XCTAssertEqual(session.clockDue, due)
+        XCTAssertTrue(session.clockTimer?.isValid == true)
+        XCTAssertEqual(session.appliedBatches, applied + 1)
+        reply.landing = true
+        publishReply(reply, to: session)
+        XCTAssertTrue(session.timerLanding)
+        XCTAssertEqual(session.appliedBatches, applied + 2)
+    }
+
+    func testAReplyThatOnlyChangesTimerWaitsArmsItsWake() throws {
+        let plan = try TableFixture.plan("""
+        component App
+          state enabled = false
+          state fired = false
+          action arm
+            enabled = true
+          action fire
+            fired = true
+          task delayed when enabled
+            after(100, fire, wait=scrollend)
+          view
+            column
+              button press=arm testId="arm"
+                text "Arm"
+              text fired ? "fired" : "waiting"
+        """)
+        let session = ExactApp.shared.makeSession(label: "reply-timer-wait")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 300, height: 200)).error)
+        settleViewlessSession(session)
+        let button = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "arm" })
+        let reply = session.runtime.press(button.id, now: session.now())
+        XCTAssertTrue(reply.ops.isEmpty)
+        XCTAssertEqual(reply.timerDueMs, session.timerDue)
+        XCTAssertTrue(session.taskTimers.matches(reply.nativeTimers))
+        XCTAssertFalse(reply.timerWaits.isEmpty)
+        XCTAssertNotEqual(reply.timerWaits, session.timerAdmissions.waits)
+        publishReply(reply, to: session)
+        XCTAssertEqual(session.timerAdmissions.waits, reply.timerWaits)
+        waitFor("the idle window's uncapped scrollend timer fires", cap: 5) {
+            session.presenter.views.values.contains { $0.props["text"] == "fired" }
+        }
+    }
+
+    func testAnEmptyProvisionalReplyStillApplies() {
+        let session = ExactApp.shared.makeSession(label: "reply-provisional")
+        defer { session.destroy() }
+        var reply = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
+        reply.layoutProvisional = true
+        let applied = session.appliedBatches
+        publishReply(reply, to: session)
+        XCTAssertEqual(session.appliedBatches, applied + 1)
+    }
+
+    func testOnlyAnEmptyBatchThatWouldHavePresentedRetriesTheReplacement() {
+        let app = ExactApp.shared
+        let session = app.makeSession(label: "replacement-retry")
+        defer { session.destroy() }
+        defer { app.replacements.withdraw(self, "test ended") }
+        var attempts = 0
+        XCTAssertEqual(app.replacements.submit(token: 1, now: true, producer: self, attempt: {
+            attempts += 1
+            return .held("requests")
+        }, finished: { _ in }), .held("requests"))
+        waitFor("the candidate's initial retry") { attempts == 2 }
+
+        let applied = session.appliedBatches
+        var batch = Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
+        session.applyUnlessEmpty(batch, scrolled: true)
+        session.applyUnlessEmpty(batch, resized: true)
+        session.applyUnlessEmpty(batch.made(by: .advance))
+        let turn = expectation(description: "the replacement observer had a turn")
+        let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false, 1) { _, _ in
+            DispatchQueue.main.async { turn.fulfill() }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .defaultMode)
+        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .defaultMode) }
+        wait(for: [turn], timeout: 5)
+        XCTAssertEqual(attempts, 2, "scroll, measurements and timers leave the candidate held")
+
+        batch.windowState = ["tab": "A"]
+        publishReply(batch, to: session)
+        waitFor("the skipped reply retries the candidate", cap: 5) { attempts >= 3 }
+        XCTAssertEqual(attempts, 3)
+        XCTAssertEqual(session.appliedBatches, applied)
     }
     #endif
 

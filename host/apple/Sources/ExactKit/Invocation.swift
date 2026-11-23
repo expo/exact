@@ -168,10 +168,8 @@ extension ExactSession {
         presenter.fieldSelections.onChange = { [unowned self] id, value, selection in admit(id) {
             let batch = runtime.fieldEvent(id, 52, selection.payload(value), now: now())
             #if os(macOS)
-            // AppKit already moved the selection.
-            if clock == nil, !ExactEnv.agentFreezes, stage == nil, presenter.views[id]?.fieldComposing != true,
-               !batch.layoutProvisional, !batch.replacesTree, changesNothing(batch) {
-                applyUnlessEmpty(batch)
+            if presenter.views[id]?.fieldComposing != true {
+                applyAppKitEvent(batch)
                 return
             }
             #endif
@@ -205,7 +203,7 @@ extension ExactSession {
         var batch = input()
         batch.input = CACurrentMediaTime()
         #if os(macOS)
-        if beforeDefault, !batch.layoutProvisional, !batch.replacesTree { return applyUnlessEmpty(batch) }
+        if beforeDefault { return applyAppKitEvent(batch) }
         #endif
         apply(batch)
     }

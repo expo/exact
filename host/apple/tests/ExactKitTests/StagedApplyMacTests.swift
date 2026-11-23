@@ -243,6 +243,67 @@ final class StagedApplyMacTests: XCTestCase {
         XCTAssertEqual(session.presenter.views[9004]?.props["title"], "later", "and lands after the earlier one's")
     }
 
+    func testAnEmptyReplyPublishesWindowStateAfterAnEarlierStage() throws {
+        let session = try session("staged-window-state")
+        defer { session.destroy() }
+        var archives: [String] = []
+        session.windowStateDidChange = { [unowned session] in archives.append(session.windowState["tab"] ?? "") }
+        var first = replacement(rows: 400)
+        first.windowState = ["tab": "A"]
+        session.apply(first)
+        XCTAssertNotNil(session.stage)
+
+        var reply = wireBatch([])
+        reply.windowState = ["tab": "B"]
+        session.repliesInFlight += 1
+        session.replySubmissions.append(0)
+        session.publish(.reply, RuntimeCompletion(lease: session.runtime.completionLease, batch: reply))
+        session.landPublished()
+        XCTAssertEqual(archives, [], "the reply waits for the reveal")
+        session.finishStage()
+        XCTAssertEqual(archives, ["A", "B"])
+        XCTAssertEqual(session.windowState, ["tab": "B"])
+    }
+
+    func testAnEmptyInputPublishesWindowStateAfterAnEarlierPendingBatch() throws {
+        let session = try session("pending-window-state")
+        defer { session.destroy() }
+        var archives: [String] = []
+        var presented: [String] = []
+        session.windowStateDidChange = { [unowned session] in archives.append(session.windowState["tab"] ?? "") }
+        session.onApplyForTests = { batch in if let tab = batch.windowState?["tab"] { presented.append(tab) } }
+        var first = wireBatch([])
+        first.windowState = ["tab": "A"]
+        first.sequence = session.runtime.sequence.next()
+        session.wait(PendingBatch(batch: first))
+        var later = wireBatch([])
+        later.windowState = ["tab": "B"]
+        session.applyAppKitEvent(later)
+        XCTAssertEqual(archives, ["A", "B"])
+        XCTAssertEqual(session.windowState, ["tab": "B"])
+        XCTAssertEqual(presented, ["A"], "B was eligible to skip once A applied")
+    }
+
+    func testEmptyInputUsesFullApplyWhenAnEarlierBatchIsWaiting() throws {
+        let session = try session("staged-empty-input")
+        defer { session.destroy() }
+        let empty = wireBatch([])
+        session.apply(replacement(rows: 400))
+        XCTAssertNotNil(session.stage)
+        var applied = session.appliedBatches
+        session.applyAppKitEvent(empty)
+        XCTAssertEqual(session.appliedBatches, applied + 1)
+        session.finishStage()
+        settleViewlessSession(session)
+
+        var earlier = empty
+        earlier.sequence = session.runtime.sequence.next()
+        session.wait(PendingBatch(batch: earlier))
+        applied = session.appliedBatches
+        session.applyAppKitEvent(empty)
+        XCTAssertEqual(session.appliedBatches, applied + 2)
+    }
+
     func testTheRevealPublishesTooltipsAndCursorRectsOnlyWhereRequested() throws {
         let p = Presenter()
         show(p.viewport)
