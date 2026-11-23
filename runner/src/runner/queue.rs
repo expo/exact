@@ -161,18 +161,54 @@ impl<D: DataSource> Runner<D> {
         m: usize,
         source: &str,
         args: &[Value],
-        write: Option<u64>,
     ) -> Result<(), RunnerError> {
-        if self.queues.waiting[m].len() >= QUEUE_BOUND {
+        let (origin, id) = (self.call_origin(), self.invocation_id());
+        let causes = self.commit_causes();
+        // Only the application data source can opt in, and an unasked
+        // tail must belong to the same foreground cause.
+        let replacement = if id == 0
+            && origin == CallOrigin::App
+            && self.mutation_row(m).then.is_none()
+            && self.source_ready(source)
+            && self.seams.source_answer.is_none()
+            && !Self::activity_send(source)
+            && self.plan.module_named(source).is_none()
+            && self.plan.fetch_named(source).is_none()
+            && (self.queues.stalled[m].is_none() || self.queues.waiting[m].len() > 1)
+            && self.queues.waiting[m].back().is_some_and(|tail| {
+                tail.id == id
+                    && tail.origin == origin
+                    && tail.causes == causes
+                    && tail.source == source
+            }) {
+            self.data
+                .queued_send_replacer(Some(source))
+                .and_then(|merge| {
+                    let tail = self.queues.waiting[m].back().expect("checked tail");
+                    merge(source, &tail.args, args)
+                })
+        } else {
+            None
+        };
+        if replacement.is_none() && self.queues.waiting[m].len() >= QUEUE_BOUND {
             return Err(RunnerError::QueueFull {
                 mutation: self.mutation_name(m).to_string(),
             });
         }
-        let (origin, id) = (self.call_origin(), self.invocation_id());
-        let causes = self.commit_causes();
+        let write = self.accept_write(
+            Target::Mutation(m),
+            source,
+            replacement.as_deref().unwrap_or(args),
+        );
+        if replacement.is_some() {
+            let tail = self.queues.waiting[m]
+                .pop_back()
+                .expect("replacement has a tail");
+            self.end_waiting(m, tail);
+        }
         self.queues.waiting[m].push_back(Waiting {
             source: source.to_string(),
-            args: args.to_vec(),
+            args: replacement.unwrap_or_else(|| args.to_vec()),
             write,
             origin,
             id,

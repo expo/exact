@@ -258,6 +258,7 @@ pub struct Placed<D> {
     /// The source (`Main`), the template (`Worker`, built there), or nothing
     /// once moved to its owner (`Worker`, moved there).
     inner: Option<D>,
+    queued_send_replacer: Option<exact_runner::QueuedSendReplacer>,
     identity: Option<exact_runner::ModuleIdentity>,
     generation: Option<exact_runner::ModuleInstance>,
     placement: Placement,
@@ -335,8 +336,9 @@ impl<D: DataSource + 'static> Placed<D> {
         Self::with_spawn(template, placement, Spawn::Build(build))
     }
 
-    fn with_spawn(source: D, placement: Placement, spawn: Spawn<D>) -> Self {
+    fn with_spawn(mut source: D, placement: Placement, spawn: Spawn<D>) -> Self {
         Self {
+            queued_send_replacer: source.queued_send_replacer(None),
             storage_changed: Default::default(),
             app_id: source.app_id().to_string(),
             grants: source.grants().to_string(),
@@ -418,6 +420,13 @@ impl<D: DataSource + 'static> Placed<D> {
 }
 
 impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
+    fn queued_send_replacer(
+        &mut self,
+        _: Option<&str>,
+    ) -> Option<exact_runner::QueuedSendReplacer> {
+        self.queued_send_replacer
+    }
+
     fn prepare_snapshot(
         &mut self,
         module: Option<exact_runner::SnapshotModule<'_>>,

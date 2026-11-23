@@ -87,8 +87,8 @@ mod source;
 mod tabs;
 pub use source::{
     Announce, BackgroundState, DataError, DataSource, DataSourceWrapper, InFlight, Interrupt,
-    Native, NativeCall, NativeHandler, Overlaid, PreloadWake, Report, Reporter, ResourceChange,
-    SnapshotModule, Target, Write, BACKGROUND,
+    Native, NativeCall, NativeHandler, Overlaid, PreloadWake, QueuedSendReplacer, Report, Reporter,
+    ResourceChange, SnapshotModule, Target, Write, BACKGROUND,
 };
 mod delivery;
 mod links;
@@ -1399,7 +1399,6 @@ impl<D: DataSource> Runner<D> {
         self.tree.as_ref().map(Tree::roots).unwrap_or_default()
     }
 
-    /// Commands produced since the last take.
     /// Surface inputs that changed since the last take — a canvas node's
     /// arguments, evaluated — published only from commits that applied
     /// (LLP 1009 D2). The host hands them to the app's GPU module.

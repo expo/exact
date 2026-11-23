@@ -405,6 +405,11 @@ impl Target {
     }
 }
 
+/// A source may combine an unasked queue tail with a newer send to that
+/// same source. Return arguments that preserve the pair's final state and
+/// effects, or `None` to keep both. The merger never reads or writes the store.
+pub type QueuedSendReplacer = fn(&str, &[Value], &[Value]) -> Option<Vec<Value>>;
+
 /// Borrowed bytes of one pinned snapshot cohort (LLP 1126 D8).
 #[derive(Clone, Copy)]
 pub struct SnapshotModule<'a> {
@@ -1089,6 +1094,14 @@ data_source! {
     }
 
     defaults {
+        /// The embedded source's optional queue-tail replacement rule.
+        /// A leaf's rule stays with the runner when it moves to a worker.
+        /// `None` asks for that rule before placement, without a source name.
+        fn queued_send_replacer(&mut self, source: Option<&str>) -> Option<QueuedSendReplacer> {
+            let _ = source;
+            None
+        }
+
         /// Requests made by the last `Later` answer for `target`, after its
         /// first request, in order. Taken once per turn (LLP 1162 D2).
         /// A source forwarding request sets forwards this too.

@@ -11,6 +11,12 @@ macro_rules! configured {
             }
         }
         impl $crate::exact_runner::DataSourceWrapper for $name {
+            fn queued_send_replacer(
+                &mut self,
+                source: Option<&str>,
+            ) -> Option<$crate::exact_runner::QueuedSendReplacer> {
+                $crate::exact_runner::DataSource::queued_send_replacer(&mut self.0, source)
+            }
             fn prepare_snapshot(
                 &mut self,
                 module: Option<$crate::exact_runner::SnapshotModule<'_>>,
