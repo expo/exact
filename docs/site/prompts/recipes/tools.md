@@ -1,0 +1,14 @@
+```prompt Let Siri and agents call my app's actions
+Offer actions of the Exact app in this folder as tools that Siri, Shortcuts and a browser's agent can call. Use https://github.com/expo/exact/blob/main/docs/recipes/tools.md as the source for each step. The Exact checkout has the same page at docs/recipes/tools.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say which actions to offer, read the root's actions and propose a list: each tool's name, its title, and whether it reads, writes or destroys. Ask me before you write code.
+3. In app.contract, write a `tool` line for each root action, as the recipe shows. After the name, write `reads`, `writes` or `destroys`. Then write each of these that is true: `additive` (after `writes` only), `idempotent`, `closed`. Then write a description for the caller.
+4. Add the clauses in this order: `returns`, `fails when`, `available when`. A faced tool's `returns` is a string, a number or a bool. `fails when` is read after the action: keep a refusal in a state that the action sets, as the recipe's `lastFailed` does.
+5. In app.json, give each tool a face under `intents.tools`: a `title`, and a `title` for each parameter. A tool with no face is not offered to Siri, Shortcuts or a browser's agent. A `destroys` tool's `doors` default to `apple` alone.
+6. On the web, a route that says `activate=interaction` registers the tools only when its script starts. Leave `activate=` unsaid on a route where an agent must find the tools after load.
+7. Add a test in app.test.contract for each action behind a tool, through the app's controls. `call` is not a test step.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. Then drive each tool as the recipe does (`bun exact.mjs agent web 'call addItem {"name":"Milk","aisle":"dairy","quantity":2}' state`), and read each call's `outcome` in `state.intents`. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me each tool, its face and each call's `outcome`, and what the tests and checks reported. To try the tools in Chrome, I must turn on `chrome://flags/#enable-webmcp-testing` and open the app in a secure context: `https`, `localhost` or `127.0.0.1`.
+```

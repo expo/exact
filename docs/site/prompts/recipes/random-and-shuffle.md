@@ -1,0 +1,14 @@
+```prompt Shuffle and deal at random in my app
+Add a random deal or a shuffle to the Exact app in this folder: an order that the data module makes from a seed. Use https://github.com/expo/exact/blob/main/docs/recipes/random-and-shuffle.md as the source for each step. The Exact checkout has the same page at docs/recipes/random-and-shuffle.md.
+
+1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
+2. If I did not say what the app shuffles or deals (a quiz's questions and answers, a deck) and when it deals again, propose it and ask me before you write code. If the app needs rolls in the view, not a deal, tell me: that is docs/recipes/random-rolls.md.
+3. In app.contract, read `exactTime()` as a resource with a `shape Time` that has `seed`. Pass the seed to the source after `with`, as in `resource q = deal(game, round) with time.seed as shape Question else empty()`.
+4. In app.ts, never call `Math.random()`: the data module refuses it. Copy the recipe's `generator`, `stream` and `shuffled`. Keep `Math.imul`, not `*`.
+5. Give each thing dealt a stream of its own: the questions' order from `stream(seed, game)`, each question's answers from `stream(seed, game, round)`. One stream for both deals every question the same shuffle. Keep the right answer by identity (`correct`), never by index.
+6. A source is asked again, so `round + 1` deals again and `game + 1` deals a new game. For a new order each ask, use `crypto.getRandomValues(new Uint32Array(n))` in the source. For one pick per launch, use `xs.at(time.seed % xs.length)`.
+7. Add a test in app.test.contract with `seed 2` at the top of the file. Expect the first order, change the round, run `clock data`, and expect another order. Then `reload` and expect the first order again. With `crypto.getRandomValues`, assert only what holds for any order.
+8. Follow the platform checks in docs/start-here.md (`bun exact.mjs docs platform checks`) for the targets in the app's AGENTS.md and app.json until they pass. Read the reports, including counted findings; a zero exit code alone does not mean clean. Fix the app, not the test. If a finding stays after three rounds of fixes, or the app had it before you changed anything, record it (step 9) and report it; do not keep trying.
+9. When a doc was wrong or missing, or a step needed a workaround, read `bun exact.mjs feedback status`. Under `never`, keep no note. Otherwise record it: `bun exact.mjs feedback note "<what happened>"`, which goes to Expo only as that status says. Do not change the policy; tell me how many notes you kept.
+10. Tell me what the app deals and from which streams, when it deals again, what the tests and checks reported, and the launch command for each target platform. The seed is new each launch, so each launch deals a new order.
+```
