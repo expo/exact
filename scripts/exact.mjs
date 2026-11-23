@@ -54,7 +54,7 @@ import { grantAdvice } from './grant-advice.mjs';
 import { checkoutPath, linkCheckout } from './paths.mjs';
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { addOutside, installIn, outsideSpecifier } from './package-manager.mjs';
-import { builtContract, compilerCargo, contractTool, hostTriple, launch, prebuiltWebTools, rustMissing } from './tools.mjs';
+import { builtContract, compilerCargo, contractTool, hostTriple, launch, prebuiltWebTools, rustMissing, sweepCompilerTarget } from './tools.mjs';
 export { grantAdvice, grantLines } from './grant-advice.mjs';
 const { cargoEnvironment, appleExecutableName, HERMES_INSTALLER, hermesBundle, hermesTarget, pathFrom, readManifest, resolveApp, WEB_TOOLCHAIN, webToolchainEnv } = await import('./app.mjs');
 const { applyPattern, createApp, createGame, patternList, rustApp, UNCACHED_CRATES, wireSnapback } = await import('../game/new.mjs');
@@ -62,7 +62,6 @@ const { gameDefaults, prepareContractGame, sdkFetch } = await import('../game/ap
 const { HOST_SDKS, HOST_SWIFT, appleSdkName, developerDir, xcodeRefusal } = await import('../host/apple/devices.mjs');
 const { appleArtifacts, assertAppleIdentity } = await import('../host/apple/build.mjs');
 const { closeFilesystemReader } = await import('./filesystem.mjs');
-const { startSweep } = await import('./sweep.mjs');
 const { builtAppMatches, jsTargetBuild } = await import('../host/web/serve.mjs');
 const { signRelease } = await import('../host/apple/assets.mjs');
 const { appleCrossReport, CROSS_IOS_ROWS, hasCrossSdk, iosSimulatorTarget } = await import('../host/apple/sdk.mjs');
@@ -641,7 +640,7 @@ function prebuildCompiler() {
  * caller's directory, in exact2's own target/, never an inherited one (an app's, or another checkout's). */
 export async function contract(args, env = process.env) {
   // `build --json` is one JSON array on stdout and nothing on stderr: the compiler's diagnostics, then app.ts's.
-  const json = args[0] === 'build' && args.includes('--json');
+  const jsonOutput = args.includes('--json'), json = args[0] === 'build' && jsonOutput;
   // A build of an app's `app.contract` refreshes the types its `app.ts` imports (LLP 1116.001 D4.5); of unsaved text
   // (`--stdin`), whose types no file holds, neither refreshes them nor type-checks app.ts.
   const input = args[0] === 'build' && !args.includes('--stdin') ? args.slice(1).find((arg, i, rest) => !arg.startsWith('-') && rest[i - 1] !== '-o') : null;
@@ -649,9 +648,9 @@ export async function contract(args, env = process.env) {
   if (!tool || !prepareContractGame(args)) return 1;
   const result = spawnSync(tool.cmd, [...tool.pre, ...args], {stdio: ['inherit', json ? 'pipe' : 'inherit', 'inherit'], env: tool.env, encoding: 'utf8', maxBuffer: 1 << 26});
   if (result.error) throw new Error(`${tool.cmd}: ${result.error.message}${tool.cmd === 'cargo' ? ' (install rustup from https://rustup.rs)' : ''}`);
-  if (tool.cmd === 'cargo' && !json && !args.includes('--json')) startSweep(resolve(ROOT, 'target'));
   // Cargo's own failures exit 101; one that is not rustup's refuses `+<pin>` before the compiler runs.
   if (result.status === 101 && tool.cmd === 'cargo') { const fault = cargoProxyFault(tool.pin, tool.env); if (fault) console.error(`exact contract: ${fault}`); }
+  if (tool.cmd === 'cargo' && result.status === 0 && !jsonOutput) sweepCompilerTarget(tool);
   if (result.status === 0 && input && basename(input) === 'app.contract') {
     const dir = dirname(resolve(input));
     refreshTypes(dir, tool.cmd === 'cargo' ? launch(COMPILER) : tool, {quiet: json});

@@ -1,30 +1,14 @@
 #!/usr/bin/env bun
-// Clear out stale Cargo output so a checkout's target/ stays bounded:
-//   1. Units (`.fingerprint/<pkg>-<hash>` + matching `deps/`, `build/`, `examples/`)
-//      no build has read for a week (`KEEP`).
-//   2. Orphaned unpacked incremental `.rcgu.o` objects in `deps/`: on macOS
-//      (`split-debuginfo=unpacked`), rustc writes a fresh
-//      `<unit>-<hash>.<25 base-36>.<7 base-36>.rcgu.o` set on every incremental rebuild
-//      of the same hash and never deletes previous tags. Keeping every tag that ties for
-//      the newest mtime per `<unit>-<hash>` reclaims superseded sets without touching
-//      non-incremental `-cgu.<N>.rcgu.o` objects or hardlinked reuse ties.
-//   3. Abandoned `-working` and superseded `s-*` session directories inside each active
-//      `incremental/<crate>-<hash>/` cache (Cargo only reads the newest completed session).
+// Units and whole incremental caches expire after a week (KEEP). Within a cache, rustc
+// reads completed sessions newest first by the timestamp in their names. On macOS,
+// debug maps name unpacked object paths, so keep sets a rebuild has not superseded.
 //
-// `resolveApp`, `exact contract`, and `host/apple/build.mjs` start this detached at most once
-// an hour; `bun scripts/sweep.mjs [target]` runs it now.
+// Cargo reads fingerprints even on a no-op build. Reset their access times to detect
+// the next read (macOS and Linux relatime). Preserve the nanoseconds of the mtime
+// because Cargo compares inputs against the dep-info file at that precision.
 //
-// "Used" is measured, not guessed. Cargo reads the fingerprint of every unit a build considers,
-// even when it compiles nothing, and never reads one it does not build. Each sweep sets those
-// files' access times back to RESET; the kernel updates an access time older than the file's
-// mtime on the next read (macOS, and Linux relatime), so one read since the last sweep shows.
-// The sweep never writes a modification time: Cargo compares a unit's inputs against its
-// dep-info file's mtime to the nanosecond, so even rounding it to the millisecond can make an
-// input written in the same millisecond read as newer, and the unit rebuild.
-//
-// Cargo holds `<profile>/.cargo-lock` (flock) while it builds into a profile directory. The sweep
-// takes the same lock without waiting and skips a directory a build holds; under the lock it only
-// renames, fingerprints first, so a unit is never half there. It deletes after letting go.
+// Cargo can hold separate locks for target and build directories. Rename under both
+// locks, fingerprints first, and delete after releasing them.
 import { constants, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { takeLock } from '../host/web/build-lock.mjs';
@@ -38,7 +22,8 @@ const LEDGER = '.exact-sweep.json', LOG = '.exact-sweep.log', ASIDE = '.exact-sw
 const HASH = /-([0-9a-f]{16})(?:\.|$)/;
 // Incremental objects only: `<unit>-<16 hex>.<25 base-36 CGU id>.<7 base-36 tag>.rcgu.o`.
 // Non-incremental objects (`-cgu.<N>.rcgu.o`) carry codegen unit indices, not rebuild tags.
-const RCGU = /^(.+-[0-9a-f]{16})\.[0-9a-z]{25}\.([0-9a-z]{7})\.rcgu\.o$/;
+const RCGU = /^(.+-[0-9a-f]{16})\.([0-9a-z]{25})\.([0-9a-z]{7})\.rcgu\.o$/;
+const SESSION = /^(s-([0-9a-z]{10})-[0-9a-z]+)-([0-9a-z]+)$/;
 
 /** Start a sweep of `target` in the background if the last one finished over an hour ago. A
  * sweep that failed leaves its error in the log, reported on every build until one succeeds. */
@@ -99,65 +84,73 @@ const profiles = target => [target, ...readdirSync(target, { withFileTypes: true
   .flatMap(dir => readdirSync(dir, { withFileTypes: true }).filter(e => e.isDirectory()).map(e => resolve(dir, e.name)))
   .filter(dir => existsSync(resolve(dir, '.fingerprint')));
 
-/** Move superseded incremental `.rcgu.o` tag sets out of `deps/`, keeping every tag that ties
- * for the newest mtime per `<unit>-<hash>` (reused CGUs are hardlinked and share mtimes). */
-function sweepOrphanRcguObjects(depsDir, move) {
+function supersedes(candidate, previous) {
+  if (candidate.size < previous.size) return false;
+  let newer = false;
+  for (const [id, old] of previous) {
+    const next = candidate.get(id);
+    if (!next) return false;
+    if (next.ino === old.ino) continue;
+    if (next.mtimeNs < old.mtimeNs) return false;
+    if (next.mtimeNs > old.mtimeNs) newer = true;
+  }
+  return newer;
+}
+
+/** An interrupted rebuild may publish only part of a set. Reused objects share inodes. */
+export function* supersededRcguObjects(depsDir) {
   const byUnit = new Map();
   for (const name of readdirSync(depsDir)) {
     const match = RCGU.exec(name);
     if (!match) continue;
-    const [, unit, tag] = match;
+    const [, unit, id, tag] = match;
     let tags = byUnit.get(unit);
     if (!tags) { tags = new Map(); byUnit.set(unit, tags); }
-    let bucket = tags.get(tag);
-    if (!bucket) { bucket = { newest: -1n, files: [] }; tags.set(tag, bucket); }
-    const full = resolve(depsDir, name);
-    const mtime = lstatSync(full, { bigint: true }).mtimeNs;
-    if (mtime > bucket.newest) bucket.newest = mtime;
-    bucket.files.push(full);
+    let objects = tags.get(tag);
+    if (!objects) { objects = new Map(); tags.set(tag, objects); }
+    const path = resolve(depsDir, name);
+    const { ino, mtimeNs } = lstatSync(path, { bigint: true });
+    objects.set(id, { path, ino, mtimeNs });
   }
-  let removed = 0;
   for (const tags of byUnit.values()) {
-    if (tags.size <= 1) continue;
-    let keepTime = -1n;
-    for (const bucket of tags.values()) {
-      if (bucket.newest > keepTime) keepTime = bucket.newest;
-    }
-    for (const bucket of tags.values()) {
-      if (bucket.newest === keepTime) continue;
-      for (const file of bucket.files) { move(file); removed++; }
+    const sets = [...tags.values()];
+    for (const objects of sets) {
+      if (sets.some(candidate => candidate !== objects && supersedes(candidate, objects))) {
+        for (const { path } of objects.values()) yield path;
+      }
     }
   }
-  return removed;
 }
 
-/** Clean `incremental/`: remove caches unused past `KEEP`, and inside each active cache remove
- * abandoned `-working` sessions and older completed `s-*` sessions (keeping the newest one). */
 function sweepIncremental(incrementalDir, now, move) {
   let removed = 0;
   for (const entry of readdirSync(incrementalDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const cache = resolve(incrementalDir, entry.name);
     const children = readdirSync(cache, { withFileTypes: true });
-    const last = Math.max(statSync(cache).mtimeMs, ...children.map(c => statSync(resolve(cache, c.name)).mtimeMs));
+    const last = children.length ? Math.max(...children.map(c => statSync(resolve(cache, c.name)).mtimeMs)) : statSync(cache).mtimeMs;
     if (now - last > KEEP) { move(cache); removed++; continue; }
-    // Abandoned `-working` sessions are from interrupted builds (we hold `.cargo-lock`).
-    // Among completed `s-*` sessions, keep only the single newest session and its `.lock`.
+    // rustc encodes the timestamp as ten base-36 digits, so string order is chronological.
     const sessions = [];
+    let newest = '', remaining = children.length;
     for (const c of children) {
-      if (!c.isDirectory() || !c.name.startsWith('s-')) continue;
-      const p = resolve(cache, c.name);
-      if (c.name.endsWith('-working')) { move(p); removed++; continue; }
-      sessions.push({ name: c.name, path: p, mtime: statSync(p, { bigint: true }).mtimeNs });
+      const session = c.isDirectory() && SESSION.exec(c.name);
+      if (!session) continue;
+      const [, prefix, timestamp, state] = session;
+      if (state !== 'working' && timestamp > newest) newest = timestamp;
+      sessions.push({ name: c.name, prefix, timestamp, state });
     }
-    sessions.sort((a, b) => (b.mtime > a.mtime ? 1 : b.mtime < a.mtime ? -1 : b.name.localeCompare(a.name)));
-    const keepLock = sessions.length ? `${sessions[0].name.split('-').slice(0, 3).join('-')}.lock` : null;
-    for (const old of sessions.slice(1)) { move(old.path); removed++; }
+    const keepLocks = new Set();
+    for (const { name, prefix, timestamp, state } of sessions) {
+      if (state !== 'working' && timestamp === newest) keepLocks.add(`${prefix}.lock`);
+      else { move(resolve(cache, name)); removed++; remaining--; }
+    }
     for (const c of children) {
-      if (!c.isDirectory() && c.name.startsWith('s-') && c.name.endsWith('.lock') && c.name !== keepLock) {
-        move(resolve(cache, c.name));
+      if (!c.isDirectory() && c.name.startsWith('s-') && c.name.endsWith('.lock') && !keepLocks.has(c.name)) {
+        move(resolve(cache, c.name)); removed++; remaining--;
       }
     }
+    if (children.length && remaining === 0) { move(cache); removed++; }
   }
   return removed;
 }
@@ -174,12 +167,17 @@ export async function sweep(target, now = Date.now()) {
     let n = 0;
     const move = p => { mkdirSync(aside, { recursive: true }); renameSync(p, resolve(aside, String(n++))); };
     for (const dir of profiles(target)) {
-      const at = relative(target, dir), fd = lock(resolve(dir, '.cargo-lock'));
-      if (fd === null) { // a build holds it: keep what we knew, look again next time
-        for (const [key, t] of Object.entries(old)) if (key.startsWith(at + '#')) units[key] = t;
-        continue;
-      }
+      const at = relative(target, dir), locks = [];
       try {
+        for (const name of ['.cargo-lock', '.cargo-build-lock']) {
+          const fd = lock(resolve(dir, name));
+          if (fd === null) break;
+          locks.push(fd);
+        }
+        if (locks.length < 2) {
+          for (const [key, t] of Object.entries(old)) if (key.startsWith(at + '#')) units[key] = t;
+          continue;
+        }
         const stale = new Set(), fingerprints = resolve(dir, '.fingerprint');
         for (const name of readdirSync(fingerprints)) {
           const hash = HASH.exec(name)?.[1];
@@ -196,11 +194,11 @@ export async function sweep(target, now = Date.now()) {
           if (existsSync(d)) for (const name of readdirSync(d)) if (stale.has(HASH.exec(name)?.[1])) move(resolve(d, name));
         }
         const deps = resolve(dir, 'deps');
-        if (existsSync(deps)) count += sweepOrphanRcguObjects(deps, move);
+        if (existsSync(deps)) for (const path of supersededRcguObjects(deps)) { move(path); count++; }
         const incremental = resolve(dir, 'incremental');
         if (existsSync(incremental)) count += sweepIncremental(incremental, now, move);
         if (count) removed[at] = count;
-      } finally { closeSync(fd); }
+      } finally { for (const fd of locks) closeSync(fd); }
     }
     writeFileSync(`${path}.tmp`, JSON.stringify({ at: now, units }));
     renameSync(`${path}.tmp`, path);

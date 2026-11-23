@@ -30,6 +30,7 @@ import { builtFilesystemHelper, filesystemLock, offlineMiss } from './filesystem
 import { digest, lockClosure, seen, workspaceManifest } from './kept.mjs';
 import { EXE, within } from './paths.mjs';
 import { canonicalBytes } from './deploy-signing.mjs';
+import { startSweep } from './sweep.mjs';
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -199,6 +200,17 @@ export function compilerCargo(verb, env = process.env) {
   const args = [`+${channel}`, verb, '-q', '--manifest-path', resolve(ROOT, 'Cargo.toml'), '-p', 'contract'];
   if (verb === 'run') args.push('--');
   return { ...launch('cargo', args, undefined, clean), pin: channel };
+}
+
+/** Cargo resolves target-dir from the caller's environment and configuration. */
+export function sweepCompilerTarget({ pin, env }) {
+  if (process.platform === 'win32') return;
+  const target = resolve(ROOT, 'target');
+  try {
+    const metadata = spawnSync('cargo', [`+${pin}`, 'metadata', '--format-version', '1', '--no-deps', '--offline', '--locked',
+      '--manifest-path', resolve(ROOT, 'Cargo.toml')], { env, encoding: 'utf8', maxBuffer: 1 << 26 });
+    if (metadata.status === 0 && JSON.parse(metadata.stdout).target_directory === target) startSweep(target);
+  } catch (error) { console.error(`warning: could not start the target sweep (${error.message})`); }
 }
 
 /** Select a fresh Contract compiler, building with the pinned Cargo when needed (D5).
