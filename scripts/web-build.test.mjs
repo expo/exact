@@ -401,9 +401,8 @@ test('JS Rust producers generate privately and read grants from their captured m
     const env = { resolve, mkdirSync, existsSync, dirname: path => resolve(path, '..'), cpSync, readFileSync, createHash,
       rustLinked: true, root: dir, sep: '/', moduleSourceDirs: () => [], devReload: true, production: false, devLogic: [], opt: () => null, out, gen, app: 'fixture', canvas2d: false, appDir: dir, ts: false,
       normalizeGrants: () => ({ entries: [] }),
-      buildModule(app, at, draw, appDir, options) {
-        expect(options.dev).toBe(true);
-        expect(at).toBe(resolve(gen, 'rust-module')); mkdirSync(at, { recursive: true });
+      builtModule() {
+        const at = resolve(gen, 'rust-module'); mkdirSync(at, { recursive: true });
         const path = resolve(at, 'app.module.wasm'); writeFileSync(path, 'captured'); return path;
       },
       async moduleGrants(path) { expect(path).toBe(resolve(out, 'rust/wasm/app.module.wasm')); return ''; },

@@ -102,7 +102,7 @@ test('a wasm batch held for presence retains its link after click dispatch ends'
       root.innerHTML = '<a href="/">Home</a>';
       const log = line => lines.push(line), host = {}, agentMode = false;
       const motion = { commit() {} }, arrange = { commit() {} }, clocks = { sync() {} };
-      const letGo = () => {}, refitTexts = () => {}, flowBatch = () => {};
+      const letGo = () => {}, refitTexts = () => {}, playSymbolEffects = () => {}, flowBatch = () => {};
       // Exercise the wasm batch's hold and release with only its router op applied.
       const apply = batch => {
         for (const op of batch.ops) if (op.op === 'router') { navigation.apply(op); applied.push(op.top); }
@@ -111,7 +111,7 @@ test('a wasm batch held for presence retains its link after click dispatch ends'
       let ready;
       const loading = new Promise(resolve => { ready = resolve; });
       const presence = presenceLoader(() => loading, root, batch => applyBatch(batch), log);
-      const bindings = { navigation, host, agentMode, motion, arrange, clocks, letGo, refitTexts, flowBatch, presence, apply };
+      const bindings = { navigation, host, agentMode, motion, arrange, clocks, letGo, refitTexts, playSymbolEffects, flowBatch, presence, apply };
       const applyBatch = new Function(...Object.keys(bindings), `${commit}; return applyBatch;`)(...Object.values(bindings));
       navigation.connect(root, () => false, log, null, null, () => true);
       const boot = { op: 'router', top: 1, url: '/', removed: [], visits: [[1, '/']] };

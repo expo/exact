@@ -11,8 +11,7 @@
 //! host's does (build.mjs's `main.js`): an `optional` face first needed while
 //! still loading would otherwise never be used, as with an uncached font file.
 
-use exact_plan::{Opcode, Plan};
-use exact_runner::vm::instructions;
+use exact_plan::Plan;
 
 /// The faces' `@font-face` rules, the preload links for the head, and the
 /// declared-name → CSS-family map canvas text uses (`exact.fontAliases`,
@@ -69,23 +68,4 @@ pub fn fonts(plan: &Plan) -> Result<Fonts, String> {
         out.aliases = format!("{{{}}}", aliases.join(","));
     }
     Ok(out)
-}
-
-/// A surface argument's declared type code (`emit::type_code`) when its
-/// code reads one slot, derive or resource; `None` otherwise, and the data
-/// seam encodes the value by its shape (`host/web-js/rust-data.js`).
-pub fn arg_type(plan: &Plan, code: &[u8]) -> Option<exact_plan::TypesId> {
-    let ins: Vec<_> = instructions(code).collect::<Result<_, _>>().ok()?;
-    let mut loads = ins.iter().filter(|i| i.op != Opcode::Return);
-    let x = loads.next()?;
-    if loads.next().is_some() {
-        return None;
-    }
-    let k = x.args[0] as usize;
-    match x.op {
-        Opcode::LoadSlot => plan.slots.get(k).map(|s| s.ty),
-        Opcode::LoadDerive => plan.derives.get(k).map(|d| d.ty),
-        Opcode::LoadResource => plan.resources.get(k).map(|r| r.ty),
-        _ => None,
-    }
 }

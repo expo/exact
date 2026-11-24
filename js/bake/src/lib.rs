@@ -1335,8 +1335,9 @@ const OPTIONAL_ENTRY: &str = "import type { Overlay } from './app.contract.d.ts'
 /// The TypeScript recorder (LLP 1056 D3), bundled into a module that draws.
 const RECORDER: &str = include_str!("../../../canvas/recorder.js");
 
-/// Its seam's type, for the generated entry's strict check.
-const RECORDER_TYPES: &str = "export declare function canvasSeam(draw: (surface: string, args: any, ctx: any, frame: any) => unknown): { draw(request: unknown, host?: unknown): string; retire(retired: unknown): void };\n";
+/// Its seam's type, for the generated entry's strict check. Any `draw` is
+/// taken: the app's own is checked against the declaration's `Draw`.
+const RECORDER_TYPES: &str = "export declare function canvasSeam(draw: (...call: never) => unknown): { draw(request: unknown, host?: unknown): string; retire(retired: unknown): void };\n";
 
 /// With async break checks in every loop and function, so a host can
 /// interrupt a running call from another thread (LLP 1048.000 D10), and with

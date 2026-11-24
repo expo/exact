@@ -116,10 +116,10 @@ public final class ExactLaunch: NSObject {
         watchInterruption()
         guard suppressed == nil, !ExactEnv.agentMode else { return }
         link = mainDisplayLink(self, #selector(tick(_:)))
+        // What held it is what the last answer read; one on its way ends first (`readOutstanding`).
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.ttiTimeout) { [weak self] in
             guard let self, ttiOutcome == nil, suppressed == nil else { return }
-            if let o = outstandingNow() { lastOutstanding = o }
-            finish("timeout")
+            if reads == 0 { finish("timeout") } else { timedOut = true }
         }
     }
 
@@ -319,47 +319,112 @@ public final class ExactLaunch: NSObject {
         }
     }
 
-    /// The launch session's outstanding work, from the runner and the host.
-    /// Empty when the screen can be used. While the data source is prepared
-    /// on the owner, the ledger's read would wait there for the module's
-    /// evaluation (LLP 1027.008 D2), and only activation is outstanding.
-    private func outstandingNow() -> [String]? {
-        guard let session = launchSession else { return nil }
-        if session.dataPreparing { return ["activation"] }
-        guard let ledger = Self.ledger(session) else { return nil }
-        if ledger.poisoned { finish("logic_failed"); return nil }
-        failedResources = ledger.failed
-        return ledger.items + (activation != "ready" ? ["activation"] : [])
+    /// Reads of outstanding work on their way, and whether the deadline
+    /// passed meanwhile: the last of them to land then ends startup there.
+    private(set) var reads = 0
+    private var timedOut = false
+
+    /// The launch session's outstanding work, from the runner and the host,
+    /// and when the owner read it; empty when the screen can be used, nil
+    /// when there is none to read. While the data source is prepared on the
+    /// owner only activation is outstanding (LLP 1027.008 D2).
+    private func readOutstanding(_ then: @escaping (_ outstanding: [String]?, _ at: Double) -> Void) {
+        guard let session = launchSession else { return then(nil, CACurrentMediaTime()) }
+        if session.dataPreparing { return then(["activation"], CACurrentMediaTime()) }
+        reads += 1
+        Self.readLedger(session) { [weak self] ledger in
+            guard let self else { return }
+            reads -= 1
+            defer { if reads == 0, timedOut, ttiOutcome == nil { finish("timeout") } }
+            guard let ledger, ttiOutcome == nil, suppressed == nil else { return then(nil, CACurrentMediaTime()) }
+            if ledger.poisoned { finish("logic_failed"); return then(nil, ledger.at) }
+            failedResources = ledger.failed
+            then(ledger.items + (activation != "ready" ? ["activation"] : []), ledger.at)
+        }
     }
 
     /// A session's outstanding work from the runner and the host, as
-    /// `kind:name` items, plus failed resources and whether the runner is
-    /// poisoned. Nil when there is none to read: a destroyed session, or a
-    /// runner that answers with an error (busy, gone), whose missing lists
-    /// would otherwise read as nothing outstanding. The runner's call comes
-    /// first and waits for the owner, so work sent there before it has
-    /// published its batch when `hostOutstanding` reads the published queue.
-    static func ledger(_ session: ExactSession) -> (items: [String], failed: [String], poisoned: Bool)? {
-        guard session.state != .destroyed, let data = session.runtime.ask(exact_outstanding, "").data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any], o["error"] == nil else { return nil }
+    /// `kind:name` items, its failed resources, whether the runner is
+    /// poisoned, and when the owner read it.
+    struct Ledger {
+        let items: [String], failed: [String], poisoned: Bool, at: Double
+        /// No work ended on main between asking and the answer.
+        var quiet = true
+    }
+
+    /// `session`'s ledger, now: main waits for the owner. For a reply that
+    /// needs it (the agent's settle); a metric reads it with `readLedger`.
+    static func ledger(_ session: ExactSession) -> Ledger? {
+        guard session.state != .destroyed else { return nil }
+        return ledger(session, reply: session.runtime.ask(exact_outstanding, ""), at: CACurrentMediaTime())
+    }
+
+    /// `session`'s ledger for a metric, read on the owner behind the work
+    /// queued there and answered on main, which never waits for it (LLP 1072
+    /// T3): a first build on the owner delays the answer, not the frames.
+    /// Its time is when the owner read it, or when main last finished landing
+    /// work before the answer if later: what that work published was not
+    /// on screen when the owner read. An empty answer that another owner job
+    /// followed or waits behind (a landing's own call, an advance it posted)
+    /// may miss what that job begins, and is read again; one that lists work
+    /// stands, as it can only hold a mark back. Nil when there is none to read.
+    static func readLedger(_ session: ExactSession, since ended: Double? = nil, then: @escaping (Ledger?) -> Void) {
+        guard session.state != .destroyed else { return then(nil) }
+        let ended = ended ?? session.workEndedAt
+        session.runtime.askLater(exact_outstanding, "") { [weak session] reply, at, job in
+            DispatchQueue.main.async {
+                guard let session, let reply, var ledger = ledger(session, reply: reply, at: max(at, session.workEndedAt)) else { return then(nil) }
+                if ledger.items.isEmpty, Owner.shared.jobsAsked != job { return readLedger(session, since: ended, then: then) }
+                ledger.quiet = session.workEndedAt == ended
+                then(ledger)
+            }
+        }
+    }
+
+    /// The ledger the runner's `reply` gives, with the host's outstanding
+    /// work read now; nil for a destroyed session or a runner that answers
+    /// with an error (busy, gone), whose missing lists would otherwise read
+    /// as nothing outstanding. The runner's reply comes first: work sent to
+    /// the owner before it has published its batch by then, which
+    /// `hostOutstanding` counts until it lands.
+    private static func ledger(_ session: ExactSession, reply: String, at: Double) -> Ledger? {
+        guard session.state != .destroyed, let o = try? JSONSerialization.jsonObject(with: Data(reply.utf8)) as? [String: Any],
+              o["error"] == nil else { return nil }
         var out: [String] = []
         for key in ["requests", "streams", "awaiting", "oneShots", "busy"] {
             out += (o[key] as? [String] ?? []).map { "\(key):\($0)" }
         }
         out += session.hostOutstanding.map { "host:\($0)" }
-        return (out, o["failed"] as? [String] ?? [], o["poisoned"] as? Bool == true)
+        return Ledger(items: out, failed: o["failed"] as? [String] ?? [], poisoned: o["poisoned"] as? Bool == true, at: at)
     }
 
-    /// Runs the turn after work ended or activation. With nothing outstanding,
-    /// the interactive mark is the next vsync if the screen changed, else now.
-    /// It is never earlier than the first render.
+    /// An evaluation's read is on its way, and another was asked meanwhile.
+    private var evaluating = false, evaluateAgain = false
+
+    /// Runs the turn after work ended or activation, once the owner has
+    /// answered: `settle`. One read is on its way at a time, so reads do not
+    /// queue up on a busy owner ahead of the person's input.
     private func evaluate() {
-        guard ttiOutcome == nil, suppressed == nil, let outstanding = outstandingNow() else { return }
+        guard ttiOutcome == nil, suppressed == nil else { return }
+        guard !evaluating else { evaluateAgain = true; return }
+        evaluating = true
+        readOutstanding { [weak self] outstanding, at in
+            guard let self else { return }
+            evaluating = false
+            settle(outstanding, at: at)
+            if evaluateAgain { evaluateAgain = false; evaluate() }
+        }
+    }
+
+    /// With nothing outstanding at `seen`, when the owner read the ledger,
+    /// the interactive mark is the next vsync after it if the screen changed,
+    /// else `seen`. It is never earlier than the first render.
+    private func settle(_ outstanding: [String]?, at seen: Double) {
+        guard ttiOutcome == nil, suppressed == nil, let outstanding else { return }
         if outstanding.isEmpty, !lastOutstanding.isEmpty, lastOutstanding.allSatisfy({ $0.hasPrefix("busy:") }) { declaredLast = true }
         if outstanding != lastOutstanding || trace.isEmpty, trace.count < 32, let p = marks[.process] {
-            trace.append("\(String(format: "%.1f", (CACurrentMediaTime() - p) * 1000)) [\(outstanding.joined(separator: ", "))]")
+            trace.append("\(String(format: "%.1f", (seen - p) * 1000)) [\(outstanding.joined(separator: ", "))]")
         }
-        let seen = CACurrentMediaTime()
         for item in outstanding where spans[item]?.to != nil || spans[item] == nil {
             if spans[item] == nil { spanOrder.append(item) }
             spans[item] = (spans[item]?.from ?? seen, nil)
@@ -367,25 +432,34 @@ public final class ExactLaunch: NSObject {
         for item in lastOutstanding where !outstanding.contains(item) { spans[item]?.to = seen }
         lastOutstanding = outstanding
         guard outstanding.isEmpty, marks[.present] != nil else { candidate = nil; return }
-        let now = CACurrentMediaTime()
         if contentDirty {
             // A candidate stands until work reappears or a batch changes the
             // screen (`applied`): work that ends showing nothing new, after
             // its vsync and before the callback that confirms it, would
             // otherwise move it a frame later each time.
-            if candidate == nil { candidate = vsync?.next(after: now) }
+            if candidate == nil { candidate = vsync?.next(after: seen) }
         } else {
-            interactive(at: now)
+            interactive(at: seen)
         }
     }
 
+    /// A candidate's confirmation is waiting for the owner's answer.
+    private var confirming = false
+
     /// Confirms the candidate vsync if no work became outstanding before it.
     private func confirmCandidate() {
-        guard let target = candidate, let v = vsync, v.at >= target, ttiOutcome == nil else { return }
-        candidate = nil
-        guard let outstanding = outstandingNow(), outstanding.isEmpty else { scheduleEvaluate(); return }
-        contentDirty = false
-        interactive(at: target)
+        guard let target = candidate, let v = vsync, v.at >= target, ttiOutcome == nil, !confirming else { return }
+        confirming = true
+        readOutstanding { [weak self] outstanding, _ in
+            guard let self else { return }
+            confirming = false
+            // A batch that changed the screen meanwhile cleared it (`applied`).
+            guard candidate == target, ttiOutcome == nil, suppressed == nil else { return }
+            candidate = nil
+            guard let outstanding, outstanding.isEmpty else { return scheduleEvaluate() }
+            contentDirty = false
+            interactive(at: target)
+        }
     }
 
     private func interactive(at t: Double) {

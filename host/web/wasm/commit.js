@@ -1,6 +1,6 @@
 import { AGENT_ADMITTED, views, retiredViews, presence, host, followedScrolls, motion, loadAfterPaint, root, agentMode, log, t0, readOut, writeIn, loadLiveTime, lists, arrange, pieces, loadGpuIfNeeded, afterNativePaint, deferFulfill, holds, agentKeepsStore, pendingStore, moduleReady, safelyFulfill, encoder, track, byTicket, forgettable, surfaceGranted, HOST_WORK_BASE64, loadPageNative, localAssetURL, controllers, pageFile, heldAsks, httpHelpers, now, postSurface, ask, picker, inflight, documentsGlue, frameNav, followScroll, messageFrames, messageViews, dropSurface, register, seek, settleFollow, pendingScrolls, rememberScroll, ownFollowed, releaseFollowed, collections, focusAutofocus, markScrollDocument, letGo, holdWake, holdOrientation, clocks } from "../glue.js";
 import { prepareContexts, positionContexts } from "./context.js";
-import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, modalCommand, popoverCommand, runFocusCommands, inertAncestor, refitTexts } from "../navigation.js";
+import { pageTitle, navigation, noteFit, syncListItemRoles, listItem, settleValue, afterPaint, createGrantSet, rawGrantText, grantError, grantWords, scopedGrantSet, refusal, appRootFontSize, liveById, navigableURL, sheetLeaves, modalCommand, popoverCommand, runFocusCommands, inertAncestor, refitTexts, noteSymbolEffect, playSymbolEffects } from "../navigation.js";
 import { applyProps, nativeCreate, listView, appSource, syncMedia, forgetList, syncViewportFit, refreshSymbols, syncLists } from "./views.js";
 import { attach } from "./input.js";
 import { flowBatch } from "./flow.js";
@@ -198,6 +198,7 @@ function apply(batch) {
             el.style.cssText = css;
           }
           noteFit(css);
+          noteSymbolEffect(css);
           if (el.hasAttribute("data-time-reservation")) {
             loadLiveTime(el);
           }
@@ -231,6 +232,7 @@ function apply(batch) {
             exact.gpu?.beforeStyle(el);
             motion.style(op.id, op.css);
             noteFit(op.css);
+            noteSymbolEffect(op.css);
             if (el.hasAttribute("data-action")) {
               el.style.touchAction = "none";
             }
@@ -1194,6 +1196,7 @@ export function applyBatch(batch) {
     const timers = link ? navigation.withLink(link, () => apply(batch)) : apply(batch);
     letGo();
     refitTexts();
+    playSymbolEffects();
     if (host.wakeLock) {
       holdWake();
     }

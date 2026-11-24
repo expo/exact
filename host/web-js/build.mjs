@@ -39,7 +39,7 @@ import { namesStream } from './stream-names.mjs';
 import { bundleHostModule, localImports, stageHostGlue, writeFalse } from './glue.mjs';
 import { gateAgent } from './agent-gate.mjs';
 import { contentName, contentNames } from './content-names.mjs';
-import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, undeclaredRustData, fresh, frameAnswer, frameFixture, frameURL, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
+import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, moduleSources, undeclaredRustData, fresh, frameAnswer, frameFixture, frameURL, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
 import { appDigest, developmentStore } from '../../scripts/agent-launch.mjs';
 import { settingLines } from '../../js/bake/src/__exact_env.mjs';
 import { colorSchemeMeta, interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from '../web/look.mjs';
@@ -261,39 +261,41 @@ compilePlan(ts ? [] : unregistered);
 const appFiles = new Set(readdirSync(gen).filter(f => f.endsWith('.js') && !existsSync(resolve(here, f)) && !existsSync(resolve(root, 'host/web', f))));
 const leaves = [['markdown', buildMarkdown, 'markdown.wasm'], ['motion', buildMotion, 'motion.wasm'], ['editor', buildEditor, 'markup-editor.wasm'], ['flow', buildFlow, 'textflow.wasm']]
   .filter(([flag]) => existsSync(resolve(gen, `${flag}.flag`)));
-if (!checkOnly || prerequisitesOnly) {
-  // Not for a leaf built and fresh, or a tool set's (LLP 1174 D5).
+if (!checkOnly || prerequisitesOnly || mixed) {
+  // Not for a leaf built and fresh, or a tool set's (LLP 1174 D5). A check of a mixed app builds its Rust module.
   if (rust || leaves.some(([flag]) => !leafTaken(flag))) webToolchainEnv(process.env);
   if (prerequisitesOnly) process.exit(0);
 }
 // The checked capture of app.ts and what it imports (typecheck, below): the
 // page and its server render bundle it, never the app's own directory.
 const tsStage = resolve(realpathSync(gen), 'typescript'), pageAppTs = resolve(tsStage, fixture ? '__exact_frame.ts' : 'app.ts');
-// App generation may create files imported by app.ts. A mixed app's composer owns the Rust source roster: take its
-// declarations, and the sources its crate's RUST_SOURCES lists (Rust's; app.ts answers the rest, as natively), from
-// that bake, which a generated workspace's web crate runs when app.json names rust.data (LLP 1153.003 D2).
-const composed = mixed && !!rustData;
-let rustSources = null;
-const generatedWeb = composed && resolveApp(appDir).generated;
-const webCrate = generatedWeb ? resolve(appDir, '.exact/shells/web') : resolve(appDir, 'web');
-if (ts && (composed || authoredWebBake(webCrate))) {
+// App generation may create files imported by app.ts: an authored web crate's build script runs first.
+const webCrate = resolve(appDir, 'web');
+if (ts && authoredWebBake(webCrate)) {
   // With what its bake watches named, as every baking build is (`bakeWatchEnv`): unset, a check reruns it every time.
   // The workspace's lock is checked first, as every build's is, and `--locked` keeps the check from rewriting it (LLP 1153 D2.1).
   resolveApp(appDir).rust();
-  const crate = resolve(webCrate, 'Cargo.toml');
-  const r = spawnSync('cargo', ['check', '-q', '--locked', '--manifest-path', crate, '--message-format=json-render-diagnostics'], { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 26, env: { ...process.env, ...bakeWatchEnv({ dir: appDir, manifest }), ...(generatedWeb ? { CARGO_TARGET_DIR: resolveApp(appDir).target } : {}) } });
-  const messages = (r.stdout ?? '').split('\n').filter(Boolean).map(line => JSON.parse(line));
-  for (const message of messages) if (message.reason === 'compiler-message' && message.message.rendered) process.stderr.write(message.message.rendered);
+  const r = spawnSync('cargo', ['check', '-q', '--locked', '--manifest-path', resolve(webCrate, 'Cargo.toml'), '--message-format=json-render-diagnostics'], { cwd: root, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 1 << 26, env: { ...process.env, ...bakeWatchEnv({ dir: appDir, manifest }) } });
+  for (const line of (r.stdout ?? '').split('\n').filter(Boolean)) { const m = JSON.parse(line); if (m.reason === 'compiler-message' && m.message.rendered) process.stderr.write(m.message.rendered); }
   if (r.status !== 0) { console.error(`${app}: its web build script failed`); process.exit(1); }
-  if (mixed) {
-    const owner = messages.find(m => m.reason === 'compiler-artifact' && resolve(m.manifest_path) === crate)?.package_id;
-    const baked = messages.find(m => m.reason === 'build-script-executed' && m.package_id === owner)?.out_dir;
-    if (!baked) throw new Error(`${app}: Cargo did not report its mixed bake output`);
-    if (composed) cpSync(resolve(baked, 'app.contract.d.ts'), resolve(gen, 'app.contract.d.ts'));
-    rustSources = JSON.parse(readFileSync(resolve(baked, 'app.module.json'), 'utf8')).rustSources;
-  }
 }
-if (mixed && !rustSources) { console.error(`${app}: app.ts beside a Rust module needs app.json's rust.data, whose crate's RUST_SOURCES names what Rust answers`); process.exit(1); }
+// The Rust module the page runs, built once (a synthetic plan takes its own's; a check, which ships none, a dev one).
+let rustModule; const builtModule = () => rustModule ??= (() => {
+  const from = opt('--data') ?? (opt('--plan') && dirname(resolve(opt('--plan'))));
+  return from && existsSync(resolve(from, 'rust/wasm/app.module.wasm')) ? resolve(from, 'rust/wasm/app.module.wasm')
+    : buildModule(app, resolve(gen, 'rust-module'), existsSync(resolve(gen, 'canvas2d.flag')), appDir, { dev: devReload || checkOnly });
+})();
+// Beside app.ts, the sources the module carries (its crate's RUST_SOURCES, logic/abi/src/sources.rs) are Rust's and
+// every other is app.ts's, as `exact_data::Mixed` routes them natively (LLP 1153.003 D2); app.ts is checked against
+// declarations without them. Read from the module, they need no host bake, so no JavaScript engine.
+let rustSources = null;
+if (mixed) {
+  resolveApp(appDir).rust(); // the workspace an app's own module crate may join, written and its lock checked
+  try { rustSources = await moduleSources(builtModule(), readManifest(appDir, app)); } catch (error) { console.error(`${app}: ${error.message}`); process.exit(1); }
+  if (!rustSources) { console.error(`${app}: its Rust module beside app.ts does not say which sources it answers: add \`exact_logic_abi::export_sources!(<data crate>::RUST_SOURCES);\` to the crate rust.module.package names`); process.exit(1); }
+  const r = spawnSync(compiler.cmd, [...compiler.pre, 'declarations', input.endsWith('.plan') ? input : resolve(gen, 'app.plan'), '-o', gen, '--app', appDir, '--rust-sources', JSON.stringify(rustSources), ...(appTypes ? ['--app-types'] : [])], { cwd: root, stdio: ['ignore', 'inherit', 'inherit'], env: compiler.env });
+  if (r.status !== 0) process.exit(r.status ?? 1);
+}
 // `app.ts` is captured and type-checked as the native bake does it: the
 // same configuration and check (js/bake/src/typescript.mjs) over the same
 // capture and entry, against this plan's declarations, so an app.ts the web
@@ -333,10 +335,10 @@ if (siteBase !== '/') {
   writeFileSync(resolve(gen, 'site.js'), readFileSync(resolve(here, 'site.js'), 'utf8').replace('__EXACT_SITE_BASE__', JSON.stringify(siteBase)));
   runtime.push('site.js');
   const edits = [
-    ['rt.js', "export { animationClocks, launchLocation, launchVisits } from './navigation.js';", `export { animationClocks } from './navigation.js';
-import { launchLocation as browserLocation, launchVisits as browserVisits } from './navigation.js';
-import { appLocation } from './site.js';
-export const launchLocation = () => appLocation(browserLocation()), launchVisits = () => browserVisits().map(appLocation);`],
+    ['rt.js', "export { animationClocks, launchVisits } from './navigation.js';", `export { animationClocks } from './navigation.js';
+import { launchVisits as browserVisits } from './navigation.js';
+import { appLocation } from './site.js'; export const launchVisits = () => browserVisits().map(appLocation);`],
+    ['rt.js', 'export const launchLocation = () => (checkpoint(), browserLocation());', 'export const launchLocation = () => (checkpoint(), appLocation(browserLocation()));'],
     ['router.js', 'import { canonical, locationOf,', 'import { locationOf,'],
     ['router.js', 'export { canonical, locationOf };', `import { canonical, appLocation, siteLocation, siteCanonical } from './site.js';
 export { canonical, locationOf };`],
@@ -459,7 +461,7 @@ async function typecheck(checking) {
   if (fixture) writeFileSync(pageAppTs, frameAnswer(fixture, answerType));
   const provider = fixture ? './__exact_frame' : './app';
   writeFileSync(resolve(stage, '__exact_entry.ts'), `import * as app from '${provider}';\n${answerType}\nconst named = (app as unknown as { appId?: string }).appId;\nexport const appId: string = named === undefined || named === ${JSON.stringify(base)} ? ${JSON.stringify(id)} : named;\nexport const grants: string = app.grants;\nexport const answer: TypeScriptAnswer = app.answer;\n` + optional
-    + "export const draw: ((surface: string, args: any, ctx: any, frame: any) => unknown) | undefined = (app as { draw?: unknown }).draw as Optional<'draw'>;\nexport const surfaces = (app as { surfaces?: unknown }).surfaces as Optional<'surfaces'>;\n");
+    + "export const draw: ((...call: never) => unknown) | undefined = (app as { draw?: unknown }).draw as Optional<'draw'>;\nexport const surfaces = (app as { surfaces?: unknown }).surfaces as Optional<'surfaces'>;\n");
   writeFileSync(resolve(stage, '__exact_paths.json'), JSON.stringify({ app: realpathSync(appDir), mounts, target: 'web', privateInputs: !!appTypes }));
   writeFileSync(resolve(stage,'__exact_backend_source.json'), JSON.stringify(Object.fromEntries(capturedSettings)));
   const real = realpathSync(stage);
@@ -561,9 +563,7 @@ const tsGrantSet = normalizeGrants(ts ? 'app.ts' : 'TypeScript', grants, 'typesc
 let moduleStorage = false, rustGrants = '', rustGrantSet = normalizeGrants('Rust module', '', 'rust');
 if (rustLinked) {
   mkdirSync(resolve(out, 'rust/wasm'), { recursive: true });
-  const from = opt('--data') ?? (opt('--plan') && dirname(resolve(opt('--plan'))));
-  const built = from && existsSync(resolve(from, 'rust/wasm/app.module.wasm')) ? resolve(from, 'rust/wasm/app.module.wasm')
-    : buildModule(app, resolve(gen, 'rust-module'), canvas2d, appDir, { dev: devReload });
+  const built = builtModule();
   cpSync(built, resolve(out, 'rust/wasm/app.module.wasm'));
   if (devReload) devLogic.push(['rust', createHash('sha256').update(readFileSync(resolve(out, 'rust/wasm/app.module.wasm'))).digest('hex')]);
   // The module's crates outside the app's directory (a path dependency) are inputs the dev loop watches, as the

@@ -42,7 +42,7 @@ type TocItem = { id: string; title: string; href: string };
 
 type Section = { title: string; anchor: string; tokens: Token[] };
 type Doc = { nav: NavPage; title: string; description: string; intro: Token[]; sections: Section[]; anchors: Map<string, string> };
-type SitePage = { route: string; path: string; title: string; description: string; source: string; tokens: Token[]; tocDepth: number; skipHeading: string; hidden: boolean; landing: boolean };
+type SitePage = { route: string; path: string; title: string; description: string; source: string; tokens: Token[]; part: boolean; skipHeading: string; hidden: boolean; landing: boolean };
 
 const THEMES = { light: 'github-light', dark: 'github-dark' } as const;
 const contractGrammar = JSON.parse(readFileSync(join(REPO, 'editors/vscode/syntaxes/exact-contract.tmLanguage.json'), 'utf8'));
@@ -219,7 +219,7 @@ function render(page: SitePage): { blocks: Block[]; toc: TocItem[] } {
           const r = runs(t.tokens, source, next);
           const id = slug(plain(t.tokens));
           if (t.depth === 1 || id === page.skipHeading) break;
-          if (t.depth === page.tocDepth) toc.push({ id: next(), title: plain(t.tokens), href: `#${id}` });
+          if (t.depth === 2) toc.push({ id: next(), title: plain(t.tokens), href: `#${id}` });
           block({ kind: 'heading', depth: t.depth, href: id, runs: r });
           break;
         }
@@ -343,9 +343,19 @@ function render(page: SitePage): { blocks: Block[]; toc: TocItem[] } {
   return { blocks: out, toc };
 }
 
+function sectionsFromLevelTwo(tokens: Token[], title?: Token): Token[] {
+  const headings = tokens.filter((t): t is Tokens.Heading => t.type === 'heading' && t.depth > 1 && t !== title);
+  const lift = Math.min(...headings.map(t => t.depth)) - 2;
+  if (!headings.length || lift <= 0) return tokens;
+  const lifted = new Set<Token>(headings);
+  const marks = new RegExp(`^( {0,3})#{${lift}}`);
+  return tokens.map(t => (t.type === 'heading' && lifted.has(t) ? { ...t, depth: t.depth - lift, raw: t.raw.replace(marks, '$1') } : t));
+}
+
 const pages: SitePage[] = docs.flatMap(doc => {
-  const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.description, source: doc.nav.source, tokens: doc.intro, tocDepth: 2, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
-  if (!doc.nav.split) return [{ ...base, tokens: [...doc.intro, ...doc.sections.flatMap(s => s.tokens)] }];
+  const base: SitePage = { route: doc.nav.route, path: doc.nav.path, title: doc.title, description: doc.description, source: doc.nav.source, tokens: sectionsFromLevelTwo(doc.intro), part: false, skipHeading: '', hidden: !!doc.nav.hidden, landing: !!doc.nav.landing };
+  // An unsplit page has no sections: its intro is the whole page.
+  if (!doc.nav.split) return [base];
   const written = doc.nav.sectionDescriptions ?? {};
   return [
     base,
@@ -355,8 +365,8 @@ const pages: SitePage[] = docs.flatMap(doc => {
       title: s.title,
       description: Object.hasOwn(written, s.anchor) ? written[s.anchor] : descriptionOf(s.tokens, doc.description),
       source: doc.nav.source,
-      tokens: s.tokens,
-      tocDepth: 3,
+      tokens: sectionsFromLevelTwo(s.tokens, s.tokens[0]),
+      part: true,
       skipHeading: s.anchor,
       hidden: !!doc.nav.hidden,
       landing: !!doc.nav.landing,
@@ -443,7 +453,7 @@ pages.forEach(page => {
   const { blocks, toc } = render(page);
   const markdownPath = page.path === '/' ? '/index.md' : `${page.path}.md`;
   const markdownUrl = ORIGIN ? ORIGIN + markdownPath : GITHUB_DOCS + page.source;
-  const markdown = pageMarkdown(page.tokens, raw => rewriteMarkdown(raw, page.source), page.tocDepth === 3 ? page.title : undefined);
+  const markdown = pageMarkdown(page.tokens, raw => rewriteMarkdown(raw, page.source), page.part ? page.title : undefined);
   const body = `${markdown}\n${page.route === 'home' ? homeMarkdown() : ''}`;
   writeFileSync(join(MARKDOWN, `${page.route}.md`), body);
   if (!page.hidden) {
@@ -461,7 +471,7 @@ pages.forEach(page => {
     crumbs: crumbsOf(page),
     title: page.title,
     description: page.description,
-    subtitle: page.tocDepth === 2 ? page.description : '',
+    subtitle: page.part ? '' : page.description,
     updated: dateOf(page.source),
     prev,
     next,

@@ -58,12 +58,15 @@ fn setup(processes: &[(&str, &str)]) -> (Core, Receiver<()>) {
 }
 
 fn request(ticket: u64, body: &str, stream: bool) -> RequestOut {
+    // The app's own child process (`process.rs` refuses another origin's start).
+    let mut request = Request::process(body.as_bytes().to_vec(), stream, 1 << 20);
+    request.reach.origin = exact_runner::CallOrigin::App;
     RequestOut {
         completion: None,
         class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "server".into(),
-        request: Request::process(body.as_bytes().to_vec(), stream, 1 << 20),
+        request,
         forced: false,
     }
 }

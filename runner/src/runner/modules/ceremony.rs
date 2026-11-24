@@ -34,7 +34,7 @@
 //!   ceremonies in `state.extensions`, never their arguments.
 
 use super::super::{DataSource, Runner};
-use super::{CallOrigin, Held, Json, ModulesRow, Waits};
+use super::{Cause, Held, Json, ModulesRow, Waits};
 use serde_json::json;
 
 /// The ceremonies and signals `state.extensions` lists, the newest last.
@@ -199,11 +199,11 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// A ceremony's ticket `args` (module doc).
-    pub(super) fn ceremony_args(&self, row: &ModulesRow, args: &Json, origin: CallOrigin) -> Json {
+    pub(super) fn ceremony_args(&self, row: &ModulesRow, args: &Json, cause: Cause) -> Json {
         let sub = self.substitute(row);
         let ceremony = &sub["ceremony"];
         if ceremony["asks"].is_object() {
-            return self.sheet_args_of(row, args, origin);
+            return self.sheet_args_of(row, args, cause);
         }
         let rp_id = self.rp_id(row, args);
         let client = match (ceremony["clientOrigin"][target()].as_str(), rp_id.as_str()) {
@@ -218,7 +218,7 @@ impl<D: DataSource> Runner<D> {
             "rpId": rp_id,
             "clientOrigin": client,
             "options": options,
-            "origin": origin.word(),
+            "origin": cause.origin.word(),
         });
         for (option, described) in self.members_args(row, args) {
             out[option] = described;
@@ -337,13 +337,13 @@ impl<D: DataSource> Runner<D> {
         let Some(at) = (self.extensions.held.iter()).position(|h| h.queued) else {
             return;
         };
-        let (source, args, origin) = {
+        let (source, args, cause) = {
             let h = &self.extensions.held[at];
-            (h.source.clone(), h.args.clone(), h.origin)
+            (h.source.clone(), h.args.clone(), h.cause)
         };
         let row = self.module_row(&source);
         let name = self.key(&row);
-        let hold = self.device_hold(&row, name, Waits::Ceremony, origin, "", &args);
+        let hold = self.device_hold(&row, name, Waits::Ceremony, cause, "", &args);
         let h = &mut self.extensions.held[at];
         h.hold = hold;
         h.queued = false;
@@ -364,7 +364,7 @@ impl<D: DataSource> Runner<D> {
                 "name": self.plan.str(row.declared),
                 "mediation": args["mediation"],
                 "rpId": self.rp_id(row, args),
-                "origin": self.ceremony_args(row, args, CallOrigin::App)["clientOrigin"],
+                "origin": self.ceremony_args(row, args, Cause::person())["clientOrigin"],
                 "outcome": outcome,
             })
         });

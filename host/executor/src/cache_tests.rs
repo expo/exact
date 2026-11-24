@@ -85,8 +85,11 @@ impl Server {
             .or_default()
             .push_back(plan);
     }
+    /// The app's own read of `path`, which the cache serves (`cache.rs`).
     pub(in super::super) fn request(&self, path: &str) -> Request {
-        Request::get(&format!("http://{}{path}", self.address))
+        let mut request = Request::get(&format!("http://{}{path}", self.address));
+        request.reach.origin = exact_runner::CallOrigin::App;
+        request
     }
     pub(in super::super) fn core(&self, asynchronous: bool, cache: bool) -> (Core, Receiver<()>) {
         self.core_grants(

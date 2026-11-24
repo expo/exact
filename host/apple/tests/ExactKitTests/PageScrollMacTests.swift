@@ -167,6 +167,76 @@ final class PageScrollMacTests: XCTestCase {
         }
     }
 
+    /// The steps of an animated shrink that layout does not follow (expo/exact#1412).
+    func testShrinksLayoutHasNotFollowedOfferNoGutters() {
+        let (p, child) = fixture()
+        let authored = child.frame
+        for size in [NSSize(width: 940, height: 880), NSSize(width: 1000, height: 950), NSSize(width: 900, height: 850), NSSize(width: 860, height: 800)] {
+            p.viewport.setFrameSize(size)
+            XCTAssertEqual(p.viewportSize, size)
+            XCTAssertLessThanOrEqual(p.root.frame.width, size.width)
+            XCTAssertLessThanOrEqual(p.root.frame.height, size.height)
+            XCTAssertTrue(p.viewport.verticalScroller!.isHidden)
+            XCTAssertTrue(p.viewport.horizontalScroller!.isHidden)
+            XCTAssertEqual(child.frame, authored)
+        }
+    }
+
+    /// Steps layout has not followed that grow and shrink leave the document the
+    /// viewport's size, so the page ends where it began when the window does.
+    func testARoundTripLayoutHasNotFollowedEndsAtTheViewport() {
+        let (p, _) = fixture()
+        for width: CGFloat in [1000, 860, 960] {
+            p.viewport.setFrameSize(NSSize(width: width, height: 900))
+            XCTAssertEqual(p.root.frame.size, p.viewportSize)
+        }
+        XCTAssertEqual(p.root.frame.size, NSSize(width: 960, height: 900))
+        XCTAssertTrue(p.viewport.hasCurrentDocumentFit)
+    }
+
+    /// A document that replaces the page's during a step takes nothing from the
+    /// old document's fit.
+    func testADocumentReplacedDuringAStepKeepsItsSize() {
+        let (p, _) = fixture()
+        let replacement = FlippedView(frame: NSRect(x: 0, y: 0, width: 1500, height: 1300))
+        p.viewport.visibleSizeChanged = {
+            guard p.viewport.documentView !== replacement else { return }
+            p.viewport.invalidateDocumentFit()
+            p.viewport.documentView = replacement
+        }
+        p.viewport.setFrameSize(NSSize(width: 930, height: 860))
+        XCTAssertEqual(replacement.frame.size, NSSize(width: 1500, height: 1300))
+        XCTAssertFalse(p.viewport.hasCurrentDocumentFit)
+    }
+
+    /// A fit completed for one document during a step certifies nothing once
+    /// another has replaced it.
+    func testAFitForAReplacedDocumentCertifiesNothing() {
+        let (p, _) = fixture()
+        let replacement = FlippedView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        p.viewport.visibleSizeChanged = {
+            guard p.viewport.documentView !== replacement else { return }
+            p.fitDocument()
+            p.viewport.documentView = replacement
+        }
+        p.viewport.setFrameSize(NSSize(width: 930, height: 860))
+        XCTAssertFalse(p.viewport.hasCurrentDocumentFit)
+        p.viewport.setFrameSize(NSSize(width: 990, height: 900))
+        XCTAssertEqual(replacement.frame.size, NSSize(width: 400, height: 300))
+    }
+
+    /// An axis that overflowed at the last layout keeps its scroller through steps
+    /// layout has not followed, even one where the window grew past the document.
+    func testOverflowingAxisKeepsItsScrollerThroughShrinksLayoutHasNotFollowed() {
+        let (p, _) = fixture(yOverflow: true)
+        for size in [NSSize(width: 940, height: 1200), NSSize(width: 900, height: 850)] {
+            p.viewport.setFrameSize(size)
+            XCTAssertEqual(p.root.frame.height, 1100)
+        }
+        XCTAssertFalse(p.viewport.verticalScroller!.isHidden)
+        XCTAssertTrue(p.viewport.horizontalScroller!.isHidden)
+    }
+
     func testSingleAxisOverflowKeepsNeededGutterWithoutCreatingOtherGutter() {
         for x in [false, true] {
             let (p, child) = fixture(xOverflow: x, yOverflow: !x)

@@ -7,6 +7,7 @@
 
 use exact_kernel::{StyleId, ViewId};
 use exact_plan::{BindingKind, NodesRow, Plan, Value};
+use std::{collections::HashMap, rc::Rc};
 
 /// The inherited rows that hold a colour, which a mode boundary writes
 /// again (D7): every one the schema marks inherited, in this order.
@@ -101,13 +102,14 @@ pub(crate) fn newly_refused(now: &[String], set: &[String]) -> Vec<String> {
 
 /// Every row that read a token, by view and row (D7's index): what a
 /// token's new value sets again, with no tree visited and no binding
-/// evaluated. One map, so a themed list's rows allocate only its growth.
+/// evaluated. The row and look maps allocate on first insertion. Checkpoints
+/// share them until they change.
 #[derive(Debug, Default, Clone)]
 pub struct ThemeIndex {
-    rows: std::collections::HashMap<(ViewId, u16), ThemedRow>,
+    rows: Option<Rc<HashMap<(ViewId, u16), ThemedRow>>>,
     /// Each node's state looks that read a token (LLP 1121 D8): what a
     /// token's new value resolves again, as `rows` are.
-    pub(super) looks: std::collections::HashMap<ViewId, super::looks::Looks>,
+    looks: Option<Rc<HashMap<ViewId, super::looks::Looks>>>,
     /// Each Markdown node's faces that read a token, likewise.
     faces: std::collections::HashMap<ViewId, ThemedFaces>,
     /// Each field's decoration declarations that read a token, likewise.
@@ -122,12 +124,24 @@ pub struct ThemeIndex {
 impl ThemeIndex {
     /// `view`'s `row`, which read a token.
     pub(super) fn put(&mut self, view: ViewId, row: ThemedRow) {
-        self.rows.insert((view, row.style as u16), row);
+        Rc::make_mut(self.rows.get_or_insert_default()).insert((view, row.style as u16), row);
+    }
+
+    pub(super) fn set_look(&mut self, view: ViewId, looks: super::looks::Looks) {
+        if looks.tokens != 0 {
+            Rc::make_mut(self.looks.get_or_insert_default()).insert(view, looks);
+        } else if let Some(looks) = self
+            .looks
+            .as_mut()
+            .filter(|looks| Rc::strong_count(looks) == 1 || looks.contains_key(&view))
+        {
+            Rc::make_mut(looks).remove(&view);
+        }
     }
 
     /// `view`'s `style`, when it read a token.
     pub fn row(&self, view: ViewId, style: StyleId) -> Option<&ThemedRow> {
-        self.rows.get(&(view, style as u16))
+        self.rows.as_ref()?.get(&(view, style as u16))
     }
 
     /// `view`'s `style`, set again, read `tokens` too: a token's new value
@@ -138,16 +152,25 @@ impl ThemeIndex {
     /// that changes nothing (bits are already shared by names, `name_bit`),
     /// where replacing them could drop a read the parse didn't repeat.
     pub(crate) fn also_read(&mut self, view: ViewId, style: StyleId, tokens: u64) {
-        if let Some(row) = self.rows.get_mut(&(view, style as u16)) {
-            row.tokens |= tokens;
+        let key = (view, style as u16);
+        if let Some(rows) = self
+            .rows
+            .as_mut()
+            .filter(|rows| rows.get(&key).is_some_and(|row| tokens & !row.tokens != 0))
+        {
+            Rc::make_mut(rows).get_mut(&key).unwrap().tokens |= tokens;
         }
     }
 
     /// `view`'s state looks, resolved again, read `tokens` too, added as
     /// [`ThemeIndex::also_read`] adds a row's.
     pub(crate) fn looks_read(&mut self, view: ViewId, tokens: u64) {
-        if let Some(l) = self.looks.get_mut(&view) {
-            l.tokens |= tokens;
+        if let Some(looks) = self.looks.as_mut().filter(|looks| {
+            looks
+                .get(&view)
+                .is_some_and(|look| tokens & !look.tokens != 0)
+        }) {
+            Rc::make_mut(looks).get_mut(&view).unwrap().tokens |= tokens;
         }
     }
 
@@ -184,42 +207,65 @@ impl ThemeIndex {
 
     /// `view`'s `style` reads no token now.
     pub(super) fn drop_row(&mut self, view: ViewId, style: StyleId) {
-        if !self.rows.is_empty() {
-            self.rows.remove(&(view, style as u16));
+        let key = (view, style as u16);
+        if let Some(rows) = self
+            .rows
+            .as_mut()
+            .filter(|rows| Rc::strong_count(rows) == 1 || rows.contains_key(&key))
+        {
+            Rc::make_mut(rows).remove(&key);
         }
     }
 
     /// Forget the views `live` says are gone.
     pub(super) fn retain(&mut self, live: &impl Fn(ViewId) -> bool) {
-        self.rows.retain(|(view, _), _| live(*view));
-        self.looks.retain(|view, _| live(*view));
+        if let Some(rows) = self
+            .rows
+            .as_mut()
+            .filter(|rows| Rc::strong_count(rows) == 1 || rows.keys().any(|(view, _)| !live(*view)))
+        {
+            Rc::make_mut(rows).retain(|(view, _), _| live(*view));
+        }
+        if let Some(looks) = self
+            .looks
+            .as_mut()
+            .filter(|looks| Rc::strong_count(looks) == 1 || looks.keys().any(|view| !live(*view)))
+        {
+            Rc::make_mut(looks).retain(|view, _| live(*view));
+        }
         self.faces.retain(|view, _| live(*view));
         self.decorations.retain(|view, _| live(*view));
     }
 
     /// Each node's state looks that read a token, by view.
     pub fn looks(&self) -> impl Iterator<Item = (ViewId, &super::looks::Looks)> + '_ {
-        self.looks.iter().map(|(view, l)| (*view, l))
+        self.looks
+            .iter()
+            .flat_map(|looks| looks.iter())
+            .map(|(view, l)| (*view, l))
     }
 
     /// `view`'s state looks, when they read a token.
     pub fn look(&self, view: ViewId) -> Option<&super::looks::Looks> {
-        self.looks.get(&view)
+        self.looks.as_ref()?.get(&view)
     }
 
     /// Every themed row, in no order.
     pub fn rows(&self) -> impl Iterator<Item = (ViewId, &ThemedRow)> + '_ {
-        self.rows.iter().map(|((view, _), r)| (*view, r))
+        self.rows
+            .iter()
+            .flat_map(|rows| rows.iter())
+            .map(|((view, _), r)| (*view, r))
     }
 
     /// How many rows read a token.
     pub fn len(&self) -> usize {
-        self.rows.len()
+        self.rows.as_deref().map_or(0, HashMap::len)
     }
 
     /// Whether no row reads a token.
     pub fn is_empty(&self) -> bool {
-        self.rows.is_empty()
+        self.rows.as_deref().is_none_or(HashMap::is_empty)
     }
 }
 
@@ -564,5 +610,57 @@ impl super::NodeInst {
             }
             implied[k] = want;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::instance::looks::Looks;
+
+    #[test]
+    fn retain_keeps_unchanged_theme_maps_shared() {
+        let mut theme = ThemeIndex::default();
+        theme.put(
+            1,
+            ThemedRow {
+                style: StyleId::TextColor,
+                text: Value::str("var(--ink)"),
+                tuple: 0,
+                written: true,
+                implied: false,
+                tokens: 1,
+            },
+        );
+        theme.set_look(
+            2,
+            Looks {
+                tuple: 0,
+                tokens: 1,
+                states: vec![],
+            },
+        );
+        let checkpoint = theme.clone();
+        let rows = checkpoint.rows.as_ref().unwrap();
+        let looks = checkpoint.looks.as_ref().unwrap();
+
+        theme.retain(&|_| true);
+        assert!(
+            Rc::ptr_eq(theme.rows.as_ref().unwrap(), rows),
+            "themed rows"
+        );
+        assert!(
+            Rc::ptr_eq(theme.looks.as_ref().unwrap(), looks),
+            "themed looks"
+        );
+
+        theme.retain(&|view| view != 1);
+        assert!(theme.row(1, StyleId::TextColor).is_none());
+        assert!(checkpoint.row(1, StyleId::TextColor).is_some());
+        assert!(Rc::ptr_eq(theme.looks.as_ref().unwrap(), looks));
+
+        theme.retain(&|view| view != 2);
+        assert!(theme.look(2).is_none());
+        assert!(checkpoint.look(2).is_some());
     }
 }

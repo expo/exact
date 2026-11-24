@@ -88,6 +88,9 @@ final class NodeLayer: CALayer {
         node.applyImageLayer()
         node.applyGradientLayer()
         node.applyBoxMask()
+        // What allows an extension can change with no new outsets, as an image drawn into the box's own backing store
+        // arrives (LLP 1123 D13)
+        node.applyExtension()
         if node.drawsPaint { super.display(); return }
         contents = nil
         if node.isParagraph {
@@ -151,7 +154,7 @@ extension NodeView {
             CATransaction.begin(); CATransaction.setDisableActions(true)
             defer { CATransaction.commit() }
             let l = imageLayer ?? NodeImageLayer()
-            if l.superlayer !== layer { imageLayer = l; insertBoxSublayer(l) }
+            if l.superlayer !== pictureHost { imageLayer = l; insertBoxSublayer(l) }
             l.sublayers?.forEach { $0.removeFromSuperlayer() }
             l.frame = crop.shown
             l.contentsRect = crop.unit
@@ -194,7 +197,7 @@ extension NodeView {
         let masks: [CACornerMask] = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner, .layerMinXMaxYCorner]
         for (r, mask) in zip(radii, masks) where r > 0 { corners.insert(mask) }
         let l = imageLayer ?? NodeImageLayer()
-        let mounted = l.superlayer === layer
+        let mounted = l.superlayer === pictureHost
         CATransaction.begin()
         CATransaction.setDisableActions(!mounted || CATransaction.disableActions())
         defer { CATransaction.commit() }
@@ -242,7 +245,7 @@ extension NodeView {
         defer { CATransaction.commit() }
         let g = boxGradient ?? CAGradientLayer()
         boxGradient = g
-        if g.superlayer !== layer { insertBoxSublayer(g) }
+        if g.superlayer !== pictureHost { insertBoxSublayer(g) }
         if g.frame != layer.bounds { g.frame = layer.bounds }
         if drawsPaint || (layer.cornerRadius == 0 && cornerRadii(in: bounds).contains { $0 > 0 }) {
             // Over the shaped box: its outline, whatever its corners.
@@ -275,7 +278,7 @@ extension NodeView {
             return
         }
         guard let p = boxPattern ?? GradientLink.makePattern?() else { return }
-        let mounted = p.superlayer === layer
+        let mounted = p.superlayer === pictureHost
         CATransaction.begin()
         CATransaction.setDisableActions(!mounted || CATransaction.disableActions())
         defer { CATransaction.commit() }
@@ -417,18 +420,23 @@ extension NodeView {
         let bg = onLayer && !away && !cssVisibilityHidden && (vibrancyView == nil || isParagraph) ? fill : nil
         applyCornerFill(shapedRadii ? bg : nil)
         let layerFill = shapedRadii ? nil : bg
-        #if os(iOS)
+        let picture = boxExtension?.picture?.layer
         if let lent = extras?.lentFill {
             // Lent to a menu's stand-in: the current fill and outline go on
-            // the sublayer it draws, the layer's own stays clear.
+            // the sublayer it draws, the layer's own and an extension's
+            // picture stay clear.
             if layer.backgroundColor != nil { layer.backgroundColor = nil }
+            if picture?.backgroundColor != nil { picture?.backgroundColor = nil }
+            #if os(iOS)
             lent.frame = layer.bounds
             lent.path = (LiftTarget.rounded(self) ?? UIBezierPath(rect: bounds)).cgPath
+            #endif
             if lent.fillColor != layerFill { lent.fillColor = layerFill }
+        } else if let picture {
+            // Mirrored past the border box (LLP 1123 D13): the fill is the picture's, which the extension mirrors
+            if layer.backgroundColor != nil { layer.backgroundColor = nil }
+            if picture.backgroundColor != layerFill { picture.backgroundColor = layerFill }
         } else if layer.backgroundColor != layerFill { layer.backgroundColor = layerFill }
-        #else
-        if layer.backgroundColor != layerFill { layer.backgroundColor = layerFill }
-        #endif
         // A flight interpolates the radius itself (LLP 1013.000 D4).
         if flightLook == nil, layer.cornerRadius != cornerRadius { layer.cornerRadius = cornerRadius }
         if let v = vibrancyView, !isParagraph {
@@ -437,6 +445,19 @@ extension NodeView {
             v.clipsToBounds = cornerRadius > 0
         }
         if cornerRadius > 0, layer.maskedCorners != corners { layer.maskedCorners = corners }
+        if let picture {
+            picture.cornerRadius = layer.cornerRadius; picture.maskedCorners = layer.maskedCorners; picture.cornerCurve = curve
+        } else if let strip = boxExtension?.view as? ExtensionStrip {
+            // Before iOS 26 only the colour extends (LLP 1123 D13)
+            strip.colour = bg
+        }
+        // Hide the strip while a layout transition's surface paints the box, its border with its picture (LLP 1123 D13),
+        // the picture's own layers (an image) back on the box meanwhile (`pictureHost`)
+        if let view = boxExtension?.view, view.isHidden != away {
+            view.isHidden = away
+            for l in pictureLayers { insertBoxSublayer(l) }
+            keepSurfaceUnder()
+        }
         let ownWidth = own && !shapedRadii && border != nil ? width : 0
         if layer.borderWidth != ownWidth { layer.borderWidth = ownWidth }
         if ownWidth > 0, layer.borderColor != border { layer.borderColor = border }
@@ -488,13 +509,22 @@ extension NodeView {
     /// shadow, gradient, inset shadow, image, border, text — whichever of
     /// them joins first (as `Mac/BoxLayerMac.swift`).
     package func insertBoxSublayer(_ l: CALayer) {
+        let host = pictureLayers.contains { $0 === l } ? pictureHost : layer
         let order: [CALayer?] = [extras?.lentFill, shadowCaster, boxFill, boxGradient, boxPattern, insetCaster, imageLayer, boxBorder, textBoxLayer]
         guard let rank = order.firstIndex(where: { $0 === l }) else { return }
-        if let below = order[..<rank].reversed().compactMap({ $0 }).first(where: { $0.superlayer === layer }) {
-            layer.insertSublayer(l, above: below)
+        if let below = order[..<rank].reversed().compactMap({ $0 }).first(where: { $0.superlayer === host }) {
+            host.insertSublayer(l, above: below)
         } else {
-            layer.insertSublayer(l, at: 0)
+            host.insertSublayer(l, at: 0)
         }
     }
+
+    /// Where the box's picture paints, its fill, gradients, inset shadow and an image's picture: the extension's
+    /// content view while it is mirrored past its border box (LLP 1123 D13) and no layout transition's surface paints
+    /// the box, else its own layer.
+    package var pictureHost: CALayer { surface == nil ? boxExtension?.picture?.layer ?? layer : layer }
+
+    /// The layers of the box's picture that exist now (`pictureHost`).
+    package var pictureLayers: [CALayer] { [boxFill, boxGradient, boxPattern, insetCaster, imageLayer].compactMap { $0 } }
 }
 #endif

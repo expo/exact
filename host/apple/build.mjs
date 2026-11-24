@@ -67,7 +67,7 @@ export { rebuildArgs };
 import { appleConfig, composedModule, moduleSeam, moduleLibraryLinkArgs, packageCompiler, rosterProbe, rosterProbeMain } from './compose.mjs';
 import { associatedDomains, clipEntitlements, entitlementValue, grantEntitlements, grantEntitlementValues, macSigning, merchantEntitlement, signInEntitlement, signsGrant } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
-import { alternativeNames, backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, layoutDirection, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
+import { alternativeNames, backgroundKeys, firstFrameKeys, declaredOrigin, interfaceStyle, layoutDirection, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys, withVendorKeys } from './plist.mjs';
 import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
 import { auditLaunchParts, launchModules, launchPartsObjects, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
@@ -463,7 +463,8 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
   Object.assign(dict, usageKeys(reach), localizationKeys(reach));
   Object.assign(dict, icon);
   Object.assign(dict, distribution, orientationKeys(app.manifest.orientation), interfaceStyle(app), tv || clip ? {} : storeKeys(app, 'ios'));
-  return plistFile(withPackageKeys(dict, reach, { events: !clip }));
+  // The app's own bundle, the tvOS app too, takes its vendor keys; an App Clip and the sample host take none.
+  return plistFile(withVendorKeys(withPackageKeys(dict, reach, { events: !clip }), id === app.id && !clip ? app.manifest : null, 'ios', reach?.packages));
 };
 
 /** What App Store Connect reads from a distributed bundle and Xcode would
@@ -512,7 +513,7 @@ export function designCompatible(app, platform) {
 }
 
 /** The macOS `Info.plist` for a bundled build, from the same manifest. */
-export const macInfoPlist = (app, { development = null, icon = {}, reach = null, distributed = false } = {}) => plistFile(withPackageKeys({
+export const macInfoPlist = (app, { development = null, icon = {}, reach = null, distributed = false, vendor = true } = {}) => plistFile(withVendorKeys(withPackageKeys({
   ...icon, ...(app.manifest.moduleConfig ? { ExactModuleConfig: app.manifest.moduleConfig } : {}),
   CFBundleExecutable: appleExecutableName(app),
   CFBundleIdentifier: app.id,
@@ -538,7 +539,7 @@ export const macInfoPlist = (app, { development = null, icon = {}, reach = null,
   ...updateActivation(app), ...interfaceStyle(app, true), ...layoutDirection(app), ...storeKeys(app, 'macos'),
   ...openingLinks(app, 'macos', development, distributed), ...shortcutKeys(app, 'macos'),
   ...(app.manifest.host?.macos?.oneTimeCodeAutofill === 'marked' ? { NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true } : {}),
-}, reach));
+}, reach), vendor ? app.manifest : null, 'macos', reach?.packages));
 /** The build receipt (LLP 1030 D2): what this binary was actually built from and with — the toolchain, the SDK, the identity and profile, the entitlements as signed — written beside it, never committed, so "what did this binary contain" is answered by a file. */
 export function receipt(app, fields) {
   const version = (cmd, args) => (read(cmd, args).stdout ?? '').trim().split('\n')[0];

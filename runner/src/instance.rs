@@ -13,6 +13,7 @@
 
 /// Variable-height viewport collections and their portable host feedback seam.
 mod bound;
+mod children;
 pub mod collection;
 mod deps;
 mod document;
@@ -39,6 +40,7 @@ use trapped::Evaluated;
 
 use crate::bridge;
 use crate::vm::{self, Env, Frame, RowSlots, Trap};
+use children::{update_all, Children};
 use deps::{Bits, Reads, Seen};
 pub(crate) use deps::{Deps, Reads as DepReads};
 pub use deps::{Input, RowDependencies, RowWrites};
@@ -137,7 +139,7 @@ pub struct NodeInst {
     /// A node with only constant bindings needs no storage here.
     last: Option<Rc<[Option<Value>]>>,
     /// Ordered children: static nodes and regions interleaved by `order`.
-    children: Vec<Child>,
+    children: Children,
     /// Last emitted child list.
     last_children: Box<[ViewId]>,
     /// What few nodes keep, behind one pointer: `Child` is 112 bytes, a
@@ -150,6 +152,8 @@ pub struct NodeInst {
     /// One of its inherited colour rows was set since its children last
     /// took the text they inherit (D7): they are visited again.
     colour_moved: bool,
+    /// Whether a region can appear under this node.
+    contains_regions: bool,
     /// The tuple around it when its rows were last set.
     around: u32,
 }
@@ -341,25 +345,7 @@ impl Ids {
 /// A value as the JSON a surface's arguments cross in: numbers shortest,
 /// records and lists as arrays, `none` as `null`.
 pub fn value_json(value: &Value, out: &mut String) {
-    match value {
-        Value::Number(n) if n.is_finite() => {
-            exact_num::push_text!(out, "{}", exact_num::Shortest(*n))
-        }
-        Value::Number(_) | Value::Unit | Value::Option(None) => out.push_str("null"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        v @ exact_plan::str_value!() => crate::json::quote(v.text(), out),
-        Value::Option(Some(v)) => value_json(v, out),
-        Value::List(items) | Value::Record(items) => {
-            out.push('[');
-            for (i, value) in items.iter().enumerate() {
-                if i != 0 {
-                    out.push(',');
-                }
-                value_json(value, out);
-            }
-            out.push(']');
-        }
-    }
+    crate::json::untyped_signed_json(value, out);
 }
 
 /// A canvas node's surface inputs, evaluated against state: the runner's
@@ -377,6 +363,8 @@ pub struct SurfaceUpdate {
     pub names: Vec<String>,
     /// Its arguments, evaluated.
     pub values: Vec<Value>,
+    /// Each argument's declared type, where it has one (LLP 1056 D1).
+    pub types: Vec<Option<exact_plan::TypesId>>,
 }
 
 impl SurfaceUpdate {
@@ -781,34 +769,6 @@ fn destroy_all(u: &mut Update<'_>, children: Vec<Child>) {
     }
 }
 
-/// Update the children whose reads may have changed; whether the roots
-/// they contribute to their parent's child list changed.
-fn update_all(
-    u: &mut Update<'_>,
-    children: &mut [Child],
-    frames: &[Frame],
-) -> Result<bool, InstanceError> {
-    let deps = &u.sites.data.deps;
-    let mut roots = false;
-    for c in children.iter_mut() {
-        match c {
-            Child::Node(n) => {
-                if u.stale(&deps.nodes[n.node.0 as usize]) {
-                    n.update(u, frames)?;
-                }
-            }
-            Child::Region(r) => {
-                if u.stale(&deps.regions[r.region.0 as usize]) {
-                    roots |= r.update(u, frames, false)?;
-                } else {
-                    u.work.regions_skipped += 1;
-                }
-            }
-        }
-    }
-    Ok(roots)
-}
-
 /// Visit a kept row when anything its body reads changed, the fields of its
 /// own item that changed included (`dirty`, [`crate::compare::changed_fields`]);
 /// whether its roots changed.
@@ -858,12 +818,13 @@ impl NodeInst {
             node,
             view,
             last: (slots != 0).then(|| (0..slots).map(|_| None).collect()),
-            children: Vec::new(),
+            children: Children::default(),
             last_children: Box::default(),
             rare: None,
             tuple: u.theme.tuple,
             themed: theme::Themed::default(),
             colour_moved: false,
+            contains_regions: u.sites.data.contains_regions[node.0 as usize],
             around: u.theme.tuple,
         };
         inst.emit_bindings(u, frames, true)
@@ -871,16 +832,13 @@ impl NodeInst {
         // Its children are created in what it sets: nothing to visit again.
         inst.colour_moved = false;
         let saved = inst.enter(u, inst.tuple);
-        let lists = u.env.lists;
         let realized = (|| {
-            let wait = tabs::wait(u, node, view);
-            if let Some(lists) = lists.filter(|_| !wait) {
-                let collection = (lists.create)(u, node, view, frames, &mut inst.children)?;
-                inst.set_list(collection);
-            }
-            if !wait && inst.list().is_none() {
-                inst.children = realize(u, Some(node), row.arm, frames)?;
-                inst.emit_children(u);
+            if !tabs::wait(u, node, view) {
+                inst.create_list(u, frames)?;
+                if inst.list().is_none() {
+                    inst.children = realize(u, Some(node), row.arm, frames)?.into();
+                    inst.emit_children(u);
+                }
             }
             Ok(())
         })();
@@ -1192,6 +1150,7 @@ impl NodeInst {
                         .map(str::to_owned)
                         .collect(),
                     values: values.clone(),
+                    types: s.args.iter().map(|a| plan.surface_arg(a).ty).collect(),
                 });
                 self.rare().last_surface = Some(values);
             }
@@ -1254,7 +1213,7 @@ impl NodeInst {
         let gap = (self.list())
             .and_then(|_| self.bound_style(plan, u.sites, exact_kernel::StyleId::ColumnGap));
         if self.list().is_some() {
-            update_all(u, &mut self.children, frames)?;
+            self.children.update(u, frames)?;
         }
         if let Some(list) = self.rare.as_mut().and_then(|r| r.collection.as_deref_mut()) {
             (u.env.lists.ok_or_else(unlinked)?.update)(
@@ -1269,7 +1228,7 @@ impl NodeInst {
                     children: &self.children,
                 },
             )?;
-        } else if update_all(u, &mut self.children, frames)? {
+        } else if self.children.update(u, frames)? {
             self.emit_children(u);
         }
         Ok(())
@@ -1436,7 +1395,7 @@ impl NodeInst {
                 return Some(found);
             }
         }
-        for c in &self.children {
+        for c in self.children.iter() {
             let found = match c {
                 Child::Node(n) => n.site(view, path),
                 Child::Region(r) => r.site(view, path),

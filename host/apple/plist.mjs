@@ -446,14 +446,49 @@ export function appleMetadataOwners() {
   return metadataOwners = hosts;
 }
 
+/** What a refused `host.<platform>.<kind>` key should be instead: its grant, the field Exact writes it from, or a
+ * feedback note. */
+function metadataAdvice(platform, kind, key) {
+  const owners = appleMetadataOwners()[platform][kind].get(key);
+  return owners?.length ? (owners.length > 1 ? `choose one: ${owners.join(' or ')}` : owners[0]) : owners
+    ? 'Exact writes this key itself from its declarations (docs/reference.md#apple-bundle-metadata), so it cannot be set here'
+    : `not supported on ${platform}: Exact does not write this key; file a \`bun exact.mjs feedback note\` from the app directory naming ${JSON.stringify(key)} and what the native module needs`;
+}
+
 /** Refusal-only manifest dictionaries: name every supplied key, including keys no writer owns yet. */
 export function appleMetadataProblem(problem) {
   const match = /^(host\.(ios|macos)\.(infoPlist|entitlements))\.([\s\S]*): not a known key$/.exec(problem);
   if (!match) return problem;
   const [, path, platform, kind, key] = match;
-  const owners = appleMetadataOwners()[platform][kind].get(key);
-  const advice = owners?.length ? (owners.length > 1 ? `choose one: ${owners.join(' or ')}` : owners[0]) : owners
-    ? 'Exact writes this key itself from its declarations (docs/reference.md#apple-bundle-metadata), so it cannot be set here'
-    : `not supported on ${platform}: Exact does not write this key; file a \`bun exact.mjs feedback note\` from the app directory naming ${JSON.stringify(key)} and what the native module needs`;
-  return `${path}.${key}: refused; ${advice}`;
+  return `${path}.${key}: refused; ${metadataAdvice(platform, kind, key)}`;
+}
+
+/** `host.<platform>.infoPlist`, or nothing where it is no dictionary (the schema refuses that). */
+const vendorKeys = (manifest, platform) => {
+  const dict = manifest?.host?.[platform]?.infoPlist;
+  return dict && typeof dict === 'object' && !Array.isArray(dict) ? dict : {};
+};
+
+/** Apple's Info.plist namespaces (LLP 1069.008 D4, amended 2026-11-23): the prefixes of the keys in Apple's
+ * [Information Property List](https://developer.apple.com/documentation/bundleresources/information-property-list)
+ * reference, and its two unprefixed keys. */
+const APPLE_KEY = /^((NS|UI|LS|CF|UT|CA|GC|GK|MK|BG|WK|IN|NFC|ITS|SK|CK|AV|PH|QL|DT)[A-Z]|MinimumOSVersion$|BuildMachineOSBuild$)/;
+
+/** The refusals of `host.ios.infoPlist` and `host.macos.infoPlist` keys that are not a vendor's: a key in Apple's
+ * namespaces, an `Exact` key, or one the build writes itself. */
+export function vendorPlistProblems(manifest) {
+  return ['ios', 'macos'].flatMap(platform => Object.keys(vendorKeys(manifest, platform))
+    .filter(key => APPLE_KEY.test(key) || key.startsWith('Exact') || appleMetadataOwners()[platform].infoPlist.has(key))
+    .map(key => `host.${platform}.infoPlist.${key}: refused; ${metadataAdvice(platform, 'infoPlist', key)}`));
+}
+
+/** Add the vendor keys of `manifest` (`host.<platform>.infoPlist`; none for null) to `dict`, last. Refuse, naming the
+ * package, a key a package's `plistKeys` wrote. */
+export function withVendorKeys(dict, manifest, platform, packages = []) {
+  for (const [key, value] of Object.entries(vendorKeys(manifest, platform))) {
+    const writer = packages.find(p => p.key === key);
+    if (writer) throw new Error(`host.${platform}.infoPlist.${key}: ${writer.extension}'s Apple implementation writes this key`);
+    Object.defineProperty(dict, key, { value, enumerable: true, writable: true, configurable: true });
+  }
+  return dict;
 }

@@ -471,11 +471,10 @@ test('a forced Rust resource keeps forcing parser-created requests and tickets a
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-forced-chain-'));
   try {
     for (const name of readdirSync(resolve(ROOT, 'host/web-js')).filter(n => n.endsWith('.js')))
-      cpSync(resolve(ROOT, 'host/web-js', name), resolve(dir, basename(name)));
+      writeFileSync(resolve(dir, name), localImports(readFileSync(resolve(ROOT, 'host/web-js', name), 'utf8')));
     stageHostGlue(ROOT, dir);
     for (const name of ['navigation.js', 'grant-admission.js'])
       writeFileSync(resolve(dir, name), await bundleHostModule(ROOT, name));
-    writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(dir, 'admission.js'), 'utf8')));
     writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes = {};');
     writeFileSync(resolve(dir, 'draw.js'), 'export const drawer = null;');
     writeFileSync(resolve(dir, 'path2d.js'), 'export const browserPath2D = undefined;');

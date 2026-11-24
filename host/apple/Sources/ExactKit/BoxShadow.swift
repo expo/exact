@@ -64,8 +64,10 @@ package final class ShadowCaster: CALayer {
     }
 
     /// `box` and the paths in the host layer's coordinates: `outline` the
-    /// border box's, each shadow's shape its outline grown by its spread.
-    package func cast(box: CGRect, outline: CGPath, shadows: [(shape: CGPath, spec: BoxShadowSpec)]) {
+    /// border box's, each shadow's shape its outline grown by its spread, and
+    /// `extended` the box's extension (LLP 1123 D13), outside which the shadows
+    /// paint as they do outside its outline.
+    package func cast(box: CGRect, outline: CGPath, shadows: [(shape: CGPath, spec: BoxShadowSpec)], extended: CGRect? = nil) {
         CATransaction.begin(); CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
         let reach = shadows.map(\.spec.reach).max() ?? 1
@@ -97,6 +99,11 @@ package final class ShadowCaster: CALayer {
         }
         let hole = CGMutablePath()
         hole.addRect(CGRect(origin: .zero, size: extent.size))
+        if let extended {
+            // The strips past the border box, even-odd: the border box's corners outside the outline still show it
+            hole.addRect(extended.applying(local))
+            hole.addRect(box.applying(local))
+        }
         if let path = outline.copy(using: &local) { hole.addPath(path) }
         outside.frame = CGRect(origin: .zero, size: extent.size)
         outside.path = hole
@@ -285,13 +292,18 @@ extension NodeView {
             let caster = shadowCaster ?? ShadowCaster()
             if caster.superlayer !== outerHost { outerHost.insertSublayer(caster, at: 0) }
             shadowCaster = caster
+            #if os(iOS) || os(tvOS)
+            let extended = extensionFrame
+            #else
+            let extended: CGRect? = nil
+            #endif
             caster.cast(box: bounds, outline: outline, shadows: outer.map { spec in
                 guard spec.spread != 0 else { return (outline, spec) }
                 let grown = bounds.insetBy(dx: -spec.spread, dy: -spec.spread)
                 let radii = sizes.map { CGSize(width: BoxShadowSpec.spreadRadius($0.width, spec.spread),
                                                 height: BoxShadowSpec.spreadRadius($0.height, spec.spread)) }
                 return (BorderPaint.roundedRect(grown, radii, shape: shape), spec)
-            })
+            }, extended: extended)
         } else {
             shadowCaster?.removeFromSuperlayer(); shadowCaster = nil
             #if os(macOS)
@@ -310,7 +322,13 @@ extension NodeView {
             .map { CGSize(width: max(0, $0.width), height: max(0, $0.height)) }
         let caster = insetCaster ?? InsetShadowCaster()
         insetCaster = caster
-        if caster.superlayer !== host { insertInsetCaster(caster, into: host) }
+        #if os(iOS) || os(tvOS)
+        // Where `insertBoxSublayer` puts it: with the picture, in an extended box's extension picture (LLP 1123 D13)
+        let home = pictureHost
+        #else
+        let home = host
+        #endif
+        if caster.superlayer !== home { insertInsetCaster(caster, into: host) }
         caster.cast(box: bounds, padding: BorderPaint.roundedRect(padding, padRadii, shape: shape), shadows: inner.map { spec in
             let hole = padding.insetBy(dx: spec.spread, dy: spec.spread)
             let radii = padRadii.map { CGSize(width: max(0, $0.width - spec.spread), height: max(0, $0.height - spec.spread)) }
@@ -564,6 +582,10 @@ extension NodeView {
             }
             func views(_ view: View) {
                 include(view.convert(view.bounds, to: self))
+                #if os(iOS) || os(tvOS)
+                // A box's extension paints its own frame; what UIKit holds inside it is UIKit's (LLP 1123 D13)
+                if view.isBoxExtension { return }
+                #endif
                 for child in view.subviews { views(child) }
             }
             // AppKit may not have attached backing layers yet; views still

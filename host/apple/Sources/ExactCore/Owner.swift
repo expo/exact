@@ -47,6 +47,13 @@ package final class Owner: @unchecked Sendable {
     /// lock, and drained under it before it goes back, so none comes back
     /// holding a count.
     private var spareWakes: [DispatchSemaphore] = []
+    /// Jobs the owner has begun, counted.
+    private var started: UInt64 = 0
+    /// How many jobs the owner has begun: in a job, that job's number.
+    package var jobsBegun: UInt64 { lock.withLock { started } }
+    /// The jobs the owner has begun and those waiting: a reply read in job
+    /// `n` had no job begun or asked after it while this is still `n`.
+    package var jobsAsked: UInt64 { lock.withLock { started + UInt64(jobs.count + later.count) } }
     /// The job main is waiting on: a call for main wakes it.
     private var mainWaits: Job?
     private var thread: pthread_t?
@@ -87,6 +94,7 @@ package final class Owner: @unchecked Sendable {
             lock.lock()
             // A notification was posted during an earlier job: it goes first.
             let job = later.isEmpty ? jobs.removeFirst() : later.removeFirst()
+            started &+= 1
             lock.unlock()
             autoreleasepool { drainOffsets(); job.body?() }
             lock.lock()

@@ -83,6 +83,7 @@ mod pointer;
 mod present;
 mod reader_selection;
 mod replacement;
+pub use frames::with_partitions;
 pub use present::Carried;
 use replacement::Waiting;
 pub use replacement::{ReloadResult, ReplacementOutcome};
@@ -462,6 +463,9 @@ pub struct Presenter<D: DataSource> {
     last_region_scale: Option<u32>,
     /// The app's hatches (LLP 1075.003.000.001; `presenter/hatch.rs`).
     pub(crate) hatches: crate::hatches::Session,
+    /// Whether the platform keeps an iframe's partition, where only the
+    /// platform can say (`exactPage().iframePartition`; `presenter/frames.rs`).
+    pub frame_partitions: Option<fn() -> Option<bool>>,
 }
 /// Two decimals, the agent API's precision.
 fn r2(x: f32) -> f64 {
@@ -771,6 +775,7 @@ impl<D: DataSource> Presenter<D> {
             last_region_frame: None,
             last_region_scale: None,
             hatches: Default::default(),
+            frame_partitions: None,
         };
         p.read_ranges();
         p.set_system_scheme(false);

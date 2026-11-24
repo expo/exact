@@ -260,6 +260,11 @@ pub(crate) fn direct_for(plan: &Plan, ids: Ids, projection: Projection) -> Resul
         if !projects_as_booted(plan) {
             return Err("a slot's initializer reads a resource".into());
         }
+        if exact_runner::uses::portals(plan) {
+            // The fold declines it (runner/src/instance/document.rs); said
+            // here, the page goes to the kernel without settling twice.
+            return Err("a portal".into());
+        }
         Ok(())
     };
     match projection {

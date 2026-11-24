@@ -669,7 +669,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 - **A link in the app's own scheme never matches.** `signalclone://connect?x=1`
   reaches the root's `navigate` handler as the location `/connect?x=1`: the scheme
   is dropped and the host becomes the first path segment (`location_of`, LLP 1038
-  D8). Fix: match on the path (`location.startsWith("/connect?")`), not the URL.
+  §3). `signalclone:///connect?x=1` and `signalclone:/connect?x=1`, with no host,
+  are `/connect?x=1` too. Fix: match on the path (`location.startsWith("/connect?")`),
+  not the URL.
   (Signal Clone, phone path.)
 - **VoiceOver reads the screen behind a full-screen overlay.** A call screen
   or menu drawn as a root child above the bars hides the chat list from sight,

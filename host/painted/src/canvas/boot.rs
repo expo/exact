@@ -77,6 +77,7 @@ impl<D: DataSource + Default> CanvasHost<D> {
                 Err(e) => eprintln!("exact update: {e}"),
             }
         }
+        config.page = Some(exact_runner::time::PageFacts::new(reader_page));
         let painter = crate::presenter::PainterBoot::canvas(
             crate::presenter::PainterChoice::from_baked(compat),
         )?;
@@ -108,7 +109,6 @@ impl<D: DataSource + Default> CanvasHost<D> {
         // The reader takes what the presenter asks of the platform (D5),
         // and makes the top layer's windows (D10) and the bars (D11).
         p.serve_requests();
-        p.serve_share_sheet();
         p.serve_frame_partitions(super::frame_partitions::kept);
         surface::serve(&mut p);
         if let Some(palette) = &palette {
@@ -168,4 +168,16 @@ impl<D: DataSource + Default> CanvasHost<D> {
         }
         Ok(host)
     }
+}
+
+/// What `exactPage()` says from the reader's first settlement: its share
+/// sheet takes text, a link and `app:/` files, and no element's picture (LLP
+/// 1094.000 D7); whether its WebView keeps partitions (LLP 1020.002 D1).
+fn reader_page(plan: &exact_plan::Plan) -> exact_runner::Page {
+    let page = exact_runner::Page {
+        can_share: true,
+        can_share_files: true,
+        ..Default::default()
+    };
+    crate::presenter::with_partitions(page, plan, super::frame_partitions::kept)
 }

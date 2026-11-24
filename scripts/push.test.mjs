@@ -138,6 +138,22 @@ test("a package's native configuration is a binary input, recorded by digest (LL
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test("an app's vendor Info.plist key is a binary input (LLP 1069.008 D4)", () => {
+  const { root, app, binaryInputChanges } = harness();
+  const manifest = (url) => ({ app: { id: 'fixture', name: 'Fixture' }, host: { macos: { infoPlist: { SUFeedURL: url } } } });
+  try {
+    app.manifest = manifest('https://example.com/appcast.xml');
+    app.target = resolve(root, 'target');
+    const compat = { target: 'aarch64-apple-darwin', delivery: {}, inputs: { platform: 'macos', store: { L: 'A' }, keys: {} } };
+    const evidence = { version: 1, metadata: { ...nativeManifestMetadata(app.manifest, 'macos'), delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys },
+      files: [], directories: [], absent: [], links: [] };
+    const bytes = Buffer.from(JSON.stringify(evidence));
+    expect(binaryInputChanges(bytes, app, compat, [], evidence)).toEqual([]);
+    app.manifest = manifest('https://example.com/beta.xml');
+    expect(binaryInputChanges(bytes, app, compat, [], evidence)).toEqual(['host']);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('notification service cohort evidence ignores hidden entries', async () => {
   const { root, app, binaryInputChanges } = harness();
   const service = resolve(root, 'modules/apple/notification-service');

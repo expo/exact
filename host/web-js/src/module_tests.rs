@@ -92,8 +92,10 @@ fn prefer(name: &str, state: &str) -> Json {
 
 type Replies = Arc<Mutex<Vec<Json>>>;
 
+/// Data code's call of a module name, in the person's cause: a call with none is refused (LLP 1133.023 D7a).
 fn data_call(r: &mut Runner<Granted>, body: &Json, replies: &Replies) {
-    let Dispatch::Run(work) = r.native_work(&Request::native(body.to_string().into_bytes())) else {
+    let request = Request::native(body.to_string().into_bytes());
+    let Dispatch::Run(work) = r.as_person(|r| r.native_work(&request)) else {
         panic!("a module call is work");
     };
     let replies = replies.clone();

@@ -4,6 +4,7 @@
 
 use exact_plan::{Plan, TypeKind, TypesId, Value};
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 /// `{"error":"…"}`.
 pub fn error(message: &str) -> String {
@@ -18,19 +19,40 @@ pub fn error(message: &str) -> String {
 /// name. A value that does not match its type (never, past the runner's
 /// conformance checks) falls back to the positional form.
 pub fn typed_json(plan: &Plan, ty: TypesId, v: &Value, out: &mut String) {
+    typed_json_by(plan, ty, v, out, number);
+}
+
+fn number(n: f64, out: &mut String) {
+    let _ = write!(out, "{}", num(n));
+}
+
+/// [`num`], with `-0` kept: what a value is in JavaScript.
+fn signed_number(n: f64, out: &mut String) {
+    if n == 0.0 && n.is_sign_negative() {
+        out.push_str("-0");
+    } else {
+        number(n, out);
+    }
+}
+
+fn typed_json_by(
+    plan: &Plan,
+    ty: TypesId,
+    v: &Value,
+    out: &mut String,
+    number: fn(f64, &mut String),
+) {
     let row = plan.type_(ty);
     match (row.kind, v) {
-        (_, Value::Number(n)) => {
-            let _ = write!(out, "{}", num(*n));
-        }
+        (_, Value::Number(n)) => number(*n, out),
         (_, Value::Bool(b)) => out.push_str(if *b { "true" } else { "false" }),
         (_, v @ exact_plan::str_value!()) => quote(v.text(), out),
         (_, Value::Unit) | (_, Value::Option(None)) => out.push_str("null"),
         (TypeKind::Option, Value::Option(Some(inner))) => match row.elem {
-            Some(elem) => typed_json(plan, elem, inner, out),
-            None => untyped_json(inner, out),
+            Some(elem) => typed_json_by(plan, elem, inner, out, number),
+            None => untyped_json_by(inner, out, number),
         },
-        (_, Value::Option(Some(inner))) => untyped_json(inner, out),
+        (_, Value::Option(Some(inner))) => untyped_json_by(inner, out, number),
         (TypeKind::List, Value::List(items)) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
@@ -38,8 +60,8 @@ pub fn typed_json(plan: &Plan, ty: TypesId, v: &Value, out: &mut String) {
                     out.push(',');
                 }
                 match row.elem {
-                    Some(elem) => typed_json(plan, elem, item, out),
-                    None => untyped_json(item, out),
+                    Some(elem) => typed_json_by(plan, elem, item, out, number),
+                    None => untyped_json_by(item, out, number),
                 }
             }
             out.push(']');
@@ -53,31 +75,82 @@ pub fn typed_json(plan: &Plan, ty: TypesId, v: &Value, out: &mut String) {
                 let field = plan.field(f);
                 quote(plan.str(field.name), out);
                 out.push(':');
-                typed_json(plan, field.ty, value, out);
+                typed_json_by(plan, field.ty, value, out, number);
             }
             out.push('}');
         }
-        (_, Value::List(_)) | (_, Value::Record(_)) => untyped_json(v, out),
+        (_, Value::List(_)) | (_, Value::Record(_)) => untyped_json_by(v, out, number),
     }
+}
+
+/// [`surface_args`], over the plan: a Canvas 2D engine's view of it.
+pub type SurfaceArgs<'a> =
+    &'a dyn Fn(&crate::SurfaceUpdate, Option<(&[Value], &[Arc<str>])>) -> (Vec<Arc<str>>, Arc<str>);
+
+/// A surface's arguments as a TypeScript `draw` receives them (LLP 1056 D1):
+/// each value's JSON under its declared type, and the whole, an array or an
+/// object by the authored names. A value equal to the one `kept` pieces were
+/// made from keeps its piece, so a commit serializes only what changed.
+pub fn surface_args(
+    plan: &Plan,
+    u: &crate::SurfaceUpdate,
+    kept: Option<(&[Value], &[Arc<str>])>,
+) -> (Vec<Arc<str>>, Arc<str>) {
+    let pieces: Vec<Arc<str>> = (u.values.iter().enumerate())
+        .map(|(i, v)| match kept {
+            Some((values, pieces)) if values.get(i) == Some(v) && i < pieces.len() => {
+                pieces[i].clone()
+            }
+            _ => {
+                let mut s = String::new();
+                match u.types.get(i).copied().flatten() {
+                    Some(ty) => typed_json_by(plan, ty, v, &mut s, signed_number),
+                    None => untyped_json_by(v, &mut s, signed_number),
+                }
+                s.into()
+            }
+        })
+        .collect();
+    let named = !u.names.is_empty();
+    let mut s = String::from(if named { "{" } else { "[" });
+    for (i, piece) in pieces.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        if named {
+            quote(&u.names[i], &mut s);
+            s.push(':');
+        }
+        s.push_str(piece);
+    }
+    s.push(if named { '}' } else { ']' });
+    (pieces, s.into())
+}
+
+/// [`untyped_json`], with `-0` kept.
+pub fn untyped_signed_json(v: &Value, out: &mut String) {
+    untyped_json_by(v, out, signed_number);
 }
 
 /// A plan value as JSON with no type to hand: records positional.
 pub fn untyped_json(v: &Value, out: &mut String) {
+    untyped_json_by(v, out, number);
+}
+
+fn untyped_json_by(v: &Value, out: &mut String, number: fn(f64, &mut String)) {
     match v {
-        Value::Number(n) => {
-            let _ = write!(out, "{}", num(*n));
-        }
+        Value::Number(n) => number(*n, out),
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         v @ exact_plan::str_value!() => quote(v.text(), out),
         Value::Unit | Value::Option(None) => out.push_str("null"),
-        Value::Option(Some(inner)) => untyped_json(inner, out),
+        Value::Option(Some(inner)) => untyped_json_by(inner, out, number),
         Value::List(items) | Value::Record(items) => {
             out.push('[');
             for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     out.push(',');
                 }
-                untyped_json(item, out);
+                untyped_json_by(item, out, number);
             }
             out.push(']');
         }

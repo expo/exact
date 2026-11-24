@@ -57,7 +57,7 @@ extension NSWindow.Level {
 /// development composition. Production compiles this name as plain AppKit.
 public typealias ExactDrivenWindow = ExactAgentWindow
 #else
-public typealias ExactDrivenWindow = NSWindow
+public typealias ExactDrivenWindow = ExactSessionWindow
 #endif
 
 extension NSWindow {

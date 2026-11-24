@@ -49,7 +49,7 @@ impl<D: DataSource> Runner<D> {
         (self.extensions.declared.statements.lock())
             .unwrap_or_else(|e| e.into_inner())
             .contains_key(&id)
-            || (self.extensions.held.iter()).any(|h| h.id == id)
+            || (self.extensions.held.iter()).any(|h| h.cause.owner == id)
     }
 
     /// Whether the host bound its own implementation of `extension`.
@@ -73,7 +73,7 @@ impl<D: DataSource> Runner<D> {
     /// Invocation `id`'s held calls end `AbortError` with `message`.
     pub(super) fn abort_held_of_linked(&mut self, id: u64, message: &str) {
         let held: Vec<(u64, u64)> = (self.extensions.held.iter())
-            .filter(|h| h.id == id && id != 0)
+            .filter(|h| h.cause.owner == id && id != 0)
             .map(|h| (h.token, h.hold))
             .collect();
         for (token, hold) in held {
@@ -439,8 +439,8 @@ impl<D: DataSource> Runner<D> {
         match self.decide_permission(row, send, args) {
             Some(Decision::Now(answer)) => self.release(token, answer),
             Some(Decision::Hold(waits)) => {
-                if let Some((held_by, origin)) = self.held_name(token, row) {
-                    let hold = self.device_hold(row, held_by, waits, origin, &name, args);
+                if let Some((held_by, cause)) = self.held_name(token, row) {
+                    let hold = self.device_hold(row, held_by, waits, cause, &name, args);
                     if let Some(h) = self.extensions.held.iter_mut().find(|h| h.token == token) {
                         h.hold = hold;
                         h.permission = name;
@@ -453,12 +453,12 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// What held call `token` is held for, as its ticket names it (a
-    /// resource or mutation, or a data-code call's key), and its origin.
+    /// resource or mutation, or a data-code call's key), and its cause.
     pub(in crate::runner) fn held_name(
         &self,
         token: u64,
         row: &ModulesRow,
-    ) -> Option<(String, CallOrigin)> {
+    ) -> Option<(String, Cause)> {
         let target = (self.pending.iter())
             .find(|p| p.continuation == Some(token))
             .map(|p| p.target);
@@ -468,7 +468,7 @@ impl<D: DataSource> Runner<D> {
             (None, true) => self.key(row),
             (None, false) => return None,
         };
-        Some((name, held.origin))
+        Some((name, held.cause))
     }
 
     /// The checks before any decision: why the call is refused, if it is.
@@ -653,8 +653,11 @@ impl<D: DataSource> Runner<D> {
             ("@exact/recording", "startMediaRecorder") => true,
             _ => false,
         };
-        // Data code holds no press record (LLP 1126.004 D2).
-        audio_only && !cause.data && self.press_records(cause.id)
+        // Data code holds no press record (LLP 1126.004 D2), and work the
+        // press joined with another cause holds what both allow, so not the
+        // press's own exemption (LLP 1133.023 D7a).
+        let alone = cause.causes == Cause::of(CallOrigin::Action, 0, false).causes;
+        audio_only && alone && !cause.data && self.press_records(cause.id)
     }
 
     /// The implementation's answer for `row` under the agent, the agent's

@@ -55,6 +55,15 @@ for (const p of pages) {
   if (!body.includes(`> Fetch the complete documentation index at: ${ORIGIN}/llms.txt`)) fail(where, 'no llms.txt pointer');
   const lines = prose(where, body);
   if (!lines.some(line => /^# \S/.test(line))) fail(where, 'no H1');
+  let instructions = false;
+  let above = 0;
+  for (const line of lines) {
+    if (line === '<AgentInstructions>' || line === '</AgentInstructions>') { instructions = line === '<AgentInstructions>'; continue; }
+    const level = instructions ? 0 : (line.match(/^ {0,3}(#{1,6})[ \t]+\S/)?.[1].length ?? 0);
+    if (!level) continue;
+    if (level > above + 1) fail(where, `a level ${level} heading below a level ${above} heading: ${line.slice(0, 80)}`);
+    above = level;
+  }
   const feedback = body.match(/^# .*\n\n<AgentInstructions>\n([\s\S]*?)\n<\/AgentInstructions>\n/m)?.[1];
   if (!feedback?.includes(`Exact docs: ${ORIGIN + p.path}:`) || !feedback.includes('bun exact.mjs feedback status') || !feedback.includes('bun exact.mjs feedback note') || !feedback.includes('never')) fail(where, 'no policy-aware feedback block naming this page below the H1');
   if (lines.filter(line => line.trim()).length < 3) fail(where, 'nothing below the pointer and the H1');

@@ -16,6 +16,7 @@
 mod card;
 mod concepts;
 mod frames;
+mod notes;
 mod recipes;
 mod records;
 mod scroll;
@@ -347,6 +348,9 @@ fn one_json(name: &str) -> (Value, bool) {
     let mut doc = json!({ "name": name });
     if let Some(tag) = tag {
         doc["tag"] = tag;
+        for (label, words) in card::tag_words(name) {
+            doc[label] = words.into();
+        }
     }
     if name == "symbol" {
         doc["roles"] = exact_kernel::generated::SYMBOL_ROLES.to_vec().into();
@@ -442,6 +446,11 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         if let Some(note) = vocab::tag_note(name) {
             println!("  {note}");
         }
+        for (label, words) in card::tag_words(name) {
+            if !words.is_empty() {
+                println!("  {label} {}", words.join(" "));
+            }
+        }
     } else if let Some(tag) = &tag {
         println!("{name}: {}", tag["note"].as_str().unwrap());
     }
@@ -464,14 +473,8 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         if let Some(only) = only_on(name) {
             println!("  only on {only}");
         }
-        if name == "src" {
-            println!("  an `image`'s source is its argument: `image url` (HTML's `img src`)");
-        }
-        if matches!(name, "min" | "max" | "step") {
-            println!("  on an `input` a number of either sign is written as its text: `min=-40`, `step=0.5`, `max=1e6` (LLP 1116.010 D3); a decimal pad (`inputmode=\"decimal\"`) with a negative `min` has the ± key");
-        }
-        if name == "markup" {
-            println!("  \"markdown\" or \"none\" (the default): a `text` reads its string as Markdown, a `textarea` edits it (LLP 1045)");
+        if let Some(note) = notes::note(name) {
+            println!("  {note}");
         }
         if matches!(name, "intersect" | "intersect-margin") {
             println!("  IntersectionObserver: nearest scroller or viewport, threshold 0; mount and enter/leave. Optional final IntersectionObserverEntry: isIntersecting (bool), intersectionRatio (number). intersect-margin is a literal 1–4 px/% rootMargin, default 0px. Browser executors and shared AppKit/UIKit/Linux layout/scroll delivery; native geometry qualification remains open, see LLP 1001 for geometry deviations (LLP 1005).");
@@ -481,15 +484,6 @@ fn one_text(name: &str, shown: &mut Shown) -> bool {
         }
         if matches!(name, "reachstart" | "reachend") {
             println!("  {REACH_MARGIN}");
-        }
-        if name == "resize" {
-            println!("  given an action, the element resize event: ResizeObserver's, after layout, with the content box's width and height and its `DOMRectReadOnly`");
-        }
-        if matches!(name, "focusin" | "focusout") {
-            println!("  bubbles from the focused child without making this node a Tab stop; an action may take `FocusEvent(target: string, relatedTarget: option<string>)` on every host (`focusout` also fires on a move between descendants and on the focused node's removal)");
-        }
-        if matches!(name, "swiperight" | "swipeleft") {
-            println!("  the node follows a sideways drag in that direction (a node may have both), 64 points freely and then a fifth of the finger's travel; its action runs once, when the finger lifts at or past 64 points. The direction is the screen's, in a right-to-left layout too. A finger reaches it only with `touch-action=\"pan-y\"`. A list row's Delete is `delete=` (the concept `swipe`). docs/contract-for-agents.md#swipe-to-reply");
         }
         if matches!(name, "scrolldragstart" | "scrolldragend") {
             println!("  on a scroller: a finger (or a trackpad's two fingers) began dragging it, and let go; UIKit's `scrollViewWillBeginDragging` and `scrollViewWillEndDragging`. `scrolldragend`'s action may take `ScrollDragEvent(velocityX: number, velocityY: number, targetLeft: option<number>, targetTop: option<number>)`: UIKit's velocity, CSS pixels per millisecond, positive as `scrollLeft`/`scrollTop` grow, and where the momentum will stop where the host knows (iOS), else `none`. A wheel, a keyboard or a programmatic scroll sends neither");

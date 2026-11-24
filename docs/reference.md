@@ -750,6 +750,14 @@ the browser's supported schemes and installation behavior. Linux's CLI URL
 argument retains the ordinary location conversion because it does not
 register OS protocol handlers.
 
+A scheme registered with `host.ios.urlSchemes` or `host.macos.urlSchemes`
+alone delivers its link as a location, cold as the launch location and warm
+as one navigation, with no `/open` route. A non-empty authority is the first
+segment and an empty one is none: `notes://post/42?x=1`,
+`notes:///post/42?x=1` and `notes:/post/42?x=1` are all `/post/42?x=1`, the
+fragment kept (LLP 1038 §3). Expo's `Linking.createURL("/post/42")` writes
+the three-slash form.
+
 For packaged-only Apple registration, add `"distribution_only": true` to an
 entry, for example `{"protocol":"notes","url":"/open?u=%s","distribution_only":true}`.
 Archives and `--distribution` builds include it; local builds, including
@@ -2444,13 +2452,34 @@ Recorder's `record` control is the device run's subject.
 ## Apple bundle metadata
 
 Exact writes Info.plist keys and entitlements from grants, named manifest fields,
-packages and build inputs. Entitlements remain derived (LLP 1069.008 D4).
-The `host.ios` and `host.macos` dictionaries `infoPlist` and `entitlements` refuse
-all supplied keys together; their values never enter a bundle. Diagnostics give
-specific grant advice only where tests apply those lines, including companion
-grants, through the bake and platform writer. Other derived keys cannot be set
-there. For a key Exact never writes, record a `bun exact.mjs feedback note` from
-the app directory naming the key and what the native module needs.
+packages and build inputs (LLP 1069.008 D4). Every `host.ios.entitlements` and
+`host.macos.entitlements` key is refused.
+
+`host.ios.infoPlist` and `host.macos.infoPlist` take a vendor SDK's configuration
+keys, the ones a library the app links reads from its bundle:
+
+```json
+"host": { "macos": { "infoPlist": {
+  "SUFeedURL": "https://example.com/appcast.xml",
+  "SUPublicEDKey": "<your EdDSA public key>"
+} } }
+```
+
+- A value is written as given: a string, number, boolean, array or dictionary.
+  It is public in the bundle, so it is no place for a secret.
+- The iOS keys go into the iOS and tvOS apps, not an App Clip.
+- A key in Apple's namespaces is refused: `NS`, `UI`, `LS`, `CF`, `UT`, `CA`, `GC`,
+  `GK`, `MK`, `BG`, `WK`, `IN`, `NFC`, `ITS`, `SK`, `CK`, `AV`, `PH`, `QL` and `DT`, each
+  followed by a capital, and `MinimumOSVersion` and `BuildMachineOSBuild`. So are an
+  `Exact` key and any key Exact writes itself. The refusal names the grant line or
+  field that writes the key. For an Apple key Exact never writes, it asks for a
+  `bun exact.mjs feedback note` from the app directory naming the key and what the
+  native module needs.
+- A key a package's Apple implementation writes is refused here.
+- The keys are binary inputs: changing one needs a new binary, and `exact deploy`
+  says so. They do not move the compatibility id, so installed binaries keep taking
+  updates. The deploy table and the install page list each key under what the app
+  can reach.
 
 ### Language and direction on macOS
 
@@ -2659,7 +2688,10 @@ answers and route statuses, and are not shared between requests. Production buil
 ignore these inputs. `--fail-fetch` with `--test` arms every test.
 A Mac agent drive never takes the focus: the app is an accessory, never activated (a `type` makes its window key
 without activating it), so AppKit draws its controls as in an inactive app. On the agent's clock its window, and a picture-in-picture
-panel it opens, sit one level below every other app's windows, so they never show over them; `--timing platform` orders them in front. `EXACT_AGENT_ACTIVATE=1`, which only
+panel it opens, sit one level below every other app's windows, so they never show over them; `--timing platform` and `--live` order them in front,
+since a covered window presents no frames and its page reads as hidden. `--display <name|index>` (`EXACT_AGENT_DISPLAY`, beside `EXACT_AGENT=live`, for a launch by hand) opens
+the window centred on one display, named as `NSScreen.localizedName` or by its index in `NSScreen.screens`; on a Mac someone is working at,
+name a display they are not using. A name no display has, or two have, is refused with the list. `EXACT_AGENT_ACTIVATE=1`, which only
 `scripts/measure-controls.mjs` sets (never a default), activates that one run, and the app that was in front is put
 back when it exits, however it exits (LLP 1121 stage 9 F2).
 A data module's `crypto.getRandomValues()` and `crypto.randomUUID()` draw from the seed too, so every drive with the same seed
@@ -2782,6 +2814,7 @@ and dropped records. An ordinary launch on the wall clock is available on macOS 
 (use `ios --live` on a simulator or `ios --device --live` on a phone). The driver launches and closes this process and keeps input
 available. `--live` uses normal scheduling and the wall clock: `performanceNow()` and
 timers advance in real time between operations, and `perf frames` records real frames.
+On macOS the window opens in front without taking the focus; `--display` puts it on a display other than the one being worked at.
 On iOS, `--touch platform` sends the gesture through XCTest so UIKit delivers the scroll callbacks.
 For example, `bun exact.mjs agent ios --device --live --touch platform "tap s drag 0 -300 over 100" "perf frames health scroll"`
 drags the scroll view named `s` on a phone. Unlock the paired phone, enable Developer Mode and UI Automation,
@@ -2841,9 +2874,9 @@ export const answer: TypeScriptAnswer = (source, args, store, storage, native) =
 The app's `build_mixed_with` bake derives these types from its `rust_sources`
 argument; no ownership list goes in `app.json` or TypeScript. Every remaining
 provider is required. Run `bun exact.mjs contract build app.contract` to obtain
-the narrowed declaration beside `app.ts`: its TypeScript check runs the app's
-Cargo bake, which writes the declaration before checking `app.ts`, even if
-the check fails. Native bakes use it too, and a development producer keeps
+the narrowed declaration beside `app.ts`: its TypeScript check builds the app's
+Rust module, which carries `RUST_SOURCES`, and writes the declaration before
+checking `app.ts`, even if the check fails. Native bakes use it too, and a development producer keeps
 the roster from the previous bake's `rustSources` receipt. Rebuild after
 changing Rust ownership. `Sources`, `Source`, `Args` and `Result` still
 describe every app-owned source, including Rust's.
@@ -4431,6 +4464,8 @@ OS floor) reaches an install only through its store. `@exact/store-update`
 (LLP 1133.038; [recipe](recipes/store-update.md)) says what the store has and
 opens it. It is not Exact's own signed updates: those are `exactDelivery()`
 and the update store (LLP 1030), which this package never touches.
+A Mac app distributed outside the Mac App Store updates its binary with
+Sparkle, as its own Swift ([recipe](recipes/mac-binary-updates.md)).
 
 `storeUpdateStatus()` is live, announced again on a return to the foreground
 and as a download moves:
@@ -5106,6 +5141,37 @@ registers `board`: `app.ts` exports `surfaces`, each surface's name and its
 number of arguments, and `draw(surface, args, ctx, frame)`, which draws on `ctx`
 with `CanvasRenderingContext2D`'s names and returns `true` to be asked for
 another frame (LLP 1056).
+
+`args` holds the call's values in order, or an object by the argument names
+when the call names them (`surface=pin(at=spot, label=title)`). On every host
+each value is what `answer` receives for its type: a record is an object by
+field name, a list an array, an `option` `null` or its value, an enum its
+string. Type `draw` as `Draw` from `app.contract.d.ts`, with all four
+parameters, and checking `surface` narrows `args` to that surface's types:
+
+```contract
+shape Node
+  x: number
+  y: number
+
+component Board
+  state nodes = [Node(x=8, y=8)]
+  view
+    canvas surface=board(nodes) width=200 height=120
+```
+
+```ts
+import type { Draw } from './app.contract.d.ts';
+export const surfaces = { board: 1 };
+export const draw: Draw = (surface, args, ctx, frame) => {
+  ctx.clearRect(0, 0, frame.width, frame.height);
+  if (surface === 'board') for (const n of args[0]) ctx.fillRect(n.x, n.y, 8, 8);
+  return false;
+};
+```
+
+Treat `args` as read-only. The web freezes it and keeps it between draws until
+a value changes; elsewhere each draw gets a fresh copy.
 
 The context's space is the content box in CSS px, at the device's scale.
 `bitmap-width` and `bitmap-height` give the canvas a fixed bitmap instead, as
@@ -6664,7 +6730,9 @@ An app outside this checkout names its data crate in app.json (LLP 1153.003 D2):
 `source`, optional, is what every host and the web's module run: the type itself, its `::default()` (the
 default) or its `::new(…)` with literal arguments (`"field_log_data::FieldLog::new(true)"`). A source
 built from anything else (a local, a path read at build time) is exported by a crate of the app's own,
-named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplies the module instead.
+named in app.json's `rust.module.package` (Update Lab's `logic/`), which supplies the module instead. Beside
+`app.ts`, that crate also carries the data crate's `RUST_SOURCES`, which the web reads from the module:
+`exact_logic_abi::export_sources!(field_log_data::RUST_SOURCES);` beside its `export!`.
 
 The crate sits beside app.json and joins the workspace exact2 generates: its `Cargo.toml` sets
 `package.workspace = "../.exact/shells"` and takes exact2's crates as workspace dependencies

@@ -3,7 +3,7 @@
 mod build_support;
 
 use build_support::{
-    digest_file, hermesc_bytecode_version, native_link_lines,
+    apple_simulator_arch, digest_file, hermesc_bytecode_version, native_link_lines,
     prepare_apple_simulator_link_archives, rerun_paths, resolve_engine_directory, LinkArchive,
 };
 use std::path::{Path, PathBuf};
@@ -202,6 +202,9 @@ fn main() {
     };
     let mut prepared = Vec::new();
     if let Some((archive, digest)) = linked {
+        if !cfg!(target_os = "macos") && apple_simulator_arch(&target).is_some() {
+            println!("cargo:rerun-if-env-changed=EXACT_APPLE_LLVM_BIN");
+        }
         let link_archives = static_link_archives(&target_os, &install.lib_root, archive);
         let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
         prepared =

@@ -1,10 +1,17 @@
 import QuartzCore
+#if os(iOS) || os(tvOS)
+import UIKit
+#endif
 
 /// Paint in a layer's own coordinates, including descendants and the full
 /// tracks played by Core Animation without presenter geometry callbacks.
 enum OverflowPaint {
     static func bounds(_ layer: CALayer) -> CGRect {
         var rect = layer.bounds
+        #if os(iOS) || os(tvOS)
+        // A box's extension paints its own bounds; what UIKit holds inside it is UIKit's (LLP 1123 D13)
+        if let view = layer.delegate as? UIView, view.isBoxExtension { return rect }
+        #endif
         let stroke = (layer as? CAShapeLayer).map(strokeReach) ?? 0
         if let shape = layer as? CAShapeLayer, let path = shape.path {
             rect = rect.union(path.boundingBoxOfPath.insetBy(dx: -stroke, dy: -stroke))

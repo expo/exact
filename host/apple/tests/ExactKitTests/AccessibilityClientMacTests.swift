@@ -881,6 +881,40 @@ final class AccessibilityClientMacTests: XCTestCase {
         p.menus.close(picker)
     }
 
+    /// A live region's new text reaches VoiceOver as AppKit's announcement,
+    /// a `status` at low priority and an `alert` at high. Text that did not
+    /// change says nothing.
+    func testALiveRegionsNewTextIsAnnounced() throws {
+        let p = try fixture([
+            ["op": "create", "id": 10, "kind": "text", "props": ["text": "", "accessibilityRole": "status", "testId": "saved"]],
+            ["op": "create", "id": 11, "kind": "text", "props": ["text": "", "accessibilityRole": "alert", "testId": "failed"]],
+            ["op": "children", "id": 1, "ids": [2, 10, 11]],
+            ["op": "frame", "id": 10, "x": 0.0, "y": 40.0, "w": 200.0, "h": 20.0],
+            ["op": "frame", "id": 11, "x": 0.0, "y": 70.0, "w": 200.0, "h": 20.0],
+        ])
+        let client = AXClient()
+        try client.listen(["AXAnnouncementRequested"])
+        func heard() -> [String] {
+            client.notifications(after: 0).compactMap { heard in
+                (heard.info["AXAnnouncementKey"] as? String).map { "\($0) \(heard.info["AXPriorityKey"] as? Int ?? -1)" }
+            }
+        }
+        // The batch alone: applying it syncs accessibility, as a commit does.
+        func set(_ id: Int, _ text: String, until count: Int) -> [String] {
+            p.apply(wireBatch([["op": "props", "id": id, "set": ["text": text], "clear": []]]))
+            let deadline = Date().addingTimeInterval(10)
+            while heard().count < count, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+            return heard()
+        }
+        let low = NSAccessibilityPriorityLevel.low.rawValue, high = NSAccessibilityPriorityLevel.high.rawValue
+        XCTAssertEqual(set(10, "3 selected", until: 1), ["3 selected \(low)"])
+        XCTAssertEqual(set(11, "Could not save", until: 2), ["3 selected \(low)", "Could not save \(high)"])
+        // A probe after the unchanged batch: its delivery means the batch's would have come first.
+        _ = set(10, "3 selected", until: 2)
+        try client.checkReady()
+        XCTAssertEqual(heard().count, 2, "unchanged text is not announced again")
+    }
+
     /// A named `region` is AppKit's group with the landmark-region subrole
     /// and says "region", as Chromium and WebKit serve one (Core-AAM); an
     /// unnamed one is no landmark (the T3 Code clone's zoomable image).

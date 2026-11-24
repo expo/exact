@@ -13,10 +13,10 @@
 //! substitute's payment sheet runs the app's handlers the same way
 //! (`sheet.rs`), each answer going to the sheet.
 //!
-//! The handler runs as a fresh answer that fills no slot,
-//! under the less privileged of `tool` and the origin of the call that made
-//! the handle, and each module call it makes is admitted under that origin
-//! (`data_origin`). As the background round's (`background.rs`), the
+//! The handler runs as a fresh answer that fills no slot, under the join
+//! of `tool` and the origin of the call that made the handle (LLP 1133.023
+//! D7a), and each module call it makes is admitted under that cause
+//! (`data_cause`). As the background round's (`background.rs`), the
 //! requests it awaits go out under tickets of their own, no target's: no
 //! commit, no `then`.
 
@@ -37,12 +37,12 @@ const NAME: &str = "tool";
 const KEPT: usize = 256;
 
 /// A handle's grant: the extension whose call made it, the handlers that
-/// call listed, and its origin.
+/// call listed, and that call's cause.
 #[derive(Clone)]
 pub(super) struct Grant {
     extension: String,
     handlers: BTreeSet<String>,
-    origin: CallOrigin,
+    cause: Cause,
 }
 
 /// The grants, by handle id, in the order they were made. Filled as a
@@ -50,12 +50,12 @@ pub(super) struct Grant {
 pub(super) type Granted = Arc<Mutex<Vec<(String, Grant)>>>;
 
 /// A pending send's grant: its extension, the handlers its `callbacks`
-/// options named (each with whether it is `final`), its origin, and the
+/// options named (each with whether it is `final`), its cause, and the
 /// budget of a final one, ms.
 pub(super) struct Anchor {
     extension: String,
     handlers: BTreeMap<String, bool>,
-    origin: CallOrigin,
+    cause: Cause,
     budget: f64,
 }
 
@@ -79,7 +79,7 @@ struct Running {
     at: String,
     source: String,
     args: Value,
-    origin: CallOrigin,
+    cause: Cause,
     started: f64,
     to: Option<To>,
     /// The send it is the final handler of, by number.
@@ -111,9 +111,15 @@ pub(in crate::runner) struct Invocations {
 }
 
 impl<D: DataSource> Runner<D> {
-    /// The grant a call of `row` with the implementation's `body` makes for
-    /// the handles its reply carries, if its declaration lists handlers.
-    pub(super) fn handler_grant(&self, row: &ModulesRow, body: &Json) -> Option<Grant> {
+    /// The grant a call of `row` under `cause` with the implementation's
+    /// `body` makes for the handles its reply carries, if its declaration
+    /// lists handlers.
+    pub(super) fn handler_grant(
+        &self,
+        row: &ModulesRow,
+        body: &Json,
+        mut cause: Cause,
+    ) -> Option<Grant> {
         let sub = self.substitute(row);
         let args = &body["args"];
         let handlers: BTreeSet<String> = if let Some(path) = sub["handlers"].as_str() {
@@ -125,20 +131,15 @@ impl<D: DataSource> Runner<D> {
             let granted = self.extensions.invocations.granted.lock();
             let granted = granted.unwrap_or_else(|e| e.into_inner());
             let (_, grant) = granted.iter().rev().find(|(h, _)| h == id)?;
+            // Its handlers keep the call that granted them (LLP 1133.023 D7a).
+            cause = self.join_causes(grant.cause, cause);
             grant.handlers.clone()
-        };
-        let origin = match body["origin"].as_str() {
-            Some("device") => CallOrigin::Device,
-            Some("wake") => CallOrigin::Wake,
-            Some("tool") => CallOrigin::Tool,
-            Some("action") => CallOrigin::Action,
-            _ => CallOrigin::App,
         };
         let extension = self.plan.str(row.extension).to_owned();
         Some(Grant {
             extension,
             handlers,
-            origin,
+            cause,
         })
     }
 
@@ -147,14 +148,20 @@ impl<D: DataSource> Runner<D> {
         self.extensions.invocations.granted.clone()
     }
 
-    /// `work`, a data-code call of `row` with `body`, whose reply grants
-    /// the handles it carries as it leaves the implementation.
-    pub(super) fn granting(&self, row: &ModulesRow, body: &[u8], work: Dispatch) -> Dispatch {
+    /// `work`, a data-code call of `row` under `cause` with `body`, whose
+    /// reply grants the handles it carries as it leaves the implementation.
+    pub(super) fn granting(
+        &self,
+        row: &ModulesRow,
+        body: &[u8],
+        cause: Cause,
+        work: Dispatch,
+    ) -> Dispatch {
         let body: Json = serde_json::from_slice(body).unwrap_or_default();
         let paths: Vec<String> = (self.substitute(row)["handles"].as_object())
             .map(|h| h.keys().cloned().collect())
             .unwrap_or_default();
-        let (Some(grant), false) = (self.handler_grant(row, &body), paths.is_empty()) else {
+        let (Some(grant), false) = (self.handler_grant(row, &body, cause), paths.is_empty()) else {
             return work;
         };
         let Dispatch::Run(Work::Later(run)) = work else {
@@ -202,10 +209,10 @@ impl<D: DataSource> Runner<D> {
             let message = format!("no call that made {handle} lists {handler}");
             return reply(json!({ "error": "NotAllowedError", "message": message }).to_string());
         };
-        let origin = grant.origin.min(CallOrigin::Tool);
-        self.log(format!("{at}: run, {}:model:{handle}", origin.word()));
+        let cause = self.handler_cause(grant.cause);
+        self.log(format!("{at}: run, {}:model:{handle}", cause.origin.word()));
         let to = To::Implementation(reply);
-        self.run_handler(at, &handler, &v["args"], origin, to, None);
+        self.run_handler(at, &handler, &v["args"], cause, to, None);
     }
 
     /// [`Self::invoke_module`] for the send numbered `n`, while it is pending.
@@ -222,9 +229,9 @@ impl<D: DataSource> Runner<D> {
             let anchors = anchors.unwrap_or_else(|e| e.into_inner());
             (anchors.get(&n))
                 .filter(|a| Some(a.extension.as_str()) == extension)
-                .and_then(|a| Some((*a.handlers.get(handler?)?, a.origin, a.budget)))
+                .and_then(|a| Some((*a.handlers.get(handler?)?, a.cause, a.budget)))
         };
-        let Some((last, origin, budget)) = grant else {
+        let Some((last, granted, budget)) = grant else {
             self.log(format!(
                 "{at}: refused, no pending call numbered {n} names the handler"
             ));
@@ -234,25 +241,39 @@ impl<D: DataSource> Runner<D> {
             );
             return reply(json!({ "error": "NotAllowedError", "message": message }).to_string());
         };
-        let origin = origin.min(CallOrigin::Tool);
-        self.log(format!("{at}: run, {}", origin.word()));
+        let cause = self.handler_cause(granted);
+        self.log(format!("{at}: run, {}", cause.origin.word()));
         if last {
             let ends = self.now_ms + budget;
             self.extensions.invocations.finals.insert(n, ends);
         }
         let to = To::Implementation(reply);
         let handler = handler.unwrap_or_default().to_owned();
-        self.run_handler(at, &handler, &v["args"], origin, to, last.then_some(n));
+        self.run_handler(at, &handler, &v["args"], cause, to, last.then_some(n));
+    }
+
+    /// The cause a handler that a call of `cause` granted runs under: no
+    /// more than a tool's and no invocation's, with that call's rules too.
+    pub(super) fn handler_cause(&self, cause: Cause) -> Cause {
+        let tool = Cause::of(CallOrigin::Tool, 0, false);
+        self.join_causes(
+            Cause {
+                id: 0,
+                owner: 0,
+                ..cause
+            },
+            tool,
+        )
     }
 
     /// Run the data module's handler `handler` with `args` as a fresh answer
-    /// of `origin`, its answer to `to`.
+    /// of `cause`, its answer to `to`.
     pub(super) fn run_handler(
         &mut self,
         at: String,
         handler: &str,
         args: &Json,
-        origin: CallOrigin,
+        cause: Cause,
         to: To,
         final_of: Option<u64>,
     ) {
@@ -267,28 +288,23 @@ impl<D: DataSource> Runner<D> {
             at,
             source: format!("tool:{handler}"),
             args: Value::from(args.to_string()),
-            origin,
+            cause,
             started: self.now_ms,
             to: Some(to),
             final_of,
             effects: false,
         };
-        // A handler is no invocation's and never more than a tool (module doc).
-        let answer = self.as_cause(Cause::of(origin, 0, false), |r| {
+        let answer = self.as_cause(cause, |r| {
             r.store.set_clock_ms(r.now_ms);
             (r.data).answer(&mut r.store, &run.source, std::slice::from_ref(&run.args))
         });
         self.tool_step(run, answer);
     }
 
-    /// A send with `body` went to its implementation: its handlers are
-    /// granted while it is pending, by its number, which is returned.
-    pub(super) fn anchor_body(
-        &self,
-        row: &ModulesRow,
-        body: &[u8],
-        origin: CallOrigin,
-    ) -> Option<u64> {
+    /// A send of `cause` with `body` went to its implementation: its
+    /// handlers are granted while it is pending, by its number, which is
+    /// returned.
+    pub(super) fn anchor_body(&self, row: &ModulesRow, body: &[u8], cause: Cause) -> Option<u64> {
         let sub = self.substitute(row);
         let callbacks = sub["callbacks"].as_object()?;
         let body: Json = serde_json::from_slice(body).ok()?;
@@ -302,7 +318,7 @@ impl<D: DataSource> Runner<D> {
         let anchor = Anchor {
             extension: self.plan.str(row.extension).to_owned(),
             handlers,
-            origin,
+            cause,
             budget: sub["ceremony"]["budget"].as_f64().unwrap_or(25_000.0),
         };
         let anchors = self.extensions.invocations.anchors.lock();
@@ -363,7 +379,7 @@ impl<D: DataSource> Runner<D> {
             Ok(Answer::Later(mut request)) => {
                 let ticket = self.next_ticket;
                 self.next_ticket += 1;
-                request.reach = self.reach_of(run.origin);
+                request.reach = self.reach_of(run.cause.origin);
                 if request.module.is_some() {
                     run.module = request.module.clone();
                 }
@@ -488,8 +504,8 @@ impl<D: DataSource> Runner<D> {
     /// running handler's causes, if one is.
     pub(super) fn tool_cause_linked(&self) -> Option<Cause> {
         (self.extensions.invocations.running.values())
-            .map(|r| Cause::of(r.origin, 0, false))
-            .reduce(|a, b| self.least(a, b))
+            .map(|r| r.cause)
+            .reduce(|a, b| self.join_causes(a, b))
     }
 
     /// A handler's request came back: its turn resumes.
@@ -497,7 +513,7 @@ impl<D: DataSource> Runner<D> {
         let Some(run) = self.extensions.invocations.running.remove(&ticket) else {
             return;
         };
-        let answer = self.as_cause(Cause::of(run.origin, 0, false), |r| {
+        let answer = self.as_cause(run.cause, |r| {
             let args = std::slice::from_ref(&run.args);
             r.store.set_clock_ms(r.now_ms);
             (r.data).parse_tool(
@@ -621,7 +637,7 @@ mod tests {
             at: "test: h".into(),
             source: "tool:h".into(),
             args: Value::str("{}"),
-            origin: CallOrigin::Tool,
+            cause: Cause::of(CallOrigin::Tool, 0, false),
             started: 0.0,
             to,
             final_of: None,

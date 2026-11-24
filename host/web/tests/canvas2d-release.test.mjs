@@ -3,7 +3,7 @@ import { expect } from 'bun:test';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { engineTests } from '../../../scripts/coverage.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
-import { standIns } from './stand-ins.mjs';
+import { runtimeSource, standIns } from './stand-ins.mjs';
 import { decodePng } from '../../../scripts/png.mjs';
 
 const { chromium: test } = await engineTests(['chromium']);
@@ -32,7 +32,7 @@ function serve() {
       '/navigation.js': '../navigation.js',
     };
     if (files[path]) return new Response(readFileSync(new URL(files[path], import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
-    if (runtime.includes(path.slice(1))) return new Response(Bun.file(new URL(`../../web-js${path}`, import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
+    if (runtime.includes(path.slice(1))) return new Response(runtimeSource(path.slice(1)), { headers: { 'content-type': 'text/javascript' } });
     if (standins.has(path.slice(1))) return new Response(standins.get(path.slice(1)), { headers: { 'content-type': 'text/javascript' } });
     return new Response('<main id="exact-root"></main>', { headers: { 'content-type': 'text/html' } });
   } });

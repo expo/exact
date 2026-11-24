@@ -194,8 +194,8 @@ export function assembleMac({intents, shared, library, moduleLibraries = [], pac
       mkdirSync(executables, { recursive: true });
       mkdirSync(resources);
       for (const file of ['ExactHostMac', ...beside]) copyFileSync(resolve(binDir, file), resolve(executables, file));
-      // The app's plist under the host's name and identity, with no document type or link scheme: those are the app's to open.
-      writeFileSync(plist, macInfoPlist(app, { distributed: distribution, reach: appleReach, icon: { ...rosterKeys, ...assetKeys, ...buildInfo(app, { root, production: production || distribution, ...stampSdk }) } }));
+      // The app's plist under the host's name and identity, with no document type, link scheme or vendor key: those are the app's.
+      writeFileSync(plist, macInfoPlist(app, { distributed: distribution, reach: appleReach, vendor: false, icon: { ...rosterKeys, ...assetKeys, ...buildInfo(app, { root, production: production || distribution, ...stampSdk }) } }));
       for (const key of ['CFBundleDocumentTypes', 'UTExportedTypeDeclarations', 'CFBundleURLTypes']) spawnSync('plutil', ['-remove', key, plist], { stdio: 'ignore' });
       for (const [key, value] of [['CFBundleExecutable', 'ExactHostMac'], ['CFBundleIdentifier', host.id], ['CFBundleName', host.name], ['CFBundleDisplayName', host.name]]) run('plutil', ['-replace', key, '-string', value, plist]);
       copyAppleStaticTrees(paths.capture, resources);

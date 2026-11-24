@@ -350,15 +350,15 @@ extension NavigationHost {
         // Clear a row above the routes, over the container, of them too: its content would show under the status bar
         for node in above { if let edges = unsafeEdges(of: node) { wanted[node.id] = .edges(edges) } }
         applyClearance(extras)
-        // A pane a native arrangement hides is the arrangement's to cover whole (`ArrangementHost.reportHiddenPanes`):
-        // nothing is told of it here, and once shown again it is told afresh.
-        var arranged = Set<UInt32>()
         #if os(iOS)
-        if #available(iOS 27.1, *) { arranged = Set(presenter.arrangements.hiddenPanes) }
+        if #available(iOS 27.1, *) {
+            // Keep the cover of a pane UIKit hid since the arrangement's last pass, as it owns no edge, until the next pass
+            for id in presenter.arrangements.hiddenPanes { wanted[id] = covers[id] }
+        }
+        wanted.merge(arrangedCovers) { _, whole in whole }
         #endif
-        for id in arranged { wanted[id] = nil }
         for (id, cover) in wanted where covers[id] != cover { changes.append((id, cover)) }
-        for id in covers.keys where wanted[id] == nil && presenter.views[id] != nil && !arranged.contains(id) { changes.append((id, nil)) }
+        for id in covers.keys where wanted[id] == nil && presenter.views[id] != nil { changes.append((id, nil)) }
         covers = wanted
         let locals = reportLocalInsets()
         guard !changes.isEmpty || locals else { return writeCarriedScrollsWhenAnswered() }
@@ -375,6 +375,14 @@ extension NavigationHost {
         // first one, whose remaining frames would overwrite the covered ones.
         presenter.afterBatch { [weak self] in self?.deliverCovers() }
     }
+
+    #if os(iOS)
+    /// The panes a native arrangement hides: each takes no room.
+    var arrangedCovers: [UInt32: HostCover] {
+        guard #available(iOS 27.1, *) else { return [:] }
+        return Dictionary(uniqueKeysWithValues: presenter.arrangements.hidden.filter { presenter.views[$0] != nil }.map { ($0, HostCover.whole) })
+    }
+    #endif
 
     /// What the kernel is told is what is wanted when it is told. A report
     /// queued behind a batch ran after later ones that did not wait, and its

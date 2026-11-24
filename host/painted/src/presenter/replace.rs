@@ -76,6 +76,7 @@ impl<D: DataSource> Presenter<D> {
             top: _,
             alert: _,
             hatches: _,
+            frame_partitions: _,
             // The tree's, set by `restore_focus` from the place of the old
             // focus.
             focus: _,
@@ -234,6 +235,7 @@ impl<D: DataSource> Presenter<D> {
         self.give_clock();
         self.modules_replaced();
         self.auth_replaced();
+        self.frame_partitions_asked();
         self.brush.replaced();
         self.brush.canvases.drawings = self.host.canvas_snapshots().clone();
         self.brush.lift = Default::default();

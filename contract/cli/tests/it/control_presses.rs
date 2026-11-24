@@ -29,6 +29,7 @@ component App
   mutation logged as shape Ack then pin
   mutation pinned as shape PinShortcutResult
   mutation spoken as shape SpeechUtteranceInfo
+  resource level = load(n) as shape Ack
   tool tick writes "Tick." = tick
   tool note writes "Note." = note
   tool count writes "Count." = count
@@ -49,6 +50,8 @@ component App
     pin()
   task countdown when ticking
     after(2000, beat)
+  task leveled when n > 0 and level.ok
+    after(1, pin)
   action follow(url: string)
     nav = go(nav, url)
   view
@@ -396,5 +399,36 @@ fn data_code_under_a_cancelled_press_is_held_to_the_actions_rules() {
         logs(&r).contains("speak: refused, not in the foreground"),
         "{}",
         logs(&r)
+    );
+}
+
+/// LLP 1133.023 D7a, a join: a press that changes the arguments of the app's
+/// request in flight makes its answer the press's work too, so what the
+/// answer arms after the press has ended may not ask for the pin.
+#[test]
+fn an_answer_a_press_kept_is_the_presss_after_it_ends() {
+    let app = App::new("kept");
+    let mut r = boot(&app);
+    let jot = digest(&r, "jot");
+    press(&mut r, "jot", &jot);
+    assert_eq!(calls(&r)[0]["outcome"], "ok", "{}", logs(&r));
+    assert!(logs(&r).contains("keep request"), "{}", logs(&r));
+    let out = r.take_requests();
+    let level = out
+        .iter()
+        .find(|o| o.target == "level")
+        .expect("level in flight");
+    let ok = exact_runner::Outcome::Response(exact_runner::Response {
+        status: 200,
+        headers: Vec::new(),
+        body: b"{}".to_vec(),
+    });
+    r.fulfill(level.ticket, ok).unwrap();
+    let at = r.now_ms() + 1.0;
+    r.advance(at).unwrap();
+    let logs = logs(&r);
+    assert!(
+        logs.contains("requestPinShortcut: refused, person-required"),
+        "{logs}"
     );
 }

@@ -405,6 +405,7 @@ fn draw(m: &mut Module, seq: u64) -> exact_runner::DrawReply {
         surface: "test",
         args: &[],
         names: &[],
+        args_json: "[]",
         frame: Default::default(),
         current_color: None,
         rtl: false,

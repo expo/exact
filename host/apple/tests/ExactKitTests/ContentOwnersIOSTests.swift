@@ -301,7 +301,7 @@ final class ContentOwnersIOSTests: XCTestCase {
             p.arrangements.sync()
             p.navigationHost.prepareRoutes([route], in: navigation)
             return entry.holders.allSatisfy { holder in
-                entry.isHidden(holder) ? p.arrangements.blocks[holder.node.id]?.block == .size(.zero)
+                entry.isHidden(holder) ? p.arrangements.blocks[holder.node.id]?.block == .size(.zero) && p.navigationHost.delivered[holder.node.id] == .whole
                     : abs(holder.node.bounds.height - holder.view.bounds.height) < 1
                         && abs(holder.node.bounds.width - holder.view.bounds.width) < 1
             }
@@ -490,16 +490,17 @@ final class ContentOwnersIOSTests: XCTestCase {
         p.arrangements.sync()
         XCTAssertEqual(scrolls[0].contentOffset.y, revealedTop, accuracy: 1, "a finished adoption does not undo an element reveal")
         let savedTop = scrolls[1].contentOffset.y + second.scrollTopInset(scrolls[1])
-        // A pane UIKit hides is laid out 0×0, and its sibling owns both edges alone
+        var toldSecond: [HostCover?] = [], tell = p.onCovers
+        p.onCovers = { changes in toldSecond += changes.filter { $0.0 == second.id }.map(\.1); tell?(changes) }
+        // A pane UIKit takes out is told covered whole and laid out 0×0, and its sibling owns both edges alone, with no
+        // layout or pass run here to report it
         func hidden() -> Bool {
-            self.window?.layoutIfNeeded()
-            return p.arrangements.hiddenPanes.contains(second.id) && second.bounds.isEmpty
+            p.arrangements.hiddenPanes.contains(second.id) && second.bounds.isEmpty && (toldSecond.last ?? nil) == .whole
                 && [true, false].allSatisfy { p.arrangements.scrollers(in: route.node, top: $0).map(\.id) == [first.id] }
         }
         controller.setViewController(nil, for: .secondary)
-        controller.view.layoutIfNeeded()
-        p.arrangements.sync()
         until("the hidden pane leaves both edges to its sibling") { hidden() }
+        XCTAssertEqual(toldSecond, [.whole], "a pane UIKit hides keeps its inset until it is covered whole")
         // While its saved position waits, a pane carries no position over it from another scroll view
         second.retainScrollPosition(from: scrolls[0])
         XCTAssertNil(second.pendingScrollTop, "a hidden pane carries nothing over the position it saved")
@@ -507,7 +508,10 @@ final class ContentOwnersIOSTests: XCTestCase {
         controller.view.layoutIfNeeded()
         until("the shown peer restores its inset and position") {
             self.window?.layoutIfNeeded()
+            // Shown again, it is told the inset its scroller wants
             return !p.arrangements.hiddenPanes.contains(second.id) && scrolls[1].contentInsetAdjustmentBehavior == .automatic
+                && p.navigationHost.covers[second.id].map { if case .inset = $0 { true } else { false } } == true
+                && toldSecond.last == .some(p.navigationHost.covers[second.id])
                 && abs(scrolls[1].contentOffset.y + second.scrollTopInset(scrolls[1]) - savedTop) < 1
         }
         // A shown pane not yet laid out owns no edge, and its sibling keeps its own
@@ -553,16 +557,14 @@ final class ContentOwnersIOSTests: XCTestCase {
             return abs(replacement.contentOffset.y + second.scrollTopInset(replacement) - savedTop) < 1
         }
         controller.setViewController(nil, for: .secondary)
-        controller.view.layoutIfNeeded()
-        p.arrangements.sync()
         until("the secondary is hidden before retiring the arrangement") { hidden() }
         XCTAssertTrue(p.arrangements.set(root.id, controller: nil))
         until("retired panes return their insets") {
-            p.navigationHost.coversChanged()
-            return first.scrollView?.contentInsetAdjustmentBehavior == .never && replacement.contentInsetAdjustmentBehavior == .never
-                && p.navigationHost.covers[second.id] == nil
+            first.scrollView?.contentInsetAdjustmentBehavior == .never && replacement.contentInsetAdjustmentBehavior == .never
+                && toldSecond.last == .some(nil)
                 && abs(replacement.contentOffset.y + second.scrollTopInset(replacement) - savedTop) < 1
         }
+        XCTAssertEqual(toldSecond.filter { $0 == .whole }.count, 2, "each removal is told covered whole once")
     }
 
     func testOwnershipChecksUseTheInsetsAppliedToArrangedPeers() throws {

@@ -191,6 +191,7 @@ impl<D: DataSource> Presenter<D> {
         }
         self.brush.media.epoch = Some(epoch);
         (self.brush.media.commands).retain(|key, _| kernel.node_by_key(*key).is_some());
+        (self.brush.media.frames).retain(|key, _| kernel.node_by_key(*key).is_some());
         (self.brush.media.framed).retain(|key| kernel.node_by_key(*key).is_some());
         let timed: std::collections::BTreeSet<_> = if kernel.has_type(NodeType::Video) {
             let mut roots = self.host.roots();

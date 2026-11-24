@@ -21,6 +21,8 @@ impl<P> Frame<P> {
 impl Painter {
     pub(crate) fn replaced(&mut self) {
         self.native_session = native::new_session();
+        // A new runner's frames have issued no command; the reader runs what a session's props carry.
+        self.media.frames.clear();
         // The new kernel can reuse the old tree's epochs, view IDs and node keys.
         self.paint_epoch = None;
         self.discard_rows();

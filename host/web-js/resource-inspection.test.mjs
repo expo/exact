@@ -830,11 +830,12 @@ test("a refused refresh while waiting leaves the launch's ask ordinary, and a fa
   } finally { await browser.close(); server.stop(true); }
 });
 
-test("a refresh of a resource that slept through its source becoming ready is a refresh", async () => {
+// Its wake asks it again as a refresh does (LLP 1161.002 D3), and so does a refresh of it in the commit that wakes it.
+test.each(['wake', 'refresh'])("a %s of a resource that slept through its source becoming ready is a refresh", async how => {
   const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {
     await page.goto(server.url.href);
-    const observed = await page.evaluate(async () => {
+    const observed = await page.evaluate(async how => {
       globalThis.__exactRender = true;
       const sent = [], callbacks = [];
       globalThis.fetch = async (input, init) => { sent.push(new Request(input, init).cache ?? 'default'); return new Response('reply'); };
@@ -857,10 +858,10 @@ test("a refresh of a resource that slept through its source becoming ready is a 
       ready = true;
       for (const f of callbacks) f();
       const asleep = sent.length;
-      rt.commit(() => { rt.W(open, true); rt.R(g); });
+      rt.commit(() => { rt.W(open, true); if (how === 'refresh') rt.R(g); });
       while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
       return { asleep, sent };
-    });
+    }, how);
     expect(observed).toEqual({ asleep: 0, sent: ['reload'] });
   } finally { await browser.close(); server.stop(true); }
 });
@@ -1172,12 +1173,40 @@ test('a resource idle at its first settlement shows its placeholder over a build
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
 
+// A refused commit puts back what a wake asked at too: a write over a resource idle since boot still shows over its
+// placeholder at no arguments, as over the runner's placeholder state.
+test('a write over a resource idle since boot is overlaid at no arguments after a refused wake', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const observed = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      rt.data.answer = source => source === 'save' ? { promise: new Promise(() => {}) } : { v: 'fresh' };
+      rt.data.overlay = (source, args, answer) => ({ value: `${answer} at ${JSON.stringify(args)}`, keep: [] });
+      const open = rt.sig(false), refusing = rt.sig(false), saved = rt.sig(null);
+      const idle = rt.res('idle', 'echo', Object.assign(() => ['wake'], { gate: () => open() }), undefined, undefined, 's', 'waiting');
+      const guard = rt.memo(() => { if (idle() && refusing()) throw new rt.Refusal('refused'); return ''; });
+      let write;
+      rt.mount(root => {
+        write = rt.mut('saved', saved, [idle], 'b');
+        rt.hd(root, { headTitle: () => idle() + guard() });
+      });
+      const woke = rt.commit(() => { rt.W(open, true); rt.W(refusing, true); });
+      rt.commit(() => rt.M(write, 'save', []));
+      return { woke, shown: idle() };
+    });
+    expect(observed).toEqual({ woke: false, shown: 'waiting at []' });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
 // A build-time answer stands in until an answer lands, one asked at newer arguments included, and is journaled so at
 // the ask and when the answer lands (LLP 1102 §3.17, the runner's `revalidated`), a store reader's too, which names no
 // arguments; a placeholder is no build-time answer, so a store reader that shows one says neither line: one with
 // neither a page answer nor a build-time answer on a device whose store holds the app's own entries, and one whose
-// build-time answer the store's secrets pass over (store-reader.js), unless its placeholder shows nothing. The
-// build-time line is said once, whether the source answers at once, later, or once it is ready.
+// build-time answer the store's secrets pass over (store-reader.js), unless its placeholder shows nothing. The latter
+// says so as the boot asks it: not while its gate is closed, nor woken after the boot or answered at once, nor with no
+// build-time answer to pass over. The build-time line is said once, whether the source answers at once, later, or once
+// it is ready.
 test('a build-time answer is journaled as one until an answer lands, and a placeholder never', async () => {
   const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {
@@ -1196,32 +1225,37 @@ test('a build-time answer is journaled as one until an answer lands, and a place
       let ready = false;
       rt.data.answer = (source, [x]) => {
         if (x === 'late' && !ready) return undefined;
-        if (x === 'now') return { v: 'fresh' };
+        if (x === 'now' || x === 'soon') return { v: 'fresh' };
         const answer = Promise.withResolvers();
         answers.set(x, answer);
         return { promise: answer.promise };
       };
-      const at = rt.sig(1);
+      const at = rt.sig(1), shut = rt.sig(false), opens = rt.sig(false);
       const moved = rt.res('moved', 'echo', () => [at()], 'built', [1], 's');
       const now = rt.res('now', 'echo', () => ['now'], 'built', ['now'], 's');
       // store readers as the compiler writes them, with no arguments for the bake's answer
       const built = reader(rt.res, false)('built', 'echo', () => ['built'], 'built', undefined, 's');
       const stored = reader(rt.res, false)('stored', 'echo', () => ['stored'], undefined, undefined, 's', 'waiting');
       const secret = reader(rt.res, true)('secret', 'echo', () => ['secret'], 'built', undefined, 's', 'waiting');
+      const unbaked = reader(rt.res, true)('unbaked', 'echo', () => ['unbaked'], undefined, undefined, 's', 'waiting');
+      const gated = (name, gate) => reader(rt.res, true)(name, 'echo', Object.assign(() => [name], { gate: () => gate() }), 'built', undefined, 's', 'waiting');
+      const idle = gated('idle', shut), opened = gated('opened', opens), soon = gated('soon', opens);
       const bare = reader(rt.res, true)('bare', 'echo', () => ['bare'], 'built', undefined, 's', () => undefined);
       const late = reader(rt.res, false)('late', 'echo', () => ['late'], 'built', undefined, 's');
       rt.mount(() => {
-        for (const r of [moved, now, built, stored, secret, bare, late]) {
+        for (const r of [moved, now, built, stored, secret, unbaked, idle, opened, soon, bare, late]) {
           rt.effect(() => r());
         }
+        rt.W(opens, true);
       });
+      rt.commit(() => rt.W(shut, true));
       // asked again at newer arguments before the build-time answer's ask lands
       rt.commit(() => rt.W(at, 2));
       ready = true;
       for (const f of rt.data.q.splice(0)) f();
-      for (const x of [1, 2, 'built', 'stored', 'secret', 'bare', 'late']) answers.get(x).resolve('fresh');
+      for (const x of [1, 2, 'built', 'stored', 'secret', 'unbaked', 'idle', 'opened', 'bare', 'late']) answers.get(x).resolve('fresh');
       while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
-      return rt.journal.filter(l => / (moved|now|built|stored|secret|bare|late) /.test(l) && /build-time|placeholder/.test(l)).map(l => l.replace(/^t=\S+ /, ''));
+      return rt.journal.filter(l => / (moved|now|built|stored|secret|unbaked|idle|opened|soon|bare|late) /.test(l) && /build-time|placeholder/.test(l)).map(l => l.replace(/^t=\S+ /, ''));
     });
     expect(lines.sort()).toEqual([
       'bare answered: replaces its build-time answer',
@@ -1234,6 +1268,7 @@ test('a build-time answer is journaled as one until an answer lands, and a place
       'moved shows its build-time answer until its source answers',
       'now answered: replaces its build-time answer',
       'now shows its build-time answer until its source answers',
+      'opened shows its placeholder until its source answers: the store holds secrets its build-time answer did not see',
       'secret shows its placeholder until its source answers: the store holds secrets its build-time answer did not see',
     ]);
   } finally { await browser.close(); server.stop(true); }

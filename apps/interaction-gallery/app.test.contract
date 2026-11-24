@@ -1,9 +1,11 @@
 // A dismissed viewer and a thrown card finish 150 ms after the release, on the
 // root's gated tasks. A release dismisses or throws past 120 points or 800
 // points a second: a 200-point drag down the viewer passes the first, and so
-// does a 180-point throw from the deck's centre, which stays on the narrowest
-// phone's screen (the folded iPhone Duo's, 382 points wide); 40 points held
-// 300 ms before the lift passes neither.
+// do throws from the deck's centre that stay on the narrowest phone's screen
+// (the folded iPhone Duo's, 382 points wide); 40 points held 300 ms before the
+// lift passes neither. The 140-point throw and the 120-point drag that springs
+// back hold the iOS pan to its touch-down: anchored where UIKit recognized it,
+// past its hysteresis, the card released under 120 from 140.
 
 test "a drag down at Fit closes the viewer once the photo has left"
   tap "open-photo-00000"
@@ -29,7 +31,7 @@ test "a short drag springs back and the viewer stays"
 
 test "a thrown card deals the next by itself, to either side"
   expect text "deck-face" == "Card 1"
-  tap "deck-handle" drag 180 0
+  tap "deck-handle" drag 140 0
   expect text "deck-face" == "Card 1"
   clock +150
   expect text "deck-face" == "Card 2"
@@ -38,6 +40,11 @@ test "a thrown card deals the next by itself, to either side"
   tap "deck-handle" drag -180 0
   clock +150
   expect text "deck-face" == "Card 3"
+
+test "a drag short of the threshold springs the card back"
+  tap "deck-handle" drag 120 0
+  clock +150
+  expect text "deck-face" == "Card 1"
 
 test "Deal again deals, and a throw it follows deals no second card"
   tap "deck-deal"

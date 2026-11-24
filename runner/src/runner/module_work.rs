@@ -196,9 +196,9 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// A report's cause, from the runner's records, never the module's
-    /// word. An answer's is the least privileged of its requests in flight
-    /// and the commit asking it now, with all their causes. A tool's
-    /// handler's is its own or the commit's, whichever may do less. With no
+    /// word. An answer's is the join of its requests in flight and the
+    /// commit asking it now; a tool's handler's, the join of its own and the
+    /// commit's (LLP 1133.023 D7a). With no
     /// answer running, a report gets what any data-code call gets
     /// ([`Self::data_cause`]), as a fresh invocation's.
     fn report_cause(&mut self, by: Reporter) -> Cause {
@@ -206,16 +206,20 @@ impl<D: DataSource> Runner<D> {
             Reporter::Answer(target) => (self.pending.iter())
                 .filter(|p| p.target == target && p.reask_at.is_none())
                 .map(|p| self.ticket_cause(p.ticket))
-                .fold(self.cause_for(target), |a, b| self.least(a, b)),
+                .fold(self.cause_for(target), |a, b| self.join_causes(a, b)),
             Reporter::Tool => {
                 let now = self.cause();
-                self.tool_cause().map_or(now, |tool| self.least(now, tool))
+                self.tool_cause()
+                    .map_or(now, |tool| self.join_causes(now, tool))
             }
-            Reporter::None => Cause {
-                id: self.next_invocation(),
-                owned: true,
-                ..self.data_cause()
-            },
+            Reporter::None => {
+                let id = self.next_invocation();
+                Cause {
+                    id,
+                    owner: id,
+                    ..self.data_cause()
+                }
+            }
         }
     }
 
@@ -406,7 +410,7 @@ impl<D: DataSource> Runner<D> {
                 .filter(|i| !self.upload_stands(*i))
                 .collect();
             for i in readers {
-                let mut in_flight = false;
+                let mut again = Vec::new();
                 for p in self.pending.iter_mut() {
                     if p.target == Target::Resource(i)
                         && p.stream.is_none()
@@ -415,11 +419,15 @@ impl<D: DataSource> Runner<D> {
                     {
                         p.ask_again = true;
                         p.module_again = Some(revision);
-                        in_flight = true;
+                        again.push(p.ticket);
                     }
                 }
-                if !in_flight {
+                if again.is_empty() {
                     now.push(i);
+                }
+                // Its next ask reads what this work wrote (LLP 1133.023 D7a).
+                for ticket in again {
+                    self.note_kept(Target::Resource(i), ticket);
                 }
             }
         }

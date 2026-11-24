@@ -114,7 +114,7 @@ pub use fields::Profile;
 pub use identity::compiler_identity;
 pub use lint::{lint, lint_unused};
 use lint::{unknown_attr, unknown_tag};
-pub use native::{is_module_tag, module_tags};
+pub use native::{is_module_tag, module_tags, CONTROL_PROPS};
 pub use native_typed::{DeclaredView, DeclaredViews, EVENT_MARKER};
 pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, Written};
 pub use states::PRESS_OPACITY_TO;
@@ -1464,7 +1464,8 @@ impl<'a> Lowerer<'a> {
                         Expr::NamedArg(name, value, _) => (name.as_str(), value.as_ref()),
                         _ => ("", arg),
                     };
-                    codes.push((name, self.expr_code(value, scope, locals)?));
+                    let (code, ty) = self.typed_code(value, scope, locals)?;
+                    codes.push((name, code, self.ty_id(&ty).ok()));
                 }
                 *surface = Some(self.b.surface(name, &codes));
             }

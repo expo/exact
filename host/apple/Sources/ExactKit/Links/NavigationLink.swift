@@ -540,7 +540,7 @@ package final class NoNavigation: NavigationHosting {
         presenter.owners.publish()
     }
 
-    package func rebooting() {}
+    package func rebooting() { told = [] }
     package func retheme() {}
     package func appearanceChanged() {}
     package func replayHatches() {}
@@ -588,10 +588,19 @@ package final class NoNavigation: NavigationHosting {
     package var covers: [UInt32: HostCover] { [:] }
     package var coversAnswerOwed: Bool { false }
     package var wantsWholeView: Bool { false }
-    /// Covers are navigation's; a native arrangement's hidden panes are the
-    /// core's (`ArrangementHost.reportHiddenPanes`).
-    package func coversChanged() {}
-    package func reportCovers() {}
+    /// The panes the kernel was last told a native arrangement hides, covered whole: the only covers without navigation
+    private var told: Set<UInt32> = []
+    package func coversChanged() { reportCovers() }
+    package func reportCovers() {
+        #if os(iOS)
+        guard #available(iOS 27.1, *) else { return }
+        let views = presenter.views, hidden = presenter.arrangements.hidden.filter { views[$0] != nil }
+        let changes = hidden.subtracting(told).map { ($0, HostCover.whole as HostCover?) }
+            + told.subtracting(hidden).filter { views[$0] != nil }.map { ($0, nil as HostCover?) }
+        told = hidden
+        if !changes.isEmpty { presenter.onCovers?(changes) }
+        #endif
+    }
     /// The document stays in the scrolling viewport: no native container takes the whole view.
     package func fitOwner() { presenter.hostDocument(fixed: false) }
     /// An arrangement's scroller is inset by UIKit, as with navigation.

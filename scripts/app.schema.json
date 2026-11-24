@@ -970,9 +970,9 @@
           "properties": {
             "swiftPackages": { "$ref": "#/$defs/swiftPackages" },
             "infoPlist": {
-              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "description": "A vendor SDK's Info.plist keys, written into the iOS and tvOS app's bundle as given (LLP 1069.008 D4): {\"SUFeedURL\": \"https://example.com/appcast.xml\"}. A key in Apple's namespaces (NS, UI, LS, CF and the others Apple uses), an Exact key or one Exact writes is refused; the refusal names the grant or field that writes it, or asks for a feedback note. A changed key needs a new binary.",
               "type": "object",
-              "additionalProperties": false
+              "additionalProperties": { "$ref": "#/$defs/plistValue" }
             },
             "entitlements": {
               "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
@@ -1143,9 +1143,9 @@
           "properties": {
             "swiftPackages": { "$ref": "#/$defs/swiftPackages" },
             "infoPlist": {
-              "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
+              "description": "A vendor SDK's Info.plist keys, written into the macOS app's bundle as given (LLP 1069.008 D4): {\"SUFeedURL\": \"https://example.com/appcast.xml\"}. A key in Apple's namespaces (NS, UI, LS, CF and the others Apple uses), an Exact key or one Exact writes is refused; the refusal names the grant or field that writes it, or asks for a feedback note. A changed key needs a new binary.",
               "type": "object",
-              "additionalProperties": false
+              "additionalProperties": { "$ref": "#/$defs/plistValue" }
             },
             "entitlements": {
               "description": "No keys are admitted. Each refusal gives tested grant advice, points to the bundle metadata reference for a derived key, or asks for a feedback note naming a key Exact does not write.",
@@ -1825,6 +1825,12 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "plistValue": {
+      "description": "A property-list value: a string, number, boolean, array or dictionary.",
+      "type": ["string", "number", "boolean", "array", "object"],
+      "items": { "$ref": "#/$defs/plistValue" },
+      "additionalProperties": { "$ref": "#/$defs/plistValue" }
+    },
     "launchColour": {
       "type": "string",
       "pattern": "^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|color\\(\\s*display-p3(\\s+(0(\\.\\d+)?|\\.\\d+|1(\\.0+)?|(\\d{1,2}(\\.\\d+)?|100(\\.0+)?)%)){3}\\s*(/\\s*(0(\\.\\d+)?|\\.\\d+|1(\\.0+)?|(\\d{1,2}(\\.\\d+)?|100(\\.0+)?)%)\\s*)?\\))$",

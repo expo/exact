@@ -1,6 +1,7 @@
 //! Read-only logical row text: no DOM construction, effects or host commands.
 use super::{sites::Site, style, Em};
 use crate::code::{self, Frame, Scope};
+use crate::hoist::mark;
 use exact_kernel::{NodeType, PropId, StyleId};
 use exact_plan::{BindingKind, EventKind, NodesId, RegionKind};
 
@@ -95,20 +96,28 @@ impl Em<'_> {
                         let children = self.logical_children(self.sites.of_arm(*arm), &inner)?;
                         bodies.push(format!("{decl}return {children};"));
                     }
+                    let other = || bodies.get(1).cloned().unwrap_or("return [];".into());
+                    // Each region's function is marked to be lifted, as its
+                    // mount's arms are (hoist.rs).
                     let value = match row.kind {
                         RegionKind::Each => format!(
-                            "({subject}).flatMap(($i,$x)=>{{const i{depth}=()=>$i,x{depth}=()=>$x;{}}})",
-                            bodies[0]
+                            "({subject}).flatMap(($i,$x)=>{{{}}})",
+                            mark(&format!(
+                                "const i{depth}=()=>$i,x{depth}=()=>$x;{}",
+                                bodies[0]
+                            ))
                         ),
                         RegionKind::When => format!(
-                            "(()=>{{if({subject}){{{}}}{} }})()",
-                            bodies[0],
-                            bodies.get(1).cloned().unwrap_or("return [];".into())
+                            "(()=>{{{}}})()",
+                            mark(&format!("if({subject}){{{}}}{} ", bodies[0], other()))
                         ),
                         RegionKind::Match => format!(
-                            "(($b)=>{{if($b!==null){{const b{depth}=()=>$b;{}}}{} }})({subject})",
-                            bodies[0],
-                            bodies.get(1).cloned().unwrap_or("return [];".into())
+                            "(($b)=>{{{}}})({subject})",
+                            mark(&format!(
+                                "if($b!==null){{const b{depth}=()=>$b;{}}}{} ",
+                                bodies[0],
+                                other()
+                            ))
                         ),
                     };
                     format!("...{value}")

@@ -152,9 +152,9 @@ impl<D: DataSource> Runner<D> {
         args: Json,
         reader: Option<usize>,
     ) -> Request {
-        let origin = self.call_origin();
+        let cause = self.cause();
         let body = self.forward_body(row, args, reader);
-        self.anchor_body(row, &body, origin);
+        self.anchor_body(row, &body, cause);
         Request::native(body)
     }
 

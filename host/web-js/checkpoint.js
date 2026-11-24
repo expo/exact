@@ -17,11 +17,12 @@ function encode(v, t) {
   return `{"r":[${Object.keys(t).map((k, i) => encode(v[i], t[k])).join(',')}]}`;
 }
 /** The page's checkpoint answers as JSON text (`answers`), with the indices in them of those the reader's page shows
- * and asks again (`open`) and of those that read the store (`readers`).
+ * and asks again (`open`), of those that read the store (`readers`), and of those a child's resource gave, each with
+ * its instance's path (`instances`, LLP 1035.005.004 D8).
  * `resources` are the plan's declared resources in plan order, as `types` are, and a list writes each element's answer
  * in the list's order. */
 export function answers(resources, types, sourceTypes) {
-  const out = [], open = [], readers = [], urls = [];
+  const out = [], open = [], readers = [], instances = [], urls = [];
   const write = (r, type) => {
     // Leave out an answer not yet given, and a runner's own source (the date, the viewport), which is the reader's
     // device: the runtime asks it again, as `Runner::document_checkpoint` leaves it out
@@ -39,12 +40,15 @@ export function answers(resources, types, sourceTypes) {
     if (r.store) {
       readers.push(out.length);
     }
+    if (r.path !== undefined) {
+      instances.push([out.length, r.path]);
+    }
     if (!globalThis.__exactProduction) urls.push([...(r.renderUrls ?? [])]);
     out.push(`[${JSON.stringify(r.name)},${JSON.stringify(r.source)},[${r.settled.map((a, k) => encode(a, params[k] ?? 's')).join(',')}],${encode(r.value, type)}]`);
   };
-  // a child's resource writes each instance's answer, which the boot's instances take by their arguments (LLP 1035.005.004 D8)
+  // a child's resource writes each instance's answer
   resources.forEach(({ r }, i) => r.each ? r.members().forEach(element => write(element, types[i][1])) : r.instances ? r.members().forEach(own => write(own, types[i])) : write(r, types[i]));
-  return { answers: `[${out.join(',')}]`, open, readers, ...(!globalThis.__exactProduction ? { urls } : {}) };
+  return { answers: `[${out.join(',')}]`, open, readers, instances, ...(!globalThis.__exactProduction ? { urls } : {}) };
 }
 
 // The JS dev loop's checkpoint handoff. Its separate MIME type keeps rt.js's

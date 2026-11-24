@@ -246,7 +246,9 @@ open class ExactModule {
         reply.fail("\(type(of: self)) answers no native.later")
     }
     /// A cheap query answered now (`native.call`), on the main thread and
-    /// inside the asking answer's 100 ms budget. Throw to refuse.
+    /// inside the asking answer's 100 ms budget. Throw to refuse. The page
+    /// cannot lay out until it returns, so an animated frame change of an
+    /// Exact window asked here runs after it (`ExactSessionWindow`).
     open func call(_ request: [String: Any]) throws -> [String: Any] {
         throw ExactNativeRefusal("\(type(of: self)) answers no native.call")
     }

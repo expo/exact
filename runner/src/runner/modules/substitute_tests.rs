@@ -580,17 +580,17 @@ fn a_background_action_refuses_foreground_calls_even_in_a_visible_session() {
         false,
         "never",
         "",
-        r#"{"origin":"app","foreground":true}"#,
+        r#"{"foreground":true}"#,
     );
     b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
     let mut r = boot(b.finish().unwrap());
     let row = r.plan.modules[0].clone();
     for hidden in [false, true] {
         r.page.hidden = hidden;
-        // The person's commit with a background action among its causes: the
-        // name held to the app passes, the foreground rule refuses.
+        // The person's commit joined by a background action: the
+        // foreground rule refuses it while the page shows.
         let action = crate::runner::provenance::Cause::of(super::CallOrigin::Action, 0, false);
-        let cause = crate::runner::provenance::Cause::person().joined(action.causes);
+        let cause = r.join_causes(crate::runner::provenance::Cause::person(), action);
         let refused = r.admit(&row, &serde_json::json!({}), cause);
         assert_eq!(
             refused,
@@ -598,6 +598,38 @@ fn a_background_action_refuses_foreground_calls_even_in_a_visible_session() {
             "hidden={hidden}"
         );
     }
+}
+
+/// A model handler that a call joining the device and a background action
+/// granted keeps the action's foreground rule, though `device` is the folded
+/// origin.
+#[test]
+fn a_handler_granted_under_a_background_action_refuses_foreground_calls() {
+    use crate::runner::provenance::Cause;
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("openBrowser", &[], string);
+    b.module(
+        source,
+        ("browser", "@fixture/browser"),
+        "openBrowser",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"foreground":true}"#,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    let row = r.plan.modules[0].clone();
+    r.page.hidden = false;
+    let device = Cause::of(super::CallOrigin::Device, 0, false);
+    let action = Cause::of(super::CallOrigin::Action, 0, false);
+    let granted = r.join_causes(device, action);
+    let handler = r.handler_cause(granted);
+    assert_eq!(handler.origin, super::CallOrigin::Device);
+    let refused = r.admit(&row, &serde_json::json!({}), handler);
+    assert_eq!(refused, Err("not in the foreground".into()));
 }
 
 #[test]

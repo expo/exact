@@ -42,6 +42,7 @@ const MODULES = {
     'host/web/navigation/selection.js',
     'host/web/navigation/sheet-stack.js',
     'host/web/navigation/store.js',
+    'host/web/navigation/symbol.js',
     'host/web/navigation/type.js',
     'host/web/navigation/urls.js',
     'host/web/grant-admission.js',

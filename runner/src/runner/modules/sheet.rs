@@ -28,7 +28,7 @@
 use super::super::{DataSource, Runner};
 use super::ceremony::within;
 use super::invoke::To;
-use super::{CallOrigin, Json, ModulesRow};
+use super::{Cause, Json, ModulesRow};
 use crate::{Hold, HoldAnswer};
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -88,7 +88,7 @@ struct Sheet {
     method: String,
     /// The handler each keyword names: `onpaymentauthorized` → `placeOrder`.
     handlers: BTreeMap<String, String>,
-    origin: CallOrigin,
+    cause: Cause,
     /// `total`, `displayItems`, `shippingOptions` and `modifiers`, as shown.
     details: Json,
     options: Json,
@@ -269,7 +269,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// A sheet for a call of `row` with `args`, before it is opened.
-    fn sheet_of(&self, row: &ModulesRow, args: &Json, origin: CallOrigin, id: String) -> Sheet {
+    fn sheet_of(&self, row: &ModulesRow, args: &Json, cause: Cause, id: String) -> Sheet {
         let sub = self.substitute(row);
         let handlers = (sub["callbacks"].as_object().into_iter().flatten())
             .filter_map(|(k, _)| Some((k.clone(), args[k].as_str()?.to_owned())))
@@ -284,7 +284,7 @@ impl<D: DataSource> Runner<D> {
             request_id: details["id"].as_str().map_or(id, str::to_owned),
             method: self.method_here(row, args).unwrap_or_default(),
             handlers,
-            origin,
+            cause,
             details: json!({
                 "total": details["total"],
                 "displayItems": details["displayItems"],
@@ -333,14 +333,14 @@ impl<D: DataSource> Runner<D> {
             "phase": sheet.phase.word(),
             "waiting": sheet.asking.as_ref().map(|a| a.ask.clone()),
             "result": sheet.last.as_ref().map(|l| l["result"].clone()),
-            "origin": sheet.origin.word(),
+            "origin": sheet.cause.origin.word(),
             "target": self.host_target(),
         })
     }
 
     /// A payment ticket's `args` as it is first held.
-    pub(super) fn sheet_args_of(&self, row: &ModulesRow, args: &Json, origin: CallOrigin) -> Json {
-        self.args_shown(&self.sheet_of(row, args, origin, String::new()))
+    pub(super) fn sheet_args_of(&self, row: &ModulesRow, args: &Json, cause: Cause) -> Json {
+        self.args_shown(&self.sheet_of(row, args, cause, String::new()))
     }
 
     /// The call held under `token` has its ticket: its sheet opens, and on
@@ -353,10 +353,10 @@ impl<D: DataSource> Runner<D> {
         if !self.substitute(&row)["ceremony"]["asks"].is_object() {
             return;
         }
-        let (hold, args, origin) = (h.hold, h.args.clone(), h.origin);
+        let (hold, args, cause) = (h.hold, h.args.clone(), h.cause);
         self.extensions.sheets.calls += 1;
         let id = format!("payment-{}", self.extensions.sheets.calls);
-        let mut sheet = self.sheet_of(&row, &args, origin, id);
+        let mut sheet = self.sheet_of(&row, &args, cause, id);
         sheet.hold = hold;
         sheet.name = (self.device_holds.iter())
             .find(|d| d.ticket == hold)
@@ -421,7 +421,7 @@ impl<D: DataSource> Runner<D> {
         let Some(handler) = sheet.handlers.get(keyword).cloned() else {
             return false;
         };
-        let (origin, budget, id) = (sheet.origin, sheet.budget, sheet.request_id.clone());
+        let (granted, budget, id) = (sheet.cause, sheet.budget, sheet.request_id.clone());
         self.extensions.sheets.calls += 1;
         let call = self.extensions.sheets.calls;
         let now = self.now_ms;
@@ -433,14 +433,14 @@ impl<D: DataSource> Runner<D> {
             ends: now + budget,
         });
         self.reopen(token);
-        let origin = origin.min(CallOrigin::Tool);
+        let cause = self.handler_cause(granted);
         let at = format!("payments: {handler} for {id}");
-        self.log(format!("{at}: run, {}", origin.word()));
+        self.log(format!("{at}: run, {}", cause.origin.word()));
         let to = To::Sheet {
             token,
             attempt: call,
         };
-        self.run_handler(at, &handler, &arg, origin, to, None);
+        self.run_handler(at, &handler, &arg, cause, to, None);
         true
     }
 
@@ -949,7 +949,7 @@ impl<D: DataSource> Runner<D> {
             "requestId": s.request_id,
             "method": s.method,
             "total": amount_text(&s.details["total"]["amount"]),
-            "origin": s.origin.word(),
+            "origin": s.cause.origin.word(),
             "outcome": outcome,
             "handlers": s.handled,
         }))

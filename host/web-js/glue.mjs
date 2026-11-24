@@ -54,14 +54,8 @@ export function driverRuntime(root) {
     ...hostModuleSources(root, ['host/web/navigation.js'])])];
 }
 
-/** A runtime module's `../web/…` imports, pointed at the copies beside it. */
-export const localImports = text => text
-  .replaceAll('"../web/symbol-geometry.js"', '"./symbol-geometry.js"')
-  .replaceAll("'../web/grant-admission.js'", "'./grant-admission.js'")
-  .replaceAll("'../web/faults.js'", "'./faults.js'")
-  .replaceAll("'../web/drag-out.js'", "'./drag-out.js'")
-  .replaceAll("'../web/address-space.js'", "'./address-space.js'")
-  .replaceAll('"../web/address-space.js"', '"./address-space.js"');
+/** A runtime module's imports from `../web/`, every one, pointed at the copies beside it. */
+export const localImports = text => text.replace(/(\b(?:from|import)\s*\(?\s*)(['"])\.\.\/web\/((?:[\w-]+\/)*[\w-]+\.js)\2/g, '$1$2./$3$2');
 
 // @ref LLP 1043.000 §3 D7/D8 — one inventory for host builds, serving and fixtures.
 // Groups preserve capability-based shipping; none of these imports enters boot.

@@ -873,3 +873,56 @@ fn a_rejected_draw_fails_its_capture_but_a_later_capture_can_succeed() {
         assert!(captured_image(&capture.captured("image/png")).is_ok());
     }
 }
+
+/// What a TypeScript `draw` is sent (LLP 1056 D1): records by field name, a
+/// nested record and a list of them, an enum as its string, and a named call
+/// as an object, made once for each change of the arguments.
+#[test]
+fn a_typescript_draw_receives_records_by_field_name() {
+    struct Seam(Rc<RefCell<Vec<String>>>);
+    impl DataSource for Seam {
+        fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
+            panic!("unexpected {name}")
+        }
+        fn canvas_surfaces(&self) -> Vec<(String, usize)> {
+            vec![("board".into(), 3), ("pin".into(), 1)]
+        }
+        fn draw(&mut self, request: &DrawRequest<'_>, _: &Context2d) -> Drawn {
+            self.0.borrow_mut().push(request.json());
+            Drawn::Now(DrawReply::default())
+        }
+    }
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let plan = contract::compile(
+        "shape Dot\n  x: number\n  y: number\n\nshape Pair\n  a: Dot\n  kind: enum<\"on\", \"off\">\n\ncomponent App\n  state dots = [Dot(x=1, y=2)]\n  state pair = Pair(a=Dot(x=3, y=4), kind=\"on\")\n  state tick = 1\n  action bump\n    tick = tick + 1\n  view\n    column\n      canvas surface=board(dots, pair.a, tick) width=20 height=10\n      canvas surface=pin(p=pair) width=20 height=10\n",
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Seam(seen.clone()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    for view in r.canvas_views() {
+        r.set_canvas_geometry(view, geometry(20.0, 10.0, 1.0));
+    }
+    r.draw_canvases(&|_| true);
+    // A commit that changes one argument: the others keep their JSON.
+    r.act("bump", vec![]).unwrap();
+    r.draw_canvases(&|_| true);
+    let args: Vec<String> = seen
+        .borrow()
+        .iter()
+        .map(|j| j[j.find("\"args\":").unwrap() + 7..j.find(",\"frame\"").unwrap()].to_string())
+        .collect();
+    assert_eq!(
+        args,
+        [
+            r#"[[{"x":1,"y":2}],{"x":3,"y":4},1]"#,
+            r#"{"p":{"a":{"x":3,"y":4},"kind":"on"}}"#,
+            r#"[[{"x":1,"y":2}],{"x":3,"y":4},2]"#
+        ]
+    );
+}

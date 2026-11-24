@@ -15,7 +15,9 @@ fn one(op: impl FnOnce(&mut Batch)) -> String {
     batch.finish(None, false, 0.0, None)
 }
 
-fn request(ticket: u64, request: Request, forced: bool) -> RequestOut {
+/// The app's own request, whose op names no origin (`batch.rs`).
+fn request(ticket: u64, mut request: Request, forced: bool) -> RequestOut {
+    request.reach.origin = exact_runner::CallOrigin::App;
     RequestOut {
         completion: None,
         class: exact_runner::RequestClass::Ordered,
@@ -72,6 +74,7 @@ fn cases() -> Vec<(&'static str, String)> {
             Value::list(vec![Value::Number(1.5), Value::Number(-2.0)]),
             Value::str("a\"b"),
         ],
+        types: vec![None, None],
     };
     vec![
         (

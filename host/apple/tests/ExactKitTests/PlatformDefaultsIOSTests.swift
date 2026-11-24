@@ -12,10 +12,13 @@ import XCTest
 /// runs it: bun host/apple/build.mjs --test --ios
 final class PlatformDefaultsIOSTests: XCTestCase {
     private var window: UIWindow!
+    private var session: ExactSession?
 
     /// A test's window goes with it: a field left editing in one would
     /// still hold the keyboard under the next test's window.
     override func tearDown() {
+        session?.destroy()
+        session = nil
         window?.endEditing(true)
         window?.isHidden = true
         window = nil
@@ -314,6 +317,164 @@ final class PlatformDefaultsIOSTests: XCTestCase {
         p.focusElement(["f3"])
         _ = fields[2].textFieldShouldReturn(editors[2])
         XCTAssertFalse(editors[2].isFirstResponder)
+    }
+
+    /// Next moves the focus only from where the field's `submit` left it.
+    /// An action that focused another field, or put the keyboard away, has
+    /// moved it already; Android and the web keep that move too.
+    func testNextDoesNotMovePastTheFieldTheSubmitFocused() throws {
+        let (p, fields, editors) = try threeFields()
+        fields[0].handlers = ["change", "blur", "submit"]
+        fields[0].applyProps(set: ["enterKeyHint": "next"], clear: [])
+        p.onSubmit = { _ in p.focusElement(["f2"]) }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertTrue(editors[1].isFirstResponder, "the field the action focused keeps the keyboard")
+        p.onSubmit = { _ in p.blurElement([]) }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertFalse(editors.contains { $0.isFirstResponder }, "an action that put the keyboard away keeps it away")
+        p.onSubmit = { _ in }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertTrue(editors[1].isFirstResponder, "an action that says nothing of the focus: Next moves it")
+    }
+
+    /// A `focus()` the host refused moved nothing, so Next still runs, as on
+    /// Android, where a refused focus leaves the focus where it was. One that
+    /// landed before a later refused one still stands.
+    func testNextStillMovesWhenTheSubmitsFocusIsRefused() throws {
+        let (p, fields, editors) = try threeFields()
+        fields[0].handlers = ["change", "blur", "submit"]
+        fields[0].applyProps(set: ["enterKeyHint": "next"], clear: [])
+        fields[1].applyProps(set: ["disabled": "true"], clear: [])
+        p.onSubmit = { _ in p.focusElement(["f2"]) }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertTrue(editors[2].isFirstResponder, "the disabled field refused the focus: Next takes the next enabled one")
+        fields[1].applyProps(set: [:], clear: ["disabled"])
+        fields[2].applyProps(set: ["disabled": "true"], clear: [])
+        p.onSubmit = { _ in p.focusElement(["f2"]); p.focusElement(["f3"]) }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertTrue(editors[1].isFirstResponder, "the focus that landed stands after a refused one")
+    }
+
+    /// A focus parked for a field that is not mounted yet is a move while
+    /// it waits, so Next keeps off and the keyboard waits for that field.
+    /// One the same `submit` cancels, by a later `focus()` (here refused)
+    /// or a `blur(id)`, moved nothing, so Next still runs; a focus that
+    /// landed before the cancelled park stands.
+    func testNextReadsWhetherTheSubmitsParkedFocusStillWaits() throws {
+        let (p, fields, editors) = try threeFields()
+        fields[0].handlers = ["change", "blur", "submit"]
+        fields[0].applyProps(set: ["enterKeyHint": "next"], clear: [])
+        fields[2].applyProps(set: ["disabled": "true"], clear: [])
+        // A live field that has not reached a window yet.
+        let later = NodeView(id: 4, kind: "input", presenter: p)
+        later.frame = CGRect(x: 0, y: 200, width: 200, height: 40)
+        p.views[later.id] = later
+        later.applyProps(set: ["id": "later"], clear: [])
+        p.onSubmit = { _ in p.focusElement(["later"]); p.focusElement(["f3"]) }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertNil(p.pendingFocusNode, "the refused focus replaced the park")
+        XCTAssertTrue(editors[1].isFirstResponder, "neither focus moved anything: Next takes the next field")
+        p.onSubmit = { _ in p.focusElement(["later"]); p.blurElement(["f2"]) }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertNil(p.pendingFocusNode)
+        XCTAssertTrue(editors[1].isFirstResponder, "a blur of another field cancelled the park: Next still runs")
+        fields[1].handlers = ["change", "blur", "submit"]
+        fields[1].applyProps(set: ["enterKeyHint": "next"], clear: [])
+        p.onSubmit = { _ in p.focusElement(["f1"]); p.focusElement(["later"]); p.focusElement(["f3"]) }
+        XCTAssertTrue(editors[1].becomeFirstResponder())
+        _ = fields[1].textFieldShouldReturn(editors[1])
+        XCTAssertNil(p.pendingFocusNode)
+        XCTAssertTrue(editors[0].isFirstResponder, "the focus that landed before the cancelled park stands")
+        p.onSubmit = { _ in p.focusElement(["later"]) }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertTrue(p.pendingFocusNode === later)
+        XCTAssertFalse(editors.contains { $0.isFirstResponder }, "a park still waiting: no Next, the keyboard waits for its field")
+        p.cancelPendingFocus()
+    }
+
+    /// Taking the focus runs the target's `focus` handler, and a `focus()`
+    /// there is the later request: a button that hands the focus straight
+    /// back leaves it on the field. Done keeps the keyboard there. For Next
+    /// the focus did not move, so Next runs, as on Android, which reads only
+    /// whether the field still has the focus.
+    func testAHandlerThatHandsTheFocusBackToTheFieldIsNoMoveSoNextStillRuns() throws {
+        let (p, fields, editors) = try threeFields()
+        let proxy = NodeView(id: 4, kind: "button", presenter: p)
+        proxy.handlers = ["focus"]
+        proxy.frame = CGRect(x: 0, y: 200, width: 200, height: 40)
+        p.root.addSubview(proxy); p.views[proxy.id] = proxy
+        proxy.applyProps(set: ["id": "proxy"], clear: [])
+        var proxyFocused = 0
+        p.onFocus = { id in if id == proxy.id { proxyFocused += 1; p.focusElement(["f1"]) } }
+        fields[0].handlers = ["change", "blur", "submit"]
+        fields[0].applyProps(set: ["enterKeyHint": "done"], clear: [])
+        p.onSubmit = { _ in p.focusElement(["proxy"]) }
+        XCTAssertTrue(editors[0].becomeFirstResponder())
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertEqual(proxyFocused, 1)
+        XCTAssertTrue(editors[0].isFirstResponder, "Done keeps the keyboard on the field the handler focused")
+        fields[0].applyProps(set: ["enterKeyHint": "next"], clear: [])
+        _ = fields[0].textFieldShouldReturn(editors[0])
+        XCTAssertEqual(proxyFocused, 2)
+        XCTAssertTrue(editors[1].isFirstResponder, "the focus is back where it was: Next moves it")
+    }
+
+    /// Through the runner, a `submit`'s `focus()` runs before Return
+    /// decides: on a mounted field, even one the action's own batch made,
+    /// the field has the keyboard when the action returns; on a field in a
+    /// dialog sheet still presenting it is parked then. Either way Next
+    /// keeps off.
+    func testARunnersSubmitFocusIsInPlaceWhenReturnDecides() throws {
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "a dialog sheet needs the hosted app's window scene")
+        }
+        let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_RETURN_FOCUS_PLAN"], "build.mjs --test --ios compiles return-focus.contract")
+        let session = ExactApp.shared.makeSession(label: "return-focus")
+        self.session = session
+        let view = ExactView(session: session), host = UIViewController()
+        window = UIWindow(windowScene: scene)
+        window.frame = window.screen.bounds
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        view.frame = host.view.bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.view.addSubview(view)
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: view.bounds.size).error)
+        view.layoutIfNeeded()
+        let p = session.presenter
+        func node(_ id: String) -> NodeView? { p.views.values.first { $0.props["testId"] == id } }
+        func until(_ what: String, _ done: () -> Bool) {
+            let deadline = Date().addingTimeInterval(10)
+            while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
+            XCTAssertTrue(done(), what)
+        }
+        func enter(_ id: String) throws {
+            let field = try XCTUnwrap(node(id), id)
+            _ = field.textFieldShouldReturn(try XCTUnwrap(field.field))
+        }
+        until("the home route is up") { node("rf-a")?.field?.window != nil }
+        until("no transition holds a focus back") { !p.navigation.inTransition && !p.modals.defersFocus }
+        func why() -> String { "\(p.pendingFocusObservation ?? [:]) navigation defers \(p.navigation.defersFocus) modals \(p.modals.defersFocus) applying \(p.applying)" }
+        XCTAssertTrue(try XCTUnwrap(node("rf-a")?.field).becomeFirstResponder())
+        try enter("rf-a")
+        XCTAssertNil(p.pendingFocusNode, "the focus landed inside the submit: \(why())")
+        XCTAssertTrue(node("rf-b")?.field?.isFirstResponder == true, "the submit's field keeps it; Next would have taken rf-d")
+        try enter("rf-b")
+        XCTAssertNil(p.pendingFocusNode, "the field the submit's own batch made took the focus inside it: \(why())")
+        XCTAssertTrue(node("rf-c")?.field?.isFirstResponder == true, "Next from rf-b would have taken rf-d")
+        try enter("rf-c")
+        let far = try XCTUnwrap(node("rf-far"))
+        XCTAssertTrue(p.pendingFocusNode === far, "the sheet's field waits for its presentation: \(why()) far first responder \(far.field?.isFirstResponder == true)")
+        XCTAssertFalse(node("rf-e")?.field?.isFirstResponder == true, "a parked focus is a move: no Next")
+        until("the parked focus lands") { far.field?.isFirstResponder == true }
     }
 
     private final class PointTouch: UITouch {

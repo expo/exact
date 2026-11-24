@@ -371,6 +371,13 @@ final class BoxFilters: BoxFilterSet {
         schedule()
     }
 
+    func filtered(above view: PlatformView) -> Bool {
+        views.values.contains { entry in
+            guard let box = entry.view, box !== view else { return false }
+            return view.isDescendant(of: box)
+        }
+    }
+
     /// `view`'s filtered output changed: the filtered boxes above it draw again.
     func landed(_ view: NodeView) {
         guard let parent = view.superview else { return }

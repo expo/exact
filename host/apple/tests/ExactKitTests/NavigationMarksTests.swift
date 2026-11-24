@@ -1,4 +1,5 @@
 #if os(iOS)
+import ExactCore
 import XCTest
 import QuartzCore
 @testable import ExactKit
@@ -70,6 +71,30 @@ final class NavigationMarksTests: XCTestCase {
         SvgFilterLive.inFlight -= 1
         waitForTTI("/picture")
         XCTAssertNotNil(picture.layer.contents, "the picture landed")
+    }
+
+    /// LLP 1072 T3: TTI's read of outstanding work waits on the owner, not
+    /// main. While the owner is busy (a first build; here a held job), main
+    /// keeps turning, and TTI is recorded once the owner answers.
+    func testTTIReadsTheLedgerWithoutHoldingMain() throws {
+        let session = try heldNavigation("/busy") { $0.holdFillForTests() }
+        defer { session.destroy() }
+        // The first frame's read, answered while the fill still holds TTI.
+        Owner.shared.sync {}
+        waitForMainQueue("the first frame's read")
+        let held = DispatchSemaphore(value: 0)
+        var released = false
+        defer { if !released { held.signal() } }
+        Owner.shared.post { _ = held.wait(timeout: .now() + 30) }
+        session.publishFillForTests(1, wireBatch([]), lease: session.runtime.completionLease)
+        let started = Date()
+        for _ in 0..<3 { waitForMainQueue("a turn while the owner is busy") }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10, "no main turn waited for the owner")
+        XCTAssertFalse(session.fillInFlight, "the fill landed while the owner was busy")
+        XCTAssertFalse(NavigationMarks.shared.recent.contains { $0.hasPrefix("tti /busy ") }, "the owner has not answered")
+        held.signal()
+        released = true
+        waitForTTI("/busy")
     }
 
     func testADestroyedSessionHasNoTTI() throws {

@@ -479,6 +479,62 @@ fn a_rendered_pages_instances_answer_the_boots_first_frame() {
     assert_eq!(r.data().asks, ["subjectWorks(2)"]);
 }
 
+/// Two launch instances ask the same thing, and the render found the first's
+/// gate closed: at a boot from its page each shows what the page showed there,
+/// the first its placeholder and not its sibling's answer (LLP 1035.005.004
+/// D8), and neither asks.
+#[test]
+fn a_rendered_pages_instance_takes_its_own_answer_not_a_siblings() {
+    let feeds = "routes nav
+  tab home \"/\"
+  tab discover \"/discover\"
+
+shape Subject
+  ok: bool
+  works: string[]
+
+component App
+  view
+    main
+      for t in nav.tabs key=t.name
+        Feed(name=t.name, shown=(nav.tab == t.name))
+
+component Feed
+  props
+    name: string
+    shown: bool
+  resource works = subjectWorks(\"sf\") when shown as shape Subject else empty(ok=true)
+  view
+    text `${name}: ${works.works.join(\",\")}` testId=`works-${name}`
+";
+    let plan = contract::compile(feeds).unwrap();
+    let mut rendered = Runner::boot(
+        plan.clone(),
+        Works::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/discover",
+    )
+    .unwrap();
+    assert_eq!(land(&mut rendered), 1);
+    let shown = |r: &Runner<Works>| [text(r, "works-home"), text(r, "works-discover")];
+    let page = [Some("home: ".to_string()), Some("discover: sf".to_string())];
+    assert_eq!(shown(&rendered), page);
+    let mut r = Runner::boot_checkpoint(
+        plan,
+        Works::default(),
+        Kernel::with_monospace(),
+        &rendered.document_checkpoint("/discover"),
+        Vec::new(),
+        Default::default(),
+        Default::default(),
+        "/discover",
+    )
+    .unwrap();
+    assert_eq!(shown(&r), page);
+    assert!(r.data().asks.is_empty(), "{:?}", r.data().asks);
+}
+
 /// An instance made at boot under a gate the boot finds closed sleeps on its
 /// page's answer, asking nothing, as a declared resource there does
 /// (LLP 1035.005.004 D8, LLP 1161.002 D2). The gate was open at the render,

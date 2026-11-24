@@ -48,6 +48,16 @@ export const WEB_STD = ['-Zbuild-std=std,panic_abort', '-Zbuild-std-features=opt
 // deprecates names, like `fetch_update`, before stable has their successors.
 export const WEB_RUSTFLAGS = ['-Zunstable-options', '-Cpanic=immediate-abort', '-Zlocation-detail=none', '-Adeprecated'];
 export const WEB_SIZE = [...WEB_STD, ...WEB_RUSTFLAGS].join(' ');
+/** Refuses a WEB_STD build run in `cwd` whose Cargo configuration names a lockfile. Cargo resolves std's own
+ * workspace against a configured `resolver.lockfile-path` as well, not against std's Cargo.lock, so each of std's
+ * dependencies that lockfile does not pin resolves afresh to its newest release, which need not compile as std's
+ * (hashbrown 0.17.2 does not on WEB_TOOLCHAIN). The key takes one path for every workspace, so nothing gives std its
+ * own while the author's is set. */
+export function refuseStdLockfile(env, cwd, what) {
+  const config = spawnSync('cargo', ['-Z', 'unstable-options', 'config', 'get', 'resolver.lockfile-path', '--color=never'], { cwd, env: { ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }, encoding: 'utf8' });
+  if (config.status === 0) throw new Error(`${what}: Cargo's configuration names a lockfile (${config.stdout.trim()}), and a -Zbuild-std build resolves std's dependencies against it instead of std's own Cargo.lock, so they move to releases std need not compile with. Unset CARGO_RESOLVER_LOCKFILE_PATH, or remove resolver.lockfile-path from the Cargo configuration that sets it.`);
+  if (!config.stderr?.trimEnd().endsWith('error: config value `resolver.lockfile-path` is not set')) throw new Error(`${what}: Cargo's configuration did not read: ${config.stderr || config.error?.message || `exit ${config.status}`}`);
+}
 /** The environment for a web build, refusing a machine without the toolchain
  * or its std sources (Cargo builds offline, so std's dependencies too). A
  * build that links wasm on a Mac also needs llvm-tools: this nightly's

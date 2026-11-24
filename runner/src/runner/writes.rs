@@ -18,6 +18,9 @@ pub(super) struct WriteRecord {
     /// The send's id and its place in send order.
     pub(super) id: u64,
     pub(super) mutation: usize,
+    /// The cause of the commit that sent it: `data_ready`, which first
+    /// shows a write made before it, joins it (LLP 1133.023 D7a).
+    pub(super) cause: provenance::Cause,
     /// A parallel mutation's send number ([`Target::Sent`]); 0 for any
     /// other mutation's.
     pub(super) send: u64,
@@ -108,6 +111,7 @@ impl<D: DataSource> Runner<D> {
         self.writes.records.push(WriteRecord {
             id,
             mutation: m,
+            cause: self.cause(),
             send: match target {
                 Target::Sent(_, n) => n,
                 _ => 0,

@@ -610,6 +610,8 @@ let session = firstWindow.session
 let view = firstWindow.view
 let window = firstWindow.window
 window.center()
+/// A drive's named display (`--display`), which the frame the person left the app at does not move it from.
+let agentScreen = AgentDisplay.named
 /// The frame the window was left at (its autosave). AppKit keeps the content
 /// rect when `.fullSizeContentView` or a toolbar goes in, so a frame restored
 /// only before the window's chrome lost the titlebar's height at every launch
@@ -617,7 +619,7 @@ window.center()
 /// again once the window has its final style (`finishLaunching`), which is
 /// when the name goes on: setting it saves the current frame. Every app's
 /// is kept, declared size or not, as AppKit apps keep theirs (LLP 1115 D8).
-let frameName = scripted ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + ".main" }
+let frameName = scripted || agentScreen != nil ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + ".main" }
 /// Where a sidebar's width, and whether the person hid it, are kept (LLP
 /// 1115.002 D3): AppKit's autosave, as the frame's is, and not a script's.
 let sidebarName = scripted ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + ".sidebar" }
@@ -625,10 +627,13 @@ if let frameName { window.setFrameUsingName(frameName) }
 // Agent-driven apps run side by side (every session's smoke launches one):
 // centred, each would cover the last and starve its Metal layer of drawables.
 // Spread them by pid so no window is fully hidden.
-if agentMode {
+let agentSpread: NSPoint = {
+    guard agentMode else { return .zero }
     let k = CGFloat(Int(getpid()) % 6)
-    window.setFrameOrigin(NSPoint(x: window.frame.origin.x - 120 + 48 * k, y: window.frame.origin.y + 60 - 24 * k))
-}
+    return NSPoint(x: -120 + 48 * k, y: 60 - 24 * k)
+}()
+if agentScreen != nil { AgentDisplay.place(window, offset: agentSpread) }
+else if agentMode { window.setFrameOrigin(NSPoint(x: window.frame.origin.x + agentSpread.x, y: window.frame.origin.y + agentSpread.y)) }
 ExactEnv.stamp("center")
 
 /// The window documents go to without a new one: the key window's, else
@@ -673,8 +678,8 @@ func openWindow(asTab: Bool = false, named: String? = nil, at location: String? 
     windows.append(w)
     AgentLink.route(w.label, w.session)
     if restoring != nil { return w } // AppKit positions and orders restored windows.
-    // A named window is where the person left it, as `main` is.
-    let frame = scripted || named == nil ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + "." + label }
+    // A named window is where the person left it, as `main` is (not on a drive's named display).
+    let frame = scripted || agentScreen != nil || named == nil ? nil : (ExactEnv.appMetadata["CFBundleIdentifier"] as? String).map { $0 + "." + label }
     if let frame, w.window.setFrameUsingName(frame) {
         w.window.setFrameAutosaveName(frame)
     } else if let beside {
@@ -683,6 +688,8 @@ func openWindow(asTab: Bool = false, named: String? = nil, at location: String? 
         } else {
             w.window.setFrameTopLeftPoint(beside.window.cascadeTopLeft(from: NSPoint(x: beside.window.frame.minX, y: beside.window.frame.maxY)))
         }
+    } else if agentScreen != nil {
+        AgentDisplay.place(w.window)
     } else {
         w.window.center()
     }
@@ -995,6 +1002,10 @@ func finishLaunching() {
     if let frameName {
         window.setFrameUsingName(frameName)
         window.setFrameAutosaveName(frameName)
+    }
+    // Placed again at its final size, and over the frames AppKit restored.
+    if agentScreen != nil {
+        for w in windows where w === firstWindow || !AgentDisplay.holds(w.window) { AgentDisplay.place(w.window, offset: w === firstWindow ? agentSpread : .zero) }
     }
     // Becoming key can synchronously announce readiness. Initialize the guard
     // before ordering the window, not afterward (two stdin readers otherwise).

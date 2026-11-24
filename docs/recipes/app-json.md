@@ -42,8 +42,8 @@
   `applinks:` domain is its `appclips:` one).
 - **Apple metadata:** grants derive keys ([permissions](permissions.md)), including
   `device.photos-add purpose.savePhoto` for `NSPhotoLibraryAddUsageDescription`.
-  `host.ios` and `host.macos` dictionaries `infoPlist` and `entitlements` refuse
-  every key; see [bundle metadata](../reference.md#apple-bundle-metadata).
+  `infoPlist` takes only a vendor SDK's keys, `entitlements` none
+  ([bundle metadata](../reference.md#apple-bundle-metadata)).
 - **Binary inputs** (`app.json`, assets, Swift, grants, `appId`, canvas surfaces, fonts,
   strings) require `bun exact.mjs ios`. Other `.contract`, `app.ts` and imported edits
   reach a running app in seconds; Rust data inputs rebuild ([driving iOS](ios-driving.md)).

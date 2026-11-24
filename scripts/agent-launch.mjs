@@ -616,7 +616,7 @@ export function parseFlags(argv) {
     else if (argv[i] === '--timing') flags.timing = value();
     else if (argv[i] === '--touch') flags.touch = value();
     else if (argv[i] === '--chrome') flags.chrome = value();
-    else if (argv[i] === '--phone') flags.phone = value();
+    else if (argv[i] === '--phone' || argv[i] === '--display') flags[argv[i].slice(2)] = value(); // --display: a Mac drive's window's display (LLP 1012, "where a driven Mac window opens")
     else if (argv[i] === '--sim') flags.sim = value();
     else if (argv[i] === '--variant') { process.env.EXACT_VARIANT = value(); delete process.env.EXACT_VARIANT_APP; }
     else if (argv[i] === '--storage') flags.storage = value();

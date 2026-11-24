@@ -1,8 +1,8 @@
 // The UI gallery's data and its canvas surface (LLP 1100 §10).
-import type { Answer, Ctx2D, Frame, NativeModule } from './app.contract.d.ts';
+import type { Answer, Ctx2D, Frame, NativeModule, Storage } from './app.contract.d.ts';
 
 export const appId = 'com.exact.uigallery';
-export const grants = '';
+export const grants = 'fs.read app:/tmp/drag-note.txt\nfs.write app:/tmp/drag-note.txt';
 
 type Swatch = { label: string; color: string };
 const rgb = (space: string, mid = '0.5 0.5 0.5') => [
@@ -113,7 +113,20 @@ const HDR = [
   ['hlg.heic', 'HLG HEIC (Safari only on the web)'],
 ].map(([file, label]) => ({ src: `assets/${file}`, label }));
 
-export const answer: Answer = ((source: string, args: unknown[], _secrets: unknown, _storage: unknown, native?: NativeModule) => {
+// The note the drag section writes as it opens, which a card drags out as an `app:/` file, or why it was not
+// written; the web carries no app file, so it writes none there
+const DRAG_NOTE = 'app:/tmp/drag-note.txt';
+async function writeDragNote(storage: Storage): Promise<{ path: string; why: string }> {
+  try {
+    const words = 'UI Gallery wrote this note when its Drag and drop section opened, and a card dragged it out of the app.\n';
+    await storage.fs.writeFile(DRAG_NOTE, new TextEncoder().encode(words));
+    return { path: DRAG_NOTE, why: '' };
+  } catch (e) {
+    return { path: '', why: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export const answer: Answer = ((source: string, args: unknown[], _secrets: unknown, storage: Storage, native?: NativeModule) => {
   const web = args[args.length - 1] === 'web';
   if (source === 'colorSpaces') {
     if (args[0] === 'platform') return web ? [] : PLATFORM;
@@ -139,13 +152,20 @@ export const answer: Answer = ((source: string, args: unknown[], _secrets: unkno
   if (source === 'sidebarBarHeight') {
     if (args[args.length - 1] !== 'ios' || !native?.available) return 0;
     native.watch('gallery-sidebar-bar');
-    return (native.call({ op: 'sidebarBarHeight' }) as { height: number }).height;
+    // A module that failed to load refuses the call, and the range bar keeps its own height
+    try {
+      const height = (native.call({ op: 'sidebarBarHeight' }) as { height: number }).height;
+      return Number.isFinite(height) ? height : 0;
+    } catch {
+      return 0;
+    }
   }
   // rec2100 white where an Apple host draws it; SDR white on the web and the Android preview
   if (source === 'hdrWhite') return APPLE.has(String(args[args.length - 1])) ? `color(rec2100-linear ${args[0]} ${args[0]} ${args[0]})` : '#ffffff';
   if (source === 'hdrPictures') return HDR.filter((p) => shows(p.src, web));
   // As of Mobile Safari 27.0 (LLP 1100 D8).
   if (source === 'caveat') return web ? SAFARI_CONSTRAINED : '';
+  if (source === 'dragNote') return web ? { path: '', why: '' } : writeDragNote(storage);
   if (source === 'hidden') {
     const gone = (args[0] === 'hdr' ? HDR : PICTURES).filter((p) => !shows(p.src, web)).map((p) => p.src.slice(7));
     return gone.length ? `Not shown in this browser (it can't decode them): ${gone.join(', ')}.` : '';

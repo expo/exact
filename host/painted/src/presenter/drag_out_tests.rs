@@ -217,7 +217,7 @@ fn a_field_inside_keeps_its_contact_and_draggable_false_drags_nothing() {
 }
 
 /// The reader's sheet takes `app:/` files once it says so
-/// ([`Presenter::serve_share_sheet`]), and still no element's picture.
+/// (`canvas/boot.rs`), and still no element's picture.
 #[test]
 fn the_share_sheet_is_given_app_files_where_it_says_so_and_no_picture() {
     let mut p = boot();
@@ -233,16 +233,12 @@ fn the_share_sheet_is_given_app_files_where_it_says_so_and_no_picture() {
         &p,
         "share: refused: files are not carried to this host's share sheet"
     ));
-    p.serve_share_sheet();
-    let page = p.host().runner().page();
-    assert_eq!(
-        (
-            page.can_share,
-            page.can_share_files,
-            page.can_share_pictures
-        ),
-        (true, true, false)
-    );
+    let page = exact_runner::Page {
+        can_share: true,
+        can_share_files: true,
+        ..p.host().runner().page()
+    };
+    assert!(p.set_page(page).is_none());
     tap(&mut p, "send");
     let shares = taken(&mut p, 4);
     let [words] = shares.as_slice() else {

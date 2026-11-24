@@ -173,6 +173,9 @@ impl Preload {
             Ok(text)
         };
         let mut request = Request::get(&fill(self.url)?);
+        // The app's own launch read, made ahead for it (LLP 1162.000): only
+        // the app's read takes its reply, and its redirects are the app's.
+        request.reach.origin = crate::CallOrigin::App;
         request.method = self.method.into();
         request.headers = self
             .headers

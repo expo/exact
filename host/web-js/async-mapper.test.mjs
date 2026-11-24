@@ -7,6 +7,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { localImports } from './glue.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 let dir, open;
@@ -24,7 +25,7 @@ beforeAll(async () => {
   else all.forEach(send);
   return Promise.resolve({ status: 200, body: new Uint8Array() });
 }\n`);
-  writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/", "'./"));
+  writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8')));
   writeFileSync(resolve(dir, 'admission-data.js'), "import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(null);\n");
   writeFileSync(resolve(dir, 'rt.js'), 'export const clock={agent:false,now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();\n');
   writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");

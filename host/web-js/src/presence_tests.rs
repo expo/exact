@@ -341,3 +341,29 @@ fn only_a_row_presence_plays_registers_with_presence() {
         assert!(js.contains("pr("), "{row}: {js}");
     }
 }
+
+/// LLP 1077 D12: a symbol effect, written or bound, is `--exact-symbol-effect` in the element's own style,
+/// where navigation/symbol.js finds it, and links the piece that plays it; a page with none does not. Only the
+/// runtime plays it, so a rendered page with one does not wait for the reader.
+#[test]
+fn a_symbol_effect_is_inline_and_links_its_player() {
+    let plan = |image: &str| {
+        contract::compile(&format!(
+            "component App\n  state on = true\n  view\n    column\n      image \"symbol:sf/bell.fill\" {image}\n"
+        ))
+        .unwrap()
+    };
+    let js = |image: &str| crate::emit::emit(&plan(image), false, false).unwrap().js;
+    assert!(exact_runner::activation::runtime_kept(&plan(
+        "-exact-symbol-effect=\"pulse\""
+    )));
+    assert!(!exact_runner::activation::runtime_kept(&plan("")));
+    let written = js("-exact-symbol-effect=\"pulse\" symbolEffectValue=`${on}`");
+    assert!(written.contains("--exact-symbol-effect:pulse"), "{written}");
+    assert!(written.contains("symbolEffects()"), "{written}");
+    let bound = js("-exact-symbol-effect=(on ? \"bounce\" : \"none\")");
+    assert!(bound.contains("\"--exact-symbol-effect\""), "{bound}");
+    assert!(bound.contains("symbolEffects()"), "{bound}");
+    let none = js("-exact-symbol-effect=\"wiggle\"");
+    assert!(!none.contains("symbolEffects"), "{none}");
+}

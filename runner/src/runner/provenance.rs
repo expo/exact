@@ -10,8 +10,9 @@
 //! scheduling it and installs it when the work runs ([`Runner::as_cause`]);
 //! there is no default. A commit with none installed is refused what the
 //! least privileged origin is refused and holds no grant: it never reads as
-//! the app's. Only boot and the host's delivery of the person's act in the
-//! app's own UI start an `app` cause ([`Cause::person`]).
+//! the app's. Boot, the host's delivery of the person's act in the app's own
+//! UI and its report of what the person sees while the page shows start an
+//! `app` cause ([`Cause::person`]).
 //!
 //! **Provenance is permanent; grants end with the invocation** (D7a). Work
 //! keeps its origin's restrictions for its whole life. An invocation's
@@ -21,9 +22,10 @@
 //!
 //! **Ownership** (D7) is separate: an invocation owns the requests, armed
 //! `then`s, held calls and queued sends its commits stamped
-//! ([`Cause::owned`]). A resource's re-ask by the device carries its last
+//! ([`Cause::owner`]). A resource's re-ask by the device carries its last
 //! ask's cause, invocation included, but is no invocation's work. What an
-//! invocation owns, and what lets go of it, is read by id alone. The tables
+//! invocation owns, and what lets go of it, is read by its owner alone,
+//! which a join keeps apart from the invocation whose grants it holds. The tables
 //! are part of a commit's checkpoint, and an invocation is superseded only
 //! when the commit that let go of its work stands (`let_go`).
 
@@ -67,10 +69,11 @@ impl CallOrigin {
 
 /// A set of origins: every cause a commit or a request has (LLP 1133.035
 /// D16 item 6). A request that a later commit keeps with newer arguments
-/// takes that commit's causes too, and its answer's commit, its `then` and
-/// what they ask carry them all, so a rule that refuses a tool sees a
-/// tool's arguments however they arrived. The `none` rule and the
-/// foreground rule read the set; the rest of admission reads one origin.
+/// is the join of both ([`Runner::join_causes`]), and its answer's commit, its
+/// `then` and what they ask carry it, so a rule that refuses a tool sees a
+/// tool's arguments however they arrived. The `none` rule, the foreground
+/// rule and a wake's refused commands read the set; the rest of admission
+/// reads the folded origin.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(in crate::runner) struct Causes(u8);
 
@@ -108,16 +111,18 @@ impl Origins {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cause {
     pub(in crate::runner) origin: CallOrigin,
-    /// The invocation it is part of; 0 for the app's.
+    /// The invocation whose grants it holds while that invocation is live;
+    /// 0 for none.
     pub(in crate::runner) id: u64,
     /// Every cause it has, its origin's included.
     pub(in crate::runner) causes: Causes,
     /// The invocation is a call: LLP 1111 D4a's command rules hold for its
     /// work, after the call too.
     pub(in crate::runner) call: bool,
-    /// The work is the invocation's own (D7's ownership): its commits stamp
-    /// what they start with the id. A device's re-ask is not.
-    pub(in crate::runner) owned: bool,
+    /// The invocation whose work it is (D7's ownership), whose id its
+    /// commits stamp on what they start; 0 for none. A device's re-ask is
+    /// no invocation's.
+    pub(in crate::runner) owner: u64,
     /// A data-code call admitted under the causes in flight: it holds no
     /// press record (LLP 1126.004 D2).
     pub(in crate::runner) data: bool,
@@ -142,34 +147,19 @@ impl Cause {
             id,
             causes: Causes(Causes::bit(origin)),
             call,
-            owned: id != 0,
+            owner: id,
             data: false,
         }
     }
 
     /// The same cause, not owned by its invocation: a device's re-ask.
     pub(in crate::runner) fn unowned(self) -> Cause {
-        Cause {
-            owned: false,
-            ..self
-        }
-    }
-
-    /// The same cause with `more` among its causes.
-    pub(in crate::runner) fn joined(self, more: Causes) -> Cause {
-        Cause {
-            causes: self.causes.union(more),
-            ..self
-        }
+        Cause { owner: 0, ..self }
     }
 
     /// The invocation that owns the work, 0 for none.
     pub(in crate::runner) fn owner(self) -> u64 {
-        if self.owned {
-            self.id
-        } else {
-            0
-        }
+        self.owner
     }
 }
 
@@ -267,6 +257,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Whether a cause is installed.
+    #[cfg(test)]
     pub(in crate::runner) fn has_cause(&self) -> bool {
         self.origins.current.is_some()
     }
@@ -441,45 +432,84 @@ impl<D: DataSource> Runner<D> {
 
     /// The cause a request of `target` asked now carries: the commit's, or,
     /// for a resource asked by the device's re-ask or by a commit with no
-    /// cause (a clock's, a reconciliation's), the least privileged of its
-    /// last ask's and its waiting ask's, owned by no invocation.
+    /// cause (a clock's, a reconciliation's), the join of its last ask's and
+    /// its waiting ask's, and of the commit's where it has one, owned by no
+    /// invocation.
     pub(in crate::runner) fn cause_for(&self, target: Target) -> Cause {
         let o = &self.origins;
         match target {
             Target::Resource(i) if o.reasking || o.current.is_none() => {
                 let asked = o.asked.get(&i).copied();
                 let waiting = o.deferred.get(&i).map(|(c, _)| *c);
-                let cause = match (asked, waiting) {
-                    (Some(a), Some(w)) => self.least(a, w),
-                    (Some(c), None) | (None, Some(c)) => c,
-                    (None, None) => self.cause(),
-                };
-                cause.unowned()
+                if asked.is_none() && waiting.is_none() {
+                    // Its first ask: the commit's own.
+                    return self.cause();
+                }
+                let cause = (asked.into_iter().chain(waiting).chain(o.current))
+                    .reduce(|a, b| self.join_causes(a, b));
+                cause.unwrap_or(Cause::none()).unowned()
             }
             _ => self.cause(),
         }
     }
 
-    /// Of two causes, the one that may do less: the lower origin, else the
-    /// one that holds no grant; with the causes of both.
-    pub(in crate::runner) fn least(&self, a: Cause, b: Cause) -> Cause {
+    /// The join of two causes, for work that depends on both (LLP 1133.023
+    /// D7a, as amended): the one function that makes a cause of several.
+    /// Its authority is what both allow. Its origin, the one the host is
+    /// told, is the lower, else the one that holds no grant now, so it
+    /// holds a grant only while both would and is the person's only when
+    /// both are (one invocation runs at a time, so two that are not the
+    /// app's never both hold a grant). Every origin of both stays among its
+    /// causes, whose own rules apply; a call's command rules and a data
+    /// call's want of a press record hold if either has them. It is an
+    /// invocation's work only if both are that invocation's.
+    pub(in crate::runner) fn join_causes(&self, a: Cause, b: Cause) -> Cause {
         let grants = |c: Cause| matches!(c.origin, CallOrigin::App | CallOrigin::Action);
         let rank = |c: Cause| (c.origin, !grants(c) || self.persons(c));
         let least = if rank(b) < rank(a) { b } else { a };
-        least.joined(a.causes.union(b.causes))
-    }
-
-    /// Request `ticket`'s causes.
-    pub(in crate::runner) fn ticket_causes(&self, ticket: u64) -> Causes {
-        self.ticket_cause(ticket).causes
+        Cause {
+            causes: a.causes.union(b.causes),
+            call: a.call || b.call,
+            data: a.data || b.data,
+            owner: if a.owner == b.owner { a.owner } else { 0 },
+            ..least
+        }
     }
 
     /// Request `ticket` of `target`, in flight, is kept with the newer
-    /// arguments of the commit being made: it takes that commit's causes.
+    /// arguments of the commit being made: its cause is the join of its
+    /// ask's and that commit's, and it stays its first asker's work (D7:
+    /// it is not let go).
     pub(in crate::runner) fn note_kept(&mut self, target: Target, ticket: u64) {
-        let more = self.cause_for(target).causes;
-        let cause = self.ticket_cause(ticket).joined(more);
+        let was = self.ticket_cause(ticket);
+        let cause = Cause {
+            owner: was.owner,
+            ..self.join_causes(was, self.cause_for(target))
+        };
         self.origins.tickets.insert(ticket, cause);
+    }
+
+    /// The cause of `data_ready`'s commit (LLP 1027 D4): the join of the
+    /// work that waited for the data source and shows in it. That is each
+    /// send made before it (`unsent`), each optimistic write, which only the
+    /// data source can lay over an answer so this commit first shows, each
+    /// resource it asks again by the ask that waited, else its last (boot's
+    /// own asks, at a placeholder or a checkpoint's answer, and a reader whose
+    /// gate never opened, record none and are the app's), and a peer's change
+    /// to the store, which is no one's.
+    pub(in crate::runner) fn ready_cause(&self, stale: &[usize], store_changed: bool) -> Cause {
+        let sends = self.unsent.iter().map(|u| u.3);
+        let writes = self.writes.records.iter().map(|w| w.cause);
+        let o = &self.origins;
+        let asks = (stale.iter()).map(|i| {
+            (o.deferred.get(i).map(|(c, _)| *c))
+                .or(o.asked.get(i).copied())
+                .unwrap_or(Cause::person())
+        });
+        let peer = store_changed.then(Cause::none);
+        (sends.chain(writes).chain(asks).chain(peer))
+            .reduce(|a, b| self.join_causes(a, b))
+            .unwrap_or(Cause::none())
     }
 
     /// Run `f` as the device's re-ask of its readers (D12).
@@ -499,16 +529,21 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Resource `i`'s ask at `args` waits for the data source (LLP 1027
-    /// D4): its cause is kept for `data_ready`'s ask (D12), the least
-    /// privileged of the commits that asked these arguments; a commit that
-    /// changes them asks under its own.
+    /// D4): its cause is kept for `data_ready`'s ask (D12), the join of the
+    /// commits that asked these arguments; a commit that changes them asks
+    /// under its own.
     pub(in crate::runner) fn note_deferred(&mut self, i: usize, args: &[Value]) {
         let now = self.cause_for(Target::Resource(i));
         let cause = match self.origins.deferred.get(&i) {
-            Some((was, asked)) if asked[..] == *args => self.least(now, *was),
+            Some((was, asked)) if asked[..] == *args => self.join_causes(now, *was),
             _ => now,
         };
         self.origins.deferred.insert(i, (cause, args.to_vec()));
+    }
+
+    /// Resource `i`'s gate closed: no ask of it waits.
+    pub(in crate::runner) fn forget_deferred(&mut self, i: usize) {
+        self.origins.deferred.remove(&i);
     }
 
     /// Resource `i` was asked, however it answered: its readers' cause is
@@ -529,7 +564,7 @@ impl<D: DataSource> Runner<D> {
     pub(in crate::runner) fn note_reasked(&mut self, i: usize) {
         let now = self.cause().unowned();
         let cause = match self.origins.asked.get(&i) {
-            Some(asked) => self.least(*asked, now),
+            Some(asked) => self.join_causes(*asked, now),
             None => now,
         };
         self.origins.asked.insert(i, cause);
@@ -569,12 +604,11 @@ impl<D: DataSource> Runner<D> {
         let folded = (self.origins.current.into_iter())
             .chain(tickets)
             .chain(self.tool_cause())
-            .reduce(|a, b| self.least(a, b));
+            .reduce(|a, b| self.join_causes(a, b));
         // Its invocation ranks it, but the call is not its own: it owns
-        // nothing and D4a's rules are for the call's commits.
+        // nothing.
         Cause {
-            owned: false,
-            call: false,
+            owner: 0,
             data: true,
             ..folded.unwrap_or(Cause::none())
         }

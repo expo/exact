@@ -57,7 +57,8 @@ impl<D: DataSource> Runner<D> {
             ));
             return Err(error);
         }
-        self.replace_viewport(viewport, "viewport")
+        let shown = !self.page.hidden;
+        self.as_shown(shown, |r| r.replace_viewport(viewport, "viewport"))
     }
 
     /// The user's display preferences changed (LLP 1061 D4): re-answer
@@ -72,6 +73,16 @@ impl<D: DataSource> Runner<D> {
             ..self.viewport
         };
         let bold = self.kernel.set_bold_text(preferences.bold_text);
+        let shown = !self.page.hidden;
+        self.as_shown(shown, |r| r.set_preferences_as(viewport, preferences, bold))
+    }
+
+    fn set_preferences_as(
+        &mut self,
+        viewport: Viewport,
+        preferences: Preferences,
+        bold: bool,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
         self.replace_fact(
             |r| &mut r.viewport,
             viewport,
@@ -102,7 +113,8 @@ impl<D: DataSource> Runner<D> {
             fold,
             ..self.viewport
         };
-        self.replace_viewport(viewport, "fold")
+        let shown = !self.page.hidden;
+        self.as_shown(shown, |r| r.replace_viewport(viewport, "fold"))
     }
 
     fn replace_viewport(

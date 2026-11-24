@@ -3,7 +3,7 @@
   "name": "UI Gallery",
   "short_name": "UI Gallery",
   "version": "0.1.1",
-  "buildNumber": 22,
+  "buildNumber": 23,
   "id": "com.exact.uigallery",
   "start_url": "/",
   "display": "standalone",
@@ -44,11 +44,12 @@
       "ios": "0"
     }
   },
-  "hatches": [
-    "sticky-limit",
-    "hdr-probe",
-    "hdr-reference"
-  ],
+  "hatches": {
+    "sidebar-list": ["ios"],
+    "sticky-limit": ["ios", "tvos", "macos", "web", "linux", "windows", "android"],
+    "hdr-probe": ["ios", "tvos", "macos", "web", "linux", "windows", "android"],
+    "hdr-reference": ["ios", "tvos", "macos", "web", "linux", "windows", "android"]
+  },
   "data": [
     "kind",
     "limit"

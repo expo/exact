@@ -512,20 +512,6 @@ impl<D: DataSource> Presenter<D> {
         self.link_activities();
     }
 
-    /// The Android reader's share sheet: `exactPage()` says it shares text,
-    /// a link and `app:/` files (LLP 1094.000 D7), and no element's picture.
-    pub fn serve_share_sheet(&mut self) {
-        let page = self.host.runner().page();
-        let page = exact_runner::Page {
-            can_share: true,
-            can_share_files: true,
-            ..page
-        };
-        if let Some(e) = self.set_page(page) {
-            self.host.log(format!("page: {e}"));
-        }
-    }
-
     /// The packages this binary composes (`crate::package`, LLP 1133.022
     /// D10 item 5): bound now, each told it runs under the agent unless the
     /// drive binds it (`--bind`), on the target this binary was built for.
@@ -1384,7 +1370,7 @@ impl<D: DataSource> Presenter<D> {
     pub(super) fn share(&mut self, args: &[exact_plan::Value], source: Option<ViewId>) {
         let share = Share::from_args(args);
         let (agent, shell) = (self.agent, self.requests.shell);
-        // What the sheet takes is what `exactPage()` says it does ([`Self::serve_share_sheet`]).
+        // What the sheet takes is what `exactPage()` says it does (the reader's boot, `canvas/boot.rs`).
         let page = self.host.runner().page();
         let reach = exact_runner::share::Reach {
             sheet: shell,

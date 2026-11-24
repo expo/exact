@@ -100,7 +100,7 @@ struct HeldEffect {
     args: Json,
     /// The permission its ticket asks: its own, or one its own requires.
     permission: String,
-    origin: CallOrigin,
+    cause: Cause,
     /// A data-code call's reply, settled when the ticket is answered.
     reply: Option<Arc<Mutex<Pending>>>,
 }
@@ -208,10 +208,9 @@ impl<D: DataSource> Runner<D> {
             };
             // A background action owns a native statement until its reply;
             // ordinary wakes keep fire-and-forget statements (LLP 1133.004 stage 2).
-            let owner = if reply.is_none() && origin == CallOrigin::Action {
-                cause.owner()
-            } else {
-                0
+            let owner = match reply.is_none() && self.action_owns(cause.owner()) {
+                true => cause.owner(),
+                false => 0,
             };
             let statements = self.extensions.declared.statements.clone();
             if owner != 0 {
@@ -283,13 +282,13 @@ impl<D: DataSource> Runner<D> {
                     .to_owned();
                 let permission = self.permission_name(row, &args);
                 let hold =
-                    self.device_hold(row, declared, Waits::Permission, origin, &permission, &args);
+                    self.device_hold(row, declared, Waits::Permission, cause, &permission, &args);
                 self.extensions.declared.held.push(HeldEffect {
                     hold,
                     source,
                     args,
                     permission,
-                    origin,
+                    cause,
                     reply,
                 });
                 Effect::Held
@@ -588,7 +587,7 @@ impl<D: DataSource> Runner<D> {
                         &row,
                         declared,
                         Waits::Permission,
-                        h.origin,
+                        h.cause,
                         &next_name,
                         &h.args,
                     );

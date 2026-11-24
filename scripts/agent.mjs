@@ -169,6 +169,8 @@ export async function main(argv, injected = {}) {
     if (host === 'trace') throw new Error('--attach drives a running app; trace reads a saved trace (trace --pid asks a running one)');
     if (host && attachUnsupported(host)) throw new Error(attachUnsupported(host));
   }
+  if (flags.display !== undefined && (!['macos', 'mac'].includes(host) || flags.test))
+    throw new Error(flags.test ? '--display places a drive\'s window, not a test run\'s' : `--display places a Mac window; ${host ?? 'this drive'} opens none to place`);
   if (flags.live) {
     if (!['macos', 'mac', 'ios', 'android'].includes(host) || flags.test)
       throw new Error('--live requires a macOS, iOS or Android reader drive without --test');
@@ -277,8 +279,9 @@ export async function main(argv, injected = {}) {
   if (!host || !ops.length) {
     console.error(
       [
-        'usage: bun scripts/agent.mjs <web|macos|ios|linux|android|windows|host|host-ios> [--browser chrome|firefox|webkit] [--app <name>] [--plan <file> | --url <url>] [--world <file>] [--device] [--phone <name|udid>] [--session <label>] [--open <document>] [--storage <name>] [--seed <n>] [--locale <tag>] [--format-locale <tag>] [--time-zone <zone>] [--epoch <ISO|ms>] [--live] [--timing platform] [--touch platform] [--chrome platform] [--size <w>x<h>] [--scale <n>] [--port <n>] [--json] <op> [<op> …]',
+        'usage: bun scripts/agent.mjs <web|macos|ios|linux|android|windows|host|host-ios> [--browser chrome|firefox|webkit] [--app <name>] [--plan <file> | --url <url>] [--world <file>] [--device] [--phone <name|udid>] [--session <label>] [--open <document>] [--storage <name>] [--seed <n>] [--locale <tag>] [--format-locale <tag>] [--time-zone <zone>] [--epoch <ISO|ms>] [--live] [--display <name|index>] [--timing platform] [--touch platform] [--chrome platform] [--size <w>x<h>] [--scale <n>] [--port <n>] [--json] <op> [<op> …]',
         '  desktop carriers open 420x900 unless --size names another viewport; a target is a testId, a view id, or a view\'s exact label or text (`tap "Sky off"`); tap and type scroll a target out of view into it first; web defaults to chrome; EXACT_WEB_BROWSER selects the same option. Install the other engines outside the repo: bunx playwright@1.65.1 install firefox webkit',
+        '  macOS --display opens the window on that display (NSScreen.localizedName, or its index in NSScreen.screens; EXACT_AGENT_DISPLAY for a launch by hand), centred; a --live window opens in front there, never activated, so name a display nobody is working at. A name no display has, or two have, is refused with the list.',
         '  Linux --size is the unrotated panel size; EXACT_ROTATE=90 or 270 swaps it for layout. Screenshots show the rotated output at the panel size.',
         '  ' +
           [
@@ -403,6 +406,7 @@ export async function main(argv, injected = {}) {
         ax: ops.some(line => /^\s*tree\s+--ax(?:\s|$)/.test(line)),
         env: {
           ...(flags.live ? { EXACT_AGENT: 'live' } : {}),
+          ...(flags.display !== undefined ? { EXACT_AGENT_DISPLAY: flags.display } : {}),
           ...(fresh ? { EXACT_AGENT_STORAGE_FRESH: '1' } : {}),
           ...(flags.login ? { EXACT_LOGIN_LAUNCH: flags.login } : {}),
         },

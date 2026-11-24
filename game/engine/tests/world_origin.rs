@@ -117,10 +117,10 @@ fn the_least_privileged_origin_wins_and_a_mark_cannot_raise_one() {
             format!("{mark}heard c")
         ]
     );
-    // An unknown word is the least privileged.
+    // An unknown word is the most restricted, an action's.
     let mut t = sim();
     post(&mut t, "\u{1}origin:root\u{1}x", 0.0);
-    assert_eq!(t.origin(), "device");
+    assert_eq!(t.origin(), "action");
 }
 
 #[test]

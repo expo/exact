@@ -230,6 +230,12 @@ impl Tree {
         theme: &ThemeIndex,
         fonts: Rc<RefCell<bridge::RuntimeFonts>>,
     ) -> Result<DocTree, DocTreeError> {
+        if self.portals.is_some() {
+            // The fold writes each node under its declared parent; only the
+            // kernel's render shows a mover under its destination
+            // (@ref LLP 1013.002 D7).
+            return Err(DocTreeError::Unsupported("a portal"));
+        }
         let mut build = Build {
             plan,
             sites,

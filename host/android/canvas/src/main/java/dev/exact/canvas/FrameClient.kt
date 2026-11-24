@@ -25,6 +25,8 @@ internal interface FrameHost {
     fun loadOf(view: WebView): FrameLoadReport?
     /** [view]'s renderer ended: it crashed, or Android reclaimed it. */
     fun rendererGone(view: WebView, crashed: Boolean)
+    /** The navigation reporter of the kept partitioned frame showing [view] now, or null. */
+    fun browser(view: WebView): FrameBrowser?
 }
 
 /** One element's `load`, sent only while that element and its event binding are still the frame's. */
@@ -91,13 +93,19 @@ internal class FrameClient(
         !Sources.navigable(request.url.scheme, request.url.path, host.assets)
 
     override fun onNavigationStarted(navigation: Navigation) {
+        host.browser(view)?.started(navigation)
         if (recoveryRequested && !navigation.wasInitiatedByPage() && !navigation.isSameDocument) {
             recoveryRequested = false
             recovery = navigation
         }
     }
 
+    override fun onNavigationRedirected(navigation: Navigation) {
+        host.browser(view)?.redirected(navigation)
+    }
+
     override fun onNavigationCompleted(navigation: Navigation) {
+        host.browser(view)?.completed(navigation)
         if (navigation === recovery) {
             recovery = null
             return
@@ -108,12 +116,14 @@ internal class FrameClient(
     }
 
     override fun onPageDeleted(page: Page) {
+        host.browser(view)?.deleted(page)
         loading.remove(page)
     }
 
     override fun onPageLoadEvent(page: Page) {
-        if (!loading.remove(page)) return
-        reportLoad()
+        // `load`, then `navigatesuccess`, as on Apple.
+        if (loading.remove(page)) reportLoad()
+        host.browser(view)?.loaded(page)
     }
 
     private fun reportLoad() {

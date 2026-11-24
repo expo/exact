@@ -1,13 +1,13 @@
 import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createDocument } from './dom.js';
 import { webCompiler } from './module.mjs';
 import { renderer } from './render.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { engineTests } from '../../scripts/coverage.mjs';
-import { standIns } from '../web/tests/stand-ins.mjs';
+import { stageRuntime } from '../web/tests/stand-ins.mjs';
 
 const engineTest = await engineTests(['chromium']);
 
@@ -159,8 +159,7 @@ async function withRenderRuntime(run) {
   globalThis.document = doc;
   try {
     const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js'];
-    for (const name of real) copyFileSync(resolve(import.meta.dir, name), resolve(dir, name));
-    for (const [name, source] of standIns(real)) writeFileSync(resolve(dir, name), source);
+    stageRuntime(dir, real);
     await run(doc, await import(resolve(dir, 'rt.js')));
   } finally {
     globalThis.document = previous;
@@ -467,8 +466,7 @@ component App
     const built = spawnSync(compiler.cmd, [...compiler.pre, 'js', source, '-o', dir], { cwd: root, encoding: 'utf8', env: compiler.env });
     expect({ status: built.status, error: built.status ? built.stdout + built.stderr : '' }).toEqual({ status: 0, error: '' });
     const real = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'elements.js', 'shape.js', 'overlay.js', 'held.js', 'roster.js', 'budget.js', 'rows.js', 'router.js', 'route-pattern.js', 'schedule.js'];
-    for (const name of real) copyFileSync(resolve(import.meta.dir, name), resolve(dir, name));
-    for (const [name, source] of standIns(real)) writeFileSync(resolve(dir, name), source);
+    stageRuntime(dir, real);
     const rows = resolve(dir, 'rows.js');
     writeFileSync(rows, readFileSync(rows, 'utf8').replace('export function inOrder(list) {',
       'export let orderingPasses = 0; export function inOrder(list) { orderingPasses++;'));

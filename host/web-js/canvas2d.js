@@ -23,8 +23,11 @@ import { drawer } from './draw.js';
 function client(logic) {
   const { writer, reader, encode, ABI } = logic;
   if (!logic.exports.exact_logic_draw) return null;
-  // A computed argument has no declared type: encoded by its shape.
-  const value = (w, v, t) => t ? encode(w, v, t) : Array.isArray(v) ? (w.u8(6), w.u32(v.length), v.forEach(x => value(w, x))) : v == null ? w.u8(4) : encode(w, v, typeof v === 'number' ? 'n' : typeof v === 'boolean' ? 'b' : 's');
+  // An argument's declared type (ts-data.js's: `"n"`, `["?",T]`, `["[",T]`, `{field:T}`) as rust-data.js's code; one
+  // without a type is encoded by its shape.
+  const codes = new WeakMap(), code = t => typeof t !== 'object' ? t
+    : codes.get(t) ?? codes.set(t, Array.isArray(t) ? t[0] + code(t[1]) : `{${Object.values(t).map(code).join('')}}`).get(t);
+  const value = (w, v, t) => t ? encode(w, v, code(t)) : Array.isArray(v) ? (w.u8(6), w.u32(v.length), v.forEach(x => value(w, x))) : v == null ? w.u8(4) : encode(w, v, typeof v === 'number' ? 'n' : typeof v === 'boolean' ? 'b' : 's');
   const u64 = (w, v) => { w.u32(v >>> 0); w.u32(Math.floor(v / 4294967296)); };
   const call = fill => {
     const w = writer(); w.u32(ABI); w.u8(5); fill(w);

@@ -157,6 +157,8 @@ impl<D: DataSource> Runner<D> {
                             origin: 0,
                         });
                         self.resources[i].stale = true;
+                        // `data_ready` asks it at these arguments, for this commit.
+                        self.note_deferred(i, args);
                         self.resources[i].kept_admitted = true;
                         out.kept_seed = !ready;
                         out.hold = ready;

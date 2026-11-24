@@ -11,15 +11,16 @@ import { join, forget, drop } from "./overlay.js";
  * takes an answer at those arguments, in the page's order. The page wrote the list's answers in its order, as the boot
  * makes the elements, so the answer after the last one taken is looked at first, and a scan finds an element the list
  * moved. With no answer it returns `null`, never `undefined`, which would make `res` look the list's name up as a
- * declared resource's. */
-function keptMember(name, source, args, type) {
+ * declared resource's. An instance's is the one the page's instance at `path` gave (`keptOwned`, LLP 1035.005.004 D8),
+ * as a sibling at equal arguments may have shown another answer or none. */
+function keptMember(name, source, args, type, path) {
   const kept = booting() && checkpoint().kept?.get(name);
   if (kept?.source !== source) {
     return null;
   }
   const at = args();
   for (let k = 0, n = kept.answers.length, i = kept.next % n; k < n; k++, i = (i + 1) % n) {
-    if (equal(kept.answers[i][0], at) && (!type || conforms(kept.answers[i][1], type))) {
+    if (kept.answers[i][4] === path && equal(kept.answers[i][0], at) && (!type || conforms(kept.answers[i][1], type))) {
       kept.next = i + 1;
       return kept.answers[i];
     }
@@ -107,11 +108,11 @@ export function owned(name) {
   return g;
 }
 
-/** Row `g`'s resource for the instance being built, `make()` in its scope: asked now, after the instance's state, and
- * let go with the instance, its ticket forgotten so a late reply changes nothing (D2, D4). `path` names the instance
+/** Row `g`'s resource for the instance being built, `make(path)` in its scope: asked now, after the instance's state,
+ * and let go with the instance, its ticket forgotten so a late reply changes nothing (D2, D4). `path` names the instance
  * (the agent's `instances`). */
 export function own(g, make, path) {
-  const m = make(), r = m.r;
+  const m = make(path), r = m.r;
   r.declared = g.r.declared;
   r.path = path;
   g.r.live.add(r);
@@ -166,8 +167,4 @@ export function ownMut(g, make, then) {
   return m;
 }
 
-/** An instance's page answer at its arguments while the runtime boots, found as a list element's is; `null` (never
- * `undefined`, which `res` would look up by name) without one. */
-export function keptOwned(name, source, args, type) {
-  return keptMember(name, source, args, type);
-}
+export { keptMember as keptOwned };

@@ -50,7 +50,17 @@ impl<D: DataSource> Presenter<D> {
         host.set_scheme(self.dark());
         // The same launch keeps what the device said about itself.
         let runner = self.host.runner();
-        let (preferences, page) = (runner.viewport().preferences, runner.page());
+        // The candidate booted under this page's facts ([`Presenter::candidate_page`])
+        // but these, whose effects only `set_page` applies.
+        let (preferences, page) = (
+            runner.viewport().preferences,
+            exact_runner::Page {
+                hidden: runner.page().hidden,
+                frozen: runner.page().frozen,
+                background: runner.page().background,
+                ..host.runner().page()
+            },
+        );
         if let Some(error) = host.set_preferences(preferences) {
             return Err(HostError::Layout(error));
         }

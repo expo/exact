@@ -171,9 +171,13 @@ extension Capture {
             // A decoration the Mac raises over the node's own views (a
             // press's wash, PressLookMac.swift) is painted after them.
             let raised = own.filter { $0.zPosition >= 1 }
+            let behind: [CALayer] = []
             #else
             let raised: [CALayer] = []
+            // A box's extension, under the box's own paint (`setPaintBehind`), goes first
+            let behind = [owner.flatMap { NodeView.extensions.object(forKey: $0)?.view.layer }].compactMap { $0 }
             #endif
+            for sub in behind { layer.addSublayer(copy(sub, inheritedFlip: flipped, inheritedScale: scale)) }
             for sub in own where !raised.contains(where: { $0 === sub }) {
                 layer.addSublayer(copy(sub, inheritedFlip: flipped, inheritedScale: scale))
             }
@@ -189,7 +193,7 @@ extension Capture {
                 }
             }
             #endif
-            for child in children {
+            for child in children where !behind.contains(where: { $0 === child }) {
                 #if os(macOS)
                 // A backdrop box's shadow stands beside it to escape the
                 // backdrop clip. It keeps the box's place among siblings.

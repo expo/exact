@@ -18,6 +18,17 @@ final class TransformContact: TransformPinchContact {
     #endif
     var pinchRecognizer: UIGestureRecognizer { pinch }
     var panning = false, pinching = false
+    /// Where the pan's finger touched down, in window points, while no other
+    /// finger has joined it: a touch that arrives while another is still down
+    /// clears it, whether the recognizer's `numberOfTouches` counts that one
+    /// yet or not.
+    private(set) var panDown: CGPoint?
+    private let fingers = NSHashTable<UITouch>.weakObjects()
+    func panReceived(_ touch: UITouch, at point: CGPoint) {
+        let joined = fingers.allObjects.contains { $0 !== touch && [.began, .moved, .stationary].contains($0.phase) }
+        panDown = joined ? nil : point
+        fingers.add(touch)
+    }
     /// The pair's value, the focal point (window points) and pinch scale at the anchor.
     var anchor: (value: TransformDragPosition, focal: CGPoint, scale: CGFloat, touches: Int)?
     #if os(tvOS)

@@ -37,6 +37,9 @@ package final class PageScrollView: NSScrollView {
         let vertical: Bool
         let horizontal: Bool
         let autohides: Bool
+        /// The axes on which the document fit the clip at the completed fit.
+        let fitsWidth: Bool
+        let fitsHeight: Bool
     }
     // One viewport tracking area sees overflowing descendants and exits even
     // when no node's bounds contain the pointer. Nodes use the same hit test.
@@ -93,19 +96,32 @@ package final class PageScrollView: NSScrollView {
 
     private var documentFit: DocumentFit?
     private var prefittingDocument = false
+    /// Inside the frame change being made: the document a root fit completed
+    /// for (certified once the change ends), and whether the fit was
+    /// invalidated since that change began.
+    private var fittedInStep: ObjectIdentifier?, invalidatedInStep = false
     var permitsDocumentPrefit: (() -> Bool)?
 
-    func invalidateDocumentFit() { documentFit = nil }
+    func invalidateDocumentFit() {
+        documentFit = nil
+        if prefittingDocument { fittedInStep = nil; invalidatedInStep = true }
+    }
 
     /// Only a completed root fit may certify axes for the next outer shrink.
     func acceptDocumentFit() {
-        guard !prefittingDocument, let document = documentView,
-              document.frame.origin == .zero, document.bounds.size == document.frame.size else { return }
+        guard let document = documentView else { return }
+        if prefittingDocument { fittedInStep = ObjectIdentifier(document); return }
+        let clip = contentView.bounds.size
+        certify(document, fitsWidth: document.frame.width <= clip.width, fitsHeight: document.frame.height <= clip.height)
+    }
+
+    private func certify(_ document: NSView, fitsWidth: Bool, fitsHeight: Bool) {
+        guard document.frame.origin == .zero, document.bounds.size == document.frame.size else { return }
         documentFit = DocumentFit(document: ObjectIdentifier(document), documentFrame: document.frame,
             clipSize: contentView.bounds.size, frameSize: frame.size, magnification: magnification,
             backingScale: window?.backingScaleFactor, style: scrollerStyle,
             border: borderType, vertical: hasVerticalScroller, horizontal: hasHorizontalScroller,
-            autohides: autohidesScrollers)
+            autohides: autohidesScrollers, fitsWidth: fitsWidth, fitsHeight: fitsHeight)
     }
 
     /// A completed fit applies only to the document and viewport geometry it measured.
@@ -123,37 +139,62 @@ package final class PageScrollView: NSScrollView {
     }
 
     package override func setFrameSize(_ newSize: NSSize) {
-        if newSize != frame.size, !prefittingDocument {
-            prefittingDocument = true
-            prefitDocument(for: newSize)
-            super.setFrameSize(newSize)
-            prefittingDocument = false
-        } else {
-            super.setFrameSize(newSize)
+        guard newSize != frame.size, !prefittingDocument else { return super.setFrameSize(newSize) }
+        prefittingDocument = true
+        fittedInStep = nil; invalidatedInStep = false
+        let fit = prefitDocument(for: newSize)
+        super.setFrameSize(newSize)
+        // Layout did not follow (`ExactView.fit` waits while main serves the owner, as in
+        // an animated resize a module's call makes in a window that is not Exact's): what
+        // fit at the last completed fit is the clip's size, as that fit left it, though a
+        // scroller the other axis needs has narrowed the clip, and the fit stands for the
+        // next step. Twice, since a scroller the old size needed goes and the clip grows.
+        var unfollowed: Bool {
+            fittedInStep == nil && !invalidatedInStep && documentView.map(ObjectIdentifier.init) == fit?.document
+        }
+        if let fit, let document = documentView {
+            for _ in 0..<2 where unfollowed {
+                let clip = contentView.bounds.size
+                var size = document.frame.size
+                if fit.fitsWidth { size.width = clip.width }
+                if fit.fitsHeight { size.height = clip.height }
+                if size == document.frame.size { break }
+                document.setFrameSize(size)
+                tile()
+            }
+        }
+        let carried = unfollowed ? fit : nil
+        prefittingDocument = false
+        if let fit = carried, let document = documentView {
+            certify(document, fitsWidth: fit.fitsWidth, fitsHeight: fit.fitsHeight)
+        } else if let fitted = fittedInStep, let document = documentView, ObjectIdentifier(document) == fitted {
+            acceptDocumentFit()
         }
     }
 
     /// An old fitting document must not manufacture gutters during tiling.
     /// Keep overflowing axes and authored root frames untouched; ordinary layout
     /// can still introduce real overflow and its necessary viewport correction.
-    private func prefitDocument(for newSize: NSSize) {
+    /// Returns the fit it applied.
+    private func prefitDocument(for newSize: NSSize) -> DocumentFit? {
         let fit = hasCurrentDocumentFit ? documentFit : nil
-        invalidateDocumentFit()
+        documentFit = nil
         guard permitsDocumentPrefit?() == true, let fit, let document = documentView,
               newSize.width.isFinite, newSize.height.isFinite,
-              newSize.width > 0, newSize.height > 0 else { return }
+              newSize.width > 0, newSize.height > 0 else { return nil }
         // The clip is in CSS px, the frame in points: the change over the page zoom.
         let width = fit.clipSize.width + (newSize.width - fit.frameSize.width) / magnification
         let height = fit.clipSize.height + (newSize.height - fit.frameSize.height) / magnification
-        guard width.isFinite, height.isFinite, width > 0, height > 0 else { return }
+        guard width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
         var size = document.frame.size
-        if size.width <= fit.clipSize.width, newSize.width < fit.frameSize.width {
+        if fit.fitsWidth, newSize.width < fit.frameSize.width {
             size.width = min(size.width, width)
         }
-        if size.height <= fit.clipSize.height, newSize.height < fit.frameSize.height {
+        if fit.fitsHeight, newSize.height < fit.frameSize.height {
             size.height = min(size.height, height)
         }
         if size != document.frame.size { document.setFrameSize(size) }
+        return fit
     }
 
     /// A click that reached the page, on its empty ground: the field being

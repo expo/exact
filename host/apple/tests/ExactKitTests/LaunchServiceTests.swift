@@ -84,9 +84,10 @@ final class LaunchServiceTests: XCTestCase {
     func testWorkEndingWithoutAChangeKeepsTheSettledVsync() throws {
         let (launch, session, candidate) = try settlingLaunch("settled-launch")
         launch.workEnded(session)
-        waitForMainQueue("the evaluation after the work ended")
+        waitForEvaluation("the evaluation after the work ended", launch)
         XCTAssertEqual(launch.candidate, candidate, "work that changed nothing does not move the candidate")
         launch.frame(Vsync(at: candidate, interval: 1.0 / 60))
+        waitFor("the owner's answer that confirms it") { launch.ttiOutcome != nil }
         XCTAssertEqual(launch.ttiOutcome, "settled")
         XCTAssertEqual(launch.marks[.interactive], candidate)
     }
@@ -99,11 +100,12 @@ final class LaunchServiceTests: XCTestCase {
         session.applyUnlessEmpty(batch)
         launch.applied(session, batch)
         launch.workEnded(session)
-        waitForMainQueue("the evaluation after the orientation request")
+        waitForEvaluation("the evaluation after the orientation request", launch)
         XCTAssertEqual(session.presenter.orientationLock.mask, 0)
         XCTAssertFalse(session.presenter.orientationLock.locked)
         XCTAssertEqual(launch.candidate, candidate)
         launch.frame(Vsync(at: candidate, interval: 1.0 / 60))
+        waitFor("the owner's answer that confirms it") { launch.ttiOutcome != nil }
         XCTAssertEqual(launch.marks[.interactive], candidate)
     }
 
@@ -116,13 +118,21 @@ final class LaunchServiceTests: XCTestCase {
         controls.controls = true
         launch.applied(session, controls)
         launch.workEnded(session)
-        waitForMainQueue("the evaluation after the change")
+        waitFor("the evaluation after the change") { launch.candidate != nil }
         let moved = try XCTUnwrap(launch.candidate, "the change sets a new candidate")
         XCTAssertGreaterThan(moved, candidate, "the change shows at a later vsync")
         launch.frame(Vsync(at: candidate, interval: 1.0 / 60))
         XCTAssertNil(launch.ttiOutcome, "the old candidate's vsync is before the change shows")
         launch.frame(Vsync(at: moved, interval: 1.0 / 60))
+        waitFor("the owner's answer that confirms it") { launch.ttiOutcome != nil }
         XCTAssertEqual(launch.marks[.interactive], moved)
+    }
+
+    /// The evaluation that ended work asks for: its turn, then the owner's
+    /// answers to its reads.
+    private func waitForEvaluation(_ what: String, _ launch: ExactLaunch) {
+        waitForMainQueue(what)
+        waitFor(what) { launch.reads == 0 }
     }
 
     /// A launch presented and activated with a change on screen and nothing
@@ -150,7 +160,7 @@ final class LaunchServiceTests: XCTestCase {
         XCTAssertNotNil(launch.marks[.present])
         waitForMainQueue("the evaluation after the first frame, which activation holds")
         launch.activated(session, ok: true)
-        waitForMainQueue("the evaluation that finds nothing outstanding")
+        waitFor("the evaluation that finds nothing outstanding") { launch.candidate != nil }
         let candidate = try XCTUnwrap(launch.candidate, "the screen changed, so it settles at the next vsync")
         waitFor("the candidate's vsync to pass") { CACurrentMediaTime() > candidate }
         return (launch, session, candidate)

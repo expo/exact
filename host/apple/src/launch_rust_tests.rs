@@ -50,12 +50,14 @@ fn a_named_rust_preload_answers_only_the_apps_own_reads() {
                 ctx.preload(LaunchRequest::new("rust-feed", Request::get(&url)))
                     .unwrap();
             });
-            let request = source
+            let mut request = source
                 .request
                 .clone()
                 .header("X-Trace", "new")
                 .preload("rust-feed")
                 .unwrap();
+            // The app's own read, as the runner stamps it.
+            request.reach.origin = CallOrigin::App;
             let launch = fixture();
             begin(&launch, &source, false);
             server.request();
@@ -197,7 +199,7 @@ fn token_refresh_is_durable_before_the_preload_uses_the_new_secret() {
         executor
             .io
             .run(
-                read(
+                app_read(
                     1,
                     Request::get(&format!("http://{}/feed", feed.address))
                         .preload("rust-feed")
@@ -472,7 +474,7 @@ fn a_launch_past_its_deadline_releases_reads_and_discards_late_requests() {
         executor
             .io
             .run(
-                read(1, source.request.clone().preload("feed").unwrap()),
+                app_read(1, source.request.clone().preload("feed").unwrap()),
                 None,
             )
             .unwrap();
@@ -852,6 +854,12 @@ impl Executing {
         }
     }
 }
+/// The app's own read, as the runner stamps it: a preload answers only those.
+fn app_read(ticket: u64, mut request: Request) -> exact_runner::RequestOut {
+    request.reach.origin = exact_runner::CallOrigin::App;
+    read(ticket, request)
+}
+
 fn read(ticket: u64, request: Request) -> exact_runner::RequestOut {
     exact_runner::RequestOut {
         completion: None,
@@ -894,7 +902,7 @@ fn a_rust_redirected_reply_requires_the_readers_scope_at_every_hop() {
                     final_hop.release(0);
                     ready(&launch);
                 }
-                let request = if named {
+                let mut request = if named {
                     source
                         .request
                         .clone()
@@ -904,6 +912,7 @@ fn a_rust_redirected_reply_requires_the_readers_scope_at_every_hop() {
                 } else {
                     source.request.clone()
                 };
+                request.reach.origin = exact_runner::CallOrigin::App;
                 let mut restricted = request.clone();
                 restricted.grants = Some(format!(
                     "net.fetch http://{}\nnet.fetch http://{}",
@@ -976,10 +985,10 @@ fn an_equal_refresh_drops_a_rust_reply_and_cancels_its_exchange() {
                 if pending {
                     executor
                         .io
-                        .run(read(1, source.request.clone()), None)
+                        .run(app_read(1, source.request.clone()), None)
                         .unwrap();
                 }
-                let mut refresh = read(2, source.request.clone());
+                let mut refresh = app_read(2, source.request.clone());
                 match mode {
                     0 => refresh.forced = true,
                     1 => refresh.request.cache = exact_runner::CacheMode::Reload,
@@ -1166,7 +1175,7 @@ fn a_function_secret_write_drops_a_request_built_with_the_old_value() {
                 .header("Authorization", "B")
                 .preload("feed")
                 .unwrap();
-            executor.io.run(read(1, request), None).unwrap();
+            executor.io.run(app_read(1, request), None).unwrap();
             assert!(server
                 .request()
                 .to_ascii_lowercase()
@@ -1371,7 +1380,7 @@ fn a_handed_preload_reaches_the_server_during_a_slow_fetch_and_survives_the_laun
             executor
                 .io
                 .run(
-                    read(
+                    app_read(
                         1,
                         Request::get(&format!("http://{}/feed", feed.address))
                             .preload("early")
@@ -1414,7 +1423,7 @@ fn a_panic_cancels_the_functions_handed_and_foreground_requests() {
         executor
             .io
             .run(
-                read(1, Request::get(&format!("http://{}/feed", server.address))),
+                app_read(1, Request::get(&format!("http://{}/feed", server.address))),
                 None,
             )
             .unwrap();

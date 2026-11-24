@@ -257,10 +257,11 @@ fn pending() -> (Arc<Mutex<Option<Outcome>>>, Reply) {
 
 fn run(r: &mut Runner<Source>, request: &Request) -> Outcome {
     // The app's own data code, unless the caller installs another cause.
-    let person = r
-        .has_cause()
-        .then(|| r.cause())
-        .unwrap_or(super::provenance::Cause::person());
+    let person = if r.has_cause() {
+        r.cause()
+    } else {
+        super::provenance::Cause::person()
+    };
     match r.as_cause(person, |r| r.native_work(request)) {
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {

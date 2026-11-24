@@ -27,7 +27,7 @@
 //! module's answers announces its sources' keys, so the host asks their
 //! readers again through [`Runner::apply_announced`].
 
-use super::provenance::CallOrigin;
+use super::provenance::{CallOrigin, Cause};
 use super::reply::{response, Pending};
 use super::wakes::WakeHow;
 use super::{DataError, DataSource, Runner, RunnerError, Target};
@@ -191,7 +191,7 @@ struct Called<'a> {
     target: Target,
     source: &'a str,
     ty: TypesId,
-    origin: CallOrigin,
+    cause: Cause,
     timeout: Option<f64>,
 }
 
@@ -224,9 +224,9 @@ struct Held {
     deadline: Option<f64>,
     /// The call's body for the implementation, once the ticket allows it.
     forward: Option<Vec<u8>>,
-    origin: CallOrigin,
-    /// The invocation it is part of (`provenance.rs`); 0 for none.
-    id: u64,
+    /// The cause it was held under; its owner is the invocation it is part
+    /// of (`provenance.rs`), 0 for none.
+    cause: Cause,
     /// The call's arguments: a denial fails it only where they ask for what
     /// the permission gates (`permission.continues`), and which of an
     /// interface's permissions it asks (`permission_of`).
@@ -379,7 +379,7 @@ impl<D: DataSource> Runner<D> {
             target,
             source,
             ty,
-            origin,
+            cause,
             timeout,
         };
         let out = self.module_decided(called, &row, args, decision);
@@ -399,9 +399,10 @@ impl<D: DataSource> Runner<D> {
             target,
             source,
             ty,
-            origin,
+            cause,
             timeout,
         } = called;
+        let origin = cause.origin;
         let (row, key, route) = (row.clone(), self.key(row), self.route(row));
         let what = match target {
             Target::Resource(i) => format!("query {}", self.plan.str(self.resource_row(i).name)),
@@ -447,7 +448,7 @@ impl<D: DataSource> Runner<D> {
                 let forward =
                     (route == Route::Agent).then(|| self.forward_body(&row, args, reader));
                 Ok(Answer::Later(self.hold_module(
-                    target, source, waits, timeout, forward, origin, held_args,
+                    target, source, waits, timeout, forward, cause, held_args,
                 )))
             }
         }
@@ -826,7 +827,7 @@ impl<D: DataSource> Runner<D> {
         waits: Waits,
         timeout: Option<f64>,
         forward: Option<Vec<u8>>,
-        origin: CallOrigin,
+        cause: Cause,
         args: Json,
     ) -> Request {
         let row = self.module_row(source);
@@ -840,7 +841,7 @@ impl<D: DataSource> Runner<D> {
             Waits::Span => (u64::MAX, Some(self.span_deadline(&row, &args))),
             _ if queued => (u64::MAX, None),
             _ => (
-                self.device_hold(&row, name, waits, origin, &permission, &args),
+                self.device_hold(&row, name, waits, cause, &permission, &args),
                 timeout
                     .filter(|_| waits == Waits::Value)
                     .map(|t| self.now_ms + t),
@@ -858,8 +859,10 @@ impl<D: DataSource> Runner<D> {
             timeout,
             deadline,
             forward,
-            origin,
-            id: invocation,
+            cause: Cause {
+                owner: invocation,
+                ..cause
+            },
             args,
             permission,
             request: None,
@@ -883,10 +886,11 @@ impl<D: DataSource> Runner<D> {
         row: &ModulesRow,
         name: String,
         waits: Waits,
-        origin: CallOrigin,
+        cause: Cause,
         permission: &str,
         call: &Json,
     ) -> u64 {
+        let origin = cause.origin;
         if let Some(hold) = self.shared_hold(waits, permission) {
             return hold;
         }
@@ -964,7 +968,7 @@ impl<D: DataSource> Runner<D> {
                 (sub["ceremony"]["ticket"].as_str())
                     .unwrap_or("ceremony")
                     .to_owned(),
-                self.ceremony_args(row, call, origin),
+                self.ceremony_args(row, call, cause),
                 &taps[..],
                 true,
             ),
@@ -1151,12 +1155,15 @@ impl<D: DataSource> Runner<D> {
                         self.note_send(ticket, &body);
                     }
                 }
-                let anchored = self.anchor_body(&row, &body, origin);
+                let anchored = self.anchor_body(&row, &body, cause);
                 // A reply carrying handles grants them the handlers its call
                 // listed (`invoke.rs`); a watched one's `watched` grants them.
                 let work = match request {
-                    Some(ticket) => self.watched(body, ticket),
-                    None => self.granting(&row, &body.clone(), self.to_implementation(body)),
+                    Some(ticket) => self.watched(body, ticket, cause),
+                    None => {
+                        let work = self.to_implementation(body.clone());
+                        self.granting(&row, &body, cause, work)
+                    }
                 };
                 let work = self.unanchoring(anchored, work);
                 Some(match (sampled, reader) {
@@ -1193,7 +1200,7 @@ impl<D: DataSource> Runner<D> {
                 let queued = waits == Waits::Ceremony && self.ceremony_begins(&row);
                 let hold = match queued || waits == Waits::Span {
                     true => u64::MAX,
-                    false => self.device_hold(&row, key, waits, origin, &permission, &args),
+                    false => self.device_hold(&row, key, waits, cause, &permission, &args),
                 };
                 let slot = Arc::new(Mutex::new(Pending::default()));
                 let deadline = match waits {
@@ -1219,8 +1226,10 @@ impl<D: DataSource> Runner<D> {
                     timeout,
                     deadline,
                     forward,
-                    origin,
-                    id: invocation,
+                    cause: Cause {
+                        owner: invocation,
+                        ..cause
+                    },
                     args: held_args.clone(),
                     permission,
                     request,

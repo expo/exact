@@ -239,9 +239,9 @@ mod tests {
     fn a_name_the_record_lacks_is_undeclared() {
         let mut b = crate::builder::PlanBuilder::new(0, 0);
         let one = b.constant(&crate::Value::Number(1.));
-        b.surface("dice", &[("count", one), ("extra", one)]);
-        b.surface("dice", &[("extra", one)]);
-        b.surface("chart", &[("series", one)]);
+        b.surface("dice", &[("count", one, None), ("extra", one, None)]);
+        b.surface("dice", &[("extra", one, None)]);
+        b.surface("chart", &[("series", one, None)]);
         let plan = b.plan();
         let found = declared(&RECORD).unwrap();
         let extra = Undeclared::Name {
@@ -262,13 +262,13 @@ mod tests {
         let mut b = crate::builder::PlanBuilder::new(0, 0);
         let one = b.constant(&crate::Value::Number(1.));
         let yes = b.constant(&crate::Value::Bool(true));
-        b.surface("dice", &[("", one)]);
+        b.surface("dice", &[("", one, None)]);
         assert!(undeclared(b.plan(), &declared(&RECORD).unwrap()).is_empty());
         let fewer: [u8; record_len("dice", &[("count", ())])] = record("dice", &[("count", ())]);
         let fewer = declared(&fewer).unwrap();
         assert!(undeclared(b.plan(), &fewer).is_empty());
-        b.surface("dice", &[("", one), ("", yes)]);
-        b.surface("dice", &[("", one), ("", yes)]);
+        b.surface("dice", &[("", one, None), ("", yes, None)]);
+        b.surface("dice", &[("", one, None), ("", yes, None)]);
         assert_eq!(
             undeclared(b.plan(), &fewer),
             [Undeclared::Arity {
@@ -278,8 +278,11 @@ mod tests {
         );
         // A surface with no arguments takes no value by position, and a
         // surface without a record is not checked.
-        b.surface("still", &[("", one)]);
-        b.surface("chart", &[("", one), ("", yes), ("", one)]);
+        b.surface("still", &[("", one, None)]);
+        b.surface(
+            "chart",
+            &[("", one, None), ("", yes, None), ("", one, None)],
+        );
         const NONE: &[(&str, ())] = &[];
         let still: [u8; record_len("still", NONE)] = record("still", NONE);
         let both = declared(&[still.as_slice(), &RECORD].concat()).unwrap();

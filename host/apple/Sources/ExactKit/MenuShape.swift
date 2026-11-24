@@ -19,7 +19,7 @@ extension NodeView {
             if let face = row.face, face.fits, !face.raster { return true }
             // Text, and at most one image: the item's title and its image.
             let content = row.childNodes
-            let images = content.filter { $0.kind == "image" && $0.container.subviews.isEmpty }
+            let images = content.filter { $0.kind == "image" && $0.container.heldSubviews.isEmpty }
             return images.count <= 1 && content.allSatisfy { textOnly($0) || images.contains($0) }
         }
         return rows.contains { !$0.isMenuSection || !$0.menuRows.isEmpty } && rows.allSatisfy { row in

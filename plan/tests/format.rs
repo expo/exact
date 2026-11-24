@@ -1104,11 +1104,14 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 /// Component member names share their qualifier in the string pool. Elements and
 /// keyed loops carry local source steps. Every plan-reading host must rebuild
 /// for these records (LLP 1029.000.002 D1).
+/// A surface argument carries its declared type (`surface_args.ty`, LLP
+/// 1056 D1), by which a TypeScript `draw` receives records by field name:
+/// every plan-reading host rebuilds for it.
 /// The digest covers all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0x8f2f_d636_115e_5ea5,
+        FORMAT_DIGEST, 0x887d_ce51_52b7_c097,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

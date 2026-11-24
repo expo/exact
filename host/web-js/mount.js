@@ -644,14 +644,20 @@ export function checkpoint() {
   const cp = JSON.parse(el.textContent);
   // Render fresh, seeding nothing, where the browser's path is not the page's once both are canonical, the query aside
   // (LLP 1048.000 D6): a page a static host serves at another path, its `404.html` or its fallback to `/`, is another
-  // location's document, and its answers are another location's. Both paths keep a mounted build's base.
-  if (canonical(location.pathname) !== canonical(cp.location).split('?')[0]) {
+  // location's document, and its answers are another location's. Both paths keep a mounted build's base. Repeated and
+  // trailing slashes make no other page (`canonical_location`, host/web/src/page.rs): put the page's own path in the
+  // address bar, as the server redirects to it (D11), since no route matches a path with an empty segment.
+  const at = canonical(cp.location).split('?')[0], one = path => path.split('/').filter(Boolean).join('/');
+  if (one(canonical(location.pathname)) !== one(at)) {
     Checkpoint.elsewhere = true;
     say(`document: rendered at ${cp.location}, not ${location.pathname}; rendering fresh`);
     return Checkpoint;
   }
+  // (its origin too: a path that opens with two slashes would name a host)
+  if (canonical(location.pathname) !== at) history.replaceState(history.state, '', location.origin + at + location.search + location.hash);
   const open = new Set(cp.open),
-    readers = new Set(cp.readers);
+    readers = new Set(cp.readers),
+    paths = new Map(cp.instances);
   // A drive starts at zero even when its document was rendered on a wall clock.
   const driven = typeof location !== 'undefined' && agentMode() && !globalThis.__exactRender;
   if (driven) for (const k of checkpointFaults(cp)) open.add(k);
@@ -661,7 +667,7 @@ export function checkpoint() {
     if (!Checkpoint.kept.has(name)) {
       Checkpoint.kept.set(name, { source, answers: [], next: 0 });
     }
-    Checkpoint.kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k)]);
+    Checkpoint.kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k), paths.get(k)]);
   });
   Checkpoint.time = clock.now = driven ? 0 : cp.time || 0;
   return Checkpoint;

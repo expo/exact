@@ -29,6 +29,7 @@ macro_rules! pattern {
 pub const RECIPES: &[(&str, &str)] = &[
     recipe!("after-a-write"),
     recipe!("alternate-app-icons"),
+    recipe!("announce"),
     recipe!("app-json"),
     recipe!("background-transfers"),
     recipe!("background-work"),
@@ -59,6 +60,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("grouped-form"),
     recipe!("in-app-browser"),
     recipe!("ios-driving"),
+    recipe!("keep-a-playing-video"),
     recipe!("keyboard-and-focus"),
     recipe!("large-live-list"),
     recipe!("list-rows"),

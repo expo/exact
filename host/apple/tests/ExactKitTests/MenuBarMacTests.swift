@@ -59,9 +59,9 @@ final class MenuBarMacTests: XCTestCase {
         return node
     }
 
-    private func key(_ characters: String, ignoring: String? = nil, _ modifiers: NSEvent.ModifierFlags = .command, code: UInt16 = 0, window: NSWindow) -> NSEvent {
+    private func key(_ characters: String, ignoring: String? = nil, _ modifiers: NSEvent.ModifierFlags = .command, code: UInt16 = 0, repeats: Bool = false, window: NSWindow) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0, windowNumber: window.windowNumber,
-                         context: nil, characters: characters, charactersIgnoringModifiers: ignoring ?? characters, isARepeat: false, keyCode: code)!
+                         context: nil, characters: characters, charactersIgnoringModifiers: ignoring ?? characters, isARepeat: repeats, keyCode: code)!
     }
 
     private func item(_ menu: NSMenu, _ id: UInt32) -> NSMenuItem? {
@@ -248,6 +248,56 @@ final class MenuBarMacTests: XCTestCase {
         presenter.shortcuts.sync()
         XCTAssertEqual(help.items.map { $0.isSeparatorItem ? "—" : $0.title },
                        ["Send Feedback to Apple", "—", "\(ExactEnv.appName) Help", "Check for Updates…"])
+    }
+
+    /// An item placed with `-exact-menu` shows and takes a chord holding ⌃
+    /// (LLP 1021 §5.3, expo/exact#1416); one of ⌥ or ⇧ alone, which types,
+    /// and an unplaced button's ⌃ chord stay the window's. One press runs
+    /// the command once: the session's route takes the chord before the bar
+    /// is asked, and the bar takes it when the session's route does not.
+    func testAPlacedItemTakesAControlChordOnce() throws {
+        let presenter = Presenter(), window = window(presenter)
+        defer { window.close() }
+        button(1, "Play / Pause", "Control+Space", menu: "view", in: presenter)
+        button(2, "Top Left", "Control+Meta+1", menu: "window", in: presenter)
+        button(3, "Float", "Alt+f", menu: "view", in: presenter)
+        button(4, "Narrow", "Shift+n", menu: "view", in: presenter)
+        button(5, "Kill Line", "Control+k", in: presenter)
+        button(6, "Toggle Help", "Control+h", menu: "help", in: presenter)
+        var presses: [UInt32] = []
+        presenter.onPress = { presses.append($0) }
+        let bar = DevMenu.makeMenu(shortcuts: presenter.shortcuts, documents: false, develop: false)
+        NSApp.mainMenu = bar
+        presenter.shortcuts.sync()
+        let menu = { (title: String) in try XCTUnwrap(bar.items.first { $0.submenu?.title == title }?.submenu) }
+        let play = try XCTUnwrap(item(try menu("View"), 1)), dock = try XCTUnwrap(item(try menu("Window"), 2))
+        XCTAssertEqual([play.keyEquivalent, dock.keyEquivalent], [" ", "1"])
+        XCTAssertEqual([play.keyEquivalentModifierMask, dock.keyEquivalentModifierMask], [.control, [.control, .command]])
+        for id: UInt32 in [3, 4] { XCTAssertEqual(try XCTUnwrap(item(try menu("View"), id)).keyEquivalent, "", "\(id)") }
+        XCTAssertNil(bar.items.compactMap(\.submenu).lazy.compactMap { self.item($0, 5) }.first, "an unplaced ⌃ chord makes no item")
+
+        // The session's route takes the chord, and the event goes no further.
+        let space = key(" ", .control, code: 49, window: window)
+        XCTAssertTrue(presenter.routeKey(space, focused: true))
+        XCTAssertEqual(presses, [1])
+        // Without the session's focus the bar takes it, and only the bar.
+        let help = key("h", .control, code: 4, window: window)
+        XCTAssertFalse(presenter.routeKey(help, focused: false))
+        XCTAssertTrue(bar.performKeyEquivalent(with: help))
+        XCTAssertEqual(presses, [1, 6])
+        // Its repeat is the menu's and presses nothing, as a held key's repeat is.
+        XCTAssertTrue(bar.performKeyEquivalent(with: key("h", .control, code: 4, repeats: true, window: window)))
+        XCTAssertEqual(presses, [1, 6])
+        // A chord the item does not hold is not its.
+        XCTAssertFalse(bar.performKeyEquivalent(with: key("f", .option, code: 3, window: window)))
+        // While an input method composes, the chord goes on to it.
+        let field = NSTextView(frame: NSRect(x: 0, y: 0, width: 100, height: 20))
+        presenter.root.addSubview(field)
+        XCTAssertTrue(window.makeFirstResponder(field))
+        field.setMarkedText("k", selectedRange: NSRange(location: 1, length: 0), replacementRange: NSRange(location: NSNotFound, length: 0))
+        XCTAssertTrue(field.hasMarkedText())
+        XCTAssertFalse(bar.performKeyEquivalent(with: help))
+        XCTAssertEqual(presses, [1, 6])
     }
 
     /// `-exact-menu-keys` (LLP 1021 §5.3.3): Close Window keeps its place

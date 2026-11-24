@@ -1012,7 +1012,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         props = next
         if set["listMarker"] != nil || clear.contains("listMarker") { layoutProseMarker() }
         if set["groupedSeparator"] != nil || clear.contains("groupedSeparator") { applyGroupedSeparator() }
-        if set["symbolEffectValue"] != nil || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
+        if set["symbolEffectValue"] != nil || clear.contains("symbolEffectValue") || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
             || set["symbolFillRule"] != nil || clear.contains("symbolFillRule") { updateSymbol() }
         applyTextArea()
         remakeFieldIfNeeded()

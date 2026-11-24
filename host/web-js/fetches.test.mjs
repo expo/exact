@@ -7,6 +7,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { localImports } from './glue.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 // `net.fetch http://127.0.0.1:9`, as the compiler normalizes it (exact-web-js `normalize-grants`).
@@ -20,7 +21,7 @@ beforeAll(async () => {
   mkdirSync(resolve(dir, 'navigation'));
   writeFileSync(resolve(dir, 'navigation/network.js'), hostFixtureFile(resolve(root, 'host/web/navigation/network.js')));
   for (const name of ['grant-admission.js', 'faults.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
-  writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replaceAll("'../web/", "'./"));
+  writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8')));
   writeFileSync(resolve(dir, 'rt.js'), "export const data = {}; export const Store = { get: () => null }; export const Origin = { now: () => globalThis.asker ?? 'app' };\n");
   writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
   // The browser's fetch, which admission binds as it loads: each request recorded, its answer the test's to give.

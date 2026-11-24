@@ -6,7 +6,8 @@
 // starts when its input happened (`inputHappened`), a program one at the
 // commit. It is cold if its entry was not shown before in the session.
 // Render time is the first vsync after the committing run-loop turn ends.
-// TTI is when outstanding work clears, never before render. A newer change cancels it.
+// TTI is when outstanding work clears, as the owner read it without main waiting,
+// never before render. A newer change cancels it.
 // Only a cold navigation has a TTI: a screen already shown (back, a tab seen
 // before) was interactive before, as Observe's markInteractive on mount is
 // never called again for it. A warm one ends at its warm_ttr.
@@ -250,19 +251,34 @@ package final class NavigationMarks: NSObject {
         evaluate()
     }
 
-    /// Records TTI once nothing is outstanding after the change was shown.
+    /// An evaluation's read is on its way, and another was asked meanwhile.
+    private var reading = false, readAgain = false
+
+    /// Records TTI once nothing is outstanding after the change was shown:
+    /// at `clear` if no work ended meanwhile, else the ledger's time, never
+    /// before the change showed. Main does not wait for the read
+    /// (`readLedger`), and one is on its way at a time.
     private func evaluate(at clear: Double? = nil) {
-        guard let p = pending, let presented = p.presented, let session = p.session,
-              let ledger = ExactLaunch.ledger(session) else { return }
-        guard ledger.items.isEmpty, !ledger.poisoned else { return }
-        pending = nil
-        deadline?.cancel()
-        stop()
-        var f = p.fields
-        f["name"] = "tti"
-        f["value"] = max(clear ?? CACurrentMediaTime(), presented) - p.start
-        if !ledger.failed.isEmpty { f["exact.tti.failed"] = ledger.failed.count }
-        ExactJournal.shared.record("navigation", f)
-        note("tti \(f["route"] ?? "") \(String(format: "%.1f", (f["value"] as? Double ?? 0) * 1000)) ms")
+        guard let p = pending, p.presented != nil, let session = p.session else { return }
+        guard !reading else { readAgain = true; return }
+        reading = true
+        ExactLaunch.readLedger(session) { [weak self, weak p] ledger in
+            guard let self else { return }
+            reading = false
+            defer { if readAgain { readAgain = false; evaluate() } }
+            guard let p, pending === p, let presented = p.presented,
+                  let ledger, ledger.items.isEmpty, !ledger.poisoned else { return }
+            pending = nil
+            readAgain = false
+            deadline?.cancel()
+            stop()
+            var f = p.fields
+            f["name"] = "tti"
+            // Work that landed meanwhile was outstanding when UIKit showed the screen.
+            f["value"] = max(ledger.quiet ? clear ?? ledger.at : ledger.at, presented) - p.start
+            if !ledger.failed.isEmpty { f["exact.tti.failed"] = ledger.failed.count }
+            ExactJournal.shared.record("navigation", f)
+            note("tti \(f["route"] ?? "") \(String(format: "%.1f", (f["value"] as? Double ?? 0) * 1000)) ms")
+        }
     }
 }

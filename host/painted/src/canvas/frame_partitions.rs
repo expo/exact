@@ -1,7 +1,7 @@
 //! `exactPage().iframePartition` on the Android reader (LLP 1020.002 D1):
 //! whether the device's WebView keeps a partition, which only the reader can
 //! ask (`dev.exact.canvas.Partitions.keeps`). Asking loads the WebView
-//! provider, so only a plan with an `iframe` asks, once, at boot.
+//! provider, so only a plan with an `iframe` asks, once.
 #![allow(unsafe_code)]
 use jni_sys::{jclass, jmethodID, JNIEnv, JavaVM, JNI_OK, JNI_VERSION_1_6};
 use std::{ffi::c_void, sync::OnceLock};
@@ -15,6 +15,7 @@ struct Reader {
 unsafe impl Send for Reader {}
 unsafe impl Sync for Reader {}
 static READER: OnceLock<Reader> = OnceLock::new();
+static KEPT: OnceLock<bool> = OnceLock::new();
 
 /// Find the reader's method from a JNI entry, whose class loader sees it.
 /// # Safety
@@ -53,26 +54,29 @@ pub unsafe fn attach(env: *mut JNIEnv) {
 }
 
 /// Whether the reader's WebView keeps partitions; false if it cannot be asked.
-pub fn kept() -> bool {
-    let Some(reader) = READER.get() else {
-        return false;
-    };
+/// None where the reader could not be asked; only an answer is kept.
+pub fn kept() -> Option<bool> {
+    if let Some(kept) = KEPT.get() {
+        return Some(*kept);
+    }
+    let kept = ask()?;
+    Some(*KEPT.get_or_init(|| kept))
+}
+
+fn ask() -> Option<bool> {
+    let reader = READER.get()?;
     // SAFETY: attach retained the class globally; a thread attached here is
     // detached before returning.
     unsafe {
         let vm = reader.vm;
         let mut env: *mut JNIEnv = std::ptr::null_mut();
         let out = (&mut env as *mut *mut JNIEnv).cast::<*mut c_void>();
-        let Some(get) = (**vm).GetEnv else {
-            return false;
-        };
+        let get = (**vm).GetEnv?;
         let attached = get(vm, out, JNI_VERSION_1_6) != JNI_OK;
         if attached {
-            let Some(attach) = (**vm).AttachCurrentThread else {
-                return false;
-            };
+            let attach = (**vm).AttachCurrentThread?;
             if attach(vm, out, std::ptr::null_mut()) != JNI_OK {
-                return false;
+                return None;
             }
         }
         let kept = match (
@@ -84,12 +88,12 @@ pub fn kept() -> bool {
                 let kept = call(env, reader.class, reader.method, std::ptr::null()) != 0;
                 if check(env) != 0 {
                     clear(env);
-                    false
+                    None
                 } else {
-                    kept
+                    Some(kept)
                 }
             }
-            _ => false,
+            _ => None,
         };
         if attached {
             if let Some(detach) = (**vm).DetachCurrentThread {

@@ -1,5 +1,5 @@
 //! Surface arguments, evaluated separately and named if they trap.
-use super::{commands, type_code, Em};
+use super::{commands, Em};
 use crate::code::{self, Scope};
 use std::fmt::Write as _;
 
@@ -19,8 +19,8 @@ impl Em<'_> {
             let gpu = commands::gpu_surfaces().iter().any(|s| s == name);
             let named = sf.mode == exact_plan::SurfaceArgsMode::Named;
             if !gpu {
-                // Positional values, their declared types where known, and
-                // the authored names (LLP 1056 D1: a draw's `args`).
+                // Positional values, their declared types, and the authored
+                // names (LLP 1056 D1: a draw's `args`).
                 self.canvas2d.insert(name.to_string());
                 let values = sf
                     .args
@@ -41,14 +41,14 @@ impl Em<'_> {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                // Field-named, as ts-data.js converts a source's arguments; one
+                // constant a type, so its converters are made once.
                 let types: Vec<String> = sf
                     .args
                     .iter()
-                    .map(|a| {
-                        let a = &plan.surface_args[a.0 as usize];
-                        crate::faces::arg_type(plan, plan.code(a.expr)).map_or("0".into(), |t| {
-                            serde_json::to_string(&type_code(plan, t)).unwrap()
-                        })
+                    .map(|a| match plan.surface_args[a.0 as usize].ty {
+                        Some(t) => self.uses.share('t', crate::emit::type_json(plan, t)),
+                        None => "0".into(),
                     })
                     .collect();
                 let names: Vec<String> = if named {

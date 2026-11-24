@@ -639,6 +639,7 @@ open class ExactActivity : Activity() {
         // Behind the hide, the pads' release and the stop of the turns (none queued after it), what they and anything
         // since the pause committed is on disk before Android may kill it.
         if (!Exact.drainStore()) android.util.Log.w("exact", "the store's writes did not finish before the stop")
+        Partitions.flush(natives?.profiles().orEmpty())
         if (reads() && !isChangingConfigurations) updateWidgets()
         contentResolver.unregisterContentObserver(settings)
         getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.removeTouchExplorationStateChangeListener(screenReaderChanged)

@@ -1,0 +1,55 @@
+// The drag section's cards carry what each says, and its switch turns a card's drag off and on
+test "the drag section's cards carry their text, links and files"
+  tap "sidebar-drag"
+  clock settle
+  clock data
+  expect drag "drag-text" has "text/plain" == "Dragged out of UI Gallery. Café, naïve and Ångström keep their accents; so do 日本語, العربية and 🧭."
+  expect drag "drag-text" missing "text/uri-list"
+  expect drag "drag-link" has "text/uri-list" == "https://example.com/"
+  expect drag "drag-link" missing "text/plain"
+  expect drag "drag-link-title" has "text/uri-list" == "https://example.com/"
+  expect drag "drag-link-title" has "text/plain" == "Example Domain"
+  expect drag "drag-jpeg" has "image/jpeg" name "drag-photo.jpg"
+  expect drag "drag-jpeg" missing "text/plain"
+  expect drag "drag-heic" has "image/heic" name "drag-photo.heic"
+  expect drag "drag-png" has "image/png" name "p3-primaries.png"
+  expect drag "drag-video" has "video/mp4" name "sdr.mp4"
+  expect drag "drag-sound" has "audio/mp4" name "drag-chord.m4a"
+  expect drag "drag-pdf" has "application/pdf" name "drag-notes.pdf"
+  expect drag "drag-files" has "image/jpeg" name "drag-photo.jpg"
+  expect drag "drag-files" has "application/pdf" name "drag-notes.pdf"
+  expect drag "drag-files" has "audio/mp4" name "drag-chord.m4a"
+  expect drag "drag-photo-caption" has "image/jpeg" name "drag-photo.jpg"
+  expect drag "drag-photo-caption" has "text/uri-list" == "https://example.com/"
+  expect drag "drag-photo-caption" has "text/plain" == "Glasshouse, a generated test photograph"
+  expect drag "drag-menu-card" has "image/jpeg" name "drag-photo.jpg"
+  expect drag "drag-tap-card" has "text/plain" == "A card you can tap"
+
+test "a card's drag turns off and on, and a tap on a draggable card is a tap"
+  tap "sidebar-drag"
+  clock settle
+  expect drag "drag-switch-card" has "text/plain" == "A card whose drag turns off"
+  tap "drag-switch"
+  clock settle
+  expect drag "drag-switch-card" none
+  expect text "drag-switch-state" == "It does not drag."
+  tap "drag-switch"
+  clock settle
+  expect drag "drag-switch-card" has "text/plain" == "A card whose drag turns off"
+  tap "drag-tap-card"
+  clock settle
+  expect text "drag-taps" == "Tapped 1 time."
+
+// A test's session has a scratch store, so the section's note is written where an app file drags
+test "the note the section writes drags as an app file" on macos, ios
+  tap "sidebar-drag"
+  clock settle
+  clock data
+  clock settle
+  expect drag "drag-written" has "text/plain" name "drag-note.txt"
+
+test "the web carries no app file" on web
+  tap "sidebar-drag"
+  clock settle
+  clock data
+  expect drag "drag-written" none

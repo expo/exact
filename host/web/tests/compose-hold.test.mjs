@@ -11,7 +11,7 @@
 // targets, whose glue (host/web/glue.js `writeValue`) and runtime must then agree.
 import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -19,12 +19,11 @@ import { open } from '../../../scripts/agent.mjs';
 import { cdpBrowser, chromium } from '../../../scripts/agent-launch.mjs';
 import { need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
-import { standIns } from './stand-ins.mjs';
+import { runtimeSource, standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
-const WEB_JS = resolve(ROOT, 'host/web-js');
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
@@ -54,7 +53,7 @@ const page = `<!doctype html><meta charset="utf-8"><div id="exact-root">
 </script>`;
 const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'elements.js'];
 const STUBS = standIns(REAL);
-const module = name => REAL.includes(name) ? readFileSync(resolve(WEB_JS, name))
+const module = name => REAL.includes(name) ? runtimeSource(name)
   : STUBS.get(name) ?? null;
 
 /** The stand-in page in headless Chrome: `drive(evaluate, call)` with its `Runtime.evaluate` and its CDP session. */

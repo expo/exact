@@ -146,6 +146,8 @@ class Natives(
         var partition: String? = null
         var profile: String? = null
         var refusedFor: String? = null
+        /** A kept partition's navigation events and commands (LLP 1020.002 D2, D3). */
+        var browser: FrameBrowser? = null
         var module: String? = null
         var generation = 0
         var session = 0L
@@ -625,6 +627,7 @@ class Natives(
             created.slot = slot
             created.session = session
             if (kind == 1) { created.partition = json!!.partition(); created.profile = Partitions.profile(json) }
+            if (created.profile != null) created.browser = browser(created)
             e = created
             elements[id] = e
             nodes = null
@@ -856,6 +859,7 @@ class Natives(
     }
 
     private fun park(e: Element) {
+        e.browser?.end("the frame left the view")
         byView.remove(e.view)
         retire(e)
         e.view = standIn
@@ -874,6 +878,10 @@ class Natives(
         byView[view] = e
         if (e.kind == 2) bindEvents(e)
         if (e.w > 0 && e.h > 0) place(e)
+        // Its page is loaded afresh from `src`: what was asked of it meanwhile moved nothing.
+        if (e.kind == 1) JSONObject(e.wanted).let { json ->
+            for (op in FrameBrowser.unrun("${e.session}:${e.slot}:${e.generation}", json)) refuseCommand(e, op.optString(1), json, parked = true)
+        }
         apply(e, e.wanted)
         if (e.dirty) record(e)
     }
@@ -925,6 +933,9 @@ class Natives(
         }
     }
 
+    /** The profiles the frames shown now were made in ([Partitions.flush]). */
+    fun profiles(): Set<String> = elements.values.mapNotNullTo(HashSet()) { it.profile }
+
     private fun readyWeb(): Int = webPool.indexOfLast { (it.webViewClient as FrameClient).readyToLend }
 
     private val frames = object : FrameHost {
@@ -932,6 +943,7 @@ class Natives(
         override fun shows(view: WebView) = byView.containsKey(view)
         override fun pooled(view: WebView) = view in webPool
         override fun rendererGone(view: WebView, crashed: Boolean) = this@Natives.rendererGone(view, crashed)
+        override fun browser(view: WebView) = byView[view]?.browser
         override fun loadOf(view: WebView): FrameLoadReport? {
             val e = byView[view] ?: return null
             val binding = e.eventBinding
@@ -947,6 +959,7 @@ class Natives(
 
     /** A frame's view; a [partitioned] one, kept or refused, never has a page-world object ([FrameClient]). */
     private fun webView(profile: String? = null, partitioned: Boolean = profile != null): WebView = WebView(context).apply {
+        Partitions.made = true
         profile?.let { Partitions.enter(this, it) }
         settings.javaScriptEnabled = true
         // A page's `localStorage` and `sessionStorage`, as a browser gives it; WebView's default has none.
@@ -954,6 +967,9 @@ class Natives(
         val hasNavigationListener = WebViewFeature.isFeatureSupported(WebViewFeature.NAVIGATION_LISTENER)
         val client = FrameClient(this, hasNavigationListener, frames, partitioned)
         webViewClient = client
+        if (profile != null) webChromeClient = object : android.webkit.WebChromeClient() {
+            override fun onReceivedTitle(view: WebView, title: String?) { frames.browser(view)?.stateChanged() }
+        }
         if (hasNavigationListener) {
             // Take the navigation identity before a new src can supersede a recovery request.
             WebViewCompat.addNavigationListener(this, { it.run() }, client)
@@ -975,16 +991,17 @@ class Natives(
         webPool.remove(web)
         web.destroy()
         if (e == null) return
-        android.util.Log.w("exact", "iframe ${e.id}: the page's renderer ${if (crashed) "crashed" else "was ended by Android"}; loading its src again")
+        android.util.Log.w("exact", "iframe ${e.id}: the page's renderer ${if (crashed) "crashed" else "was ended by Android"}; ${if (e.browser == null) "loading its src again" else "recovering it"}")
         val fresh = webView(e.profile, partitioned = e.partition != null)
         val client = fresh.webViewClient as FrameClient
-        client.recoveryPending = true
+        client.recoveryPending = e.browser == null
         addView(fresh, LayoutParams(1, 1))
         e.view = fresh
         byView[fresh] = e
         if (e.paused) fresh.onPause()
         if (e.w > 0 && e.h > 0) place(e)
         if (refresh()) frame()
+        e.browser?.let { return it.crashed() }
         // Loaded after every view of the renderer has been told and outside WebView's report of its end. A new
         // `src`, a park or a release in between takes the frame instead.
         android.os.Handler(context.mainLooper).post {
@@ -1153,6 +1170,22 @@ class Natives(
         }
     }
 
+    /** A kept partitioned frame's reporter. Its events go to the frame's allocation, which exact2 checks, so an
+     * element let go for a new partition still ends its navigation in flight. */
+    private fun browser(e: Element) = FrameBrowser({ (e.view as? WebView)?.takeIf { !e.parked } }, { JSONObject(e.wanted).text("src") },
+        { url -> if (!e.parked) loadFrame(e, url) }, { event, record -> android.os.Handler(context.mainLooper).post {
+            Exact.frameEvent(e.id, e.slot, e.generation, e.session, event, record)
+        } })
+
+    /** A command to a frame [Partitions] refuses, or one given while the frame had no view: its `navigateerror`. */
+    private fun refuseCommand(e: Element, name: String, props: JSONObject, parked: Boolean = false) {
+        val why = if (parked) "the frame was out of view, with no page to move" else Partitions.refusal(props)?.second ?: "the frame has no partition"
+        val record = refusalRecord(if (parked) "InvalidStateError" else "NotSupportedError", "$name: $why", partitioned = Partitions.kept)
+        android.os.Handler(context.mainLooper).post {
+            if (elements[e.id] === e) Exact.frameEvent(e.id, e.slot, e.generation, e.session, "navigateerror", record)
+        }
+    }
+
     private fun loadFrame(e: Element, src: String, silently: Boolean = false) {
         val web = e.view as WebView
         val source = Sources.frame(src, assets)
@@ -1201,7 +1234,12 @@ class Natives(
                 val shown = !e.hidden && (e.inView || !lazyVideo || !lazy || e.rows.contains(0))
                 if (shown != e.playing) { e.playing = shown; p.shown(shown) }
             }
-            1 -> if (old?.text("src") != json.text("src")) showFrame(e, json)
+            1 -> {
+                if (old?.text("src") != json.text("src")) { e.browser?.cancelRecovery(); showFrame(e, json) }
+                for (op in FrameBrowser.unrun("${e.session}:${e.slot}:${e.generation}", json)) {
+                    e.browser?.command(op) ?: refuseCommand(e, op.optString(1), json)
+                }
+            }
             // A hatch gave the node another view.
             5 -> if (old != null && old.optInt("gen") != json.optInt("gen")) {
                 val view = obtain(5, json, e.id) ?: return
@@ -1279,6 +1317,7 @@ class Natives(
 
     private fun release(e: Element, reuse: Boolean = true, forget: Boolean = true) {
         elements.remove(e.id)
+        e.browser?.close()
         nodes = null
         // The node is gone; a reader made again keeps the records of the nodes it will make again (LLP 1042.001 D1).
         if (e.kind == 0 && forget) MediaRecords.forget(e.id)

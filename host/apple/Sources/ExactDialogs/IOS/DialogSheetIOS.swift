@@ -111,6 +111,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
             nav.view.tintColor = view.tintColor
             setContentScrollView(scroller)
         }
+        paintSurface()
         return presented
     }
     /// The height of the bar above the dialog, while it shows.
@@ -158,6 +159,8 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
                 sheet.invalidateDetents()
             }
             SheetDetents.updateGrabber(nextGrabber, on: sheet)
+            // In `animateChanges`, the surface moves with the sheet.
+            self.paintSurface()
         }
         if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges(configure) }
         else { configure() }
@@ -217,6 +220,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         if let tint = ThemeRoles.color("AccentColor", in: view) { view.tintColor = tint }
         self.view = view
         paintSurface()
+        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (controller: DialogSheetController, _: UITraitCollection) in controller.paintSurface() }
         scroller.keyboardDismissMode = .interactive
         #endif
         scroller.delegate = self
@@ -964,13 +968,28 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
 extension DialogSheetController: PaintsSheetSurface {
     /// Its surface, which a live theme edit paints again
     /// (`Presenter.applyThemeTint`): its dim, and a sheet's ground where the
-    /// dialog painted none, the platform's (LLP 1115 D2), which UIKit
+    /// dialog painted none, the platform's (LLP 1115 D2), as a modal route's
+    /// is (`ModalController.paintSurface`): the theme's; else, resting below
+    /// its large detent in a compact width, nothing, so UIKit draws its
+    /// glass (LLP 1141.001 D3); else the system background, which UIKit
     /// elevates in dark mode.
     func paintSurface() {
         guard let view = viewIfLoaded else { return }
         paintBackdrop()
         if topLayer { return }
-        view.backgroundColor = ThemeRoles.color("background", in: view) ?? ThemeRoles.color("Canvas", in: view, or: .systemBackground)
+        let surface = ThemeRoles.color("background", in: view) ?? ThemeRoles.color("Canvas", in: view) ?? (glass ? .clear : .systemBackground)
+        if view.backgroundColor != surface { view.backgroundColor = surface }
+    }
+    private var glass: Bool {
+        guard traitCollection.horizontalSizeClass != .regular, let sheet = presentedSheet else { return false }
+        return (sheet.selectedDetentIdentifier ?? sheet.detents.first?.identifier) != .large
+    }
+}
+
+// A sheet a person drags between detents changes its ground with no batch.
+extension DialogSheets: UISheetPresentationControllerDelegate {
+    func sheetPresentationControllerDidChangeSelectedDetentIdentifier(_ sheetPresentationController: UISheetPresentationController) {
+        entries.first { $0.presented.sheetPresentationController === sheetPresentationController }?.controller.paintSurface()
     }
 }
 #endif

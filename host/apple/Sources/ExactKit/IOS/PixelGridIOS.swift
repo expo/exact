@@ -177,6 +177,7 @@ extension Presenter {
         v.layoutTextArea()
         v.metal?.frame = v.bounds
         v.overlay?.frame = v.bounds
+        v.placeExtension()
         v.web?.frame = v.bounds
         v.fitScroll()
         v.applyTransform()

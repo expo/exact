@@ -33,7 +33,11 @@ export const fragmentOf = location => { const s = clean(location), at = s.indexO
 export function locationOf(href) {
   const input = clean(href), scheme = /^([A-Za-z][A-Za-z0-9+.-]*):([\s\S]*)$/.exec(input), fragment = fragmentOf(input), hash = fragment ? "#" + fragment : "";
   if (!scheme) return canonical(input) + hash;
-  if (!/^https?$/i.test(scheme[1])) return canonical('/' + scheme[2].replace(/^\/\//, '')) + hash;
+  if (!/^https?$/i.test(scheme[1])) {
+    // An empty authority adds no segment. A leading backslash is a slash, as path_query folds it.
+    const path = scheme[2].replace(/^\/\//, '').replace(/^\\/, '/');
+    return canonical(path[0] === '/' ? path : '/' + path) + hash;
+  }
   const after = scheme[2].replace(/^[/\\]+/, ''), end = after.search(/[/\\?#]/);
   // A leading backslash folds to `/` first, as path_query folds before it strips one `/`.
   const rest = end < 0 ? '' : after.slice(end);

@@ -59,7 +59,7 @@ pub use look::page_color;
 pub(crate) mod material;
 pub(crate) use alert::Picture as AlertPicture;
 pub use material::{FieldText, FieldTexts};
-mod native;
+pub(crate) mod native;
 pub(crate) mod neutral;
 pub(crate) mod numerals;
 pub(crate) mod ripple;

@@ -3,7 +3,7 @@ export { bindGpuProduct, bakeSelection } from './app-shells.mjs';
 import { takeLock } from '../host/web/build-lock.mjs';
 import { refreshCargoRustBindings } from './cargo-dep-info.mjs';
 import { capturePrivacyManifest } from '../host/apple/privacy.mjs';
-import { appleMetadataProblem } from '../host/apple/plist.mjs';
+import { appleMetadataProblem, vendorPlistProblems } from '../host/apple/plist.mjs';
 import { appleImplementations } from '../js/bake/src/typescript.mjs';
 import { webHostFiles, hostModuleSources, MODULE_PRELUDE } from '../host/web-js/glue.mjs';
 export { webHostFiles } from '../host/web-js/glue.mjs';
@@ -48,10 +48,10 @@ import { bakeOutside, buildAndroidBake, compiledBakeDir, linkable, linkedInputs,
 import { filesystem, installedModules, OFFLINE_MISSING, removePrivateTree, withHostDeployment } from './filesystem.mjs';
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { holdAppOutput, startSweep } from './sweep.mjs';
-import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargoEnvironment,
+import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, refuseStdLockfile, cargoEnvironment,
   appCrates, authoredWorkspace, buildCommand, cargoOnPath, claimTargetCrates, physicalPath, writtenPath,
   wholeProgram, declaredWorkspace, knownWorkspace, refuseLoose, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
-export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath, wholeProgram } from './cargo-check.mjs';
+export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, refuseStdLockfile, cargoEnvironment, cargoOnPath, wholeProgram } from './cargo-check.mjs';
 import { configTarget, nativePackageConfig } from '../js/bake/src/package-config.mjs';
 export { gpuModules } from './app-shells.mjs';
 import { installProblems } from './install-page.mjs';
@@ -583,7 +583,7 @@ export function readManifest(dir, name) {
       // Expo's splash keys and a host's own launch colour: the launch colours are the manifest's on every host.
       : /^((host\.\w+\.)?(splash\w*|windowBackground|backgroundColor|launchColor)): not a known key$/i.test(p) ? `${p.split(':')[0]}: not a known key; what shows before the first frame is background_color in every colour scheme, or color_scheme_light.background_color and color_scheme_dark.background_color in one, on every host (host.ios.launchImage and host.android.launchImage add a picture)`
       : /^host\.ios\.associatedDomains: expected array, got boolean$/.test(p) ? REMOVED_DOMAINS[parsed.host.ios.associatedDomains]
-      : appleMetadataProblem(p)).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed));
+      : appleMetadataProblem(p)).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed), vendorPlistProblems(parsed));
   if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...linkProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir), ...variantProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
@@ -1246,7 +1246,7 @@ export function buildBake(app, platform, target, options = {}) {
   let env=withHostDeployment({...process.env,...options.env});env.CARGO_TARGET_DIR=app.target;env.EXACT_BAKE_OUTPUT=options.output??bakeOutput(app,env);
   env.EXACT_RUST_BINDINGS = '1';
   const privacyManifests = apple ? [capturePrivacyManifest(resolve(app.dir, 'PrivacyInfo.xcprivacy'))] : [], watch = target.includes('apple-watchos');
-  if(platform==='web'||watch)env=webToolchainEnv(env,{linksWasm:target==='wasm32-unknown-unknown'&&!options.check});
+  if(platform==='web'||watch){env=webToolchainEnv(env,{linksWasm:target==='wasm32-unknown-unknown'&&!options.check});refuseStdLockfile(env,app.dir,app.name);}
   if(options.analysis && env.EXACT_UPDATE_TRUST==='production')env.EXACT_BAKE_ANALYSIS='1';else delete env.EXACT_BAKE_ANALYSIS;
   mkdirSync(env.EXACT_BAKE_OUTPUT,{recursive:true});
   if(platform!=='web')prepareLibrary(app.dir,target); // a package's library, fetched and checked before Cargo links it (LLP 1154 D3)

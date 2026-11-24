@@ -29,6 +29,7 @@ capabilities.
   - [Tools: what a call answers](#tools-what-a-call-answers)
 - [Views, layout, and interaction](#views-layout-and-interaction)
   - [Tabular numbers](#tabular-numbers)
+  - [Announcing a change](#announcing-a-change)
   - [Sound, MIDI and media](#sound-midi-and-media)
 - [Routes and web documents](#routes-and-web-documents)
 - [Tabs and stacks](#tabs-and-stacks)
@@ -3326,6 +3327,34 @@ beneath its own directory, an absolute path or a `data:` URL, a regular file of 
 source is an `error` there. A drive sees both after `clock +<ms>
 real`; `clock settle` can return just before them.
 
+### Announcing a change
+
+There is no announce call. A screen reader reads a live region as its text changes: a
+`text role="status"` (or `aria-live="polite"`) is polite, asking to wait for current
+speech, and a `text role="alert"` (or `aria-live="assertive"`) asks to interrupt it.
+`aria-live` wins over the role's, and `aria-live="off"` silences a `status`. To announce
+a result, a form's error or "3 selected", keep such a `text` mounted, empty until there is
+something to say, and change its text ([recipe](recipes/announce.md)):
+
+- Put the role on the `text` itself. Apple hosts read the text under a live box, but on
+  Windows a box is read by its own accessible name, which it takes only from an
+  `aria-label`, so a `row role="status"` whose child text changes says nothing there;
+  Android sends the change from the box, and what TalkBack reads of it is untested.
+- Leave `aria-label` off the region: on Android and Windows it is what is read, and a
+  change of the text alone is not.
+- Text the region already had is not read again. One that arrives holding its text is read
+  on some hosts and not others (below), so mount it first.
+
+| Host | What it does |
+| --- | --- |
+| iOS, iPadOS, tvOS | `UIAccessibility.post(notification: .announcement)` with the region's text, queued behind current speech when polite. An `alert` that arrives is also announced, except one already there when the app launches. A region under `aria-hidden` says nothing |
+| macOS | `NSAccessibility.post(… .announcementRequested)` with the text, at low priority when polite and high when assertive; an arriving `alert` as on iOS. VoiceOver may still finish the focused control's speech first |
+| Web | the browser: the element carries its `role` and any `aria-live`, and the screen reader treats it as any page's live region |
+| Android | the node is a polite or assertive live region (`AccessibilityNodeInfo.setLiveRegion`), and a content change is sent from it when its accessible name changes and, usually, when it arrives; that is what TalkBack reads a live region by. TalkBack itself has not been heard reading one |
+| Windows | AccessKit's UI Automation adapter: the node's `LiveSetting`, and a `LiveRegionChanged` event when its name changes or it arrives with one. Not yet heard from Narrator |
+| Linux | nothing yet: the Linux host serves no screen reader (no AT-SPI) |
+| watchOS | nothing: the watch entry refuses `aria-live`, and its SwiftUI driver posts no announcement for a `status` or `alert` |
+
 ### Sound, MIDI and media
 
 A sound effect is a declared WAV that an action plays (LLP
@@ -4093,6 +4122,10 @@ SwiftPM verifies binary targets by checksum. One shared dynamic library links
 all declared products used by the app's Swift and its bound implementations,
 so SDK singletons and configuration are shared across consumers. It loads with
 the first consumer that needs it; an unused implementation stays unloaded.
+A dynamic framework a package brings, such as `Sparkle.framework`, goes into
+the Mac app's `Contents/Frameworks` whole, with its helpers and XPC services;
+`exact release` signs each inside out with the Developer ID and the hardened
+runtime ([Mac binary updates](recipes/mac-binary-updates.md)).
 App-local `.xcframework`s remain supported. Package resources ship with the
 app and are available through `Bundle.module`. SDK privacy manifests and the
 requesting implementations' declarations accompany the shared library and
@@ -4547,7 +4580,11 @@ the complete original URL percent-encoded in `u`; read it with
 `searchParam(top(nav), "u")`. The handler needs an `/open` route and a
 navigation root with `navigate=`. At cold launch it is the initial location;
 when already running, each link fires one `navigate` event in arrival order.
-An app without `protocol_handlers` keeps ordinary URL-to-location behavior.
+A scheme registered with `host.ios.urlSchemes` or `host.macos.urlSchemes` alone
+needs no `/open` route: the link arrives as its path. A non-empty authority is the first
+segment and an empty one is none, so `notes://post/42?x=1`, `notes:///post/42?x=1` and
+`notes:/post/42?x=1` are all `/post/42?x=1`. Expo's `Linking.createURL("/post/42")`
+writes the three-slash form.
 For the app's own web addresses, declare `"handle_links": "preferred"` beside
 `app.origin` (and `scope`, `scope_extensions` to narrow or widen the claim):
 iOS, macOS and Android then open links to them in the app, at the link's path,
@@ -5554,7 +5591,11 @@ For the Mac menu bar, put `-exact-menu="app"` on an ordinary button to add
 an item without a shortcut. Literal destinations are `about` (directly under
 About, where Check for Updates… goes), `app`, `file`, `edit`, `view`, `go`,
 `window`, `help`, and `none` (no item: the chord stays a shortcut);
-explicit placement overrides the usual `aria-keyshortcuts` chord filing. Its
+explicit placement overrides the usual `aria-keyshortcuts` chord filing. A
+placed item shows and takes the button's chord holding ⌘, or else one holding ⌃
+(`aria-keyshortcuts="Control+Space"`); a chord of ⌥ or ⇧ alone stays out of
+the menu, since those type. ⌃Space is macOS's default shortcut for Select the
+Previous Input Source, and where it is on the system takes it first. Its
 accessible label or text titles it, and `disabled` disables it. An item in the
 app menu or Help is the app's, so it stays enabled while no window is key and
 under a sheet or a Contract modal dialog. Keep the button reachable: the agent taps it,

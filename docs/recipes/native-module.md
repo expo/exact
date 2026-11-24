@@ -15,8 +15,8 @@ instead. Android and the web read the build's value.
 Declare device access in the activating source's `grants`
 ([permissions](permissions.md)). `device.photos-add purpose.savePhoto` derives
 `NSPhotoLibraryAddUsageDescription` from that strings key. Grants derive
-entitlements too. Apple `infoPlist` and `entitlements` dictionaries refuse every
-key; see [bundle metadata](../reference.md#apple-bundle-metadata).
+entitlements too. Apple `infoPlist` takes only a vendor SDK's keys, `entitlements` none
+([bundle metadata](../reference.md#apple-bundle-metadata)).
 
 **Kept answers:** a resource reading `native.available` or calling `native.call`
 reads device state; its answer is kept across launches. Keep native access out of

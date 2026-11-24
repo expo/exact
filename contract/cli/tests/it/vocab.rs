@@ -311,6 +311,13 @@ fn a_handler_and_a_tag_say_what_they_are() {
     let column = stdout(&vocab(&["column"]));
     assert!(column.contains("column: tag, View"), "{column}");
     assert!(column.contains("flex_direction: column"), "{column}");
+    // A tag lists the card's attributes and events for it, from every line naming it.
+    let textarea = stdout(&vocab(&["textarea"]));
+    assert!(textarea.contains(" autocorrect spellcheck "), "{textarea}");
+    assert!(textarea.contains(" rows markup\n"), "{textarea}");
+    let json: Value = serde_json::from_str(&stdout(&vocab(&["--json", "textarea"]))).unwrap();
+    let attributes = json["attributes"].as_array().unwrap();
+    assert!(attributes.iter().any(|a| a == "spellcheck"), "{json}");
 }
 
 /// LLP 1116.003 D2.2: when a route's `header` becomes the iOS navigation
@@ -818,7 +825,8 @@ fn no_name_prints_the_card_and_all_prints_every_table() {
         "parseNumber(text) -> option<number>",
         "formatNumber(n,",
         "tags: attributes; on events",
-        "input: value type inputmode min max step",
+        "input textarea: value placeholder maxlength inputmode",
+        "input: type min max step",
         "parts: use X from \"exact:content\"",
         "EmptyState(symbol=\"symbol:sparkles\"",
         "test steps",
@@ -1082,6 +1090,7 @@ fn every_concepts_code_compiles_and_its_names_are_its_own() {
         "titlebar",
         "haptics",
         "toast",
+        "live",
         "var",
     ] {
         let one: Value = serde_json::from_str(&stdout(&vocab(&["--json", name]))).unwrap();

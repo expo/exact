@@ -38,7 +38,7 @@ const hostCommitBody = `
   const collections = {commit() {}, restyled() {}}, arrange = {commit() {}, destroy() {}, binding() {}, state() {}}, presence = {hold: () => false, live: null};
   const prepareContexts = () => {}, runFocusCommands = () => {}, inertAncestor = () => false, refreshSymbols = () => {};
   const focusAutofocus = () => {}, inputHandlers = null, positionContexts = () => {}, markScrollDocument = () => {}, syncLists = () => {};
-  const followScroll = () => {}, settleFollow = () => {}, settleValue = () => {}, letGo = () => {}, flowBatch = () => {}, noteFit = () => {}, refitTexts = () => {};
+  const followScroll = () => {}, settleFollow = () => {}, settleValue = () => {}, letGo = () => {}, flowBatch = () => {}, noteFit = () => {}, refitTexts = () => {}, noteSymbolEffect = () => {}, playSymbolEffects = () => {};
   const navigation = {project() {}, apply() {}, holdLink() {}}, log = () => {}, inputReady = false, agentMode = false, agentKeepsStore = false, frameSampler = null, clocks = {sync() {}};
   const viewFor = (_, id) => views.get(id), applyProps = () => {}, attach = () => {}, listView = () => {};
   const host = { timelinesMoved, agentClock, followOnSeek, listSelection, textflow, page, inputHandlers, inputReady, frameSampler };

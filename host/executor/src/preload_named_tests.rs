@@ -248,10 +248,11 @@ fn a_named_read_takes_different_headers_and_body_ready_or_inflight() {
             let release = held_plan(&server, "/feed", b"preloaded");
             let mut def = definition(&server, "/feed");
             def.request = Request::post_json(&def.request.url, "old").header("X-Trace", "old");
-            let request = Request::post_json(&def.request.url, "new")
+            let mut request = Request::post_json(&def.request.url, "new")
                 .header("X-Trace", "new")
                 .preload("feed")
                 .unwrap();
+            request.reach.origin = exact_runner::CallOrigin::App;
             let set = launch(&server, vec![def]);
             server.seen(1);
             if !pending {

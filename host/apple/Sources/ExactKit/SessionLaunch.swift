@@ -1,4 +1,5 @@
 import Foundation
+import QuartzCore
 import CExact
 import ExactCore
 
@@ -23,6 +24,7 @@ extension ExactSession {
     /// batch, owner work landing, a canvas replay or an SVG picture done), so
     /// this follows every end of work, not only an apply.
     func workEnded() {
+        workEndedAt = CACurrentMediaTime()
         notificationHost.backgroundActionsApplied(self)
         ExactLaunch.shared.workEnded(self)
         NavigationMarks.shared.workEnded(self)

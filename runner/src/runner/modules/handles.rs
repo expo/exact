@@ -19,7 +19,7 @@
 //! (`destroy`) still ends what any call made.
 
 use super::super::{DataSource, Runner};
-use super::{Json, Release, TOKENS};
+use super::{Cause, Json, Release, TOKENS};
 use crate::request::{Dispatch, Outcome, Reply, Response, Work};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
@@ -107,7 +107,7 @@ impl<D: DataSource> Runner<D> {
             .find(|(_, p)| !p.data && !p.dispatched && p.body == body)?;
         p.dispatched = true;
         let body = p.body.clone();
-        Some(self.watched(body, ticket))
+        Some(self.watched(body, ticket, self.ticket_cause(ticket)))
     }
 
     /// A held module request the agent's ticket allowed, for the host to
@@ -120,15 +120,15 @@ impl<D: DataSource> Runner<D> {
         match ticket.and_then(|t| self.extensions.provisional.get_mut(&t).map(|p| (t, p))) {
             Some((ticket, p)) => {
                 p.dispatched = true;
-                self.watched(body, ticket)
+                self.watched(body, ticket, self.ticket_cause(ticket))
             }
             None => self.to_implementation(body),
         }
     }
 
-    /// `body` for the implementation, its reply's handles noted as it
-    /// leaves, and the host woken to look at them.
-    pub(super) fn watched(&self, body: Vec<u8>, ticket: u64) -> Dispatch {
+    /// `body`, a call under `cause`, for the implementation, its reply's
+    /// handles noted as it leaves, and the host woken to look at them.
+    pub(super) fn watched(&self, body: Vec<u8>, ticket: u64, cause: Cause) -> Dispatch {
         let source = &self.extensions.provisional[&ticket].source;
         let row = self.module_row(source);
         let sent: Json = serde_json::from_slice(&body).unwrap_or_default();
@@ -146,7 +146,7 @@ impl<D: DataSource> Runner<D> {
             self.native_slot(),
         );
         // The handlers its call listed, for the handles it carries (`invoke.rs`).
-        let (grant, granted) = (self.handler_grant(&row, &sent), self.granted());
+        let (grant, granted) = (self.handler_grant(&row, &sent, cause), self.granted());
         Dispatch::Run(Work::Later(Box::new(move |reply| {
             let watched = Reply::new(move |outcome: Outcome| {
                 let ids = ids_in(&outcome, &paths);

@@ -103,6 +103,13 @@ struct Call {
     control: Option<usize>,
 }
 
+impl<D: DataSource> Runner<D> {
+    /// Whether invocation `id` is the running call of a control's press.
+    pub(in crate::runner) fn press_running(&self, id: u64) -> bool {
+        (self.calls.current.as_ref()).is_some_and(|c| c.id == id && c.control.is_some())
+    }
+}
+
 impl Call {
     fn origin(&self) -> CallOrigin {
         match self.control {
@@ -568,7 +575,8 @@ impl<D: DataSource> Tools<D> for LinkedTools {
             r.commands.remove(i);
             if SKIPPED.contains(&name.as_str()) {
                 // The running call's record says what it skipped.
-                if let Some(call) = (r.calls.current.as_mut()).filter(|c| c.id == cause.id) {
+                let ours = |c: &&mut Call| c.id == cause.id || c.id == cause.owner();
+                if let Some(call) = (r.calls.current.as_mut()).filter(ours) {
                     call.skipped.push(name.clone());
                 }
                 r.log(format!("{name}: skipped in a tool call"));

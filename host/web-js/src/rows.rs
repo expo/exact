@@ -417,11 +417,16 @@ impl Em<'_> {
                     None => format!("v=>{none}v"),
                 }))
             }
-            // @ref LLP 1116.001 D1.4 — what navigation.js `fitText` reads, inline.
-            StyleId::Fit => {
-                let fit = self.uses.rt("fitTexts");
-                let _ = write!(self.out, "{fit}();");
-                one("--exact-fit", Some("v=>v===\"shrink\"?v:null".into()))
+            // @ref LLP 1116.001 D1.4, LLP 1077 D12 — what navigation.js `fitText` and
+            // `playSymbolEffects` read, inline.
+            StyleId::Fit | StyleId::SymbolEffect => {
+                let (piece, name, map) = match id {
+                    StyleId::Fit => ("fitTexts", "--exact-fit", "v=>v===\"shrink\"?v:null"),
+                    _ => ("symbolEffects", "--exact-symbol-effect", "v=>/^(bounce|pulse|scale)$/.test(v)?v:null"),
+                };
+                let piece = self.uses.rt(piece);
+                let _ = write!(self.out, "{piece}();");
+                one(name, Some(map.into()))
             }
             // The feedback's factor, and `scale` as its product (css.rs), on
             // a node whose own `scale` does not also compose through it.
@@ -871,8 +876,10 @@ pub(super) fn presence_decls(css: &mut String) -> String {
                 "--exact-press-opacity-to:",
                 "--exact-press-background-color:",
                 "--exact-press-color:",
-                // A fitted text's (LLP 1116.001 D1.4), which navigation.js finds by it.
+                // A fitted text's (LLP 1116.001 D1.4) and a symbol effect's (LLP 1077
+                // D12), which navigation.js finds by them.
                 "--exact-fit:",
+                "--exact-symbol-effect:",
                 // A hit slop's sides, which index.html's `[style*=…]` finds.
                 "--exact-hit-slop-",
             ])

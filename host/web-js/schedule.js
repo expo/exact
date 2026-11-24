@@ -23,25 +23,27 @@ const Q = {
   // arms or drops (rt.js `commit`).
   save() {
     Asked = new Set();
-    return [Mutations.map(m => m.wait && [m, m.wait.slice(), m.stall]), Gates.length ? [clock.timers.slice(), Gates.map(g => [g, g.armed, g.kt, g.due, g.base, g.k, g.gen, g.ready])] : null];
+    return [Mutations.map(m => m.wait && [m, m.wait.slice(), m.stall]), Gates.length ? [clock.timers.slice(), Gates.map(g => [g, g.armed, g.kt, g.due, g.base, g.k, g.gen, g.ready, g.stepped])] : null];
   },
   restore([queues, timers]) {
     for (const q of queues) if (q) { q[0].wait = q[1]; q[0].stall = q[2]; }
-    if (timers) { clock.timers.splice(0, Infinity, ...timers[0]); for (const [g, ...state] of timers[1]) [g.armed, g.kt, g.due, g.base, g.k, g.gen, g.ready] = state; }
+    if (timers) { clock.timers.splice(0, Infinity, ...timers[0]); for (const [g, ...state] of timers[1]) [g.armed, g.kt, g.due, g.base, g.k, g.gen, g.ready, g.stepped] = state; }
   },
   /** D8's step, inside the commit after its settlement: each gate and key over the settled state, at the commit's
    * time. A key that is no key refuses the commit (`TaskKey`); else a false gate drops its timer, a gate turned true
    * or a changed key arms it from now, and anything else leaves it (an `every`'s phase, a spent `after`). */
-  gates() {
-    if (!Gates.length) return;
-    const seen = untracked(() => Gates.map(g => {
+  gates(list = Gates) {
+    if (!list.length) return;
+    const seen = untracked(() => list.map(g => {
       if (!taskScopeLive(g.scope)) return [false, undefined];
       const on = g.gate() === true, kt = on && g.key ? keyText(g.key()) : undefined;
       if (kt === null) throw new Refusal(`TaskKey { task: ${JSON.stringify(g.name)} }`);
       return [on, kt];
     }));
-    Gates.forEach((g, k) => step(g, ...seen[k]));
+    list.forEach((g, k) => step(g, ...seen[k]));
   },
+  /** The same step after the tree update, for the gates no step has seen: the tasks of the instances it made. */
+  made() { Q.gates(Gates.filter(g => !g.stepped)); },
   /** A send of queue mutation `m`: asked now only when free and the commit's first; else it waits (D2). */
   hold(m, source, args, undo) {
     if (!Asked.has(m) && idle(m) && !m.wait.length) { Asked.add(m); return false; }
@@ -103,6 +105,7 @@ export function queues(state) {
 /** One key's text, as the runner's `key_text`: a string, a finite number (`-0` is `0`), a bool; anything else none. */
 const keyText = v => typeof v === "string" ? "s:" + v : typeof v === "number" ? (Number.isFinite(v) ? "n:" + (v === 0 ? 0 : v) : null) : typeof v === "boolean" ? "b:" + v : null;
 function step(g, on, kt) {
+  g.stepped = true;
   const at = clock.timers.indexOf(g);
   if (!on) { if (at >= 0) clock.timers.splice(at, 1); g.armed = false; g.kt = undefined; return; }
   if (g.armed && kt === g.kt) return;

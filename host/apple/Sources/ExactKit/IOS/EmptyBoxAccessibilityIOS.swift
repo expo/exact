@@ -68,7 +68,7 @@ extension NodeView {
     /// holds them, and it is neither an element (whose children are never
     /// visited) nor a modal boundary.
     private var passesAccessibilityThrough: Bool {
-        bounds.isEmpty && !subviews.isEmpty && !isHidden && alpha > 0.01 && !accessibilityElementsHidden && !accessibilityViewIsModal
+        bounds.isEmpty && !heldSubviews.isEmpty && !isHidden && alpha > 0.01 && !accessibilityElementsHidden && !accessibilityViewIsModal
             && !clipsToBounds && clipBox == nil && clipPath == nil && scroll == nil && !isAccessibilityElement
     }
 }
@@ -78,8 +78,8 @@ extension NodeView {
     /// placeholder has no accessible content; virtual elements still count.
     var isEmptyPanelPlaceholder: Bool {
         props["accessibilityRole"] == "tabpanel" && presenter?.navigation.tabPanels.contains(id) == true
-            && container.subviews.isEmpty && !isAccessibilityElement && accessibilityElements?.isEmpty != false
-            && (container === self || subviews.allSatisfy({ $0 === container })
+            && container.heldSubviews.isEmpty && !isAccessibilityElement && accessibilityElements?.isEmpty != false
+            && (container === self || heldSubviews.allSatisfy({ $0 === container })
                 && !container.isAccessibilityElement && container.accessibilityElements?.isEmpty != false)
     }
 }

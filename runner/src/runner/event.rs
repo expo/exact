@@ -1022,25 +1022,23 @@ impl<D: DataSource> Runner<D> {
                 return self.as_cause(cause, |r| r.arrived(|r| r.dispatch_event(view, event)));
             }
         }
-        // The person's act in the app's own UI is an `app` cause; what the
-        // host observes of the page is the device's (LLP 1133.023 D7a).
-        // A package view's message is its implementation's event.
+        // The person's act in the app's own UI is an `app` cause. What the
+        // host observes of the page and a package view's message are the
+        // person's while the page shows (`as_shown`).
         let package = matches!(event, Event::Message(_))
             && (self.kernel.node(view)).is_some_and(|n| {
                 n.props
                     .str(exact_kernel::PropId::NativeViewModuleName)
                     .is_some()
             });
-        let cause = match observed(&event) || package {
-            true => super::provenance::Cause::of(super::CallOrigin::Device, 0, false),
-            false => super::provenance::Cause::person(),
-        };
-        self.as_cause(cause, |r| {
+        let shown = !(observed(&event) || package) || !self.page.hidden;
+        let dispatched = |r: &mut Self| {
             r.arrived(|r| {
                 r.note_input(&event);
                 r.dispatch_event(view, event)
             })
-        })
+        };
+        self.as_shown(shown, dispatched)
     }
 
     fn dispatch_event(&mut self, view: ViewId, event: Event) -> Result<CommitReceipt, RunnerError> {
@@ -1457,9 +1455,7 @@ fn observed(event: &Event) -> bool {
         | Event::MidiMessage(..)
         | Event::FrameNavigation(..)
         | Event::FrameRecord(..)
-        | Event::HeightRelease { .. }
-        | Event::TransformGeometry { .. }
-        | Event::TransformRelease { .. } => true,
+        | Event::TransformGeometry { .. } => true,
         _ => false,
     }
 }

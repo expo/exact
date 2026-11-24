@@ -85,7 +85,7 @@ impl<D: DataSource> Runner<D> {
                         hold: h.hold,
                         declared: name.to_owned(),
                         args: h.args.clone(),
-                        origin: h.origin,
+                        origin: h.cause.origin,
                     }
                 })
             })

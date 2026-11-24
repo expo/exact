@@ -284,7 +284,13 @@ final class ShortcutMenu: NSMenu {
         }
     }
 
+    /// The key a lookup here is for, which an item's action reads: AppKit's
+    /// `currentEvent` is not the agent's key, nor any key a caller hands the bar.
+    fileprivate static var lookingUp: NSEvent?
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let outer = Self.lookingUp
+        Self.lookingUp = event
+        defer { Self.lookingUp = outer }
         // A removed item's chord, and its submenu's, is out of the lookup:
         // AppKit sends a hidden item's chord whatever its
         // `allowsKeyEquivalentWhenHidden` (measured, macOS 26.6).
@@ -389,6 +395,20 @@ package final class ShortcutHost: NSObject, NSMenuItemValidation {
     private func declarations(_ view: NodeView) -> [Shortcut] {
         (view.props["accessibilityKeyShortcuts"] ?? "").split(whereSeparator: \.isWhitespace).compactMap(Shortcut.init)
     }
+    /// The menu id `-exact-menu` names, `dock` beside it being the Dock menu's.
+    private func placement(_ view: NodeView) -> String? {
+        (view.props["menuPlacement"] ?? "").split(whereSeparator: \.isWhitespace).map(String.init).first { $0 != "dock" }
+    }
+    /// The chord a button's item shows and takes: its first holding ⌘, else,
+    /// on an item its author placed in a menu, its first holding ⌃ (LLP 1021
+    /// §5.3). A chord of ⌥ or ⇧ alone types, so it stays the window's. A
+    /// platform alternative does not create a second menu item.
+    private func menuShortcut(_ view: NodeView) -> Shortcut? {
+        let chords = declarations(view)
+        if let command = chords.first(where: { $0.modifiers.contains(.command) }) { return command }
+        guard let placement = placement(view), placement != "none", placement != "status" else { return nil }
+        return chords.first { $0.modifiers.contains(.control) }
+    }
     private func nodes() -> [NodeView] {
         guard let presenter else { return [] }
         // Buttons that declare a chord or menu, and the window toolbar's own.
@@ -416,8 +436,11 @@ package final class ShortcutHost: NSObject, NSMenuItemValidation {
     fileprivate func menuEquivalent(_ item: NSMenuItem, matching event: NSEvent? = nil) -> String {
         guard let id = (item.representedObject as? NSNumber)?.uint32Value,
               let view = presenter?.views[id],
-              let shortcut = declarations(view).first(where: { $0.modifiers.contains(.command) }) else { return "" }
+              let shortcut = menuShortcut(view) else { return "" }
         if let event, !shortcut.matches(event) { return "" }
+        // During a composition a chord without ⌘ is the input method's (`Presenter.passesComposition`).
+        if let event, !shortcut.modifiers.contains(.command),
+           ((event.window ?? NSApp.keyWindow)?.firstResponder as? NSTextInputClient)?.hasMarkedText() == true { return "" }
         return shortcut.keyEquivalent
     }
     package func sync() {
@@ -439,13 +462,10 @@ package final class ShortcutHost: NSObject, NSMenuItemValidation {
         appWide = []
         settingsItem = nil
         for view in nodes() {
-            // A platform alternative does not create a second menu item.
-            let shortcut = declarations(view).first(where: { $0.modifiers.contains(.command) })
-            // One menu id; `dock` beside it is the Dock menu's, and a status
-            // item is no menu's (LLP 1133.025 D4, D5: StatusItemsMac.swift).
-            let ids = (view.props["menuPlacement"] ?? "").split(whereSeparator: \.isWhitespace).map(String.init)
-            if ids.contains("status") { continue }
-            let placement = ids.first { $0 != "dock" }
+            // One menu id; a status item is no menu's (LLP 1133.025 D4, D5: StatusItemsMac.swift).
+            let placement = placement(view)
+            if placement == "status" { continue }
+            let shortcut = menuShortcut(view)
             guard shortcut != nil || placement != nil || presenter?.toolbar.contains(view) == true else { continue }
             view.rejectNativeActiveProperties(on: "NSMenuItem")
             live.insert(view.id)
@@ -799,7 +819,7 @@ package final class ShortcutHost: NSObject, NSMenuItemValidation {
         // Menu selection by keyboard need not use the declared equivalent.
         // AppKit owns that selection; repeat and composition still cannot fire
         // it, nor a chord that ended one (`Presenter.endComposition`, #140).
-        if let event = NSApp.currentEvent, event.type == .keyDown,
+        if let event = ShortcutMenu.lookingUp ?? NSApp.currentEvent, event.type == .keyDown,
            event.isARepeat || (NSApp.keyWindow?.firstResponder as? NSTextInputClient)?.hasMarkedText() == true
             || presenter?.endedComposition(event) == true { return }
         guard let view = presenter?.views[id] else { return }

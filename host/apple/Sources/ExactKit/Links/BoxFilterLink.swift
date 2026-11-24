@@ -53,6 +53,8 @@ package protocol BoxFilterSet: AnyObject {
     func changed(_ view: PlatformView)
     /// `view`'s picture showed.
     func landed(_ view: NodeView)
+    /// Whether a box with a filter, which may show its subtree as a picture, holds `view`.
+    func filtered(above view: PlatformView) -> Bool
     /// The batch ended: draw what it touched.
     func render()
 }

@@ -37,16 +37,23 @@ pub fn fragment_of(location: &str) -> String {
 }
 
 /// Derive a location from a host's incoming URL, its fragment kept. For
-/// non-HTTP schemes the authority is the first path segment, so
-/// `interview://post/42` is `/post/42`. A scheme without `//` uses
-/// everything after `:` as that path (e.g. mailto).
+/// non-HTTP schemes a non-empty authority is the first path segment, so
+/// `interview://post/42` is `/post/42`, and an empty one is no segment, so
+/// `interview:///post/42` and `interview:/post/42` are `/post/42` too. A
+/// scheme without `//` uses everything after `:` as that path (e.g. mailto).
 pub fn location_of(href: &str) -> String {
     let input = clean(href);
     let location = match scheme(&input) {
         Some((name, after))
             if !name.eq_ignore_ascii_case("http") && !name.eq_ignore_ascii_case("https") =>
         {
-            path_query(&format!("/{}", after.strip_prefix("//").unwrap_or(after)))
+            let path = after.strip_prefix("//").unwrap_or(after);
+            // `path_query` folds a backslash to `/`, so one leads an empty authority's path too.
+            if path.starts_with(['/', '\\']) {
+                path_query(path)
+            } else {
+                path_query(&format!("/{path}"))
+            }
         }
         Some((_, after)) => path_query(without_authority(after.trim_start_matches(['/', '\\']))),
         None => canonical(&input),

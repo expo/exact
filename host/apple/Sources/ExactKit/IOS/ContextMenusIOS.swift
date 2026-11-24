@@ -547,7 +547,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         // pull-down's stand-in does, `MenuFocus.lendFill`): the preview's ground
         // is that fill, so a chat bubble keeps its colour, not UIKit's white. A
         // fill drawn otherwise (`background-clip: text`) is in the copy already.
-        if let fill = shown.layer.backgroundColor, fill.alpha > 0 {
+        if let fill = shown.ownFill, fill.alpha > 0 {
             parameters.backgroundColor = UIColor(cgColor: fill)
         }
         guard let target = LiftTarget.target(shown) else { return nil }
@@ -850,7 +850,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
               source.layer.borderWidth == 0, let parent = source.superview else { return nil }
         // From the nearest view under the paragraph that covers the reach opaquely, or the box the padding extends: nothing behind it shows
         let root = sequence(first: parent, next: { $0.superview }).first {
-            $0.layer.opacity >= 1 && ($0.layer.backgroundColor?.alpha ?? 0) >= 1 && ($0.layer === lines.box || covers($0.layer, reach, in: container.layer))
+            $0.layer.opacity >= 1 && ($0.ownFill?.alpha ?? 0) >= 1 && ($0.layer === lines.box || covers($0.layer, reach, in: container.layer))
         } ?? source.window ?? container
         switch underneath(root.layer, across: reach, in: container.layer, exceptFor: source.layer, within: lines.box) {
         case .screen:

@@ -168,12 +168,14 @@ fn every_corpus_and_conformance_plan_is_the_same_without_a_kernel() {
     // 1048.004 stage 2: virtualized lists and `id` references included),
     // except one whose initializer reads a resource through a prop, which
     // `projects_as_booted` sends to the kernel (budget.contract, 976bef093),
-    // and one with `rem` or `em` lengths, which the fold leaves to the
-    // kernel's inherited font sizes (rem.contract, 077fe52b4).
+    // one with `rem` or `em` lengths, which the fold leaves to the kernel's
+    // inherited font sizes (rem.contract, 077fe52b4), and one with a `portal`,
+    // whose placement only the kernel's render writes (LLP 1013.002 D7).
     assert!(
         skipped.iter().all(|why| why.ends_with("no kernel render")
             || why.ends_with("a slot's initializer reads a resource")
-            || why.ends_with("a relative length (rem, em)"))
+            || why.ends_with("a relative length (rem, em)")
+            || why.ends_with("a portal"))
             && compared > 0,
         "{compared} of {} plans compared; skipped: {skipped:#?}",
         files.len()

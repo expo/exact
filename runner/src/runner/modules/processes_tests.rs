@@ -76,7 +76,7 @@ fn a_model_handler_starts_no_program() {
         "probe".into(),
         "probe",
         &serde_json::json!({}),
-        CallOrigin::Tool,
+        crate::runner::provenance::Cause::of(CallOrigin::Tool, 0, false),
         To::Implementation(reply),
         None,
     );

@@ -27,7 +27,8 @@ An `iframe` with `sandbox`, including `sandbox=""`, is refused before a WebView 
 names `iframe <id>: sandbox is unsupported on Android`. Adding `sandbox` destroys the frame's existing WebView.
 
 A frame whose renderer ends, by a crash or because Android reclaimed it, keeps the app running: its WebView is
-destroyed and a new one silently reloads its `src` (LLP 1020 D2). The log names `iframe <id>: the page's renderer
+destroyed and a new one silently reloads its `src` (LLP 1020 D2); a kept partition's frame (`FrameBrowser.kt`) reports
+the end and reloads what it showed as LLP 1020.002 D2 has it. The log names `iframe <id>: the page's renderer
 crashed; loading its src again`. The frame reports `load` for completed documents, including error pages.
 AndroidX's navigation listener identifies each document separately. With web messaging, the reader observes
 the document's load from document start when available, or from the main-frame commit on older providers.

@@ -85,11 +85,12 @@ impl<D: DataSource> Runner<D> {
         why: &str,
     ) {
         let target = Target::Resource(i);
-        if !forced
-            && (self.pending.iter()).any(|p| {
-                p.target == target && p.reask_at.is_some() && p.args == args && p.reasks == reasks
-            })
-        {
+        let standing = (self.pending.iter()).find(|p| {
+            p.target == target && p.reask_at.is_some() && p.args == args && p.reasks == reasks
+        });
+        if let Some(ticket) = standing.map(|p| p.ticket).filter(|_| !forced) {
+            // It reads what this commit changed too (LLP 1133.023 D7a).
+            self.note_kept(target, ticket);
             return;
         }
         let after = REASK_MS[reasks];

@@ -43,6 +43,7 @@ fn delivery(platform: &str) {
             packages: Vec::new(),
             clock_started: None,
             preferences: None,
+            page: None,
         };
         let (mut p, error) = boot_presenter::<()>(&mut config, (390., 844.)).unwrap();
         assert!(error.is_none(), "{error:?}");

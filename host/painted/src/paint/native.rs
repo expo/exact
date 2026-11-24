@@ -53,7 +53,7 @@ pub enum NativeKind {
 }
 
 /// What a media node's props carry beside its own: what the presenter knows
-/// of it from the runner (LLP 1042.001 D3).
+/// of it from the runner (LLP 1042.001 D3); and an iframe's commands.
 pub(crate) struct Media {
     /// Each media node has a platform player, which draws its controller
     /// and takes the window's focus: only Android's reader has one.
@@ -69,6 +69,8 @@ pub(crate) struct Media {
     /// `fastSeek`, `load` and `requestFullscreen` asked of each node, numbered as the Apple arm
     /// numbers them, so a player made again from its record repeats none.
     pub(crate) commands: std::collections::BTreeMap<exact_kernel::NodeKey, Commands>,
+    /// A partitioned iframe's commands (LLP 1020.002 D3), for its reader to run.
+    pub(crate) frames: std::collections::BTreeMap<exact_kernel::NodeKey, FrameCommands>,
     /// The nodes asked since the last paint: their rows paint again.
     pub(crate) asked: Vec<exact_kernel::NodeKey>,
     /// The media nodes whose player has shown their source's first frame
@@ -86,6 +88,7 @@ impl Default for Media {
             epoch: None,
             timed: Default::default(),
             commands: Default::default(),
+            frames: Default::default(),
             asked: Vec::new(),
             framed: Default::default(),
             held: Vec::new(),
@@ -103,6 +106,43 @@ pub(crate) struct Commands {
     pub(crate) loads: u32,
     /// How many `requestFullscreen`s.
     pub(crate) fullscreens: u32,
+}
+
+/// An iframe's latest commands, `[seq, name, args…]` with `seq` counting
+/// from 1, for the partition they were given in. The reader runs those
+/// above the last it ran for the frame's allocation, so one it makes again
+/// repeats none; a burst of more than [`FrameCommands::KEPT`] between two
+/// paints keeps the newest.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FrameCommands {
+    pub(crate) partition: String,
+    pub(crate) next: u64,
+    pub(crate) list: std::collections::VecDeque<serde_json::Value>,
+}
+
+impl FrameCommands {
+    pub(crate) const KEPT: usize = 16;
+
+    /// The frame shows `partition` now: a changed partition is a new web
+    /// view, which runs none of the old commands.
+    pub(crate) fn held(&mut self, partition: &str) {
+        if self.partition != partition {
+            self.partition = partition.to_owned();
+            self.list.clear();
+        }
+    }
+
+    /// `name(args)` given to the frame while its partition is `partition`.
+    pub(crate) fn push(&mut self, partition: &str, name: &str, args: &[serde_json::Value]) {
+        self.held(partition);
+        self.next += 1;
+        let mut command = vec![self.next.into(), name.into()];
+        command.extend_from_slice(args);
+        self.list.push_back(command.into());
+        if self.list.len() > Self::KEPT {
+            self.list.pop_front();
+        }
+    }
 }
 
 impl Painter {
@@ -306,17 +346,22 @@ impl Painter {
                 }
                 (NativeKind::Video, props)
             }
-            NodeType::WebView => (
-                NativeKind::WebView,
-                serde_json::json!({
+            NodeType::WebView => {
+                let mut props = serde_json::json!({
                     "src": p.str(PropId::Src),
                     "sandbox": p.str(PropId::Sandbox),
                     "partition": p.str(PropId::Partition),
                     "generation": node.key.generation,
                     "slot": node.key.index,
                     "session": self.native_session,
-                }),
-            ),
+                });
+                let partition = p.str(PropId::Partition).unwrap_or_default();
+                if let Some(c) = self.media.frames.get_mut(&node.key) {
+                    c.held(partition);
+                    props["commands"] = c.list.iter().cloned().collect();
+                }
+                (NativeKind::WebView, props)
+            }
             NodeType::NativeView => (
                 NativeKind::Module,
                 serde_json::json!({

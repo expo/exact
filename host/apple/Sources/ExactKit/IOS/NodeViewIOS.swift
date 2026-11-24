@@ -229,6 +229,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             if (gestureRecognizer === heightRecognizer || gestureRecognizer === transformRecognizer || gestureRecognizer === transformContact?.pinchRecognizer), current is UIScrollView { return false }
             hit = current.superview
         }
+        if gestureRecognizer === transformRecognizer { transformContact?.panReceived(touch, at: touch.location(in: window)) }
         return true
     }
     /// A nested editor owns its selection gestures, including read-only
@@ -360,7 +361,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// field does by itself): the web's rule that only a focusable element
     /// hears these. Keys come from a hardware keyboard (`pressesBegan`).
     /// UIKit's focus search finds what UIKit can focus (`FocusSearch`).
-    package override func didAddSubview(_ subview: UIView) { super.didAddSubview(subview); FocusSearch.joined(subview) }
+    package override func didAddSubview(_ subview: UIView) { super.didAddSubview(subview); if subview !== extras?.boxExtension?.view { keepExtensionLast(); FocusSearch.joined(subview) } }
     /// A hidden element is not exposed. Children stay in the tree: this is
     /// not `accessibilityElementsHidden`, which would hide them too.
     package override var isAccessibilityElement: Bool {
@@ -501,9 +502,16 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // a hand-built field's delegate resigns it (LLP 1115.000 D9.2),
         // unless that action focused this field again: "add another" keeps
         // the keyboard and never lets go of it on the way. Next moves to the
-        // next field instead, and from the last one puts the keyboard away.
+        // next field instead, and from the last one puts the keyboard away,
+        // but only from where the action left the focus. When another field
+        // took the keyboard, or a `focus()` waits to be delivered (a field
+        // not mounted yet, a transition, a sheet presenting), the action
+        // moved the focus and Next adds nothing; Android returns there too
+        // if a handler moved the focus (`hosted.rs`). A refused or cancelled
+        // `focus()` moved nothing, and nor did one on this field.
         if handlers.contains("submit") { presenter?.submit(id) }
-        if props["enterKeyHint"] == "next", presenter?.focusNextField(after: self) == true { return false }
+        if props["enterKeyHint"] == "next", textField.isFirstResponder, presenter?.pendingFocusNode == nil,
+           presenter?.focusNextField(after: self) == true { return false }
         if presenter?.focusAsked !== self, textField.isFirstResponder { textField.resignFirstResponder() }
         return false
     }
@@ -838,7 +846,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// this view's own coordinates — UIKit's convention, not AppKit's.)
     package override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         // A true leaf cannot hit beyond its bounds; flat children can overflow.
-        if !bounds.contains(point), subviews.isEmpty,
+        if !bounds.contains(point), heldSubviews.isEmpty,
            presenter?.flats.holdsLeaves(id) != true, layoutHits == nil, !hitBounds.contains(point) { return nil }
         // UIKit's conversion already carries a box in space through its
         // plane (LLP 1077 D8); a hidden back face is the host's to refuse.
@@ -1112,7 +1120,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         swipeOwner = props["swipeContent"] != nil
         if isParagraph, ["textOffset", "textLeft", "textWidth"].contains(where: { set[$0] != nil || clear.contains($0) }) { textRasterGeometryChanged() }
         if set["groupedSeparator"] != nil || clear.contains("groupedSeparator") { applyGroupedSeparator() }
-        if set["symbolEffectValue"] != nil || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
+        if set["symbolEffectValue"] != nil || clear.contains("symbolEffectValue") || set["symbolColorWritten"] != nil || clear.contains("symbolColorWritten")
             || set["symbolFillRule"] != nil || clear.contains("symbolFillRule")
             || set["symbolAsset"] != nil || clear.contains("symbolAsset") { updateSymbol() }
         if (pendingScrollLeft ?? 0) != 0 || (pendingScrollTop ?? 0) != 0 { needScroll() }
@@ -1187,11 +1195,14 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if f.set(style["filter"]) {
             boxFilter = f
             presenter?.boxFilters?.add(self) { [weak self] in self?.renderFilter(fresh: $0) }
+            // Before the picture is drawn, which paints them as it draws them: no extension shows beneath a filter (LLP 1123 D13)
+            Self.extensionsUnder(self)
             redrawFilter()
         } else if let f = boxFilter {
             f.remove()
             boxFilter = nil
             presenter?.boxFilters?.remove(self)
+            Self.extensionsUnder(self)
             applyBoxMask()
             presenter?.afterBatch { [weak self] in self?.filterPublished() }
         }
@@ -1225,6 +1236,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if Self.containerMoves == 0 { pressEpoch &+= 1; cancelPressContact(reparenting: true); presenter?.unshown(self) } // a new parent: shown elsewhere
         super.didMoveToSuperview()
         Self.textRasterAncestryChanged(self)
+        Self.extensionsUnder(self)
         ScrollMembership.epoch &+= 1
         overflowClipGeometryChanged()
         Self.textGeometry &+= 1

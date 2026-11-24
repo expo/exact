@@ -225,6 +225,7 @@ impl<D: DataSource> Presenter<D> {
                     preferences: Some(self.host.runner().viewport().preferences),
                     time: Some(self.host.runner().wall_time()),
                     place: Some(self.host.runner().place().clone()),
+                    page: Some(self.candidate_page()),
                     ..exact_runner::time::Launch::NONE
                 },
                 || {
@@ -536,6 +537,7 @@ impl<D: DataSource> Presenter<D> {
                 preferences: Some(self.host.runner().viewport().preferences),
                 time: Some(self.host.runner().wall_time()),
                 place: Some(self.host.runner().place().clone()),
+                page: Some(self.candidate_page()),
                 ..exact_runner::time::Launch::NONE
             },
             || {

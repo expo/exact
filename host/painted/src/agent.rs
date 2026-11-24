@@ -774,7 +774,8 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
     if let Some(code) = retier {
         p.retier_surfaces(code);
     }
-    if let Some(e) = p.set_page(page) {
+    let partition = page_facts.contains_key("iframe-partition");
+    if let Some(e) = p.prefer_page(page, partition) {
         return error(&e);
     }
     if let Some(e) = presented.and_then(|v| p.prefer_presented(Some(v))) {

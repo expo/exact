@@ -808,10 +808,26 @@ impl<D: DataSource> Runner<D> {
             .iter_mut()
             .map(|row| &mut row.overlay)
             .for_each(|o| *o = None);
+        let nothing = self.unsent.is_empty()
+            && !change.any
+            && stale.is_empty()
+            && self.writes.records.is_empty();
+        if nothing {
+            return Ok(None);
+        }
+        // What its answers open (a task, a sequence, a mounted component's
+        // task) is the work that waited (LLP 1133.023 D7a).
+        let cause = self.ready_cause(&stale, change.any);
+        self.as_cause(cause, |r| r.activate_with(stale, launch))
+    }
+
+    /// [`Self::activate`]'s commit, once something waited.
+    fn activate_with(
+        &mut self,
+        stale: Vec<usize>,
+        launch: Vec<usize>,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
         if self.unsent.is_empty() {
-            if !change.any && stale.is_empty() && self.writes.records.is_empty() {
-                return Ok(None);
-            }
             self.owe(&stale);
             self.launch = launch;
             return (self.reasking(|r| r.commit_again(stale, "data_ready"))).map(Some);

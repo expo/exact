@@ -172,6 +172,7 @@ fn filled_settings_are_checked_held_and_journalled() {
         _ => format!("{origin}/feed"),
     };
     let mut request = Request::get(&target);
+    request.reach.origin = exact_runner::CallOrigin::App;
     request.method = "POST".into();
     request.headers = vec![("X-Note".into(), value.into())];
     request.body = std::env::var("EONE_EXECUTOR_HEADER")

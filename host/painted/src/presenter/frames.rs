@@ -1,12 +1,16 @@
 //! An iframe's commands (@ref LLP 1020.002 D3, D7, D11) on a painted host:
 //! `navigate(id, url)`, `traverseHistory(id, delta)`, `reload(id, ignoreCache=)`,
 //! `stopLoading(id)`, `captureScreenshot(id, path, clip=)` and `openDevTools(id)`.
-//! None is built here yet (LLP 1020.002 §11: Android `later`, Linux `absent`),
-//! so each is refused where the app hears it: the frame's `navigateerror`
-//! with `NotSupportedError`, a capture's `capture` with it (LLP 1133 D8).
+//! Where the reader keeps partitions (`exactPage().iframePartition`, Android
+//! with the WebView's profiles and navigation listener) the four that move a
+//! frame go to a partitioned frame's reader in its props
+//! (`paint/native.rs`). The rest, and any to an unpartitioned frame or on a
+//! host without (LLP 1020.002 §11: Linux `absent`), are refused where the app
+//! hears it: the frame's `navigateerror` with `NotSupportedError`, a
+//! capture's `capture` with it (LLP 1133 D8).
 
 use super::Presenter;
-use exact_kernel::{NodeKey, NodeType, ViewId};
+use exact_kernel::{NodeKey, NodeType, PropId, ViewId};
 use exact_runner::{DataSource, Event};
 
 /// The frame commands, by name; a bare `reload()` is the development host's.
@@ -27,22 +31,63 @@ pub(super) fn id(args: &[exact_plan::Value]) -> &str {
         .unwrap_or_default()
 }
 
+/// `page` with `exactPage().iframePartition` as `kept` answers, asked only
+/// by a plan with an `iframe`, as asking may load the platform's web engine.
+pub fn with_partitions(
+    page: exact_runner::Page,
+    plan: &exact_plan::Plan,
+    kept: fn() -> Option<bool>,
+) -> exact_runner::Page {
+    exact_runner::Page {
+        iframe_partition: page.iframe_partition || framed(plan) && kept() == Some(true),
+        ..page
+    }
+}
+
+fn framed(plan: &exact_plan::Plan) -> bool {
+    (plan.nodes.iter()).any(|node| NodeType::from_wire(node.node_type) == Some(NodeType::WebView))
+}
+
 impl<D: DataSource> Presenter<D> {
-    /// `exactPage().iframePartition`: what `kept` answers, asked only by a
-    /// plan with an `iframe`, as asking may load the platform's web engine.
-    pub fn serve_frame_partitions(&mut self, kept: impl FnOnce() -> bool) {
-        let plan = self.host.runner().plan();
-        if !(plan.nodes.iter())
-            .any(|node| NodeType::from_wire(node.node_type) == Some(NodeType::WebView))
-        {
-            return;
+    /// Asks `kept` for `exactPage().iframePartition` when a live update
+    /// brings the first `iframe`, unless the boot's plan had one and the
+    /// platform answered (`None`: it could not, and is asked again).
+    pub fn serve_frame_partitions(&mut self, kept: fn() -> Option<bool>) {
+        self.frame_partitions = Some(kept);
+        self.frame_partitions_asked();
+    }
+
+    /// `exactPage()` from the first settlement of a runner that replaces
+    /// this one: this one's facts, with `iframePartition` asked if the
+    /// reader has not been and the new plan has an `iframe`.
+    pub(super) fn candidate_page(&self) -> exact_runner::time::PageFacts {
+        let (page, kept) = (self.host.runner().page(), self.frame_partitions);
+        exact_runner::time::PageFacts::new(move |plan| match kept {
+            Some(kept) => with_partitions(page, plan, kept),
+            None => page,
+        })
+    }
+
+    /// A drive's facts (`prefer`): an `iframePartition` it names holds, and
+    /// the reader is not asked after.
+    pub(crate) fn prefer_page(
+        &mut self,
+        page: exact_runner::Page,
+        partition: bool,
+    ) -> Option<String> {
+        let error = self.set_page(page);
+        if partition && error.is_none() {
+            self.frame_partitions = None;
         }
-        let page = exact_runner::Page {
-            iframe_partition: kept(),
-            ..self.host.runner().page()
-        };
-        if let Some(e) = self.set_page(page) {
-            self.host.log(format!("page: {e}"));
+        error
+    }
+
+    /// The platform is asked until it answers, once.
+    pub(super) fn frame_partitions_asked(&mut self) {
+        if framed(self.host.runner().plan())
+            && self.frame_partitions.is_some_and(|kept| kept().is_some())
+        {
+            self.frame_partitions = None;
         }
     }
 
@@ -60,19 +105,43 @@ impl<D: DataSource> Presenter<D> {
                 .host
                 .log(format!("{name}: no unique live iframe with id \"{id}\""));
         };
+        if let Some(partition) = self.moved_by_reader(name, view, key) {
+            let args: Vec<serde_json::Value> = (args.iter().skip(1))
+                .map(|a| match (a.as_str(), a.as_number(), a.as_bool()) {
+                    (Some(s), ..) => s.into(),
+                    (_, Some(n), _) => n.into(),
+                    (.., Some(b)) => b.into(),
+                    _ => serde_json::Value::Null,
+                })
+                .collect();
+            let frames = self.brush.media.frames.entry(key).or_default();
+            frames.push(&partition, name, &args);
+            self.brush.media.asked.push(key);
+            self.dirty = true;
+            return;
+        }
         let host = if cfg!(target_os = "android") {
             "Android"
         } else {
             "this host"
         };
-        let message = format!(
-            "{name}: iframe \"{id}\": {host} does not yet {}",
-            match name {
-                "captureScreenshot" => "capture a frame's pixels",
-                "openDevTools" => "open a frame's inspector",
-                _ => "navigate a frame",
+        let partitioned = (self.host.kernel().node(view))
+            .is_some_and(|node| node.props.str(PropId::Partition).is_some());
+        let message = match name {
+            "captureScreenshot" | "openDevTools" => format!(
+                "{name}: iframe \"{id}\": {host} does not yet {}",
+                if name == "openDevTools" {
+                    "open a frame's inspector"
+                } else {
+                    "capture a frame's pixels"
+                }
+            ),
+            // As Apple's: only a partitioned frame is a browsing context of its own to move.
+            _ if !partitioned && self.host.runner().page().iframe_partition => {
+                format!("{name}: iframe {id} has no partition")
             }
-        );
+            _ => format!("{name}: iframe \"{id}\": {host} does not yet navigate a frame"),
+        };
         self.host.log(&message);
         if self
             .host
@@ -105,6 +174,23 @@ impl<D: DataSource> Presenter<D> {
             "navigateerror"
         };
         self.frame_event(view, event, &payload.to_string());
+    }
+
+    /// The partition of the frame at `view` whose reader runs `name`: a
+    /// command that moves a mounted partitioned frame, where the reader
+    /// keeps partitions. The reader refuses it for a partition it cannot keep.
+    fn moved_by_reader(&self, name: &str, view: ViewId, key: NodeKey) -> Option<String> {
+        let moves = matches!(
+            name,
+            "navigate" | "traverseHistory" | "reload" | "stopLoading"
+        );
+        let node = self
+            .host
+            .kernel()
+            .node(view)
+            .filter(|node| node.key == key)?;
+        let partition = node.props.str(PropId::Partition)?;
+        (moves && self.host.runner().page().iframe_partition).then(|| partition.to_owned())
     }
 
     /// The one live iframe with this `id`, and its allocation.

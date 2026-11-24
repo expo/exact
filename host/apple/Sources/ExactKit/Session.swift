@@ -393,6 +393,8 @@ public final class ExactSession {
     var launchLocation: String? // a pre-boot `openURL`'s location, until the first frame (LaunchURL.swift)
     /// Nil until this session's launch route is journaled.
     var seenNavigationEntries: Set<UInt64>?
+    /// When work last ended (`workEnded`), on the `CACurrentMediaTime` clock: a metric's ledger read is no earlier (`ExactLaunch.readLedger`).
+    var workEndedAt = 0.0
     var pendingLaunchLocations: [String] = []
     /// The host's window for a link's `target`, `_blank` or a name (LLP 1030.004 D1); unset, links navigate in place.
     /// `resume` (Settings…, D5): the window forward as it stands, or opened where it last was.
@@ -489,6 +491,8 @@ public final class ExactSession {
         if fillInFlight || !afterFill.isEmpty { out.append("fill") }
         // Count a published batch only if it shows something new: one that shows nothing is not loading, nor is a hold it moves or an error it logs (LLP 1132 D5)
         if hasPublished({ !showsNothing($0) }) { out.append("published") }
+        // A large batch prepared off screen shows at its reveal (LLP 1072 T13)
+        if stage != nil { out.append("staged") }
         if canvasInFlight || canvasOwed || presenter.canvas2d.loadingCount > 0 { out.append("canvas") }
         #if os(iOS)
         if (SvgLink.drawing?() ?? 0) > 0 { out.append("svgPicture") }

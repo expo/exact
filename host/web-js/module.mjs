@@ -14,7 +14,7 @@ import { gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 // Also for its PATH: the pinned binaryen (and Cargo) as every web build has
 // them, so a prebuild optimizes and keeps what an app's build would.
-import { awaitBuildOutput, cargoCheckout, WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, injectedProfiles, resolveApp, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
+import { awaitBuildOutput, cargoCheckout, refuseStdLockfile, WEB_STD, WEB_SIZE, WEB_TOOLCHAIN, injectedProfiles, resolveApp, wasmRemapFlags, webToolchainEnv } from '../../scripts/app.mjs';
 import { rustDataOf, undeclaredDataCrate } from '../../scripts/app-shells.mjs';
 import { appCrates, linkedCrate } from '../../scripts/cargo-check.mjs';
 import { SETUP_FETCHES, withHostDeployment } from '../../scripts/filesystem.mjs';
@@ -123,6 +123,13 @@ const WASM_FLAGS = () => (wasmFlags ??= [...WEB_STD, ...wasmRemapFlags(null, WEB
 // cannot link is refused with its install command (scripts/cargo-check.mjs).
 let linkChecked = false;
 const LINK_FLAGS = () => { if (!linkChecked) { webToolchainEnv(process.env, { linksWasm: true }); linkChecked = true; } return WASM_FLAGS(); };
+// Each directory a WEB_STD build runs Cargo in, under each lockfile variable, once Cargo's configuration there names
+// no lockfile (`refuseStdLockfile`).
+const stdChecked = new Set();
+const checkStd = (cwd, what) => {
+  const key = `${cwd}\0${process.env.CARGO_RESOLVER_LOCKFILE_PATH ?? ''}`;
+  if (!stdChecked.has(key)) { refuseStdLockfile(process.env, cwd, what); stdChecked.add(key); }
+};
 // What those flags say apart from this checkout's path, for a kept module's group.
 const WASM_FLAGS_KEY = () => WASM_FLAGS().map(f => f.replaceAll(root, '.'));
 // Under this checkout's own target/ (AGENTS.md: never another checkout's):
@@ -235,14 +242,6 @@ function lockFrom(crate) {
 
 const LOCKFILE_KEY = 'resolver.lockfile-path';
 
-// Let Cargo apply configuration includes and environment overrides.
-function usesDefaultLock(env) {
-  const result = spawnSync('cargo', [`+${WEB}`, '-Z', 'unstable-options', 'config', 'get', LOCKFILE_KEY, '--color=never'], { env, encoding: 'utf8' });
-  if (result.status === 0) return false;
-  if (result.stderr?.trimEnd().endsWith(`error: config value \`${LOCKFILE_KEY}\` is not set`)) return true;
-  throw new Error(`module Cargo config: ${result.stderr || result.error?.message}`);
-}
-
 // Cargo prunes unused pins. Start each resolution with Exact's full lockfile
 // and preserve the build lockfile's mtime when the result is identical.
 function resolveDevLock(lock, readMetadata) {
@@ -265,9 +264,7 @@ export function moduleMetadata(manifest, env, dev = false) {
     if (result.status !== 0) throw new Error(`module metadata: ${result.stderr || result.error?.message}`);
     return JSON.parse(result.stdout);
   };
-  const locked = dev && usesDefaultLock(env);
-  const metadata = locked ? resolveDevLock(resolve(dirname(manifest), 'Cargo.lock'), readMetadata) : readMetadata();
-  return { metadata, locked };
+  return { metadata: dev ? resolveDevLock(resolve(dirname(manifest), 'Cargo.lock'), readMetadata) : readMetadata(), locked: dev };
 }
 
 /** A built `app.js` past this is an order of magnitude over what the apps here build, and near what a host refuses
@@ -328,6 +325,7 @@ function prepareModule(wasm, done, { manifest, targetDir, profile, wrapper = fal
 }
 
 export function buildModule(app, out, draw = false, dir = resolve(root, 'apps', app), { dev = false } = {}) {
+  checkStd(process.cwd(), app);
   const key = dirKey(dir);
   out ??= resolve(MODULES, `${app}-${key}`);
   const manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
@@ -336,8 +334,9 @@ export function buildModule(app, out, draw = false, dir = resolve(root, 'apps', 
   // the data crate.
   const data = rustDataOf(manifest);
   if (!data) return ownModule(app, out, dir, dev);
-  // Canvas 2D draws only for a plan that has a 2D surface (logic/abi/src/draw.rs).
-  const lib = `exact_logic_abi::export!(${data.ty}, ${data.source});\n${draw ? `exact_logic_abi::export_draw!(${data.ty});\n` : ''}`;
+  // Canvas 2D draws only for a plan that has a 2D surface (logic/abi/src/draw.rs). Beside app.ts, the module carries
+  // the sources Rust answers (logic/abi/src/sources.rs).
+  const lib = `exact_logic_abi::export!(${data.ty}, ${data.source});\n${draw ? `exact_logic_abi::export_draw!(${data.ty});\n` : ''}${existsSync(resolve(dir, 'app.ts')) ? `exact_logic_abi::export_sources!(${data.lib}::RUST_SOURCES);\n` : ''}`;
   const resolved = resolveApp(dir);
   // An app whose host crates exact2 generates has the module as a member of that workspace (`.exact/shells/module`),
   // built --locked against the app's resolution, so a data crate's dependencies resolve once.
@@ -429,25 +428,46 @@ function ownModule(app, out, dir, dev) {
   return module(manifest, pkg.replaceAll('-', '_'), out, `${app}: ${pkg}`, undefined, dev);
 }
 
-/** A logic module's grants (the seam's first call, `meta`): what its storage
- * requests may name, which decides whether the page ships the storage
- * adapters. A `production` build refuses a dev loop's module. */
-export async function moduleGrants(path, { production = false } = {}) {
-  const { module, instance } = await WebAssembly.instantiate(readFileSync(path), {}), e = instance.exports;
-  if (production && WebAssembly.Module.customSections(module, DEV_MARK).length) throw new Error(`this production build was given a dev loop's Rust module (built at ${DEV_PROFILE}, not optimized): give --data or --plan a build made without --dev`);
-  const abi = e.exact_logic_abi();
+/** A logic module's `meta`, the seam's first call: the app id its data names and its grants, or null if it fails. */
+function moduleMeta(instance, path) {
+  const e = instance.exports, abi = e.exact_logic_abi();
   if (abi !== 12) throw new Error(`${path}: Rust module ABI ${abi} is not 12; rebuild it with this checkout`);
   const session = e.exact_logic_create(), request = new Uint8Array(5), p = e.exact_logic_alloc(request.length);
   new DataView(request.buffer).setUint32(0, abi, true);
   new Uint8Array(e.memory.buffer, p, request.length).set(request);
-  if (e.exact_logic_call(session, p, request.length) !== 0) return '';
+  if (e.exact_logic_call(session, p, request.length) !== 0) return null;
   const out = new Uint8Array(e.memory.buffer, e.exact_logic_output(session), e.exact_logic_output_len(session)).slice(), d = new DataView(out.buffer);
+  // The reply's header: the ABI, then the kind of reply, 0 for `meta` (logic/abi/src/lib.rs `dispatch`).
+  if (out.length < 5 || d.getUint32(0, true) !== abi || out[4] !== 0) return null;
   let at = 5;
-  const str = () => { const n = d.getUint32(at, true), t = new TextDecoder().decode(out.subarray(at + 4, at + 4 + n)); at += 4 + n; return t; };
-  str();
-  return str();
+  // The id exactly as Rust wrote it, a leading U+FEFF included, since the composition compares it byte for byte.
+  const str = (ignoreBOM = false) => { const n = d.getUint32(at, true), t = new TextDecoder('utf-8', { ignoreBOM }).decode(out.subarray(at + 4, at + 4 + n)); at += 4 + n; return t; };
+  return { appId: str(true), grants: str() };
 }
 
+/** A logic module's grants: what its storage requests may name, which decides whether the page ships the storage
+ * adapters. A `production` build refuses a dev loop's module. */
+export async function moduleGrants(path, { production = false } = {}) {
+  const { module, instance } = await WebAssembly.instantiate(readFileSync(path), {});
+  if (production && WebAssembly.Module.customSections(module, DEV_MARK).length) throw new Error(`this production build was given a dev loop's Rust module (built at ${DEV_PROFILE}, not optimized): give --data or --plan a build made without --dev`);
+  return moduleMeta(instance, path)?.grants ?? '';
+}
+
+/** The sources a module beside app.ts answers, as its `exact_logic_abi::export_sources!` carries them, or null for a
+ * module that carries none. The module is refused what a native host's composition refuses (`exact_data::Mixed::new`
+ * over `Placed::named`): a source named twice or empty, and data whose app id is neither empty nor app.ts's, which is
+ * `manifest.app.id` (the selected variant's) as the page runs it. */
+export async function moduleSources(path, manifest) {
+  const { module, instance } = await WebAssembly.instantiate(readFileSync(path), {});
+  const [section] = WebAssembly.Module.customSections(module, 'exact.rust_sources');
+  if (!section) return null;
+  const names = JSON.parse(new TextDecoder().decode(section)), bad = names.find((name, i) => !name || names.indexOf(name) !== i);
+  if (bad !== undefined) throw new Error(`RUST_SOURCES names ${bad ? `\`${bad}\` twice` : 'an empty source'}: name each source once`);
+  const meta = moduleMeta(instance, path), id = manifest.app.id;
+  if (!meta) throw new Error('its Rust module did not answer `meta`, the seam\'s first call');
+  if (meta.appId && meta.appId !== id) throw new Error(`its Rust data's app_id is ${JSON.stringify(meta.appId)}, but app.ts's is ${JSON.stringify(id)}${manifest.variant ? ` (variant ${manifest.variant.name})` : ''}: the two halves of a mixed app declare one identity, so return the same id or an empty one`);
+  return names;
+}
 
 /** Markdown pieces (LLP 1045 D3) as a loaded capability for the runtime:
  * the web host's own `exact_web_capabilities::markdown::pieces`, exported
@@ -512,6 +532,7 @@ export async function buildFlow({ out = resolve(MODULES, 'flow'), keepFresh = fa
   const leaf = own ? null : taken('textflow.wasm', at);
   if (leaf?.path) { replace(wasm, (temp) => cpSync(leaf.path, temp)); held.set('textflow.wasm', leaf.kept); return wasm; }
   const started = Date.now();
+  checkStd(root, 'textflow.wasm');
   const r = await run('cargo', [`+${WEB}`, 'build', '--profile', 'web', '--target', 'wasm32-unknown-unknown', '-p', 'exact-textflow', '--bin', 'textflow-web', ...LINK_FLAGS()],
     { cwd: root, env: { ...process.env, CARGO_TARGET_DIR: target } });
   if (r.status !== 0) throw new Error('textflow.wasm did not build');
@@ -610,6 +631,7 @@ ${patch}`;
   const leaf = own ? null : taken(`${name}.wasm`, at);
   if (leaf?.path) { replace(wasm, (temp) => cpSync(leaf.path, temp)); held.set(`${name}.wasm`, leaf.kept); return wasm; }
   const started = Date.now();
+  checkStd(process.cwd(), `${name}.wasm`);
   const r = await run('cargo', cargoWasmArgs(resolve(crate, 'Cargo.toml')), { env: { ...process.env, CARGO_TARGET_DIR: target } });
   if (r.status !== 0) throw new Error(`${name}.wasm did not build`);
   const optimizedLeaf = await replace(wasm, async (temp) => !unoptimized.has(await optimizeAsync(product, temp, `${name}.wasm`)));

@@ -120,13 +120,22 @@ extension NodeView {
         }
         switch gesture.state {
         case .began:
-            if transformHold == nil { transformHold = TransformDragHold(self, time: time) }
+            // A touch's pan translation starts where UIKit recognized it, past
+            // its hysteresis. When one finger's pan begins the hold, the hold
+            // starts with that finger's travel since it touched down, so the
+            // target steps to the finger in its first sample and the release's
+            // velocity counts no step. Otherwise the pan keeps the movement
+            // that recognized it (a coalesced drag may begin and end at once).
+            let point = pan.location(in: window)
+            let down = isPan && !contact.pinching && transformHold == nil ? contact.panDown : nil
+            if transformHold == nil {
+                let travel = down.map { CGPoint(x: point.x - $0.x, y: point.y - $0.y) } ?? .zero
+                transformHold = TransformDragHold(self, time: time, travel: travel)
+            }
             guard transformHold != nil else { return }
             if isPan { contact.panning = true } else { contact.pinching = true }
-            // UIKit measures a pan from touch-down: keep the movement that
-            // recognized it (a coalesced drag may begin and end at once).
-            let point = focal(), t = pan.translation(in: window)
-            anchor(isPan && !contact.pinching ? CGPoint(x: point.x - t.x, y: point.y - t.y) : nil)
+            let t = pan.translation(in: window)
+            anchor(isPan && !contact.pinching ? (down == nil ? CGPoint(x: point.x - t.x, y: point.y - t.y) : point) : nil)
             if let values = current(), (transformHold as? TransformDragHold)?.move(to: values, time: time) != true { transformHold?.cancel(); transformHold = nil }
         case .changed:
             guard let hold = transformHold as? TransformDragHold else { return }

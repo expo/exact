@@ -1373,6 +1373,7 @@ mod finish_bytes_tests {
                                 mode: exact_plan::SurfaceArgsMode::Positional,
                                 names: vec![],
                                 values: vec![exact_plan::Value::str("日本語")],
+                                types: vec![None],
                             });
                             batch.command("focus", &[exact_plan::Value::Number(1.)], None);
                             batch.destroy(3);

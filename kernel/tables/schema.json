@@ -1507,7 +1507,7 @@
       "id": 218,
       "name": "symbolEffectValue",
       "kind": "str",
-      "_comment": "@ref LLP 1077 D12: a symbol's discrete effect (bounce, wiggle) plays each time this value changes, as SwiftUI's `.symbolEffect(_:value:)`."
+      "_comment": "@ref LLP 1077 D12: present, a symbol's effect plays in its discrete form, once each time this value changes, as SwiftUI's `.symbolEffect(_:value:)`; scale, which has no discrete form, runs while set."
     },
     {
       "id": 225,
@@ -4641,7 +4641,10 @@
       "bit": 165,
       "field": "symbol_effect",
       "codec": "enum:SymbolEffect",
-      "_comment": "@ref LLP 1077 D12: not CSS. An SF Symbol effect: a continuing one (pulse, breathe, rotate, variable-color, scale) plays while set; a discrete one (bounce, wiggle) plays each time `symbolEffectValue` changes; replace plays when the source changes.",
+      "_comment": "@ref LLP 1077 D12: not CSS. An SF Symbol effect. With `symbolEffectValue`, one with a discrete form (all but scale) plays once each time the value changes; without it, one with an indefinite form runs while set (bounce, wiggle, breathe and rotate from iOS 18 and macOS 15); replace plays when the source changes. The web stands in for bounce, pulse and scale.",
+      "hosts": [
+        { "host": "painted", "fidelity": "none", "why": "no symbol effect is drawn; the symbol stays still" }
+      ],
       "cold": true
     },
     {

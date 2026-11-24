@@ -991,6 +991,7 @@ mod tests {
     fn fixture_config(plan: Vec<u8>) -> crate::app::Config {
         crate::app::Config {
             preferences: None,
+            page: None,
             output_rotation: Default::default(),
             #[cfg(target_os = "macos")]
             painted_boot: None,

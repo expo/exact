@@ -14,11 +14,10 @@ import { cdpBrowser, chromium } from '../../../scripts/agent-launch.mjs';
 import { withLook } from '../look.mjs';
 import { need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
-import { standIns } from './stand-ins.mjs';
+import { runtimeSource, standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const WEB_JS = resolve(WEB, '../web-js');
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
@@ -64,7 +63,7 @@ const page = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/<
 const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js'];
 const STUBS = standIns(REAL);
 const module = name => ['navigation.js', 'input-glue.js', 'prompt-glue.js', 'alert-message.js'].includes(name) ? readFileSync(resolve(WEB, name))
-  : REAL.includes(name) ? readFileSync(resolve(WEB_JS, name))
+  : REAL.includes(name) ? runtimeSource(name)
   : STUBS.get(name) ?? null;
 
 /** The page in headless Chrome: `test(evaluate, call)` with its `Runtime.evaluate` and its CDP session. */

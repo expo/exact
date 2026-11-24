@@ -19,6 +19,21 @@ pub(super) const PRESENCE_ROWS: [&str; 4] = [
 ];
 
 impl Em<'_> {
+    /// A fitted text (LLP 1116.001 D1.4) and a symbol effect (LLP 1077 D12) among a
+    /// node's inline declarations: the runtime piece that scales or plays them after
+    /// each tree update.
+    pub(super) fn after_updates_in(&mut self, declarations: &str) {
+        for (property, piece) in [
+            ("--exact-fit:", "fitTexts"),
+            ("--exact-symbol-effect:", "symbolEffects"),
+        ] {
+            if declarations.contains(property) {
+                let piece = self.uses.rt(piece);
+                let _ = write!(self.out, "{piece}();");
+            }
+        }
+    }
+
     /// Resolve SVG rotation eligibility with the current animation name and axis.
     pub(super) fn svg_animation(
         &mut self,

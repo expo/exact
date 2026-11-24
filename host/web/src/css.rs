@@ -581,6 +581,13 @@ fn css_text_in(
                     push_text!(&mut out, "--exact-fit:{};", kind);
                 }
             }
+            // @ref LLP 1077 D12 — the stand-ins navigation/symbol.js plays: bounce,
+            // pulse and scale; the web draws no other symbol effect.
+            (StyleId::SymbolEffect, RowValue::Enum(kind)) => {
+                if matches!(*kind, "bounce" | "pulse" | "scale") {
+                    push_text!(&mut out, "--exact-symbol-effect:{};", kind);
+                }
+            }
             // Written with `rotate` and `translate` (LLP 1077 D8), never alone, and a
             // boundary's tuple (LLP 1121 D7): nothing to write, none skipped (F30).
             (StyleId::RotateAxis | StyleId::TranslateZ | StyleId::TranslatePercent, _) => {}
@@ -860,7 +867,6 @@ fn lowered(id: StyleId, value: &RowValue<'_>) -> bool {
             StyleId::SymbolRendering
                 | StyleId::TintAdjustment
                 | StyleId::SymbolValue
-                | StyleId::SymbolEffect
                 | StyleId::ContentTransition
                 | StyleId::ScrollEdgeEffect
                 | StyleId::HoverEffect

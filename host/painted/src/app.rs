@@ -201,6 +201,9 @@ pub struct Config {
     pub services: Services,
     /// Viewport preferences the carrier read before boot (LLP 1039 D10).
     pub preferences: Option<exact_runner::Preferences>,
+    /// What `exactPage()` says from the first settlement of the plan a boot
+    /// runs, where the carrier knows it ([`exact_runner::time::Launch::page`]).
+    pub page: Option<exact_runner::time::PageFacts>,
     /// Explicit consumer registration before the first layout; ordinary default
     /// is None. This trial never guesses bindings from test IDs.
     pub content_region: Option<crate::content_region::ContentRegionRegistration>,
@@ -458,6 +461,7 @@ impl Config {
         Config {
             services,
             preferences: None,
+            page: None,
             content_region: None,
             // An argument, else `EXACT_LAUNCH_URL`: the Android reader's launching intent's data has no
             // command line to arrive by (LLP 1133.023 D15 item 3).
@@ -700,8 +704,28 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
     if let Some((location, _)) = &cold_share {
         config.launch = location.clone();
     }
+    // @ref LLP 1069.000 D2, D6 — this host has no share sheet and no
+    // document picker; under the agent the drive's substitute answers
+    // each, files and pictures in a share too, as on every host.
+    let page = if std::env::var("EXACT_AGENT").as_deref() == Ok("1") {
+        let host = config.page.clone();
+        Some(exact_runner::time::PageFacts::new(move |plan| {
+            exact_runner::Page {
+                can_share: true,
+                can_share_files: true,
+                can_share_pictures: true,
+                can_open_files: true,
+                ..host
+                    .as_ref()
+                    .map_or_else(Default::default, |host| host.facts(plan))
+            }
+        }))
+    } else {
+        config.page.clone()
+    };
     let launch_facts = exact_runner::time::Launch {
         preferences: config.preferences,
+        page,
         time: Some(exact_runner::time::WallTime {
             epoch_at_zero,
             utc_offset,
@@ -731,21 +755,6 @@ pub(crate) fn boot_presenter_with_painter<D: DataSource + Default>(
         // (above); under the agent, the drive's epoch (D3).
         if let Some(e) = booted.0.set_time(epoch_at_zero, utc_offset) {
             eprintln!("exact: {e}");
-        }
-        // @ref LLP 1069.000 D2, D6 — this host has no share sheet and no
-        // document picker; under the agent the drive's substitute answers
-        // each, files and pictures in a share too, as on every host.
-        if std::env::var("EXACT_AGENT").as_deref() == Ok("1") {
-            let page = exact_runner::Page {
-                can_share: true,
-                can_share_files: true,
-                can_share_pictures: true,
-                can_open_files: true,
-                ..Default::default()
-            };
-            if let Some(e) = booted.0.set_page(page) {
-                eprintln!("exact: {e}");
-            }
         }
         booted.0.set_development(dev_url.clone(), dev_identity);
         booted.0.said_at_boot(dev_said.clone());

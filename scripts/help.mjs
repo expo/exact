@@ -35,7 +35,7 @@ const DRIVE = [
   ['--size <w>x<h>', 'viewport; Linux: unrotated panel; 90/270 swap layout'],
   ['--scale <n>', 'screenshots at n pixels per point (exact.mjs agent on ios, macos: 1; an iPhone\'s own: 3)'],
   ['--chrome platform|agent', 'UIKit\'s bars (exact.mjs on iOS); agent paints the header'],
-  ['--attach [pid] · --live · --timing platform · --bind <extension>', 'macOS, the iOS simulator and a web dev loop\'s tab: read the development app a person has open, after its Enable Agent Attach (Develop menu; iOS developer menu; ⌥⇧A in the tab, whose code goes on stdin) and their Allow; on Apple, tap, type and call after their Allow Agent Input · wall clock on macOS, iOS and Android reader · Apple native transitions · use a module implementation'],
+  ['--attach [pid] · --live · --display <name|index> · --timing platform · --bind <extension>', 'macOS, the iOS simulator and a web dev loop\'s tab: read the development app a person has open, after its Enable Agent Attach (Develop menu; iOS developer menu; ⌥⇧A in the tab, whose code goes on stdin) and their Allow; on Apple, tap, type and call after their Allow Agent Input · wall clock on macOS, iOS and Android reader · the Mac display a drive\'s window opens on (NSScreen name or index; a live one stays in front there, never activated) · Apple native transitions · use a module implementation'],
   ['--touch platform', 'iOS simulator or paired iPhone: send taps and drags through XCTest'],
   ['--epoch <ISO|ms|now> · --login [hidden]', 'the date at the clock\'s zero (default 2026-01-01) · a launch the login item made, hidden: with no window'],
   ['--locale <tag> · --format-locale <tag> · --time-zone <zone> · --seed <n>', 'default en-US, the locale (the Region\'s format, exactTime().formatLocale), UTC, 1'],
@@ -49,7 +49,7 @@ const DRIVE = [
   ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --configuration <json> · --placement <name> · --state <json>', 'gallery: widget variant/props/configuration choices or activity placement/state; --size large|xxxl is widget text size'],
   ['--json', 'one compact JSON object per op reply, one per line (default: short text)'],
 ];
-const TEST_IGNORES = ['--attach [pid]', '--live', '--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
+const TEST_IGNORES = ['--attach [pid]', '--live', '--display <name|index>', '--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
 // The drive flags a first build reaches for; `--help all` shows the rest.
 const DRIVE_FIRST = ['--storage', '--size', '--chrome', '--epoch', '--sim', '--json'];
 const naming = (names, keep) => ([row]) => specs(row).some((spec) => names.includes(name(spec))) === keep;

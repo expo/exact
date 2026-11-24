@@ -12,21 +12,19 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { appDigest, developmentStore } from '../../../scripts/agent-launch.mjs';
-import { standIns } from './stand-ins.mjs';
+import { runtimeSource, standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
-const webJs = fileURLToPath(new URL('../../web-js/', import.meta.url)), web = fileURLToPath(new URL('../', import.meta.url));
+const web = fileURLToPath(new URL('../', import.meta.url));
 const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'persist.js'];
 const root = mkdtempSync(resolve(tmpdir(), 'exact-js-storage-'));
-mkdirSync(resolve(root, 'web'));
-writeFileSync(resolve(root, 'web/faults.js'), readFileSync(resolve(web, 'faults.js')));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 /** The runtime as a build lays it out for the app at `appDir`, or as written (a release) when it is null. */
 function runtime(name, appDir) {
   const dir = resolve(root, name), ship = code => appDir ? developmentStore(code, appDir) : code;
   mkdirSync(dir);
   for (const [file, source] of standIns(REAL)) writeFileSync(resolve(dir, file), source);
-  for (const f of REAL) writeFileSync(resolve(dir, f), ship(readFileSync(resolve(webJs, f), 'utf8')));
+  for (const f of REAL) writeFileSync(resolve(dir, f), ship(runtimeSource(f)));
   writeFileSync(resolve(dir, 'storage-environment.js'), ship(readFileSync(resolve(web, 'storage-environment.js'), 'utf8')));
   return dir;
 }

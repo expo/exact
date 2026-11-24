@@ -318,9 +318,9 @@ impl<D: DataSource> Runner<D> {
                         }
                         Decision::Forward => self.release_forward(token),
                         Decision::Hold(waits) => {
-                            if let Some((held_by, origin)) = self.held_name(token, &row) {
+                            if let Some((held_by, cause)) = self.held_name(token, &row) {
                                 let hold =
-                                    self.device_hold(&row, held_by, waits, origin, name, &args);
+                                    self.device_hold(&row, held_by, waits, cause, name, &args);
                                 let deadline = timeout
                                     .filter(|_| waits == Waits::Value)
                                     .map(|t| self.now_ms + t);

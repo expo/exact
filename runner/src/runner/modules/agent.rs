@@ -89,7 +89,7 @@ impl<D: DataSource> Runner<D> {
                     .as_array_mut()
                     .filter(|_| h.waits != Waits::Span)
                 {
-                    held.push(json!({ "ticket": h.hold, "name": declared, "origin": h.origin.word(), "waits": h.waits.word() }));
+                    held.push(json!({ "ticket": h.hold, "name": declared, "origin": h.cause.origin.word(), "waits": h.waits.word() }));
                 }
             }
         }
