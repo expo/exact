@@ -471,11 +471,8 @@ extension NavigationHost {
     /// Back alone, or nothing.
     func bar(of route: NodeView, pushed: Bool) -> NavigationRules.Bar {
         if HeaderRule.keepsAuthoredHeader(route) { return .hidden }
-        let asked = route.props["navigationBar"]
-        let bar = NavigationRules.bar(asked: asked, header: HeaderShape.bar(of: route) != nil, pushed: pushed, backButton: Self.barHasBackButton)
-        // UIKit only: a transparent bar stays over a root with nothing in it, empty (`.back` on a root has no
-        // Back), so a push blurs its items in and a cancelled pop keeps them, as a hand-built UIKit app's do.
-        return bar == .hidden && !pushed && asked == "transparent" ? .back : bar
+        return NavigationRules.bar(asked: route.props["navigationBar"], header: HeaderShape.bar(of: route) != nil,
+                                   pushed: pushed, backButton: Self.barHasBackButton)
     }
 
     /// Whether a route shows the bar: its stack's routes may, and the route
