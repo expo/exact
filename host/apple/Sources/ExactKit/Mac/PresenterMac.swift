@@ -894,7 +894,11 @@ package final class Presenter {
         defer { if row { split.pressing = nil } }
         let command = dialogs.command(node, fromNativeMenu: fromNativeMenu, bubbled: bubbled)
         let popover = menus.command(node, fromNativeMenu: fromNativeMenu, bubbled: bubbled)
-        if command == nil && popover == nil, node.id == id, let url = node.defaultLink, node.activateLink(url, bubbled: bubbled) { return }
+        // A link follows its link, and one that also hides its popover (a menu's link row) hides it then
+        if command == nil, popover == nil || menus.onlyHides(node), node.id == id, let url = node.defaultLink, node.activateLink(url, bubbled: bubbled) {
+            popover?()
+            return
+        }
         if node.isButton, !node.handlers.contains("press") { dispatchButtonAncestor(node, click: click ?? pressClick) }
         else if (command == nil && popover == nil) || node.handlers.contains("press") { pressClick = click ?? pressClick; onPress?(id); pressClick = nil }
         guard views[node.id] === node else { return }

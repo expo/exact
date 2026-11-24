@@ -278,6 +278,9 @@ package final class MenuHost: NSObject {
             else if invocation.action == .show || !self.closedByThisClick(source) { self.show(pop, from: source, bubbled: bubbled) }
         }
     }
+    /// Whether `source`'s popover command only hides its popover, as a menu
+    /// row's `popovertargetaction="hide"` does.
+    func onlyHides(_ source: NodeView) -> Bool { popoverInvocation(source)?.action == .hide }
     func opens(_ source: NodeView, _ pop: NodeView) -> Bool {
         popoverInvocation(source).map { $0.opens && $0.target === pop } ?? false
     }
@@ -877,8 +880,10 @@ package final class MenuHost: NSObject {
         func add(_ row: NodeView) {
             if row.props["semanticTag"] == "hr" { menu.addItem(.separator()); return }
             guard row.isButton else { return }
-            // Escape and outside clicks cancel NSMenu; a hide-only row adds no action.
-            if !row.handlers.contains("press"), presenter?.buttonPressListener(above: row) == nil, closes(row, pop) { return }
+            // A link row its author hides (`display: none`) is no item
+            if row.defaultLink != nil, row.style["display"]?.string == "none" { return }
+            // Escape and outside clicks cancel NSMenu; a hide-only row adds no action, but a link row follows its link
+            if !row.handlers.contains("press"), row.defaultLink == nil, presenter?.buttonPressListener(above: row) == nil, closes(row, pop) { return }
             if let sub = submenu(of: row, path: popovers) {
                 let item = menuItem(of: row, action: nil)
                 menuOpener.pops.append(Weak(pop: sub)) // a row chosen in it opens from the same opener

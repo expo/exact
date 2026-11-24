@@ -5416,7 +5416,8 @@ pressed then. See [Keys](contract-grammar.md#keys).
 
 A long-press or right-click menu is a `popover` the node names with
 `contextPopover="<id>"`: its `button` rows (with `popovertarget="<id>"
-popovertargetaction="hide"`), `hr` separators and `role="group"` sections of rows
+popovertargetaction="hide"`), `link` rows, which follow their link (Call as
+`link href="tel:…"`), `hr` separators and `role="group"` sections of rows
 (`contract vocab menu`) are the menu, and one row with
 `contextPreview=true` is the preview, whose `press` is what tapping the preview
 does (open the conversation). iOS presents UIKit's context menu, with the row
