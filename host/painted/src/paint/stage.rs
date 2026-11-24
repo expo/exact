@@ -1047,7 +1047,7 @@ mod tests {
             roots: &kernel.roots(),
             hidden: &|_| false,
             presented: &|_| Presented::IDENTITY,
-            has_scale: false,
+            scaled_presented: &Default::default(),
             paths: &|_| None,
             filters: &|_| None,
             scroll: &BTreeMap::new(),
@@ -1132,7 +1132,7 @@ mod tests {
             };
             let scene = Scene {
                 presented: &presented,
-                has_scale: false,
+                scaled_presented: &Default::default(),
                 ..scene
             };
             painter.stage = Stage {

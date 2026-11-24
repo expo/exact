@@ -211,7 +211,7 @@ impl<D: DataSource> Presenter<D> {
                 &node,
                 limits.get(&id).copied(),
                 &|id| self.host.presented(id),
-                self.host.has_scale(),
+                self.host.scaled_presented(),
             )
         }))
     }
@@ -609,7 +609,7 @@ impl<D: DataSource> Presenter<D> {
                     &node,
                     limits.get(&id).copied(),
                     &|id| self.host.presented(id),
-                    self.host.has_scale(),
+                    self.host.scaled_presented(),
                 );
                 self.stage_shown(id, key, bounds);
             }

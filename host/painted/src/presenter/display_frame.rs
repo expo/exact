@@ -332,7 +332,7 @@ impl<D: DataSource> Presenter<D> {
                         &n,
                         limits.get(&b.id).copied(),
                         &|id| self.host.presented(id),
-                        self.host.has_scale(),
+                        self.host.scaled_presented(),
                     ));
                     witness.nodes.insert(
                         b.id,

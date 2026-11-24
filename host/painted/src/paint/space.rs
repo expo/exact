@@ -679,7 +679,7 @@ pub(crate) fn content_size_with(
     node: &NodeRef<'_>,
     kernel: &Kernel,
     presented: &dyn Fn(ViewId) -> Presented,
-    has_scale: bool,
+    scaled_presented: &std::collections::BTreeSet<ViewId>,
 ) -> (f32, f32) {
     fn overflow(
         node: &NodeRef<'_>,
@@ -745,21 +745,22 @@ pub(crate) fn content_size_with(
             scaled_below || p.scale != (1., 1.),
         ))
     }
-    let mut stack = if has_scale {
-        node.children()
-    } else {
-        Vec::new()
-    };
-    let mut transformed = false;
-    while let Some(id) = stack.pop() {
-        if let Some(child) = kernel.node_unblocked(id) {
-            if presented(id).scale != (1., 1.) {
-                transformed = true;
-                break;
+    // Check the sparse scale sets through parent links. Unrelated swipe
+    // indicators must not make every scroller search its whole subtree.
+    let transformed = kernel.has_scaled_descendant(node.key)
+        || scaled_presented.iter().any(|&id| {
+            let mut parent = kernel.node(id).and_then(|n| n.parent);
+            while let Some(id) = parent {
+                let Some(ancestor) = kernel.node(id) else {
+                    break;
+                };
+                if ancestor.key == node.key {
+                    return true;
+                }
+                parent = ancestor.parent;
             }
-            stack.extend(child.children());
-        }
-    }
+            false
+        });
     if !transformed {
         let (_, _, pr, pb) = kernel.layout_padding(node.key).unwrap_or_default();
         let mut size = (
@@ -786,4 +787,100 @@ pub(crate) fn content_size_with(
         }
     }
     size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{presenter::PainterChoice, Presenter};
+    use std::{cell::Cell, path::PathBuf, time::Instant};
+
+    #[test]
+    fn unrelated_swipe_scales_do_not_walk_scroll_content() {
+        let source = r#"component App
+  state n = 0
+  action noop
+    n = n + 1
+  view
+    column
+      list testId="port" width=120 height=120
+        for row in range(1000) key=row
+          view width=160 height=20 translate="50px 70px"
+            view width=100 height=20
+      list testId="other" width=120 height=120
+        for row in range(1000) key=row
+          view width=100 height=20 swiperight=noop
+            view swipeIndicator=true width=10 height=10 scale=0.5
+"#;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (400., 500.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let kernel = p.host().kernel();
+        let node = kernel
+            .node_by_key(kernel.find_by_test_id("port")[0])
+            .unwrap();
+        assert!(kernel.has_scale());
+        assert!(!kernel.has_scaled_descendant(node.key));
+        // Main uses layout overflow and immediate children, ignoring translate.
+        let expected = (160., 20_000.);
+        let reads = Cell::new(0);
+        let presented = |id| {
+            reads.set(reads.get() + 1);
+            p.host().presented(id)
+        };
+        let start = Instant::now();
+        for _ in 0..1000 {
+            assert_eq!(
+                content_size_with(&node, kernel, &presented, p.host().scaled_presented()),
+                expected
+            );
+        }
+        eprintln!("1000-row content_size, 1000 reads: {:?}", start.elapsed());
+        assert_eq!(
+            reads.get(),
+            0,
+            "the transform path must not read presentation"
+        );
+
+        // Held scales use a separate sparse set and obey the same boundary.
+        let other = kernel
+            .node_by_key(kernel.find_by_test_id("other")[0])
+            .unwrap()
+            .id;
+        let port = node.id;
+        for id in [other, port] {
+            let held = p
+                .host_mut()
+                .hold_begin(id, exact_motion::Property::Scale, 0.)
+                .unwrap()
+                .unwrap();
+            p.host_mut()
+                .hold_update(held.token, exact_motion::Value::new(2., 0.5), 0.)
+                .unwrap();
+            // The hold must reach the presented-scale set, or this section tests nothing.
+            assert!(p.host().scaled_presented().contains(&id));
+            let kernel = p.host().kernel();
+            let node = kernel.node(port).unwrap();
+            assert_eq!(
+                content_size_with(
+                    &node,
+                    kernel,
+                    &|_| panic!("an unrelated or own scale must not enter the transform path"),
+                    p.host().scaled_presented(),
+                ),
+                expected
+            );
+            p.host_mut()
+                .hold_end(held.token, exact_motion::HoldEnd::Cancel, 0.)
+                .unwrap();
+        }
+    }
 }

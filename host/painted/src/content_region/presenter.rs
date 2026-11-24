@@ -243,7 +243,7 @@ impl<D: DataSource> Presenter<D> {
             },
             roots: &roots,
             presented: &presented,
-            has_scale: host.has_scale(),
+            scaled_presented: host.scaled_presented(),
             paths: &|id| host.presented_path(id),
             filters: &|id| host.presented_filter(id),
             scroll: model_scroll.as_ref().unwrap_or(&self.scroll),

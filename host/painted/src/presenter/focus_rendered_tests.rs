@@ -208,7 +208,7 @@ fn alert_focus_stops_at_the_presented_root_for_hidden_placements() {
         roots: &p.host.roots(),
         hidden: &|id| p.host.route_visibility(id).0,
         presented: &|id| p.host.presented(id),
-        has_scale: p.host.has_scale(),
+        scaled_presented: p.host.scaled_presented(),
         paths: &|_| None,
         filters: &|_| None,
         scroll: &p.scroll,

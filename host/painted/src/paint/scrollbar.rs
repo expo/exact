@@ -140,7 +140,7 @@ impl Painter {
             node,
             self.scrollbars.limits.get(&node.id).copied(),
             walk.scene.presented,
-            walk.scene.has_scale,
+            walk.scene.scaled_presented,
         );
         let field = walk.fields.get(&node.id);
         if let Some(field) = field {

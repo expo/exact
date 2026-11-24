@@ -555,7 +555,7 @@ impl<D: DataSource> Presenter<D> {
                 &node,
                 None,
                 &|id| self.host.presented(id),
-                self.host.has_scale(),
+                self.host.scaled_presented(),
             );
             let end_port = tracks_end.then(|| {
                 let kernel = self.host.kernel();
@@ -804,7 +804,7 @@ impl<D: DataSource> Presenter<D> {
                     &node,
                     limit,
                     &|id| self.host.presented(id),
-                    self.host.has_scale(),
+                    self.host.scaled_presented(),
                 )
             });
             ((node.frame.width, node.frame.height), bounds.max)

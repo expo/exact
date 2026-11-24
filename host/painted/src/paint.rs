@@ -336,8 +336,8 @@ pub struct Scene<'a> {
     pub roots: &'a [ViewId],
     /// A node's presentation values.
     pub presented: &'a dyn Fn(ViewId) -> Presented,
-    /// A scale row or played value differs from identity.
-    pub has_scale: bool,
+    /// Nodes whose played or held scale differs from identity.
+    pub scaled_presented: &'a std::collections::BTreeSet<ViewId>,
     /// A path's `d` while a transition moves it (LLP 1055.000 D15).
     pub paths: &'a dyn Fn(ViewId) -> Option<exact_motion::PathValue>,
     /// A `filter` while a transition moves it (LLP 1003.002 D8).
@@ -1409,7 +1409,7 @@ pub fn content_size(node: &NodeRef<'_>, kernel: &Kernel) -> (f32, f32) {
                 .node(id)
                 .map_or(Presented::IDENTITY, |n| Presented::from_style(n.style))
         },
-        kernel.has_scale(),
+        &Default::default(),
     )
 }
 

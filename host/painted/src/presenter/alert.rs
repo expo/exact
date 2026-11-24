@@ -687,7 +687,7 @@ impl<D: DataSource> Presenter<D> {
                     &node,
                     None,
                     &|id| self.host.presented(id),
-                    self.host.has_scale(),
+                    self.host.scaled_presented(),
                 );
                 bounds.max.0 > 0. || bounds.max.1 > 0.
             })
@@ -727,7 +727,7 @@ impl<D: DataSource> Presenter<D> {
             &node,
             None,
             &|id| self.host.presented(id),
-            self.host.has_scale(),
+            self.host.scaled_presented(),
         );
         let border = node
             .computed_style(exact_kernel::StyleMask::EMPTY)

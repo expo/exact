@@ -108,7 +108,7 @@ impl<D: DataSource> Presenter<D> {
                 &node,
                 limits.get(&id).copied(),
                 &|id| self.host.presented(id),
-                self.host.has_scale(),
+                self.host.scaled_presented(),
             )
         });
         let off = self.scroll.get(&id).copied().unwrap_or((0.0, 0.0));
@@ -443,7 +443,7 @@ impl<D: DataSource> Presenter<D> {
                 &node,
                 collection_limits.get(&id).copied(),
                 &|id| self.host.presented(id),
-                self.host.has_scale(),
+                self.host.scaled_presented(),
             )
         });
         let scrolls = |o| matches!(o, Overflow::Scroll | Overflow::Auto);
@@ -562,7 +562,7 @@ impl<D: DataSource> Presenter<D> {
                         &node,
                         collection_limits.get(&a).copied(),
                         &|id| self.host.presented(id),
-                        self.host.has_scale(),
+                        self.host.scaled_presented(),
                     )
                 });
             // `auto` scrolls as `scroll` does (a `scroll`'s default, `wheel_at`).

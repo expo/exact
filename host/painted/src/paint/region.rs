@@ -77,7 +77,7 @@ impl ScrollBounds {
                     .node(id)
                     .map_or(Presented::IDENTITY, |n| Presented::from_style(n.style))
             },
-            kernel.has_scale(),
+            &Default::default(),
         )
     }
     fn capture_with(
@@ -85,7 +85,7 @@ impl ScrollBounds {
         kernel: &Kernel,
         collection_max: Option<f32>,
         presented: &dyn Fn(ViewId) -> Presented,
-        has_scale: bool,
+        scaled_presented: &std::collections::BTreeSet<ViewId>,
     ) -> Self {
         let axes = effective_overflow(node);
         // Not a scroll container: nothing to measure; it never moves.
@@ -95,7 +95,8 @@ impl ScrollBounds {
                 max: (0., 0.),
             };
         }
-        let (width, height) = super::space::content_size_with(node, kernel, presented, has_scale);
+        let (width, height) =
+            super::space::content_size_with(node, kernel, presented, scaled_presented);
         let mut max = (
             (width - node.frame.width).max(0.),
             (height - node.frame.height).max(0.),
@@ -574,7 +575,7 @@ impl Painter {
         node: &NodeRef<'_>,
         collection_max: Option<f32>,
         presented: &dyn Fn(ViewId) -> Presented,
-        has_scale: bool,
+        scaled_presented: &std::collections::BTreeSet<ViewId>,
     ) -> ScrollBounds {
         if let Some(region) = region {
             if let Some(bounds) = self.region_scroll_bounds(region, node.key) {
@@ -600,7 +601,7 @@ impl Painter {
                 };
             }
         }
-        ScrollBounds::capture_with(node, kernel, collection_max, presented, has_scale)
+        ScrollBounds::capture_with(node, kernel, collection_max, presented, scaled_presented)
     }
     pub(super) fn validate_region_presentation(
         &self,

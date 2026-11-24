@@ -688,8 +688,8 @@ impl<D: DataSource> Host<D> {
         self.runner.roots()
     }
 
-    pub(crate) fn has_scale(&self) -> bool {
-        self.runner.kernel().has_scale() || !self.scaled_presented.is_empty()
+    pub(crate) fn scaled_presented(&self) -> &std::collections::BTreeSet<ViewId> {
+        &self.scaled_presented
     }
 
     /// A node's presentation values: the engine's, else the committed style's.
