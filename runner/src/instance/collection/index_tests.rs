@@ -30,11 +30,11 @@ fn reorder_twenty_five_thousand_zero_ties_do_not_scan_rows() {
     assert!(i.tree.visits.get() < 200);
 }
 
-fn keys(count: usize) -> Vec<Rc<str>> {
+pub(super) fn keys(count: usize) -> Vec<Rc<str>> {
     (0..count).map(|i| Rc::from(format!("k{i}"))).collect()
 }
 
-fn index(heights: &[f64]) -> SizeIndex {
+pub(super) fn index(heights: &[f64]) -> SizeIndex {
     let mut index = SizeIndex::new(10.0).unwrap();
     index.replace_keys(keys(heights.len())).unwrap();
     for (i, &height) in heights.iter().enumerate() {
@@ -45,7 +45,7 @@ fn index(heights: &[f64]) -> SizeIndex {
     index
 }
 
-fn near(actual: f64, expected: f64) {
+pub(super) fn near(actual: f64, expected: f64) {
     assert!((actual - expected).abs() <= 1e-8, "{actual} != {expected}");
 }
 

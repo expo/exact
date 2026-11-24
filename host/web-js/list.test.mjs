@@ -1174,6 +1174,78 @@ test('an anchor past the end keeps its overshoot, as the runner\'s does', async 
   expect(result.gone[0]).toBe(0);
 }, 60_000);
 
+// @ref runner/src/instance/collection/index_report_tests.rs: a row the report measures for the first time yields the
+// place to the next row the port shows, its top at the port's top included; one the report does not list keeps it, as
+// does a listed row with no other to yield to; a new estimate marks the rows it does not keep.
+test('a report anchors past a row it measures for the first time, as the runner\'s does', async () => {
+  const result = await evaluate(`(async () => {
+    const port = document.createElement('div');
+    port.style.cssText = 'height:100px;width:200px;overflow:auto';
+    document.getElementById('exact-root').append(port);
+    const own = rt.scope(() => list.vl(port, () => [0, 1], i => i(), (w, i) => { const row = document.createElement('div'); row.style.height = '20px'; w.append(row); }, {est:20, pw:[], ph:[100]}));
+    rt.settled();
+    const C = port.$list.index.constructor;
+    rt.end(own); port.remove(); rt.settled();
+    const keys = ['k0', 'k1', 'k2', 'k3', 'k4'];
+    const index = () => { const ix = new C(10); ix.replace(keys); keys.forEach(k => ix.setMeasured(k, ix.token(k), 20)); ix.replace(['new', ...keys]); return ix; };
+    const restored = (offset, first) => {
+      const ix = index(), a = ix.anchorReported(offset, 30, false, first);
+      ix.setMeasured('new', ix.token('new'), 30);
+      return ix.restoreAnchor(a, 30);
+    };
+    // Every row the port shows listed: the first anchor, not the offset
+    const fresh = new C(10); fresh.replace(keys);
+    const all = fresh.anchorReported(5, 30, false, keys);
+    keys.forEach(k => fresh.setMeasured(k, fresh.token(k), 40));
+    const marked = index(); marked.resize(12, 0, new Set([1]));
+    // Past a first-measured row behind a 100 px lead (100 + 32.1 - 100 finds it once more), and past a hidden row
+    const lead = new C(32.1); lead.replace(keys); lead.fixed = [100, 0];
+    const leadRow = lead.anchorReported(116, 100, false, ['k0']).row; lead.setMeasured('k1', lead.token('k1'), 0);
+    // A card that is only its gap holds no place: k1 at no width, k0 and k2 first measured, k3 holds it
+    const cards = new C(30, 10); cards.replace(keys); cards.setMeasured('k1', cards.token('k1'), 10); ['k3', 'k4'].forEach(k => cards.setMeasured(k, cards.token(k), 30));
+    // A first-measured row whose top is exactly the port's yields the place too: k1 stays 10 px below the top
+    const at = new C(10); at.replace(keys); keys.forEach(k => at.setMeasured(k, at.token(k), 20)); at.replace(['k0', 'new', ...keys.slice(1)]);
+    const atTop = at.anchorReported(20, 30, false, ['new']); at.setMeasured('new', at.token('new'), 30);
+    return { above: restored(5, ['new']), unlisted: restored(5, []), pixel: restored(0.33, ['new']), all: [all.row, fresh.restoreAnchor(all, 30)], guess: marked.guess, lead: [leadRow, lead.anchorReported(116, 100, false, ['k0', 'k2']).row], atTop: at.restoreAnchor(atTop, 30), cards: cards.anchorReported(10, 100, false, ['k0', 'k2']).row };
+  })()`);
+  expect(result).toEqual({ above: 25, unlisted: 5, pixel: 20.33, all: [0, 5], guess: [true, false, true, true, true, true], lead: [1, 3], atTop: 40, cards: 3 });
+}, 60_000);
+
+// @ref mod.rs `first_measured` and runner/tests/it/end_anchor.rs `a_row_measured_again_taller_keeps_its_readers_place` and
+// `a_page_row_measured_at_the_estimate_yields_the_place_too`:
+// through the list's own report, a row measured for the first time with the port's top inside it yields the place to
+// the measured row after it, and a row measured before keeps it as it grows.
+test('a list\'s report yields the place only past a row it measures for the first time', async () => {
+  const result = await evaluate(`(() => {
+    const run = (first, grown) => {
+      const port = document.createElement('div'); document.querySelector('main').append(port);
+      const own = rt.scope(() => list.vl(port, () => [0, 1, 2, 3, 4, 5, 6, 7], i => i(), () => {}, {est:20, pw:[300], ph:[50]}));
+      const c = port.$list;
+      const report = (offset, sizes) => {
+        const byView = new Map(c.mounted.map((m, i) => [m.view, i]));
+        const measurements = c.mounted.flatMap(m => sizes[m.position] === undefined ? [] : [{view: m.view, size: sizes[m.position]}]);
+        c.feedback({offset, port_main:50, port_cross:300, cross:300, padding:[0,0], measurements}, byView, {});
+      };
+      // The first report finds the width and keeps no measurement (mod.rs changed_width)
+      report(0, first);
+      report(0, first);
+      report(30, grown);
+      const offset = c.correction?.offset ?? 30;
+      rt.end(own); port.remove();
+      return offset;
+    };
+    return {
+      // The port's top 10 into row 1, at the estimate, which measures 40: row 2, 10 below the top, stays there
+      estimated: run({2: 20, 3: 20, 4: 20}, {1: 40}),
+      // Row 1 measured at 20 before, now 40: it keeps the place
+      measured: run({0: 20, 1: 20, 2: 20, 3: 20, 4: 20}, {1: 40}),
+      // Row 1 measured for the first time at the estimate, row 2 at 40: row 3, the first measured before, holds it
+      atEstimate: run({3: 20, 4: 20}, {1: 20, 2: 40}),
+    };
+  })()`);
+  expect(result).toEqual({ estimated: 50, measured: 30, atEstimate: 50 });
+}, 60_000);
+
 // @ref runner/src/instance/collection/start.rs `anchor_offset`: an opening list's anchor is taken at its
 // end in its port, `max_offset(port)`, so it carries no overshoot (once it has opened it no longer follows its end).
 test('a list opened at its end anchors at its end with no overshoot', async () => {

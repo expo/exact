@@ -106,20 +106,21 @@ function positive(t, band, out, n = 1, s = 0, e = t.base) {
 }
 
 class SizeIndex {
-  constructor(est, gap = 0) { this.est = est; this.gap = gap; this.order = []; this.pos = new Map(); this.h = []; this.gen = []; this.me = []; this.epoch = 1; this.next = 0; this.t = tree([], []); this.trailing = 0; this.leading = 0; this.fixed = [0, 0]; }
+  constructor(est, gap = 0) { this.est = est; this.gap = gap; this.order = []; this.pos = new Map(); this.h = []; this.gen = []; this.me = []; this.guess = []; this.epoch = 1; this.next = 0; this.t = tree([], []); this.trailing = 0; this.leading = 0; this.fixed = [0, 0]; }
   get len() { return this.h.length; }
   replace(keys) {
     if (keys.length === this.order.length && keys.every((k, i) => k === this.order[i])) return;
-    const pos = new Map(), h = [], gen = [], me = [];
+    // `guess`: the row's height is still the estimate, never measured (index.rs `estimated`)
+    const pos = new Map(), h = [], gen = [], me = [], guess = [];
     keys.forEach((k, i) => {
       if (pos.has(k)) throw new Refusal(`duplicate collection key: ${k}`);
       pos.set(k, i);
       const o = this.pos.get(k);
-      if (o !== undefined) { h.push(this.h[o]); gen.push(this.gen[o]); me.push(this.me[o]); }
-      else { h.push(this.est); gen.push(++this.next); me.push(0); }
+      if (o !== undefined) { h.push(this.h[o]); gen.push(this.gen[o]); me.push(this.me[o]); guess.push(this.guess[o]); }
+      else { h.push(this.est); gen.push(++this.next); me.push(0); guess.push(true); }
     });
     this.t = tree(h, me);
-    Object.assign(this, { order: keys, pos, h, gen, me });
+    Object.assign(this, { order: keys, pos, h, gen, me, guess });
   }
   prefix(end) { return this.fixed[0] + prefixT(this.t, end); }
   // Each row's height counts the list's gap after it (index.rs `total_height`).
@@ -131,6 +132,7 @@ class SizeIndex {
     // A kept row of no extent is one not displayed, with no gap around it: it stays at none.
     this.h = this.h.map((h, i) => kept.has(i) ? (h > 0 ? Math.max(gap, h - this.gap + gap) : 0) : est);
     this.me = this.me.map((m, i) => kept.has(i) ? m : 0);
+    this.guess = this.guess.map((g, i) => kept.has(i) ? g : true);
     this.t = tree(this.h, this.me); this.est = est; this.gap = gap;
   }
   // Sufficient bound: every candidate leaf and padding <= H. B >= 1 is
@@ -157,7 +159,7 @@ class SizeIndex {
     if (!(isFinite(h) && h >= 0)) throw new Refusal("row height must be finite and nonnegative");
     if (this.token(key) !== token) return false;
     const i = this.pos.get(key);
-    setT(this.t, i, h); this.h[i] = h; this.me[i] = this.epoch; setEpoch(this.t, i, this.epoch);
+    setT(this.t, i, h); this.h[i] = h; this.me[i] = this.epoch; this.guess[i] = false; setEpoch(this.t, i, this.epoch);
     return true;
   }
   // The padding after the last row (LLP 1010 §6.9) runs the range past the rows' end;
@@ -195,14 +197,33 @@ class SizeIndex {
     const fixed = offset > 0 && offset < this.fixed[0] ? 0 : this.fixed[1] > 0 && offset >= this.fixed[0] + this.dataExtent ? 1 : null;
     let row = fixed !== null || offset <= 0 && !follows ? null : find(this.t, offset - this.fixed[0], false);
     let within = fixed !== null ? offset - (fixed ? this.fixed[0] + this.dataExtent : 0) : row === null ? 0 : Math.max(0, offset - this.prefix(row));
-    while (!follows && row !== null && excluded.includes(this.order[row])) {
-      row = find(this.t, this.prefix(row + 1) - this.fixed[0], false);
+    // A set: a report can list every row the port shows
+    const skipped = new Set(excluded);
+    while (!follows && row !== null && skipped.has(this.order[row])) {
+      row = this.nextShown(row);
       if (row !== null && this.prefix(row) >= offset + port) row = null;
       within = row === null ? offset : offset - this.prefix(row);
     }
     // How far past the end the port was (a rubber band under a finger or a fling), kept past the end; and the
     // offset it was taken at, unclamped, where a port with no row to anchor stays.
     return { order: this.order, row, fixed, within, follows, beyond: Math.max(0, raw - max), raw };
+  }
+  // index.rs `next_shown`: the first row after row `i` with a height, the tree's lookup from `i`'s end in its own terms.
+  // Past a row that is only its gap (a zero-width card) too.
+  nextShown(i) {
+    for (let next = i; next !== null && next < this.order.length;) {
+      next = find(this.t, prefixT(this.t, next + 1), false);
+      if (next !== null && this.h[next] - this.gap > 0) return next;
+    }
+    return null;
+  }
+  // index.rs `capture_report_anchor`: a report's anchor, unless its row is among `firstMeasured`, the rows the report
+  // measures for the first time; then the next row the port shows that the report does not, or with none the row itself.
+  anchorReported(offset, port, follow, firstMeasured) {
+    const a = this.anchor(offset, port, follow);
+    if (a.follows || a.row === null || !firstMeasured.includes(this.order[a.row])) return a;
+    const past = this.anchor(offset, port, follow, firstMeasured);
+    return past.row === null ? a : past;
   }
   // index.rs `capture_bottom_anchor` (LLP 1168.000 D1.2): the last row the port shows, by key, and how far the port's
   // bottom is past that row's end; at a zero offset too. A port below the rows holds the last row with a height. An end
@@ -893,7 +914,12 @@ class Collection {
     const height = this.geometry ? this.geometry.port_main : f.port_main;
     this.leaveEndIfMoved(fill.velocity ?? 0);
     const extent = this.index.total;
-    const anchor = this.restoring(f) ?? this.reportAnchor(f.offset, height, padding, height !== f.port_main && !(fill.velocity ?? 0));
+    // The rows this report measures for the first time, as `measure` takes them (mod.rs `first_measured`)
+    const firstMeasured = changedWidth ? [] : measurements.flatMap(r => {
+      const m = this.fixedSide(r.view) < 0 ? this.mounted[byView.get(r.view)] : undefined, key = m && this.index.order[m.position];
+      return key !== undefined && this.index.guess[m.position] && this.index.token(key) === m.token ? [key] : [];
+    });
+    const anchor = this.restoring(f) ?? this.reportAnchor(f.offset, height, padding, height !== f.port_main && !(fill.velocity ?? 0), firstMeasured);
     [this.index.leading, this.index.trailing] = padding;
     this.geometry = { ...f, measurements: [] };
     this.correction = null;
@@ -916,15 +942,17 @@ class Collection {
   }
   /** inset.rs `report_anchor`: on the old range, where the port is as far down as a grown padding
    * before the rows moved them (none before a first report), or on the new one when only that follows the end;
-   * `resized` (not by the reader) keeps an end the last report was at. */
-  reportAnchor(offset, port, padding, resized) {
+   * `resized` (not by the reader) keeps an end the last report was at; `firstMeasured`, the rows the report measures
+   * for the first time. */
+  reportAnchor(offset, port, padding, resized, firstMeasured) {
     const i = this.index, down = this.geometry ? padding[0] - i.leading : 0;
-    const atEnd = resized && this.geometry && this.follows() && i.anchor(this.anchorOffset(this.geometry.offset, port), port, true).follows;
-    let a = i.anchor(this.anchorOffset(offset + down, port), port, this.follows());
+    const capture = (at, follow) => i.anchorReported(this.anchorOffset(at, port), port, follow, firstMeasured);
+    const atEnd = resized && this.geometry && this.follows() && capture(this.geometry.offset, true).follows;
+    let a = capture(offset + down, this.follows());
     const moved = padding[0] !== i.leading || padding[1] !== i.trailing;
     [i.leading, i.trailing] = padding;
-    if (moved && this.follows() && !a.follows) { const b = i.anchor(this.anchorOffset(offset, port), port, this.follows()); if (b.follows) a = b; }
-    if (atEnd && !a.follows) a = i.anchor(this.anchorOffset(i.maxOffset(port), port), port, true);
+    if (moved && this.follows() && !a.follows) { const b = capture(offset, this.follows()); if (b.follows) a = b; }
+    if (atEnd && !a.follows) a = capture(i.maxOffset(port), true);
     return a;
   }
   travelWithin(f, byView, fill) {

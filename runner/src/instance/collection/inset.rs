@@ -27,16 +27,25 @@ impl Collection {
     /// end the last report was at is kept: the host may have clamped the
     /// port to the end of a size it never reported, short of the new end
     /// (UIKit, as the keyboard goes down in two frames between reports).
+    /// `first_measured`: the rows the report measures for the first time
+    /// (`SizeIndex::capture_report_anchor`).
     pub(super) fn report_anchor(
         &mut self,
         offset: f64,
         port: f64,
         padding: [f64; 2],
         resized: bool,
+        first_measured: &[Rc<str>],
     ) -> Result<index::Anchor, InstanceError> {
+        let first_measured: Vec<&str> = first_measured.iter().map(|key| &**key).collect();
         let capture = |c: &Self, offset: f64| {
-            c.index
-                .capture_anchor(c.anchor_offset(offset, port), port, c.follows())
+            (c.index)
+                .capture_report_anchor(
+                    c.anchor_offset(offset, port),
+                    port,
+                    c.follows(),
+                    &first_measured,
+                )
                 .map_err(index_error)
         };
         let at_end = match &self.geometry {
