@@ -273,7 +273,7 @@ fn an_interruption_restarts_from_the_current_value() {
 #[test]
 fn a_reversal_is_shortened_by_the_css_reversing_rule() {
     exact_motion::link_transitions();
-    // CSS Transitions §3.2: reversing an ease-in-out at 25% elapsed, where the
+    // CSS Transitions 1 §3.1: reversing an ease-in-out at 25% elapsed, where the
     // curve's output is ≈0.129, yields a new transition of ≈0.129 × 1s — not a
     // full second back — so a hover-off that follows a brief hover-on is brief.
     let mut engine = engine_with(vec![ease(TransitionProperty::All, 1.0, Easing::EaseInOut)]);
@@ -518,7 +518,7 @@ fn the_engine_refuses_bad_input_by_name() {
         engine.observe(Change {
             node: 1,
             property: Property::Scale,
-            value: Value::scalar(f64::INFINITY),
+            value: Value::new(f64::INFINITY, f64::INFINITY),
             velocity: None
         }),
         Err(EngineError::NonFinite)
@@ -568,7 +568,7 @@ fn a_removed_node_holds_no_property_and_one_removed_property_leaves_the_rest() {
             let change = Change {
                 node,
                 property,
-                value: Value::scalar(0.5),
+                value: Value::new(0.5, if property == Property::Scale { 0.5 } else { 0. }),
                 velocity: None,
             };
             engine.observe(change).expect("observed");
@@ -605,7 +605,11 @@ fn a_node_at_rest_observed_again_is_as_one_forgotten_first() {
             let change = Change {
                 node,
                 property,
-                value: Value::scalar(value),
+                value: if property == Property::Scale {
+                    Value::new(value, value)
+                } else {
+                    Value::scalar(value)
+                },
                 velocity: None,
             };
             engine.observe(change).expect("observed");

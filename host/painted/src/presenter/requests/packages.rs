@@ -135,7 +135,9 @@ impl Packages {
             package.foreground(shown);
             reply.send(Json::Object(Default::default()));
         } else if let Some(name) = named.and_then(Json::as_str) {
-            let origin = request["origin"].as_str().unwrap_or("app");
+            // The runner names every call's origin; one that names none is no
+            // one's (LLP 1133.023 D7a).
+            let origin = request["origin"].as_str().unwrap_or("none");
             *context.0.origin.borrow_mut() = origin.to_owned();
             context.0.request.set(request["request"].as_u64());
             let args = args.cloned().unwrap_or(Json::Object(Default::default()));

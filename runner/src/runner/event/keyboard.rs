@@ -1,4 +1,4 @@
-//! `key`'s and `keyup`'s record (#140): DOM's `KeyboardEvent` as a host
+//! `key`'s and `keyup`'s record: DOM's `KeyboardEvent` as a host
 //! reports a keydown or a keyup — the key's name, the modifiers held, the
 //! physical key, whether a keydown is the platform's auto-repeat and whether
 //! the key came while an input method composed text.

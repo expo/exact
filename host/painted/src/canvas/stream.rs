@@ -121,7 +121,7 @@ pub(super) fn needs_world(b: &[u32]) -> bool {
             NATIVE if b[i + 2] & 255 == 3 => return true,
             ROW_BEGIN if needs_world(&b[i + 6..j - 1]) => return true,
             SLOT_SET if needs_world(&b[i + 3..j]) => return true,
-            LAYER_SET if needs_world(&b[i + 19..j]) => return true,
+            LAYER_SET if needs_world(&b[i + 3 + layer::HEADER_WORDS..j]) => return true,
             shared::SET | shared::DRAW => return true,
             _ => (),
         }
@@ -726,6 +726,7 @@ mod tests {
             roots: &kernel.roots(),
             hidden: &|_| false,
             presented: &|_| Presented::IDENTITY,
+            scaled_presented: &Default::default(),
             paths: &|_| None,
             filters: &|_| None,
             scroll: &Default::default(),
@@ -1310,8 +1311,8 @@ component App
         let mut definitions = vec![FONT, 1, 0, 400, 0, IMAGE_DEF, 2, 10, 10];
         definitions.extend([FONT_AXES, 3, 0, 400, 0, 0]);
         definitions.extend([ANIMATED, 2, 0, ROW_BEGIN, 4, 0, 10, 10, 2, RESTORE, ROW_END]);
-        definitions.extend([SLOT_SET, 5, 2, SLOT, 2, LAYER_SET, 6, 16]);
-        definitions.extend([0; 16]);
+        definitions.extend([SLOT_SET, 5, 2, SLOT, 2, LAYER_SET, 6, 17]);
+        definitions.extend([0; 17]);
         definitions.extend([
             TRACKS, 6, 0, CLOCK, 7, 0, IMAGE_FREE, 8, ROW_FREE, 9, LAYER_FREE, 10,
         ]);
@@ -1332,7 +1333,7 @@ component App
         let row = [ROW_BEGIN, 7, 0, 10, 10, 1, ROW_END];
         let sets = [
             vec![SLOT_SET, 8, 2, SLOT, 1],
-            [vec![LAYER_SET, 9, 16], vec![0; 16]].concat(),
+            [vec![LAYER_SET, 9, 17], vec![0; 17]].concat(),
             vec![TRACKS, 9, 0],
             vec![CLOCK, 9, 0],
         ];

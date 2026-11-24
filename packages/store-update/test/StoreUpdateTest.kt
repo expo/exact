@@ -9,6 +9,7 @@ import com.google.android.play.core.appupdate.AppUpdateOptions
 import com.google.android.play.core.appupdate.testing.FakeAppUpdateManager
 import com.google.android.play.core.install.model.AppUpdateType
 import com.google.android.play.core.install.model.InstallErrorCode
+import dev.exact.canvas.Cause
 import dev.exact.canvas.Exact
 import dev.exact.canvas.ExactActivity
 import dev.exact.canvas.ExtensionContext
@@ -67,7 +68,7 @@ class StoreUpdateTest {
 
     private fun call(name: String, args: JSONObject = JSONObject()): JSONObject? {
         var answer: JSONObject? = null
-        module.later(name, args) { answer = it }
+        module.later(name, args, null, Cause("app")) { answer = it }
         idle()
         return answer
     }
@@ -116,7 +117,7 @@ class StoreUpdateTest {
     @Test fun aFlexibleUpdateDownloadsAnnouncingProgressThenCompletes() {
         play.setUpdateAvailable(7)
         var answer: JSONObject? = null
-        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "flexible")) { answer = it }
+        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "flexible"), null, Cause("app")) { answer = it }
         idle()
         assertTrue("Play's confirmation shows", play.isConfirmationDialogVisible)
         play.userAcceptsUpdate()
@@ -154,7 +155,7 @@ class StoreUpdateTest {
 
     @Test fun aFailedDownloadReportsItsErrorCode() {
         play.setUpdateAvailable(7)
-        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "flexible")) {}
+        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "flexible"), null, Cause("app")) {}
         idle()
         play.userAcceptsUpdate()
         play.downloadStarts()
@@ -171,7 +172,7 @@ class StoreUpdateTest {
     @Test fun anImmediateFlowLeftIsStartedAgainOnResume() {
         val play = counting()
         this.play.setUpdateAvailable(7)
-        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "immediate")) {}
+        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "immediate"), null, Cause("app")) {}
         idle()
         assertTrue(this.play.isImmediateFlowVisible)
         this.play.userAcceptsUpdate()
@@ -188,7 +189,7 @@ class StoreUpdateTest {
     @Test fun anAcceptedImmediateUpdateIsForgottenOnceInstalled() {
         val play = counting()
         this.play.setUpdateAvailable(7)
-        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "immediate")) {}
+        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "immediate"), null, Cause("app")) {}
         idle()
         this.play.userAcceptsUpdate()
         idle()
@@ -204,7 +205,7 @@ class StoreUpdateTest {
     @Test fun aFlexibleDownloadIsNotTurnedImmediateOnResume() {
         val play = counting()
         this.play.setUpdateAvailable(7)
-        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "flexible")) {}
+        module.later("startStoreUpdate", JSONObject().put("appUpdateType", "flexible"), null, Cause("app")) {}
         idle()
         this.play.userAcceptsUpdate()
         this.play.downloadStarts()

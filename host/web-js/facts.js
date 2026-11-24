@@ -105,7 +105,8 @@ export function page(readers) {
   });
 }
 
-// Physical output and a sequence need the freeze edge even if the plan reads no page fields.
+// Page fields' readers, and with `freezes` the freeze edge, which physical output and a sequence need even if the
+// plan reads no page fields (output.js `watchOutput`).
 export function watchPage(freezes = false) {
   pageFreezes ||= freezes;
   const facts = reporter();

@@ -34,6 +34,7 @@ import android.provider.ContactsContract.CommonDataKinds.Phone
 import android.provider.ContactsContract.CommonDataKinds.StructuredPostal
 import android.provider.ContactsContract.Contacts
 import android.provider.ContactsContract.Data
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -61,12 +62,12 @@ internal class ContactStore(private val context: ExtensionContext, private val s
         Manifest.permission.READ_CONTACTS in app.packageManager.getPackageInfo(app.packageName, PackageManager.GET_PERMISSIONS).requestedPermissions.orEmpty()
     }
 
-    fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    fun later(name: String, args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "getContactProperties" -> reply(JSONObject().put("properties", JSONArray(AgentContacts.properties)))
             "contactsStatus" -> reply(status())
             "selectContacts" -> pick(args, reply)
-            "queryContacts" -> readable(reply) { observe(); page(args, reply) }
+            "queryContacts" -> readable(cause, reply) { observe(); page(args, reply) }
             else -> reply(ContactsModule.error("NotSupportedError"))
         }
     }
@@ -99,12 +100,12 @@ internal class ContactStore(private val context: ExtensionContext, private val s
     }
 
     /** [then] once the app may read: asked while `prompt`; refused while `denied` or undeclared. */
-    private fun readable(reply: (JSONObject) -> Unit, then: () -> Unit) {
+    private fun readable(cause: Cause, reply: (JSONObject) -> Unit, then: () -> Unit) {
         if (!declared) return reply(ContactsModule.error("NotAllowedError", "the manifest declares no READ_CONTACTS"))
         when (status().getString("state")) {
             "granted" -> then()
             "denied" -> reply(ContactsModule.error("NotAllowedError"))
-            else -> context.askPermission(Manifest.permission.READ_CONTACTS) {
+            else -> context.askPermission(cause, Manifest.permission.READ_CONTACTS) {
                 say("asked: ${status().getString("state")}")
                 if (status().getString("state") == "granted") then() else reply(ContactsModule.error("NotAllowedError"))
             }

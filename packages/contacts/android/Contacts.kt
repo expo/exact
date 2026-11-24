@@ -17,6 +17,7 @@ package exact.contacts
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -73,12 +74,12 @@ class ContactsModule(context: ExtensionContext) : ExactExtension(context) {
 
     private fun say(line: String) = context.log("contacts: $line")
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, reply)
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
 
-    override fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         if (!context.agent) {
             if (name == "queryContacts") readers += name
-            return real.later(name, args) { answer ->
+            return real.later(name, args, cause) { answer ->
                 reply(answer)
                 if (name == "queryContacts" && awaiting) main.post { landed() }
             }

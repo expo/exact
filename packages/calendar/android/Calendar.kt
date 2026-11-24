@@ -18,6 +18,7 @@ package exact.calendar
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import exact.calendar.AgentCalendar.Companion.text
@@ -52,13 +53,13 @@ class CalendarModule(context: ExtensionContext) : ExactExtension(context) {
 
     private fun say(line: String) = context.log("calendar: $line")
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, reply)
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
 
-    override fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         val read = name == "calendars" || name == "calendarEvents"
         if (!context.agent) {
             if (read) readers += name
-            return real.later(name, args) { answer ->
+            return real.later(name, args, cause) { answer ->
                 reply(answer)
                 if (read) asked()
             }

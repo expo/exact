@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { open } from '../../scripts/agent.mjs';
 import { webCompiler } from './module.mjs';
 import { localImports } from './glue.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 // LLP 1016.000 D10, end to end on the web JS target: an app downloads a file
 // into its store (`exactBodyTo`), then uploads it as a resource's stream with
@@ -169,7 +170,7 @@ export function answer(name, args) { return fetch(...inits[args[0]]); }
   writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8')));
   writeFileSync(resolve(dir, 'admission-data.js'), "import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(null);\n");
   for (const name of ['grant-admission.js', 'address-space.js', 'faults.js', 'navigation.js', 'storage-environment.js', 'http-body.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
-  for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   try {
     const ts = await import(pathToFileURL(resolve(dir, 'ts-data.js')).href), data = { q: [] };
     ts.install(data);
@@ -245,11 +246,11 @@ export const tools = { async probe() { const before = await ask(); await Promise
   writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
   writeFileSync(resolve(dir, 'names.js'), 'export const sourceTypes={};');
   writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
-  writeFileSync(resolve(dir, 'grant-admission.js'), `export {isCloudMetadata, isLocalNetwork, socketProtocols, trimGrant, grantWords} from ${JSON.stringify(pathToFileURL(resolve(root, 'host/web/grant-admission.js')).href)};
+  writeFileSync(resolve(dir, 'grant-admission.js'), `export {isCloudMetadata, isLocalNetwork, knownFolderPath, socketProtocols, trimGrant, grantWords} from ${JSON.stringify(pathToFileURL(resolve(root, 'host/web/grant-admission.js')).href)};
 export const admitsNetwork=()=>true, admitsSecret=()=>false, coversPath=()=>false, createGrantSet=x=>x, grantError=()=>null, hasGrant=()=>false, rawGrantText=()=>'', scopedGrantSet=x=>x, unionGrantSets=x=>x, sameGrantDeclaration=()=>true;`);
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet={};');
   for (const name of ['address-space.js', 'faults.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
-  for (const name of ['ts-fetch.js', 'shape.js', 'uploads.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-fetch.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   cpSync(resolve(dir, 'admission.js'), resolve(dir, 'landing.js'));
   try {
     const ts = await import(pathToFileURL(resolve(dir, 'ts-data.js')).href), tsf = await import(pathToFileURL(resolve(dir, 'ts-fetch.js')).href), data = { q: [] };

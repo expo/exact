@@ -3,7 +3,7 @@ import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 // browser's fetch does, whatever the app's own code does to the signal or to `AbortSignal.any`, and lets go of the
 // signal when it ends.
 import { afterAll, beforeAll, test, expect } from 'bun:test';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -11,13 +11,14 @@ import { spawnSync } from 'node:child_process';
 import vm from 'node:vm';
 import { webCompiler } from './module.mjs';
 import { localImports } from './glue.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 // A folder of the runtime's modules side by side, as a build lays them out, with the app's grants in
 // `admission-data.js`; the rest of the runtime is a stub.
 function runtime(prefix) {
   const dir = mkdtempSync(resolve(tmpdir(), prefix));
-  for (const name of ['ts-stream.js', 'ts-fetch.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-stream.js', 'ts-fetch.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   for (const name of ['http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js', 'storage-environment.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
   writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8')));
   writeFileSync(resolve(dir, 'admission-data.js'), "import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(null);\n");

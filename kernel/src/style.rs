@@ -1228,21 +1228,21 @@ impl StyleProps {
             Display::None => taffy::style::Display::None,
             Display::Grid => taffy::style::Display::Grid,
         };
-        // Replaced pixels have ink overflow, never scrollable overflow (CSS
-        // Overflow §2.1). This also identifies images for grid intrinsic sizing.
         s.direction = match self.direction {
             Direction::Ltr => taffy::style::Direction::Ltr,
             Direction::Rtl => taffy::style::Direction::Rtl,
         };
+        // Replaced pixels and a form control's natural size are ink overflow, never scrollable
+        // overflow (CSS Overflow §2.1). The first also marks images for grid intrinsic sizing.
         s.item_is_replaced = node_type.is_replaced();
-        // A form control in a block container keeps its preferred width,
-        // where a `<div>` stretches: an `<input>`, `<textarea>` or `<select>`
-        // at `display: block`. Flex columns and grids still stretch it, and
-        // absolute insets still size it, as Chrome does. Taffy's block layout
-        // skips stretch for tables and replaced elements; a replaced element
-        // would also stop the insets, so these measured leaves take the
-        // table's exemption (nothing else follows from that marker).
-        s.item_is_table = matches!(node_type, NodeType::TextInput | NodeType::Control);
+        s.item_is_form_control = matches!(node_type, NodeType::TextInput | NodeType::Control);
+        // A form control in a block container keeps its preferred width, where a `<div>`
+        // stretches: an `<input>`, `<textarea>` or `<select>` at `display: block`. Flex columns
+        // and grids still stretch it, and absolute insets still size it, as Chrome does. Taffy's
+        // block layout skips stretch for tables and replaced elements; a replaced element would
+        // also stop the insets, so these measured leaves take the table's exemption (nothing
+        // else follows from that marker).
+        s.item_is_table = s.item_is_form_control;
         s.box_sizing = match self.box_sizing {
             BoxSizing::ContentBox => taffy::style::BoxSizing::ContentBox,
             BoxSizing::BorderBox => taffy::style::BoxSizing::BorderBox,

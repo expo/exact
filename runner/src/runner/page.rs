@@ -15,7 +15,7 @@ impl<D: DataSource> Runner<D> {
     /// changed: re-answer, in one commit, every `exactPage` resource whose
     /// shape reads a field that changed; the same facts again, or no such
     /// reader, commit nothing. Focus moves each time the person switches
-    /// windows, and asks nothing of a reader of `onLine` alone (#114). Size
+    /// windows, and asks nothing of a reader of `onLine` alone. Size
     /// readers are not asked.
     ///
     /// A page that shows is the person's ([`Runner::as_shown`]): a launch

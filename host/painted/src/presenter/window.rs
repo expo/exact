@@ -84,6 +84,10 @@ pub(super) struct State {
     /// The field to keep in view once the page has been painted in the
     /// viewport a keyboard left it ([`Presenter::reveal_owed`]).
     reveal: Option<ViewId>,
+    /// The frame whose page holds the platform's focus (the Android
+    /// reader's [`Presenter::reader_frame_focused`]): a keyboard that rises
+    /// for a field in it keeps the frame in view.
+    guest: Option<(ViewId, exact_kernel::NodeKey, u64)>,
 }
 
 impl<D: DataSource> Presenter<D> {
@@ -209,11 +213,16 @@ impl<D: DataSource> Presenter<D> {
         let mut error = self.fit_view(size, env, moved.then_some(keyboard));
         // The shell's bars take their room of the page as it is now placed.
         error = error.or(self.fit_bars());
-        // The field being edited stays above the keyboard. Where a picture
-        // is shown, the boxes a reveal goes by are that picture's, painted
-        // before the keyboard rose: the field is kept in view once the page
-        // has been painted in its new viewport.
-        if let Some(field) = self.focus.filter(|_| rose) {
+        // The field being edited stays above the keyboard, or the frame
+        // whose page has the keyboard, as Apple's hosts reveal a frame whose
+        // field became first responder. Where a picture is shown, the boxes
+        // a reveal goes by are that picture's, painted before the keyboard
+        // rose: the field is kept in view once the page has been painted in
+        // its new viewport.
+        let guest = (self.window.guest)
+            .filter(|&(id, key, session)| self.live_frame(id, key, session))
+            .map(|(id, ..)| id);
+        if let Some(field) = guest.or(self.focus).filter(|_| rose) {
             match self.display.attached() {
                 true => self.window.reveal = Some(field),
                 false => self.keep_in_view(field, reveal::Cause::InsetAdjustment),
@@ -265,6 +274,34 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// The Android reader's iframe `id` took the platform's focus (a field
+    /// in its page did) or lost it, for this session and allocation.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_frame_focused(
+        &mut self,
+        id: ViewId,
+        key: exact_kernel::NodeKey,
+        session: u64,
+        focused: bool,
+    ) {
+        if focused && self.live_frame(id, key, session) {
+            self.window.guest = Some((id, key, session));
+            // Focused while the keyboard is already up (moving from a field to the frame's).
+            if self.window.keyboard > 0.0 {
+                self.keep_in_view(id, reveal::Cause::InsetAdjustment);
+            }
+        } else if !focused && self.window.guest == Some((id, key, session)) {
+            self.window.guest = None;
+        }
+    }
+
+    fn live_frame(&self, id: ViewId, key: exact_kernel::NodeKey, session: u64) -> bool {
+        session == self.brush.native_session
+            && (self.host.kernel().node(id)).is_some_and(|node| {
+                node.key == key && node.node_type == exact_kernel::NodeType::WebView
+            })
+    }
+
     /// What the shell draws around the page; on a host that told no window,
     /// the viewport at the origin.
     pub fn chrome(&self) -> Chrome {
@@ -278,11 +315,11 @@ impl<D: DataSource> Presenter<D> {
             .first()
             .and_then(|root| kernel.node(*root))
             .and_then(|n| {
-                // The root's own accent, as the painted root reads it.
+                // The root's own accent and scheme, as the painted root reads them.
                 let _accent = crate::paint::accent_scope(&n);
                 n.style
                     .background_color
-                    .map(|c| crate::paint::rgba(c.resolve(dark)))
+                    .map(|c| crate::paint::rgba(c.resolve(self.dark_at(n.id))))
             })
             .filter(|c| c[3] == 255);
         let bars = self.status_bar();

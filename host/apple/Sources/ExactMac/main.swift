@@ -614,8 +614,8 @@ window.center()
 let agentScreen = AgentDisplay.named
 /// The frame the window was left at (its autosave). AppKit keeps the content
 /// rect when `.fullSizeContentView` or a toolbar goes in, so a frame restored
-/// only before the window's chrome lost the titlebar's height at every launch
-/// (#113). It is restored before boot, so the plan boots near its size, and
+/// only before the window's chrome lost the titlebar's height at every launch.
+/// It is restored before boot, so the plan boots near its size, and
 /// again once the window has its final style (`finishLaunching`), which is
 /// when the name goes on: setting it saves the current frame. Every app's
 /// is kept, declared size or not, as AppKit apps keep theirs (LLP 1115 D8).
@@ -927,8 +927,8 @@ let delegate = Delegate()
 ExactComposition.installHostEvents(on: exact, applicationDelegate: Delegate.self, sceneDelegate: nil, session: { frontWindow()?.session })
 app.delegate = delegate
 
-// A supervisor's SIGTERM follows the same cancellable quit as the menu
-// (#269). The signal handler does no AppKit work; the retained source runs
+// A supervisor's SIGTERM follows the same cancellable quit as the menu.
+// The signal handler does no AppKit work; the retained source runs
 // on the main queue. A caught signal, unlike SIG_IGN, resets to the default
 // when an executed helper starts, so the helper can still be terminated.
 signal(SIGTERM) { _ in }

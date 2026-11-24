@@ -116,6 +116,10 @@ component NativeFixture
   state received = ""
   action bump
     count = count + 1
+  // The bar item's pull-down's `toggle` edges, in order (expo/exact#1462).
+  state barMenuToggles = ""
+  action barMenuToggled(e: ToggleEvent)
+    barMenuToggles = `${barMenuToggles}${e.oldState}>${e.newState};`
   // What hatches ask of authored nodes (LLP 1075.003.000.001 §2.5): the `feed`
   // hatch replaces a field's value with `input`; the `presser` hatch clicks
   // its own button once when armed, and on every change while looping, which
@@ -484,7 +488,7 @@ component NativeFixture
                     button commandfor="plain-clear" command="close" testId="plain-clear-cancel"
                       text "Cancel"
                 if e.name == "home"
-                  column id="bar-menu" popover="auto" position="absolute" role="menu" aria-label="Actions" width=200 padding=8 background-color="#ffffff"
+                  column id="bar-menu" popover="auto" position="absolute" role="menu" aria-label="Actions" toggle=barMenuToggled width=200 padding=8 background-color="#ffffff"
                     button appearance="none" press=bump popovertarget="bar-menu" popovertargetaction="hide" role="menuitem" testId="bar-menu-bump" height=44 text-align="start"
                       text "Bump from the bar"
                     // Rows that open a confirmation, with no handler or after one: it presents

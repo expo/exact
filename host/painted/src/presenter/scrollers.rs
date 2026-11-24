@@ -210,6 +210,8 @@ impl<D: DataSource> Presenter<D> {
                 self.host.content_region(),
                 &node,
                 limits.get(&id).copied(),
+                &|id| self.host.presented(id),
+                self.host.scaled_presented(),
             )
         }))
     }
@@ -601,9 +603,14 @@ impl<D: DataSource> Presenter<D> {
                 let kernel = self.host.kernel();
                 let node = kernel.node(id).unwrap();
                 let region = self.host.content_region();
-                let bounds =
-                    self.brush
-                        .scroll_bounds(kernel, region, &node, limits.get(&id).copied());
+                let bounds = self.brush.scroll_bounds(
+                    kernel,
+                    region,
+                    &node,
+                    limits.get(&id).copied(),
+                    &|id| self.host.presented(id),
+                    self.host.scaled_presented(),
+                );
                 self.stage_shown(id, key, bounds);
             }
             held.insert(id);
@@ -776,13 +783,14 @@ impl<D: DataSource> Presenter<D> {
     /// its hit reply (`Native.under` in `host/android/canvas` has the
     /// words): its id, border box, allocation slot and generation, the
     /// long-press count, the painter's session token, the painted origin of
-    /// its content box and the node a long press there would give to.
+    /// its content box and the node a long press there would give to. A
+    /// frame's WebView is offered its contacts as a module's view is.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_module(&mut self, x: f32, y: f32, scale: f32) -> [i32; 13] {
         let module = self.hit(x / scale, y / scale).filter(|id| {
             // A video with `controls` takes its gestures as a module's view does (LLP 1042.001 D4).
             self.host.kernel().node(*id).is_some_and(|node| {
-                (node.node_type == NodeType::NativeView
+                (matches!(node.node_type, NodeType::NativeView | NodeType::WebView)
                     || (node.node_type == NodeType::Video
                         && node.props.bool(PropId::Controls) == Some(true)))
                     && self.host.retained_action_eligible(node.key)

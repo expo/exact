@@ -165,6 +165,13 @@ final class FrameAutomation {
         pending.forEach { $0(["error": "AbortError", "message": "the document navigated away"]) }
     }
 
+    /// The web content process ended: its documents, and their evaluations, with it.
+    func terminated() {
+        let pending = evaluations.values
+        evaluations = [:]
+        pending.forEach { $0(["error": "AbortError", "message": "the web content process ended"]) }
+    }
+
     /// A new web view for the same frame (a partition change): the preload scripts go with it.
     func attached(_ controller: WKUserContentController) {
         for entry in preload { controller.addUserScript(entry.script) }
@@ -262,26 +269,51 @@ final class FrameAutomation {
             ? "(\n\(request["expression"] as? String ?? "")\n)"
             : "(\n\(request["functionDeclaration"] as? String ?? "")\n)(...__exactArguments)"
         let settle = awaited ? "await __exactValue" : "(__exactValue && typeof __exactValue.then === 'function' ? {} : __exactValue)"
-        // An exception is caught in the guest and answered as a value: WebKit's
-        // error for one names it only under a key outside its headers.
-        let body = "try {\nconst __exactValue = \(value);\nconst __exactText = JSON.stringify(\(settle));\nreturn __exactText === undefined ? 'null' : __exactText;\n} catch (__exactError) {\nreturn { __exactThrown: true, name: String(__exactError?.name ?? 'Error'), message: String(__exactError?.message ?? __exactError) };\n}"
+        // An exception is caught in the guest and answered as text, `!` then
+        // its name and message: WebKit's error for one names it only under a
+        // key outside its headers. Text, as no object is, is never taken for a
+        // thenable, and reading the exception may throw too.
+        let body = "try {\nconst __exactValue = \(value);\nconst __exactText = JSON.stringify(\(settle));\nreturn __exactText === undefined ? 'null' : __exactText;\n} catch (__exactError) {\ntry {\nreturn '!' + String(__exactError?.name ?? 'Error') + '\\n' + String(__exactError?.message ?? __exactError);\n} catch {\nreturn '!Error\\nan exception that cannot be read as text';\n}\n}"
         nextId += 1
         let number = nextId
         evaluations[number] = reply
-        web.callAsyncJavaScript(body, arguments: ["__exactArguments": request["arguments"] as? [Any] ?? []], in: nil, in: world) { [weak self] result in
-            guard let self, let reply = self.evaluations.removeValue(forKey: number) else { return }
+        web.callAsyncJavaScript(body, arguments: ["__exactArguments": request["arguments"] as? [Any] ?? []], in: nil, in: world) { [weak self, weak web] result in
+            guard let self, self.evaluations[number] != nil else { return }
+            if case .failure(let error) = result, Self.unparsed(error), let web {
+                return self.parsed(body, web, world, number)
+            }
+            guard let reply = self.evaluations.removeValue(forKey: number) else { return }
             switch result {
+            case .success(let text as String) where text.hasPrefix("!"):
+                let thrown = text.dropFirst().split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+                reply(Self.thrown(String(thrown[0]), thrown.count > 1 ? String(thrown[1]) : ""))
             case .success(let text as String):
                 guard text.utf8.count <= Automations.limit else {
                     return reply(["error": "QuotaExceededError", "message": "the result is \(text.utf8.count) bytes of JSON; at most \(Automations.limit)"])
                 }
                 reply(["result": (try? JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed)) ?? NSNull()])
-            case .success(let thrown as [String: Any]) where thrown["__exactThrown"] as? Bool == true:
-                reply(Self.thrown(thrown["name"] as? String ?? "Error", thrown["message"] as? String ?? ""))
             case .success: reply(["result": NSNull()])
             case .failure(let error): reply(Self.failure(error))
             }
         }
+    }
+
+    /// WebKit fails a call whose promise it collected unsettled with the same
+    /// error as one whose script does not parse (`callAsyncJavaScript`'s
+    /// "result unreachable"). Such a promise can never settle, and BiDi's
+    /// call then waits, so the call is left to end with its document or
+    /// frame; only a script that does not parse is refused.
+    private func parsed(_ body: String, _ web: WKWebView, _ world: WKContentWorld, _ number: Int) {
+        web.evaluateJavaScript("typeof async function (__exactArguments) {\n\(body)\n}", in: nil, in: world) { [weak self] result in
+            guard case .failure(let error) = result, Self.unparsed(error),
+                  let reply = self?.evaluations.removeValue(forKey: number) else { return }
+            reply(Self.failure(error))
+        }
+    }
+
+    private static func unparsed(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == WKError.errorDomain && ns.code == WKError.javaScriptExceptionOccurred.rawValue
     }
 
     /// The guest's exception by its own name (`TypeError`), else `Error`.
@@ -293,11 +325,8 @@ final class FrameAutomation {
     /// WebKit's public description. Where the source fails to parse, WebKit
     /// names the cause only under a key outside its headers.
     static func failure(_ error: Error) -> [String: Any] {
-        let ns = error as NSError
-        if ns.domain == WKError.errorDomain, ns.code == WKError.javaScriptExceptionOccurred.rawValue {
-            return ["error": "SyntaxError", "message": "the script does not parse"]
-        }
-        return ["error": "Error", "message": ns.localizedDescription]
+        if unparsed(error) { return ["error": "SyntaxError", "message": "the script does not parse"] }
+        return ["error": "Error", "message": (error as NSError).localizedDescription]
     }
 
     // MARK: Input

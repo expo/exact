@@ -1,6 +1,6 @@
 //! A world's message carries what caused it (LLP 1133.022 D6, D10 item 6):
 //! once a tool's message is posted into a world, every message the world
-//! emits carries the least privileged origin posted since its fresh start,
+//! emits carries the set of origins posted since its fresh start,
 //! through a person's input, the clock and a save restored into a new
 //! world; only a restart clears it. An unmarked world's save is unchanged.
 use exact_game::*;
@@ -101,14 +101,14 @@ fn a_tool_message_marks_every_later_emission_until_a_restart() {
 }
 
 #[test]
-fn the_least_privileged_origin_wins_and_a_mark_cannot_raise_one() {
+fn the_mark_is_every_origin_posted_and_cannot_raise_one() {
     let mut s = sim();
     post(&mut s, "\u{1}origin:device\u{1}a", 0.0);
     post(&mut s, &format!("{TOOL}b"), 0.0);
-    post(&mut s, "\u{1}origin:app\u{1}c", 0.0);
+    post(&mut s, "c", 0.0);
     s.advance(100.0, Clock::Seekable);
-    assert_eq!(s.origin(), "device");
-    let mark = "\u{1}origin:device\u{1}";
+    assert_eq!(s.origin(), "device,tool");
+    let mark = "\u{1}origin:device,tool\u{1}";
     assert_eq!(
         s.take_messages(),
         [
@@ -117,10 +117,30 @@ fn the_least_privileged_origin_wins_and_a_mark_cannot_raise_one() {
             format!("{mark}heard c")
         ]
     );
-    // An unknown word is the most restricted, an action's.
-    let mut t = sim();
-    post(&mut t, "\u{1}origin:root\u{1}x", 0.0);
-    assert_eq!(t.origin(), "action");
+    // A background action's post keeps its own rules beside a tool's.
+    let mut a = sim();
+    post(&mut a, "\u{1}origin:tool,action\u{1}x", 0.0);
+    assert_eq!(a.origin(), "tool,action");
+    // A mark the world cannot read, `app` and an empty one included, names
+    // every restricted origin.
+    for unread in ["root", "app", "", "tool,", "tool,app"] {
+        let mut t = sim();
+        post(&mut t, &format!("\u{1}origin:{unread}\u{1}x"), 0.0);
+        assert_eq!(t.origin(), "device,wake,tool,action", "{unread:?}");
+    }
+    let mut endless = sim();
+    post(&mut endless, "\u{1}origin:tool", 0.0);
+    assert_eq!(endless.origin(), "device,wake,tool,action");
+    // The set survives a save, and a live world restored to an older save
+    // keeps what was posted into it since.
+    let save = s.save().unwrap();
+    let mut restored = sim();
+    restored.restore(&save).unwrap();
+    assert_eq!(restored.origin(), "device,tool");
+    post(&mut s, "\u{1}origin:action\u{1}y", 100.0);
+    s.advance(200.0, Clock::Seekable);
+    s.restore(&save).unwrap();
+    assert_eq!(s.origin(), "device,tool,action");
 }
 
 #[test]

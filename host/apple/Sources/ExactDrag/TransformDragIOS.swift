@@ -6,7 +6,8 @@ import QuartzCore
 
 extension NodeView {
     func transformDragModel() -> TransformDragPosition? {
-        TransformDragPosition(x: Double(translate.x), y: Double(translate.y), scale: Double(scale))
+        guard scale.x == scale.y else { return nil }
+        return TransformDragPosition(x: Double(translate.x), y: Double(translate.y), scale: Double(scale.x))
     }
     func transformDragPresentation() -> TransformDragPosition? {
         guard rotate == 0, contextTransform.isIdentity else { return nil }
@@ -20,9 +21,9 @@ extension NodeView {
         // tvOS has no multi-finger pan or pinch.
         #if !os(tvOS)
         if presenter?.transformBindings[id]?.target != nil, transformRecognizer == nil {
-            let pan = UIPanGestureRecognizer(target: self, action: #selector(transformDragging(_:)))
+            let pan = TimedPan(target: self, action: #selector(transformDragging(_:)))
             pan.maximumNumberOfTouches = 2; pan.delegate = self
-            let pinch = UIPinchGestureRecognizer(target: self, action: #selector(transformDragging(_:)))
+            let pinch = TimedPinch(target: self, action: #selector(transformDragging(_:)))
             pinch.delegate = self
             addGestureRecognizer(pan); addGestureRecognizer(pinch)
             transformRecognizer = pan; contact = TransformContact(pinch)
@@ -105,7 +106,7 @@ extension NodeView {
     #if !os(tvOS)
     @objc func transformDragging(_ gesture: UIGestureRecognizer) {
         guard let contact = contact, let pan = transformRecognizer else { return }
-        let time = CACurrentMediaTime(), isPan = gesture === pan
+        let time = (gesture as? TimedGesture)?.time(gesture.state) ?? CACurrentMediaTime(), isPan = gesture === pan
         func focal() -> CGPoint { (contact.panning ? pan : contact.pinch).location(in: window) }
         func anchor(_ from: CGPoint? = nil) {
             guard let hold = transformHold as? TransformDragHold, let value = TransformDragPosition(hold.current) else { return }
@@ -122,15 +123,17 @@ extension NodeView {
         case .began:
             // A touch's pan translation starts where UIKit recognized it, past
             // its hysteresis. When one finger's pan begins the hold, the hold
-            // starts with that finger's travel since it touched down, so the
-            // target steps to the finger in its first sample and the release's
-            // velocity counts no step. Otherwise the pan keeps the movement
-            // that recognized it (a coalesced drag may begin and end at once).
+            // starts where and when that finger touched down and steps to it
+            // in its first sample, so the target is under the finger and the
+            // release's velocity counts the travel at the finger's pace.
+            // Otherwise the pan keeps the movement that recognized it (a
+            // coalesced drag may begin and end at once).
             let point = pan.location(in: window)
             let down = isPan && !contact.pinching && transformHold == nil ? contact.panDown : nil
             if transformHold == nil {
                 let travel = down.map { CGPoint(x: point.x - $0.x, y: point.y - $0.y) } ?? .zero
-                transformHold = TransformDragHold(self, time: time, travel: travel)
+                transformHold = TransformDragHold(self, time: time, travel: travel,
+                                                  down: down == nil ? nil : (pan as? TimedPan)?.down?.time)
             }
             guard transformHold != nil else { return }
             if isPan { contact.panning = true } else { contact.pinching = true }
@@ -149,7 +152,7 @@ extension NodeView {
             if contact.panning || contact.pinching { anchor(); return }
             // The last of the pair ends: one release while both tokens are live.
             transformHold = nil
-            hold.finish(to: hold.current, time: time, cancel: gesture.state != .ended)
+            hold.finish(to: nil, time: time, cancel: gesture.state != .ended)
         default: break
         }
     }

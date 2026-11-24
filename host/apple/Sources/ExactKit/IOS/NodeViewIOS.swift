@@ -470,7 +470,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         #endif
         let presses=pressedControls(presses,down:false)
         if presses.isEmpty {return}
-        // The release's `keyup` handlers (#140), as `pressesBegan` the down's.
+        // The release's `keyup` handlers, as `pressesBegan` the down's.
         if !formDisabled, isFirstResponder, let key = presses.first?.key { _ = hardwareKey(key, down: false) }
         if inputCanvas?.canvasInput?.presses(presses, down: false, source: self) != true { super.pressesEnded(presses, with: event) }
     }
@@ -588,6 +588,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// The view is gone: no load in flight may report for it.
     func forget() {
         layoutHits = nil
+        ControlBars.detach(self)
         holdGone() // out of the map: a hold on it is let go (HeldState.swift)
         cancelPressContact()
         let previousTransform = transformHold; transformHold = nil
@@ -681,6 +682,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         presenter?.noteOwedText(self)
         super.didMoveToWindow()
         if window == nil { pressEpoch &+= 1 }
+        ControlBars.moved(self)
         // Focused by its autofocus and moved out of the window in the same
         // turn, which resigned it: a sheet's route going into the controller
         // UIKit presents, a grouped list's row into its cell. Its autofocus
@@ -851,6 +853,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // UIKit's conversion already carries a box in space through its
         // plane (LLP 1077 D8); a hidden back face is the host's to refuse.
         if placedAncestor?.placementHidden == true || hidesBack() { return nil }
+        let matrix = layer.transform
+        if CATransform3DIsAffine(matrix), matrix.m11 * matrix.m22 - matrix.m12 * matrix.m21 == 0 { return nil }
         if let clipPath, !clipPath.contains(point, using: clipRule) { return nil }
         if !fragmentHit(point) { return nil }
         if props["swipeIndicator"] == "true" { return nil }
@@ -951,8 +955,12 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package override var accessibilityFrame: CGRect {
         get {
             if placedAncestor?.placementHidden == true { return .zero }
-            guard placedAncestor?.placement != nil, let window else { return super.accessibilityFrame }
-            return UIAccessibility.convertToScreenCoordinates(drawnRect(bounds, in: window), in: window)
+            guard placedAncestor?.placement != nil, let window else {
+                // A box that does not scroll keeps its laid-out frame however far it reaches (LLP 1123 D13)
+                guard laidOutBox != bounds, let window else { return super.accessibilityFrame }
+                return UIAccessibility.convertToScreenCoordinates(convert(laidOutBox, to: window), in: window)
+            }
+            return UIAccessibility.convertToScreenCoordinates(drawnRect(laidOutBox, in: window), in: window)
         }
         set { super.accessibilityFrame = newValue }
     }
@@ -1235,7 +1243,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if scrolls { syncClipBox(false) }
         if scrolls && scroll == nil && !scrollWaits && !groupedOwner {
             if pageBand != .zero, extras?.nativeScrollView != nil { setPageBand(.zero) } // the list leaving keeps its scrollTop
-            if reach != .zero, extras?.nativeScrollView != nil { setReach(.zero) }
+            if reach != .zero { setReach(.zero) } // the box's own reach, or a native list's, goes as the scroll view comes
             let sv = ScrollView(frame: bounds)
             sv.backgroundColor = .clear
             sv.contentInsetAdjustmentBehavior = .never
@@ -1283,6 +1291,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         updateKeyboardDismissal()
         fitScroll()
         syncShadowClip()
+        syncScrollCorner()
         // A scroll's children, back out, go where a material holds them.
         if materialView != nil, scroll == nil { rehomeMaterialChildren() }
         syncGlassGroup()
@@ -1342,7 +1351,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if focusRing != nil { showFocusRing(true) }
         if let s = presenter?.session, s.firstLayoutMs == nil { s.firstLayoutMs = ExactEnv.wall() }
         super.layoutSubviews()
-        if materialView != nil { applyMaterialRadius(); syncDefaultSurfaceScroll() } // its corners, at its size
+        if materialView != nil { applyMaterialRadius(); syncScrollCorner() } // its corners, at its size
         syncEllipticalClip()
         if style["perspective"] != nil { applyPerspective() }
         if kind == "image" { if flightLook == nil { presenter?.session?.rasters?.resized(self) }; if raster != nil { applyImageLayer() } }

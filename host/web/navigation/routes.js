@@ -151,7 +151,6 @@ function placeTabBar(root, list, wide) {
   root.toggleAttribute("data-exact-sidebar", wide);
   list.toggleAttribute("data-exact-sidebar-tabs", wide);
 }
-
 // @ref LLP 1075.003 §3.7 — tabs name their kept panels with aria-controls; each panel holds a route stack.
 // Attribute and parent walks also work in the server renderer's DOM, which has no selector engine.
 const tabsOf = (nav) => {
@@ -222,7 +221,7 @@ function selectedDetent(route) {
     const kept = keptDetents(said), initial = route.getAttribute("data-navigationinitialdetent");
     const { kind = "large", height = 100, word } = kept.find((d) => d.word === initial) ?? kept[0] ?? {};
     const css = kind === "share" ? `calc(${TALLEST} * ${word === "medium" ? ".5" : height / 100})` : kind === "points" ? `${height}px` : "";
-    sheetDetents.set(route, chosen = { said, kind: kind === "content" ? "fit-content" : css ? "height" : null, css });
+    sheetDetents.set(route, chosen = { said, canGrow: word !== kept.at(-1)?.word, kind: kind === "content" ? "fit-content" : css ? "height" : null, css });
   }
   return chosen;
 }
@@ -287,6 +286,7 @@ function sheetFrame(routes, index, shownIn, inUse, selected) {
   if (route.hasAttribute("data-exact-in-sheet") !== pushed) {
     route.toggleAttribute("data-exact-in-sheet", pushed);
   }
+  route.$sheetCanGrow = chosen?.canGrow;
   if ((route.getAttribute("data-exact-detent") ?? null) !== (chosen?.kind ?? null)) {
     chosen?.kind ? route.setAttribute("data-exact-detent", chosen.kind) : route.removeAttribute("data-exact-detent");
   }

@@ -34,6 +34,15 @@ internal class ModuleContact(private val transform: (View, Matrix) -> Boolean) {
         }
     }
 
+    /** Whether the view is a frame's WebView that can scroll its page the way a finger moved by ([dx], [dy]) goes,
+     * along the longer. Other views ask by `requestDisallowInterceptTouchEvent`; a clipped `TextView` would answer
+     * that it can scroll and does not. */
+    fun scrolls(dx: Float, dy: Float): Boolean {
+        val v = (target as? android.webkit.WebView) ?: return false
+        return if (kotlin.math.abs(dx) > kotlin.math.abs(dy)) v.canScrollHorizontally(if (dx < 0) 1 else -1)
+        else v.canScrollVertically(if (dy < 0) 1 else -1)
+    }
+
     /** Retirement consumes the remaining sequence, even if the same View is lent to another element. */
     fun retired(view: View): Boolean {
         if (target !== view) return false

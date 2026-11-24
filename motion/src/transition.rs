@@ -6,7 +6,7 @@
 //! the kernel — the same row a web host emits as CSS. The rest of this module
 //! is what a browser does with that row: start a transition when the target
 //! changes, interrupt it from the current value when the target changes
-//! again, and shorten it when the change reverses (§3.2's reversing-adjusted
+//! again, and shorten it when the change reverses (§3.1's reversing-adjusted
 //! start value and reversing shortening factor), so a hover-off halfway
 //! through a hover-on takes half the time on every platform, not just the web.
 
@@ -266,9 +266,9 @@ pub(crate) struct Running {
     pub start: f64,
     /// The curve and its effective duration.
     pub curve: Curve,
-    /// CSS §3.2: the value a reversal is measured against.
+    /// The value a reversal is measured against (CSS Transitions 1 §3.1).
     pub reversing_adjusted_start: Value,
-    /// CSS §3.2: how much of the authored duration this transition uses.
+    /// The share of the authored duration to use (CSS Transitions 1 §3.1).
     pub reversing_shortening: f64,
     /// While it waits for the first presented frame (LLP 1003.001 D1), the
     /// engine time it began: every reading is at that time, so it does not
@@ -310,13 +310,39 @@ impl Running {
         reversing_adjusted_start: Value,
         reversing_shortening: f64,
     ) -> Running {
+        Self::start_with(
+            declaration,
+            property,
+            (from, to),
+            velocity,
+            now,
+            (reversing_adjusted_start, reversing_shortening),
+            |config, displacement, velocity| {
+                if property == Property::Rotate {
+                    config.settle_time(-crate::rotation::distance(from, to), velocity.x)
+                } else {
+                    settle_time(config, displacement, velocity)
+                }
+            },
+        )
+    }
+
+    fn start_with(
+        declaration: &Transition,
+        property: Property,
+        (from, to): (Value, Value),
+        velocity: Value,
+        now: f64,
+        (reversing_adjusted_start, reversing_shortening): (Value, f64),
+        settle: impl FnOnce(&SpringConfig, Value, Value) -> f64,
+    ) -> Running {
         let (curve, delay) = match &declaration.timing {
             TimingFunction::Easing(easing) => (
                 Curve::Easing {
                     easing: easing.clone(),
                     duration: declaration.duration * reversing_shortening,
                 },
-                // CSS §3.2: a negative delay is scaled by the shortening factor.
+                // The shortening factor scales a negative delay (CSS Transitions 1 §3.1).
                 if declaration.delay >= 0.0 {
                     declaration.delay
                 } else {
@@ -354,15 +380,14 @@ impl Running {
         let curve = match curve {
             Curve::Spring {
                 config, velocity, ..
-            } => Curve::Spring {
-                config,
-                velocity,
-                settle: if property == Property::Rotate {
-                    config.settle_time(-crate::rotation::distance(from, to), velocity.x)
-                } else {
-                    settle_time(&config, from - to, velocity)
-                },
-            },
+            } => {
+                let settle = settle(&config, from - to, velocity);
+                Curve::Spring {
+                    config,
+                    velocity,
+                    settle,
+                }
+            }
             easing => easing,
         };
         Running {
@@ -377,8 +402,38 @@ impl Running {
         }
     }
 
-    /// The easing's output progress at `now` (CSS §3.2 "timing function
-    /// output"). A spring has no such number; it reports `1`.
+    /// The reversing-adjusted start and shortening factor of a transition
+    /// to `target` that interrupts this one at `current` (CSS Transitions 1
+    /// §3.1). An easing back to this one's reversing-adjusted start is
+    /// measured from its end and shortened by [`Running::reversing_factor`].
+    /// Any other interruption is measured from `current` at full duration.
+    pub(crate) fn reversal(
+        &self,
+        declaration: &Transition,
+        current: Value,
+        target: Value,
+        now: f64,
+    ) -> (Value, f64) {
+        if matches!(declaration.timing, TimingFunction::Easing(_))
+            && target.same(self.reversing_adjusted_start)
+        {
+            (self.to, self.reversing_factor(now))
+        } else {
+            (current, 1.0)
+        }
+    }
+
+    /// The shortening factor for a reversal at `now` (CSS Transitions 1
+    /// §3.1). It accounts for this transition's progress and its own
+    /// shortening factor.
+    pub(crate) fn reversing_factor(&self, now: f64) -> f64 {
+        (self.easing_progress(now) * self.reversing_shortening + (1.0 - self.reversing_shortening))
+            .abs()
+            .clamp(0.0, 1.0)
+    }
+
+    /// The easing's output progress at `now` (CSS Transitions 1 §3.1). A
+    /// spring reports `1`.
     pub fn easing_progress(&self, now: f64) -> f64 {
         let now = self.pending.unwrap_or(now);
         match &self.curve {
@@ -546,6 +601,78 @@ impl Running {
     }
 }
 
+/// A host-owned blend between live style values, sampled in seconds. The
+/// endpoints are progress values so style commits can change the values being
+/// blended without restarting the transition.
+#[derive(Debug)]
+pub struct TransitionProgress(Running);
+
+impl TransitionProgress {
+    /// Start a blend from `from` to `to` at `now` (seconds) under a
+    /// governing declaration, or interrupt `previous` from where it is,
+    /// reversing it as CSS Transitions 1 §3.1 says. For a spring, `settle`
+    /// receives the displacement and the inherited speed in progress units
+    /// and returns the time to rest in seconds. Return `None` when the
+    /// declaration starts no transition ([`Transition::starts`]), the blend
+    /// is at `to` and at rest, or it ends by `now`. The caller then shows `to`.
+    pub fn retarget(
+        declaration: &Transition,
+        (from, to): (f64, f64),
+        now: f64,
+        previous: Option<&Self>,
+        settle: impl FnOnce(&SpringConfig, f64, f64) -> f64,
+    ) -> Option<Self> {
+        if !declaration.starts() {
+            return None;
+        }
+        let (from, to) = (Value::scalar(from), Value::scalar(to));
+        let (current, velocity, reversal) = match previous {
+            Some(Self(running)) => {
+                let sample = running.sample(now);
+                let reversal = if sample.done {
+                    (sample.value, 1.0)
+                } else {
+                    running.reversal(declaration, sample.value, to, now)
+                };
+                (sample.value, sample.velocity, reversal)
+            }
+            None => (from, Value::ZERO, (from, 1.0)),
+        };
+        if current == to
+            && (velocity == Value::ZERO || !matches!(declaration.timing, TimingFunction::Spring(_)))
+        {
+            return None;
+        }
+        // A progress interpolates linearly, as opacity does.
+        let running = Running::start_with(
+            declaration,
+            Property::Opacity,
+            (current, to),
+            velocity,
+            now,
+            reversal,
+            |config, displacement, velocity| settle(config, displacement.x, velocity.x),
+        );
+        (running.end_time() > now).then_some(Self(running))
+    }
+
+    /// The blend's progress now.
+    pub fn value(&self, now: f64) -> f64 {
+        self.0.sample(now).value.x
+    }
+
+    /// The seconds on the clock at which the blend starts moving: its
+    /// change time plus its delay.
+    pub fn start_time(&self) -> f64 {
+        self.0.start
+    }
+
+    /// The seconds on the clock until which the blend is active.
+    pub fn end_time(&self) -> f64 {
+        self.0.end_time()
+    }
+}
+
 /// Seconds until a spring released at `displacement` with `velocity`
 /// settles: the latest of its components' settle times on the sample grid.
 fn settle_time(config: &SpringConfig, displacement: Value, velocity: Value) -> f64 {
@@ -570,4 +697,129 @@ fn spring(config: &SpringConfig, displacement: Value, velocity: Value, t: f64) -
     }
     let value = |c: [f64; 4]| Value::four(c[0], c[1], c[2], c[3]);
     (value(moved), value(speed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::easing::LinearStop;
+
+    fn linear(duration: f64) -> Transition {
+        Transition::new(
+            TransitionProperty::All,
+            duration,
+            TimingFunction::Easing(Easing::Linear),
+        )
+    }
+
+    fn eased(
+        declaration: &Transition,
+        ends: (f64, f64),
+        now: f64,
+        previous: Option<&TransitionProgress>,
+    ) -> Option<TransitionProgress> {
+        TransitionProgress::retarget(declaration, ends, now, previous, |_, _, _| {
+            unreachable!("an easing has no spring")
+        })
+    }
+
+    #[test]
+    fn an_interrupted_blend_reverses_with_css_shortening() {
+        let declaration = linear(0.2);
+        let pressing = eased(&declaration, (0., 1.), 0., None).unwrap();
+        assert_eq!(pressing.value(0.1), 0.5);
+        // Back halfway through: from where it is, over half the duration.
+        let releasing = eased(&declaration, (1., 0.), 0.1, Some(&pressing)).unwrap();
+        assert_eq!(releasing.value(0.1), 0.5);
+        assert!((releasing.end_time() - 0.2).abs() < 1e-12);
+        assert!((releasing.value(0.15) - 0.25).abs() < 1e-12);
+        // Reversing the reversal keeps its shortening: 0.5 · 0.5 + 0.5.
+        let again = eased(&declaration, (0., 1.), 0.15, Some(&releasing)).unwrap();
+        assert!((again.end_time() - 0.3).abs() < 1e-12);
+        assert!((again.value(0.3) - 1.).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_blend_after_a_finished_one_takes_its_whole_duration() {
+        // An easing whose output ends short of 1 would shorten a reversal.
+        let declaration = Transition::new(
+            TransitionProperty::All,
+            0.2,
+            TimingFunction::Easing(Easing::PiecewiseLinear(vec![
+                LinearStop {
+                    input: 0.,
+                    output: 0.,
+                },
+                LinearStop {
+                    input: 1.,
+                    output: 0.5,
+                },
+            ])),
+        );
+        let pressing = eased(&declaration, (0., 1.), 0., None).unwrap();
+        let releasing = eased(&declaration, (1., 0.), 0.5, Some(&pressing)).unwrap();
+        assert_eq!(releasing.value(0.5), 1.);
+        assert!((releasing.end_time() - 0.7).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_blend_with_nothing_to_play_is_none() {
+        let declaration = linear(0.2);
+        assert!(eased(&declaration, (1., 1.), 0., None).is_none());
+        let pressing = eased(&declaration, (0., 1.), 0., None).unwrap();
+        assert!(eased(&declaration, (0., 1.), 0.3, Some(&pressing)).is_none());
+        assert!(eased(&Transition::INITIAL, (0., 1.), 0., None).is_none());
+        let spring = Transition::new(
+            TransitionProperty::All,
+            0.,
+            TimingFunction::Spring(SpringConfig {
+                stiffness: 100.,
+                damping: 10.,
+                mass: 1.,
+            }),
+        );
+        let settled = TransitionProgress::retarget(&spring, (0., 1.), 0., None, |_, _, _| 0.);
+        assert!(
+            settled.is_none(),
+            "a spring that settles at once ends by now"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_spring_keeps_its_velocity() {
+        let spring = Transition::new(
+            TransitionProperty::All,
+            0.,
+            TimingFunction::Spring(SpringConfig {
+                stiffness: 100.,
+                damping: 10.,
+                mass: 1.,
+            }),
+        );
+        let settle = |config: &SpringConfig, distance, speed| config.settle_time(distance, speed);
+        let pressing =
+            TransitionProgress::retarget(&spring, (0., 1.), 0., None, |config, distance, speed| {
+                assert_eq!((distance, speed), (-1., 0.));
+                settle(config, distance, speed)
+            })
+            .unwrap();
+        let at = pressing.value(0.05);
+        let mut launched = 0.;
+        let releasing = TransitionProgress::retarget(
+            &spring,
+            (1., 0.),
+            0.05,
+            Some(&pressing),
+            |config, distance, speed| {
+                assert_eq!(distance, at);
+                launched = speed;
+                settle(config, distance, speed)
+            },
+        )
+        .unwrap();
+        assert!(launched > 0., "it still moves toward the press");
+        assert_eq!(releasing.value(0.05), at);
+        assert!(releasing.value(0.06) > at);
+        assert!(releasing.value(releasing.end_time()).abs() < 1e-12);
+    }
 }

@@ -1244,6 +1244,12 @@ momentum, so a Mac's scroll can be tested where a drag selects text instead.
 a nonzero 32-bit integer, negative for Back and positive for Forward. It uses
 the browser's `history.go`, including entries kept across `reload`; other hosts
 report unsupported. Scope these tests with `on web`.
+`tap "zone" drop file "a.pdf" text "Mount Fuji" url "https://example.com/"` is
+the driver's drop (the agent's `tap <t> drop`) at the node's middle: a drag
+from another app carrying the files, each `file` once and its path from the
+test file's folder, the plain text and the link, at least one of them
+([Pointer](#pointer), `drop`). It runs where drops do: the web, macOS and
+Windows.
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
@@ -1447,7 +1453,7 @@ says. Every roster function has a row and an example, and each example written
 | `frame(id)` | `Geometry`, actions only; last layout where the viewer sees it, as `getBoundingClientRect`: in the viewport, every scroll offset and transform applied | `frame("card").height`, in an action, is the card's height as drawn |
 | `scrollMetrics(id)` | `option<ScrollMetrics>`, actions only. A mounted textarea reports `scrollLeft`, `scrollTop`, `scrollWidth`, `scrollHeight`, `clientWidth` and `clientHeight` in CSS pixels. A missing or hidden field answers `none`. | In a textarea’s `resize` action, compare `scrollWidth` with `clientWidth` to detect horizontal overflow before the first scroll. |
 | `rangeFrame(id, start, end)` | `Geometry`, actions only; a textarea's UTF-16 range as `Range.getBoundingClientRect()` (on a `text markup="markdown"`, the union of the atom pills the range meets, [inline atoms](#inline-atoms-atom-atoms-atomfaces-atompress)): collapsed, the caret's rectangle; unavailable past the text, while composing, or with no host reader ([decorations](#plain-textarea-decorations), LLP 1114.007) | `rangeFrame("composer", caret, caret)`, in an action, is where a mention popover goes |
-| `measure("id")` | `Geometry`, actions only; literal id, the border box as if `height` were `auto`, other styles kept (padding, border, `min-height`, `max-height`, insets): 0 for a bare box whose children are all absolutely positioned (a navigation root); `frame` is the laid-out box | `measure("note").height`, in an action, is the note's natural height |
+| `measure("id")` | `Geometry`, actions only; literal id, the border box as if `height` were `auto`, other styles kept (padding, border, `min-height`, `max-height`, insets): 0 for a bare box whose children are all absolutely positioned (a navigation root); motion in flight counts at its end (a `height` transition's end value, a layout transition's laid-out box); `unavailable` before the first layout, for an id no element has, for a box with no single size (an inline run, `display: none`) and, on the web, under a `keyframes` animation of a font axis in or above it; `frame` is the laid-out box | `measure("note").height`, in an action, is the note's natural height |
 | `elementFromPoint(x, y)` | `option<string>`, actions only; the `id` of the front-most of `frame`'s boxes at the viewport point, or of its nearest ancestor with one (DOM's `elementFromPoint(x, y)?.closest("[id]")?.id`): a box reaches as far as its `-exact-hit-slop`, ancestors' overflow clips apply, `pointer-events: none` and hidden boxes are passed over. The front modal's host-reported backdrop also hits where it accepts input, beneath later top-layer content | `elementFromPoint(x, y)`, in a pointer action, is `some("card-3")` over that card |
 | `elementsFromPoint(x, y)` | `string[]`, actions only; own ids of every hit box, including hit ancestors, front to back; id-less boxes skipped, with `elementFromPoint`'s clips, transforms and skips. The front modal's host-reported backdrop includes its own id once where it accepts input, beneath later top-layer content | `elementsFromPoint(e.clientX, e.clientY)` sees through an Inspect overlay |
 | `querySelectorAll(selector)` | `string[]`, actions only; only `[data-word~="value"]` for a declared `data-*` word; own ids of mounted, displayed, non-inert matches in tree order, excluding covered routes and unselected tabs; any other dynamic selector gives `[]` | `querySelectorAll("[data-paint~=\"accent\"]")` lists the accent nodes |
@@ -2465,7 +2471,11 @@ right), `deltaMode` (0 pixels) and the four modifiers. A trackpad's pinch is a
 wheel with `ctrlKey` and `deltaY` of -100 × its magnification, as browsers
 deliver one. An action that calls `stopPropagation()` stops the wheel at its
 handler and leaves the scroll alone; one that calls `preventDefault()` keeps
-the scroll from happening (web, macOS, Linux; iOS has none):
+the scroll from happening (web, macOS, Linux; iOS has none). On macOS a
+trackpad gesture that a scroller scrolls reaches the handler only in its first
+events, since AppKit runs the rest on its scrolling thread, unless the handler
+prevents them or the scroller snaps or has a `scrolldragstart` or
+`scrolldragend` handler:
 
 ```text
 action wheeled(e: WheelEvent)
@@ -2475,31 +2485,49 @@ action wheeled(e: WheelEvent)
 scroll wheel=wheeled …
 ```
 
-`drop` is DOM's `drop` of files dragged in from outside the app (Finder, Explorer
-or the desktop) onto the innermost node that declares it: its `DragEvent` is
-`offsetX`, `offsetY`, `files` (a `string[]` of `doc:` handles minted as a
-picker's are, LLP 1069.010
-D1, readable under `fs.read doc:/`) and the modifiers. Files of any type are
-taken, and a dropped folder is a folder's handle (`fs.stat` says
+`drop` is DOM's `drop` of what another app drags in (Finder, Explorer, Photos,
+a browser, another Exact app) onto the innermost node that declares it, when
+the drag carries files, plain text or a link and its source allows a copy
+(LLP 1094.001): its `DragEvent` is `offsetX`, `offsetY`, `files` (a
+`string[]` of `doc:` handles minted as a picker's are, LLP 1069.010 D1,
+readable under `fs.read doc:/`), `text`, `url` and the modifiers. `text` is
+the drag's plain text, its items' joined by line breaks; `url` is its first
+link that is not a file (a `file:` URL is a file), of any scheme, so check
+it before following it. Each is `""` when the drag has none, and neither is
+made from the other: a link whose source gives no plain text has `text` `""`. Files of any type
+are taken, and a dropped folder is a folder's handle (`fs.stat` says
 `isDirectory`, `fs.readdir` lists it); the app never learns an absolute
-path. A file drag over an `input` or a `textarea` inside such a node (or
-declaring `drop` itself) is the node's, as on the web, where its listener
-prevents the field's own drop: the field inserts no path text. A text drag,
-and a file drag over a field with no `drop` above it, stay the field's. Web,
-macOS and Windows deliver files in the order the source supplies them. A
-browser without `getAsFileSystemHandle` hands the app read-only copies.
-iOS, Linux, Android and the terminal have no external file drops. The
-driver's `tap <target> drop <path…>` drags files and folders in.
+path. A drag with files over an `input` or a `textarea` inside such a node
+is the node's, as on the web, where its listener prevents the field's own
+drop: the field inserts no path text. A drag of text over a field is the
+field's, which inserts it, unless the field itself declares `drop`. On the
+web a field takes only plain text, as HTML inserts it, so a link with no
+plain text goes to the `drop` above; a macOS field takes links too. On
+Windows a field takes no drag, so any drag goes to the `drop` above unless
+the field itself declares `drop`. While a drop waits for its files, the
+nodes it was over defer the next drag's `dragenter`, so the waiting drop's
+action cannot clear what the next drag drew: it is heard when the waiting
+drops land or when the next drag drops, and the next drag's leave cancels it. Web, macOS
+and Windows deliver files in the order the source supplies them, and macOS
+receives a promised file (Photos', an Exact app's) before the action runs.
+A browser without `getAsFileSystemHandle` hands the app read-only copies.
+iOS, tvOS, Linux, Android and the terminal take no drop yet. The driver's
+`tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
+folders, text and a link, at least one of them, as a test's `tap "zone"
+drop …` step does.
 
 `dragenter` and `dragleave` are DOM's, as a node hears them when it ignores
 moves between its own descendants (the `currentTarget.contains(relatedTarget)`
 test a drop overlay makes): a node that declares one hears `dragenter` when
-a drag of files from outside the app comes over its box, and `dragleave` when
-it leaves the box or is cancelled. A drop sends `drop` and no `dragleave`, as
-the DOM's does: the drop's action clears what the enter drew. Their
-`DragEvent` has the point and the modifiers and no `files`, which the DOM
-keeps from a page until the drop. They are heard whether or not a `drop`
-will take the files, so an overlay can say where they would land:
+a drag from another app comes over its box, and `dragleave` when it leaves
+the box or is cancelled. A drop a node takes sends `drop` and no
+`dragleave`, as the DOM's does: the drop's action clears what the enter drew,
+an ancestor's overlay included, since it is the app's state. A drop no node
+takes, one a field takes, and one that carried nothing that arrived send
+`dragleave` instead. Their `DragEvent` has the point and the modifiers and
+no data (`files` `[]`, `text` and `url` `""`), which the DOM keeps from a page
+until the drop. They are heard whether or not a `drop` will take the drag, so
+an overlay can say where it would land:
 
 ```text
 state over = false
@@ -2519,8 +2547,8 @@ column dragenter=entered dragleave=left drop=took position="relative"
 ```
 
 Web, macOS and Windows support these events. The driver's
-`tap <target> dragenter <path…>` brings a drag of those files over the target and leaves it there (for a
-screenshot); `tap <target> drop <path…>` drops it, and `tap <target>
+`tap <target> dragenter [<path…>] [--text "…"] [--url "…"]` brings that drag over the target and leaves it there (for a
+screenshot); `tap <target> drop …` drops it, and `tap <target>
 dragleave` takes it away undropped.
 
 `draggable` is HTML's attribute: a node a person can lift and drop into
@@ -3083,7 +3111,7 @@ the virtual clock).
   Close Window beside the app's ⌘W). Drop the chord while a field is being
   edited and the host's text Undo, Cut, Copy and Paste come back (studio
   diary R16). Edit also holds Speech ▸ Start Speaking and Stop Speaking, which
-  read the selected text aloud, in a field or out of one (#141).
+  read the selected text aloud, in a field or out of one.
 
   Explicit placement: `button "Check for Updates…" -exact-menu="about"
   press=checkUpdates` also becomes a menu item without a shortcut. The literal
@@ -3308,7 +3336,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `requestPermission(id, path, mode)`: a kept document's access asked for again, `mode` `"read"` or `"readwrite"`, from a press (the web asks the browser under its activation; a native host answers `granted` for a document that resolves); `change` at `id` hears `granted` or `denied` ([documents kept across launches](reference.md#documents-the-person-chose-doc)) | No app fixture; [the web's kept documents test](../host/web/documents-kept.test.mjs) |
 | `scrollIntoView(id, block=, inline=, behavior=)`: `Element.scrollIntoView()` on any element by its `id` (a string, dynamic as `focus`'s): every scroll container above it, innermost first, then the page, align it by the web's `ScrollIntoViewOptions` (`block` default `start`, `inline` `nearest`). `scrollIntoView("list-id", key, …, row=, offset=)`: a virtualized list's row by key, built and measured first (LLP 1070.000). macOS, iOS and tvOS animate the element form with the platform's scroll animation unless `behavior="instant"` (LLP 1115.000 D8.4), landing immediately under reduced motion; `scrollend` comes once the animation ends. Linux and Android glide the element form the same way while the display owns the clock, and land it at once under the agent's (LLP 1070.000 §14). Either form owns its scrollers until it settles: `scrollFollowEnd` moves nothing meanwhile, and follows afterwards only where it rests at the end (LLP 1070.000 §15) | [collection tests](../contract/cli/tests/it/collection_into_view.rs) |
 | `scrollBy(id, x, y)`: `Element.scrollBy(x, y)` on a scroll container by its `id`, in pixels (a terminal's row is 16, its column 8), clamped to its travel; an element that does not scroll does not move. A reader's `j` and `k`. The terminal, Linux and the web's JS target take it; Apple and the wasm web host do not yet | [the LLP terminal reader](../apps/llp/terminal.contract), [`reading.rs`](../host/terminal/tests/it/reading.rs) |
-| `showPopover(id, source="trigger")`, `hidePopover(id)`, `togglePopover(id, source="trigger")`: HTML's methods by element id. `popover=(expanded ? some("manual") : none)` adds or removes that property on the same node; removing it closes the top layer and restores inline placement. `source=` is optional and explicit; it need not carry `popovertarget`, and the key handler's node is not inferred. Repeated show/hide is a no-op. Visibility changes immediately in command order, including hide then show during native dismissal. Bad targets or sources are refused in the journal. A popover's `toggle=changed` action may take `e: ToggleEvent`, with `oldState` and `newState` (`"open"` or `"closed"`); events follow logical visibility, coalescing changes in one turn. Without a source the popover has no invoker. A following `focus(id)` in the opening action selects a native menu row on macOS and windowed Linux; AppKit refuses changing the highlight once native tracking begins. UIKit navigation-bar menus still lack command dismissal and toggle observation (issue #319 remaining work). Desktop/headless Linux reports unsupported; windowed Linux uses its existing supported menu/alert shapes. | LLP 1021 |
+| `showPopover(id, source="trigger")`, `hidePopover(id)`, `togglePopover(id, source="trigger")`: HTML's methods by element id. `popover=(expanded ? some("manual") : none)` adds or removes that property on the same node; removing it closes the top layer and restores inline placement. `source=` is optional and explicit; it need not carry `popovertarget`, and the key handler's node is not inferred. Repeated show/hide is a no-op. Visibility changes immediately in command order, including hide then show during native dismissal. Bad targets or sources are refused in the journal. A popover's `toggle=changed` action may take `e: ToggleEvent`, with `oldState` and `newState` (`"open"` or `"closed"`); events follow logical visibility, coalescing changes in one turn. Without a source the popover has no invoker. A following `focus(id)` in the opening action selects a native menu row on macOS and windowed Linux; AppKit refuses changing the highlight once native tracking begins. A navigation-bar item's pull-down on iOS reports `open` as UIKit reads its rows, and `closed` at a pick, at a touch on the app's own views outside it, at `hidePopover` or another auto popover's showing, which dismiss it, and when its button leaves the bar; a close by a hardware keyboard's Escape or VoiceOver's escape gesture is reported only when the next pull-down opens, and the others as UIKit begins to dismiss the menu, not when it is gone (expo/exact#1462). A macOS toolbar or status item's menu reports both edges as AppKit tracks it. Desktop/headless Linux reports unsupported; windowed Linux uses its existing supported menu/alert shapes. | LLP 1021 |
 | `showModal(id)`, `close(id)`: `HTMLDialogElement.showModal()` and `close()` on a dialog by its `id`, from an action (bare `close()` is the window's). The terminal takes them (LLP 1101.001 P5); iOS presents a `dialog` or `role="alertdialog"` popover by its id as its confirmation (an alert or action sheet, with no invoker) and any other `dialog` as a sheet as tall as its content (LLP 1115.000 D11.5), the web shows the dialog (or the alertdialog popover), macOS the dialog in its top layer, or a `role="alertdialog"` one in the alert's shape as `NSAlert`, a sheet on the window (LLP 1115 D6, LLP 1115.000 D7.6) | [the harness](../apps/harness/terminal.contract), [the native fixture](../apps/native-fixture/app.contract) (`askClear`) |
 | `fastSeek(id, seconds)`, `load(id)`: a `video` or `audio`, by HTML's method names (LLP 1042 §3). `fastSeek` seeks each time it runs, where a bound `currentTime` seeks only when its value changes; every host seeks to the exact time, which HTML's approximate-for-speed allows. `load` loads the source again, as a changed `src` does: the bound `currentTime` waits for its metadata and a bound `paused` false plays | [media tests](../contract/cli/tests/it/media.rs), [media conformance plan](../host/web-js/conformance/media.contract) |
 | `requestPictureInPicture(id)`, `exitPictureInPicture()`: the `image` with that `id` floats in the platform's picture-in-picture window, which shows each picture its `src` names next, live (HTML has it only on `video`; this stands for the canvas `captureStream()` and hidden video a page builds). The image hears `enterpictureinpicture`, `leavepictureinpicture` (the person closed the window, or `exitPictureInPicture()`), and `pictureinpictureerror` with the reason when the request fails, as HTML's promise rejects; an image that leaves the document closes it with no event. One image floats in that window at a time, so `exitPictureInPicture()` takes no id, as HTML's `document.exitPictureInPicture()`. macOS (AVKit's sample-buffer source) and the web's JS target (`captureStream()` into `requestPictureInPicture()`) float it; iOS, tvOS, the wasm target, Linux and Windows refuse it in the journal and with the event. `requestPictureInPicture(id, presentation="window", title=…, width=…, height=…)` asks for a window Exact draws instead, by name as `scrollIntoView` takes its options: `"window"` a browser's picture-in-picture window as Chromium draws it on the Mac (bottom right, its title, Minimize, Back to tab and Close shown while the pointer moves over it), `"panel"` a floating panel with the platform's title bar, one per image beside the picture-in-picture window, which `exitPictureInPicture()` leaves open (LLP 1042 §9.2); `title`, `width` and `height` go only with `presentation`. The web shows either in Document Picture-in-Picture's window where the browser has it, else floats the default way; iOS and tvOS refuse it. The agent reads each window in `tree` (`pictureInPicture` on its image's row), presses it with `tap <image> pictureinpicture minimize\|back\|close\|hover` and pictures it with `screenshot <png> window pictureinpicture [<image>]` | LLP 1042 §9 and §9.1, [compiler tests](../contract/cli/tests/it/picture_in_picture.rs), [web test](../host/web-js/picture-in-picture.test.mjs), [window tests](../host/apple/Tests/ExactKitTests/PictureInPictureWindowMacTests.swift) |

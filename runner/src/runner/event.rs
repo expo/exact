@@ -705,6 +705,11 @@ impl Event {
 
     fn invalid_payload(&self) -> Option<&'static str> {
         match *self {
+            Self::Media(kind @ (EventKind::Play | EventKind::Pause), ref how)
+                if !matches!(how.as_str(), "" | "remote") =>
+            {
+                Some(kind.name())
+            }
             Self::Pan(x, y) if !pixel(x) || !pixel(y) => Some("pan"),
             Self::PanRelease(vx, vy) if !vx.is_finite() || !vy.is_finite() => Some("panrelease"),
             Self::HeightRelease { height, velocity } if !valid_height_release(height, velocity) => {
@@ -1011,16 +1016,28 @@ impl<D: DataSource> Runner<D> {
     /// Deliver a host event to `view`: find its handler, evaluate the curried
     /// arguments in the instance's scope now, run the action, update.
     pub fn dispatch(&mut self, view: ViewId, event: Event) -> Result<CommitReceipt, RunnerError> {
-        // A world's message runs as the origin its mark carries (`world_origin.rs`).
-        if let Event::Message(text) = &event {
-            if let Some((origin, text)) = super::world_origin::unmark(text) {
-                let event = Event::Message(text.to_owned());
-                // A tool's or a press's work keeps D4a's command rules (LLP
-                // 1133.023 D7a); the mark cannot tell a press from another action.
-                let causes = super::provenance::Causes::of(origin);
-                let cause = super::provenance::Cause::marked(causes);
-                return self.as_cause(cause, |r| r.arrived(|r| r.dispatch_event(view, event)));
-            }
+        // A world's message carries the origins posted into it
+        // (`world_origin.rs`), which only lower what it runs as. A tool's or
+        // a press's work keeps D4a's command rules (LLP 1133.023 D7a); the
+        // mark cannot tell a press from another action.
+        let mut marked = None;
+        let event = match event {
+            Event::Message(text) => match super::world_origin::unmark(&text) {
+                Some((causes, rest)) => {
+                    marked = Some(super::provenance::Cause::marked(causes));
+                    Event::Message(rest.to_owned())
+                }
+                None => Event::Message(text),
+            },
+            event => event,
+        };
+        // A remote Play or Pause the host carried out for the element (LLP
+        // 1133.023 D7a; no host reports one yet). A `play` or `pause`
+        // carries nothing else (`invalid_payload`).
+        if matches!(&event, Event::Media(EventKind::Play | EventKind::Pause, how) if how == "remote")
+        {
+            let cause = super::provenance::Cause::remote_control();
+            return self.as_cause(cause, |r| r.arrived(|r| r.dispatch_event(view, event)));
         }
         // The person's act in the app's own UI is an `app` cause. What the
         // host observes of the page and a package view's message are the
@@ -1032,11 +1049,15 @@ impl<D: DataSource> Runner<D> {
                     .is_some()
             });
         let shown = !(observed(&event) || package) || !self.page.hidden;
-        let dispatched = |r: &mut Self| {
-            r.arrived(|r| {
+        let dispatched = |r: &mut Self| match marked {
+            Some(marked) => {
+                let cause = r.join_causes(r.cause(), marked);
+                r.as_cause(cause, |r| r.arrived(|r| r.dispatch_event(view, event)))
+            }
+            None => r.arrived(|r| {
                 r.note_input(&event);
                 r.dispatch_event(view, event)
-            })
+            }),
         };
         self.as_shown(shown, dispatched)
     }

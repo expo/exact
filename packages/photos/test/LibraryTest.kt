@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Looper
 import android.provider.MediaStore
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Native
 import java.util.concurrent.ExecutorService
@@ -81,7 +82,7 @@ class LibraryTest {
 
     private fun assets(args: JSONObject = JSONObject()): JSONObject {
         var answer: JSONObject? = null
-        module.later("photoAssets", args.put("limit", 10)) { answer = it }
+        module.later("photoAssets", args.put("limit", 10), null, Cause("app")) { answer = it }
         ReflectionHelpers.getField<ExecutorService>(module, "work").submit {}.get()
         shadowOf(Looper.getMainLooper()).idle()
         return answer!!

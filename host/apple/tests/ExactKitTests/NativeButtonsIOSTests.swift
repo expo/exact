@@ -758,7 +758,7 @@ final class NativeButtonsIOSTests: XCTestCase {
         pop.keyboardLift = 80
         pop.applyTransform()
         XCTAssertEqual(try told(), shown(), "the keyboard's lift is the host's placement")
-        pop.scale = 0.5
+        pop.scale = CGPoint(x: 0.5, y: 0.5)
         pop.applyTransform()
         let seen = shown()
         XCTAssertEqual(try told().size, pop.bounds.size, "its own scale is the runner's to apply")

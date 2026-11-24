@@ -33,4 +33,5 @@ mod route_overflow;
 mod segments;
 mod symbol;
 mod textflow;
+mod transform_drag;
 mod viewport;

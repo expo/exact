@@ -390,7 +390,7 @@ impl<D: DataSource> Presenter<D> {
                 .map_or(exact_kernel::Direction::Ltr, |n| {
                     n.computed_row(exact_kernel::StyleId::Direction, |s| s.direction)
                 }),
-            dark: self.dark(),
+            dark: self.dark_at(node),
             contrast: self.colors.contrast.palette,
             bold_text: self.host.kernel().bold_text_weights(0),
             font_scale: if scale.is_finite() && scale > 0.0 {

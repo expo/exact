@@ -62,9 +62,12 @@ impl Kernel {
                 || s.translate_percent.y != 0.0
                 || !s.translate.x.is_finite()
                 || !s.translate.y.is_finite()
-                || !s.scale.is_finite()
-                || s.scale <= 0.0
-                || (!matching && (s.scale != 1.0 || s.translate.x != 0.0 || s.translate.y != 0.0))
+                || !s.scale.x.is_finite()
+                || !s.scale.y.is_finite()
+                || s.scale.x <= 0.0
+                || s.scale.x != s.scale.y
+                || (!matching
+                    && (s.scale.x != 1.0 || s.translate.x != 0.0 || s.translate.y != 0.0))
             {
                 return None;
             }

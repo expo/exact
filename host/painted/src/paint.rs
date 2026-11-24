@@ -47,7 +47,7 @@ pub(crate) use overlay::TopSurface;
 pub(crate) mod field;
 mod fragments;
 pub(crate) use fragments::{center as tap_point, hits, slop_hits};
-pub(crate) use lift::{Ghost, Lift};
+pub(crate) use lift::{scheme_of, Ghost, Lift};
 mod alert;
 pub(crate) mod inline;
 pub(crate) mod inline_frame;
@@ -336,6 +336,8 @@ pub struct Scene<'a> {
     pub roots: &'a [ViewId],
     /// A node's presentation values.
     pub presented: &'a dyn Fn(ViewId) -> Presented,
+    /// Nodes whose played or held scale differs from identity.
+    pub scaled_presented: &'a std::collections::BTreeSet<ViewId>,
     /// A path's `d` while a transition moves it (LLP 1055.000 D15).
     pub paths: &'a dyn Fn(ViewId) -> Option<exact_motion::PathValue>,
     /// A `filter` while a transition moves it (LLP 1003.002 D8).
@@ -377,7 +379,7 @@ pub struct Painter {
     pub(crate) native_session: u64,
     pub(crate) split: Option<crate::presenter::split::Split>,
     pub(crate) window_canvas: Option<ViewId>,
-    pub(crate) direct_canvases: std::collections::BTreeSet<ViewId>,
+    pub(crate) gpu_canvases: std::collections::BTreeMap<ViewId, bool>,
     pub(crate) media: native::Media,
     boxless_audio: Option<Vec<ViewId>>,
     pub(crate) alert: Option<alert::Picture>,
@@ -533,7 +535,7 @@ impl Painter {
             native_session: native::new_session(),
             split: None,
             window_canvas: None,
-            direct_canvases: Default::default(),
+            gpu_canvases: Default::default(),
             media: Default::default(),
             boxless_audio: None,
             markers: HashMap::new(),
@@ -939,7 +941,7 @@ impl Painter {
         if node.style.display == Display::None
             || (node.props.str(PropId::SemanticTag) == Some("dialog") && walk.dialog != Some(id))
         {
-            self.boxless_audio(walk, &node);
+            self.unpainted(walk, &node);
             return;
         }
         // The roles drawn in the accent read the nearest authored accent color.
@@ -1027,9 +1029,7 @@ impl Painter {
                 let mut base = hit_p;
                 base.press = 1.;
                 base.press_translate = [0.; 4];
-                hit_p
-                    .transform(rect, origin)
-                    .invert()
+                space::inverse_affine(hit_p.transform(rect, origin))
                     .map(|inverse| inverse.pre_concat(base.transform(rect, origin)))
                     .unwrap_or_default()
             },
@@ -1159,6 +1159,7 @@ impl Painter {
                     self.backend.pop_clip();
                 }
             }
+            NodeType::NativeView if !paints_self => self.held_module(node),
             // The rest is this element's own paint (its picture, field, or control).
             _ if !paints_self => {}
             // @ref LLP 1056 D7 — a 2D canvas's kept bitmap fills its content box.
@@ -1401,17 +1402,16 @@ pub use field::effective_overflow;
 /// containers do not always count it), never less than the box itself. A
 /// child in a block of its own (a popover's, the viewport) is elsewhere.
 pub fn content_size(node: &NodeRef<'_>, kernel: &Kernel) -> (f32, f32) {
-    // Read the end padding the engine laid out with, a bar's cover included
-    let (_, _, pad_right, pad_bottom) = kernel.layout_padding(node.key).unwrap_or_default();
-    let mut w = node.frame.width.max(node.content.0);
-    let mut h = node.frame.height.max(node.content.1);
-    for child in node.children() {
-        if let Some(c) = kernel.node_unblocked(child) {
-            w = w.max(c.frame.x - node.frame.x + c.frame.width + pad_right);
-            h = h.max(c.frame.y - node.frame.y + c.frame.height + pad_bottom);
-        }
-    }
-    (w, h)
+    space::content_size_with(
+        node,
+        kernel,
+        &|id| {
+            kernel
+                .node(id)
+                .map_or(Presented::IDENTITY, |n| Presented::from_style(n.style))
+        },
+        &Default::default(),
+    )
 }
 
 /// The painting scope for `node` (`roles::authored_accent`): the roles drawn

@@ -66,6 +66,7 @@ impl<D: DataSource> Presenter<D> {
 
     pub(crate) fn begin_display_frame(&mut self) {
         for window in self.surfaces.windows.values_mut() {
+            window.awaiting_tick = false;
             window.retry.begin();
         }
     }
@@ -155,6 +156,7 @@ pub(crate) struct Window {
     window: usize,
     size: (u32, u32),
     attached: bool,
+    awaiting_tick: bool,
     retry: super::retry::Retry,
     rest: super::retry::Rest,
 }
@@ -372,20 +374,20 @@ impl Surfaces {
 impl<D: DataSource> Presenter<D> {
     /// The stream's decision uses the same fitted window and canvas instances
     /// as this paint; the reader does no geometry or module queries.
-    pub(crate) fn direct_canvases(&mut self) {
+    pub(crate) fn sync_canvas_views(&mut self) {
         let frame = self.chrome().frame;
         let full = self
             .window()
             .is_some_and(|w| frame == [0.0, 0.0, w.size.0, w.size.1]);
-        let direct = self
+        let canvases = self
             .surfaces
             .canvases
             .keys()
             .copied()
-            .filter(|id| full && self.surfaces.opaque(*id))
+            .map(|id| (id, full && self.surfaces.opaque(id)))
             .collect();
-        if self.brush.direct_canvases != direct {
-            self.brush.direct_canvases = direct;
+        if self.brush.gpu_canvases != canvases {
+            self.brush.gpu_canvases = canvases;
             self.repaint();
         }
     }
@@ -393,7 +395,13 @@ impl<D: DataSource> Presenter<D> {
     /// A reader's window for canvas `view` (an `ANativeWindow` of `size`
     /// pixels, alive until [`Presenter::detach_window`]). Whether the view is
     /// a GPU canvas (a 2D canvas's window is never used).
-    pub(crate) fn attach_window(&mut self, view: u32, window: usize, size: (u32, u32)) -> bool {
+    pub(crate) fn attach_window(
+        &mut self,
+        view: u32,
+        window: usize,
+        size: (u32, u32),
+        live: bool,
+    ) -> bool {
         self.surfaces.detach(view);
         PRESENTED
             .lock()
@@ -405,6 +413,7 @@ impl<D: DataSource> Presenter<D> {
                 window,
                 size,
                 attached: false,
+                awaiting_tick: live,
                 retry: Default::default(),
                 rest: Default::default(),
             },
@@ -462,6 +471,11 @@ impl<D: DataSource> Presenter<D> {
         let (vw, vh) = self.viewport();
         for (view, buffered) in views {
             let window = &self.surfaces.windows[&view];
+            // Attaching a target wakes an idle owner between ticks. Its first draw needs its own display facts.
+            if window.awaiting_tick {
+                wants = true;
+                continue;
+            }
             let Some((w, h, scale, now)) = window.retry.frame else {
                 continue;
             };

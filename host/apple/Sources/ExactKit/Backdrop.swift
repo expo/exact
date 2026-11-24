@@ -191,16 +191,52 @@ extension NodeView {
     }
 
     #if os(iOS) || os(tvOS)
-    /// A scrolling popover's children are its scroll view's, not the glass's
-    /// content view's: the scroll view takes the default surface's corner
-    /// while that applies, and gives it up when it no longer does.
-    func syncDefaultSurfaceScroll() {
-        // The corner the glass has: the author's (one circle) or the default's.
-        let corner = materialView == nil || defaultSurfaceRadius == nil ? nil : effectiveCornerSizes(in: bounds).first?.width
-        guard let scroll, corner != nil || scrollCornered else { return }
-        scroll.layer.cornerRadius = corner ?? 0
-        scroll.layer.cornerCurve = corner == nil ? .circular : .continuous
-        scrollCornered = corner != nil
+    /// A scroller's children are its scroll view's, which clips them to its own square bounds, so the scroll view
+    /// takes the corner that clips them ([CSS Backgrounds 3 §5.3](https://drafts.csswg.org/css-backgrounds-3/#corner-clipping)):
+    /// a default surface's while that applies, as its glass has it, else its author's one radius over the corners
+    /// that have one. The author's is left off where the node's own layer clips the scroll view (`clipsItself`) and
+    /// where the scroll view is drawn past the box (`scrollOutset`).
+    ///
+    /// CSS clips at the padding edge, whose corners are the box's less the borders beside them. With no border
+    /// that edge is the scroll view's bounds and its layer's radius says it. With one the curve lies inside the
+    /// bounds, where no radius of a layer the size of the border box reaches, and the scroll view masks its layer
+    /// with it (`ScrollView.clip(toPaddingEdge:inset:)`), so a translucent border shows the box's ground and not
+    /// the children, and keeps its scroll indicators inside it. Corners that differ, an ellipse and a
+    /// `corner-shape` other than Apple's continuous curve still clip square.
+    func syncScrollCorner() {
+        guard let scroll else { return }
+        let each: [CACornerMask] = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner, .layerMinXMaxYCorner]
+        var radius: CGFloat = 0, corners = CACornerMask(each), curve = CALayerCornerCurve.circular, edge: CGPath?, border = UIEdgeInsets.zero
+        if materialView != nil, defaultSurfaceRadius != nil {
+            // The corner the glass has: the author's (one circle) or the default's.
+            radius = effectiveCornerSizes(in: bounds).first?.width ?? 0
+            curve = .continuous
+        } else if !clipsItself, scrollOutset == .zero {
+            let sizes = cornerSizes(in: bounds), widest = sizes.map(\.width).max() ?? 0, shape = CornerShape(style["corner_shape"])
+            // One circle within Core Animation's own limit, half the shorter side, as `applyBoxLayer` asks of the box's.
+            if widest > 0, widest <= min(bounds.width, bounds.height) / 2 + 0.01, shape?.isAppleContinuous ?? true,
+               sizes.allSatisfy({ abs($0.width - $0.height) < 0.01 && ($0.width == 0 || abs($0.width - widest) < 0.01) }) {
+                let uniform = number("border_width")
+                let widths = ["top", "right", "bottom", "left"].map { devicePixels(number("border_width_" + $0, uniform)) }
+                if widths.contains(where: { $0 > 0 }) {
+                    let inner = CGRect(x: widths[3], y: widths[0], width: max(0, bounds.width - widths[1] - widths[3]),
+                                       height: max(0, bounds.height - widths[0] - widths[2]))
+                    edge = BorderPaint.roundedRect(inner, BorderPaint.contentRadii(sizes, outer: bounds, inner: inner), shape: shape)
+                    border = UIEdgeInsets(top: widths[0], left: widths[3], bottom: widths[2], right: widths[1])
+                } else {
+                    radius = widest
+                    corners = CACornerMask(zip(sizes, each).filter { $0.0.width > 0 }.map(\.1))
+                    if shape != nil { curve = .continuous }
+                }
+            }
+        }
+        let layer = scroll.layer
+        if layer.cornerRadius != radius { layer.cornerRadius = radius }
+        if layer.cornerCurve != curve { layer.cornerCurve = curve }
+        if radius > 0, layer.maskedCorners != corners { layer.maskedCorners = corners }
+        // A layout transition's surface masks the scroll view itself until it ends (`Surface.swift`).
+        if surface == nil { scroll.clip(toPaddingEdge: edge, inset: border) }
+        else { scroll.paddingInset = border }
     }
     #endif
 

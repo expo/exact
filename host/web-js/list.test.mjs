@@ -1084,8 +1084,8 @@ test('vertical rubber-band travel does not trigger collection scroll corrections
   }
 }, 60000);
 
-// @ref runner/src/instance/collection/index_tests.rs `an_anchor_past_the_end_keeps_its_overshoot` (#1095,
-// 7b0352262f), case by case on the JS target's size index, with one more case for each other branch #1095 added.
+// @ref runner/src/instance/collection/index_tests.rs `an_anchor_past_the_end_keeps_its_overshoot`
+// (7b0352262f), case by case on the JS target's size index, with one more case for each other branch that commit added.
 test('an anchor past the end keeps its overshoot, as the runner\'s does', async () => {
   const result = await evaluate(`(async () => {
     const port = document.createElement('div');
@@ -1134,7 +1134,7 @@ test('an anchor past the end keeps its overshoot, as the runner\'s does', async 
   expect(result.gone[0]).toBe(0);
 }, 60_000);
 
-// @ref runner/src/instance/collection/start.rs `anchor_offset` (#1095): an opening list's anchor is taken at its
+// @ref runner/src/instance/collection/start.rs `anchor_offset`: an opening list's anchor is taken at its
 // end in its port, `max_offset(port)`, so it carries no overshoot (once it has opened it no longer follows its end).
 test('a list opened at its end anchors at its end with no overshoot', async () => {
   const result = await evaluate(`(async () => {

@@ -10,9 +10,13 @@
   "views": {
     "audio-waveform": {
       "props": {
-        "track": "handle<track>",
+        "track": {
+          "type": "handle<track>",
+          "binds": true
+        },
         "tint": "option<string>"
-      }
+      },
+      "displayed": true
     }
   },
   "shapes": {

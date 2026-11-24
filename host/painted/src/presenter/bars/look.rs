@@ -848,7 +848,7 @@ component App
             .unwrap();
             assert!(error.is_none(), "{error:?}");
             p.host.set_bar_room(Some((64., 80., 80.))).unwrap();
-            let (top, bottom) = p.read_bars(false);
+            let (top, bottom) = p.read_bars();
             let inputs = Inputs {
                 dark: false,
                 font_scale: 1.,

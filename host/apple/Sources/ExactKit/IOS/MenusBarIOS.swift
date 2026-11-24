@@ -20,6 +20,53 @@ extension MenuHost {
         return source.isNativeButton && !inBar ? pop.props["accessibilityRole"] == "menu" : pop.menuShaped
     }
     #endif
+    /// UIKit's bar item says nothing of its menu's life (`UIBarButtonItem`
+    /// has a `menu` and no delegate), so a bar pull-down's `toggle` follows
+    /// what public API shows (LLP 1021, "A bar item's pull-down";
+    /// expo/exact#1462). It opens as UIKit reads its rows. It closes at a
+    /// pick, at a touch on the app's views (`lightDismiss`), at
+    /// `hidePopover` or another auto popover's showing (`agentShow`), when
+    /// its button stops opening it from the bar (`endLeftBarMenu`), and when
+    /// the next pull-down opens, which is where a close by Escape or
+    /// VoiceOver's escape gesture is reported: nothing public reports those.
+    /// A close seen here is reported as UIKit begins to dismiss the menu.
+    ///
+    /// `afterClose`: a close was reported in this turn, which the open
+    /// follows on the next, so the two are not coalesced into one event.
+    func barMenuOpened(_ pop: NodeView, from invoker: NodeView, in bar: @escaping () -> UIView?, afterClose: Bool) {
+        let menu = BarMenu(popover: pop, invoker: invoker, bar: bar)
+        barMenu = menu
+        guard afterClose else { presenter?.popoverEvents.changed(pop, open: true); return }
+        DispatchQueue.main.async { [weak self, weak menu] in
+            guard let self, let menu, self.barMenu === menu, let pop = menu.popover else { return }
+            self.presenter?.popoverEvents.changed(pop, open: true)
+        }
+    }
+    /// `dismissing`: the app closed it (`hidePopover`, another popover
+    /// shown, its button gone), so UIKit's menu is dismissed here, through
+    /// the interactions of the bar it is in:
+    /// `UIContextMenuInteraction.dismissMenu()` dismisses only a menu its
+    /// interaction presents. False when no pull-down was open.
+    @discardableResult func barMenuClosed(dismissing: Bool = false) -> Bool {
+        guard let menu = barMenu else { return false }
+        barMenu = nil
+        if recordsGiven { presentedMenu = [:] }
+        if dismissing, let bar = menu.bar() { Self.dismissMenus(in: bar) }
+        if let pop = menu.popover, live(pop), pop.incarnation == menu.incarnation { presenter?.popoverEvents.changed(pop, open: false) }
+        return true
+    }
+    /// After a batch: a pull-down whose button the bar no longer shows as
+    /// an item with a menu, or that no longer opens it, is closed.
+    func endLeftBarMenu() {
+        guard let menu = barMenu else { return }
+        guard let presenter, let invoker = menu.invoker, live(invoker), eligible(invoker, inBar: true),
+              presenter.navigation.shownBarItem(invoker.id)?.menu != nil, let pop = menu.popover,
+              let invocation = presenter.invocation(of: invoker), invocation.opens, invocation.target === pop else { barMenuClosed(dismissing: true); return }
+    }
+    private static func dismissMenus(in view: UIView) {
+        for case let interaction as UIContextMenuInteraction in view.interactions { interaction.dismissMenu() }
+        for sub in view.subviews { dismissMenus(in: sub) }
+    }
     /// A bar item's popover that is no menu, opened (or closed, a second
     /// tap) from the item as a native button in the page opens one: lifted,
     /// anchored on the item (`lift`). False when the item is ineligible or
@@ -54,6 +101,18 @@ extension MenuHost {
         lightDismiss(node)
         if !isOpen(target) { agentShow(target, named: name, from: node.id, invoked: true) } else { drop(name) }
         return true
+    }
+}
+
+/// The popover a bar item's pull-down shows while UIKit shows it, the bar
+/// button that opened it, and the bar it is in.
+final class BarMenu {
+    weak var popover: NodeView?
+    let incarnation: UInt64
+    weak var invoker: NodeView?
+    let bar: () -> UIView?
+    init(popover: NodeView, invoker: NodeView, bar: @escaping () -> UIView?) {
+        self.popover = popover; incarnation = popover.incarnation; self.invoker = invoker; self.bar = bar
     }
 }
 #endif

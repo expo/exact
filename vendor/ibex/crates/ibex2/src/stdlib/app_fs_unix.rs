@@ -350,7 +350,7 @@ impl AppDirectories {
     fn root(&self, index: usize) -> Result<File, HostError> {
         self.roots[index]
             .as_ref()
-            .ok_or_else(|| error(io::Error::from(io::ErrorKind::NotFound)))?
+            .ok_or_else(|| error(io::Error::from_raw_os_error(libc::ENOENT)))?
             .try_clone()
             .map_err(error)
     }

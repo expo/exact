@@ -1074,7 +1074,7 @@ impl Batch {
     }
 
     /// `{"op":"present","id":…,"property":…,"x":…,"y":…}` — a motion
-    /// property's presentation value this frame (`y` only for `translate`).
+    /// property's presentation value this frame (`y` for `translate` and `scale`).
     pub fn present(&mut self, id: u32, property: &'static str, x: f64, y: f64) {
         self.note_present(id, property);
         self.ops.push(format!(

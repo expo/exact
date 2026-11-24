@@ -253,7 +253,7 @@ final class ScrollRoutingTests: XCTestCase {
             XCTAssertEqual(scroll == nil, !hears)
             // No up for that press: AppKit sends it to no view, the one
             // pressed having left the window. The next click is on the new
-            // panel, and its up ends a hold (#519).
+            // panel, and its up ends a hold.
             try autoreleasepool {
                 let button = try hit()
                 XCTAssertTrue(button === p.views[5])

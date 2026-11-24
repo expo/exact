@@ -144,7 +144,7 @@ fn status(n: f64) -> Option<Value> {
     Some(Value::record(vec![Value::Number(n)]))
 }
 
-/// LLP 1016.002 D4 (issue #109): a topic announced while the watching
+/// LLP 1016.002 D4: a topic announced while the watching
 /// resource's request is in flight does not forget that request. Its reply
 /// lands and shows, then the resource is asked again once, however many
 /// announcements came meanwhile; `pending` holds until that ask lands.

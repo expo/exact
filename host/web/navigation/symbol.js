@@ -9,20 +9,24 @@
 const PULSE = [{ filter: "opacity(1)", easing: "ease-in-out" }, { filter: "opacity(.3)", easing: "ease-in-out" }, { filter: "opacity(1)" }];
 const BOUNCE = [{ scale: "1", easing: "ease-out" }, { scale: "1.2", offset: 0.35, easing: "ease-in-out" }, { scale: "0.9", offset: 0.65, easing: "ease-in-out" }, { scale: "1" }];
 const ONCE = { bounce: { frames: BOUNCE, duration: 600 }, pulse: { frames: PULSE, duration: 2000 } };
-const RUNNING = {
-  bounce: { frames: BOUNCE.map((k, i) => ({ ...k, offset: [0, 0.35, 0.65, 1][i] * 0.4 })).concat({ scale: "1" }), duration: 1500, iterations: Infinity },
+// What runs while set, made at its first play, so a bundle that never plays an effect drops it
+let Running = null;
+const running = (key) => (Running ??= {
+  bounce: { frames: [...BOUNCE.map((k, i) => ({ ...k, offset: [0, 0.35, 0.65, 1][i] * 0.4 })), { scale: "1" }], duration: 1500, iterations: Infinity },
   pulse: { frames: PULSE, duration: 1800, iterations: Infinity },
   scale: { frames: [{ scale: "1" }, { scale: "1.2" }], duration: 250, fill: "forwards" },
-};
+})[key];
 const MOVES = new Set(["bounce", "scale"]);
 let seen = false, installed = false;
 // Each element's effect, the one it runs while set ("" for none), whether Reduce Motion stills it, the last value
 // seen and the animation playing.
 const shown = new Map();
-const motion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
+// Reduce Motion, read once an effect is seen
+let motion = null;
 const animate = (el, { frames, duration, iterations = 1, fill = "none" }) => el.animate(frames, { duration, iterations, fill, composite: "add" });
 const see = () => {
   seen = true;
+  motion ??= globalThis.matchMedia?.("(prefers-reduced-motion: reduce)");
   motion?.addEventListener?.("change", playSymbolEffects);
 };
 /** A batch's style may name an effect: from then on, each tree update plays them. */
@@ -51,7 +55,7 @@ export function playSymbolEffects() {
     if (!s || s.effect !== effect || s.key !== key || s.still !== still) {
       const same = s && s.effect === effect && s.key === key;
       s?.playing?.cancel();
-      s = { effect, key, still, value: same ? s.value : value, playing: RUNNING[key] && !still ? animate(el, RUNNING[key]) : null };
+      s = { effect, key, still, value: same ? s.value : value, playing: running(key) && !still ? animate(el, running(key)) : null };
       shown.set(el, s);
     }
     if (!key && value !== s.value && !still) {

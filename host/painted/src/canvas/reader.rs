@@ -79,7 +79,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
     #[cfg(target_os = "android")]
     pub fn attach_window(&mut self, view: u32, window: usize, size: (u32, u32)) -> bool {
         self.surfaces = true;
-        self.p.attach_window(view, window, size)
+        self.p
+            .attach_window(view, window, size, super::agent::clock(&self.p).is_none())
     }
     /// The window of canvas `view` is going.
     #[cfg(target_os = "android")]

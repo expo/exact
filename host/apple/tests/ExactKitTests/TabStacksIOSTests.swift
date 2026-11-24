@@ -207,6 +207,44 @@ final class TabStacksIOSTests: XCTestCase {
         XCTAssertEqual(root.view.convert(root.view.bounds, to: nil), frame, "the root is where it was")
     }
 
+    /// A refused write to an inactive tab keeps the agent waiting and is
+    /// retried without selecting the tab or reporting an at-rest difference.
+    func testAnInactiveTabsRefusedStackWriteIsRetried() throws {
+        let session = try fixture("inactive-tab-refused-write"), presenter = session.presenter
+        let navigation = presenter.navigationHost
+        let (tabs, nav, previous) = try barless(session)
+        try press(session, "tab-titled")
+        waitFor("Titled is selected and the Barless stack is idle") {
+            tabs.selectedIndex == 1 && !navigation.inTransition && nav.transitionCoordinator == nil
+        }
+        let panel = try XCTUnwrap(navigation.tabPanels.first)
+        let delegate = nav.delegate
+        nav.delegate = nil
+        defer { nav.delegate = delegate }
+        presenter.onCovers = nil
+        let replacement: UInt32 = 900_001
+        var refusing = true
+        try withNavigationStackWrites(shouldRefuse: { stack, routes in
+            stack === nav && refusing && (routes.last as? RouteController)?.node.id == replacement
+        }) {
+            presenter.apply(wireBatch([
+                ["op": "create", "id": replacement, "kind": "column", "props": ["navigationKey": "replacement"]],
+                ["op": "children", "id": panel, "ids": [replacement]]
+            ]))
+            XCTAssertTrue(navigation.stackWritesOwed)
+            XCTAssertTrue(nav.topViewController === previous)
+            XCTAssertFalse(navigation.inTransition, "the selected stack is idle")
+            XCTAssertNil(navigation.restDifference, "the inactive tab still owes its write")
+            let agent = session.agentInstance
+            XCTAssertTrue(agent.hostsInTransition, "the inactive stack's retry is still in flight")
+            refusing = false
+            XCTAssertTrue(agent.awaitTransitions())
+            XCTAssertEqual((nav.topViewController as? RouteController)?.node.id, replacement)
+            XCTAssertNil(navigation.restDifference)
+            XCTAssertEqual(tabs.selectedIndex, 1)
+        }
+    }
+
     /// A warm deep link into a tab built earlier: one update selects Barless
     /// and pushes Detail onto it. Detail shows, over Barless's root.
     func testATabSelectedWithAPushOntoItShowsThePush() throws {

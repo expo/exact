@@ -314,12 +314,14 @@ class Natives(
         val size = (e.w.toLong() shl 32) or e.h.toLong()
         if (e.asked == size) return
         e.asked = size
+        HostFacts.attached(e.view)
         Exact.attachBuffers(e.id, e.w, e.h)
         poll()
     }
 
     /** Buffers were refused: the canvas gets a TextureView and its window, as with gpubuf=0. */
     private fun unbuffer(e: Element) {
+        detachBuffers(e)
         e.buffers = false
         e.wrapped.clear()
         byView.remove(e.view)
@@ -403,7 +405,7 @@ class Natives(
     private var placing = false
     private val placeMatrix = android.graphics.Matrix()
     private val placePoint = FloatArray(2)
-    private val placer = android.view.ViewTreeObserver.OnPreDrawListener { placeControls(); true }
+    private val placer = android.view.ViewTreeObserver.OnPreDrawListener { HostFacts.onScreen(display); placeControls(); true }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -485,7 +487,14 @@ class Natives(
                 c.drawBitmap(bmp, src, dst, bitmapPaint)
             }
         } else if (e.view is SurfaceView && e.presentation.ready) c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
-        else if (!e.stale) e.view.draw(c)
+        else if (!e.stale) {
+            // What a parent's drawing does (`View.updateDisplayListIfDirty`): a WebView's fling and a scroller's move
+            // on in computeScroll, and ask to be drawn again while they last; the view's scroll offset (a WebView keeps
+            // its page's there) is taken off the canvas before it draws.
+            e.view.computeScroll()
+            c.translate(-e.view.scrollX.toFloat(), -e.view.scrollY.toFloat())
+            e.view.draw(c)
+        }
         e.node.endRecording()
     }
 
@@ -638,6 +647,9 @@ class Natives(
                 byView[e.view] = e
                 if (kind == 2) bindEvents(e)
             }
+            // A module's view is placed at once, at an empty box too: it came attached at 1 by 1, or pooled at its
+            // last borrower's size.
+            if (kind == 2 && !e.parked) { e.w = w; e.h = h; place(e) }
         }
         if (kind == 1) refuseFrame(e, json!!)
         e.fullWindow = fullWindow && row == 0
@@ -652,8 +664,10 @@ class Natives(
         e.rows.add(row)
         e.wanted = props
         if (hidden) {
-            // Its size and view stay as they were shown, so showing it again only places the same player.
+            // Its size and view stay as they were shown, so showing it again only places the same player. A module's
+            // view is invisible meanwhile, out of touch and accessibility, as iOS hides it.
             if (!e.hidden && !e.parked) players[e.view]?.hidden()
+            if (kind == 2 && !e.parked) e.view.visibility = View.INVISIBLE
             e.hidden = true
             if (!e.parked && e.props != props) apply(e, props)
             if (!e.parked) play(e, false)
@@ -662,6 +676,7 @@ class Natives(
         // Shown again: its props first, so the player is told it is in view with the ones it shows.
         val returned = e.hidden
         e.hidden = false
+        if (kind == 2 && !e.parked) e.view.visibility = View.VISIBLE
         if (e.w != w || e.h != h) {
             e.w = w; e.h = h
             if (!e.parked) { place(e); askBuffers(e) }
@@ -881,7 +896,7 @@ class Natives(
         byView[view] = e
         if (e.kind == 2) bindEvents(e)
         e.browser?.automation?.attach()
-        if (e.w > 0 && e.h > 0) place(e)
+        if (e.w > 0 && e.h > 0 || e.kind == 2) place(e)
         // Its page is loaded afresh from `src`: what was asked of it meanwhile moved nothing.
         if (e.kind == 1) JSONObject(e.wanted).let { json ->
             for (op in FrameBrowser.unrun("${e.session}:${e.slot}:${e.generation}", json)) refuseCommand(e, op.optString(1), json, parked = true)
@@ -972,6 +987,9 @@ class Natives(
         settings.javaScriptEnabled = true
         // A page's `localStorage` and `sessionStorage`, as a browser gives it; WebView's default has none.
         settings.domStorageEnabled = true
+        // A pinch zooms the page as Chrome and WebKit let it, unless its viewport forbids; with no on-screen buttons.
+        settings.builtInZoomControls = true
+        settings.displayZoomControls = false
         val hasNavigationListener = WebViewFeature.isFeatureSupported(WebViewFeature.NAVIGATION_LISTENER)
         val client = FrameClient(this, hasNavigationListener, frames, partitioned)
         webViewClient = client
@@ -984,6 +1002,11 @@ class Natives(
         }
         isVerticalScrollBarEnabled = false; isHorizontalScrollBarEnabled = false
         overScrollMode = View.OVER_SCROLL_NEVER
+        // exact2 keeps the frame above a keyboard its page raises.
+        setOnFocusChangeListener { web, focused ->
+            val e = if (focused) byView[web]?.takeIf { elements[it.id] === it && it.view === web } else focusedFrame
+            if (e != null) frameFocused(e, focused)
+        }
         setBackgroundColor(Color.WHITE)
     }
 
@@ -997,6 +1020,8 @@ class Natives(
         removeView(web)
         val e = byView.remove(web)?.takeIf { elements[it.id] === it && it.view === web }
         webPool.remove(web)
+        retiring?.invoke(web)
+        if (e != null && e === focusedFrame) frameFocused(e, false)
         web.destroy()
         if (e == null) return
         android.util.Log.w("exact", "iframe ${e.id}: the page's renderer ${if (crashed) "crashed" else "was ended by Android"}; ${if (e.browser == null) "loading its src again" else "recovering it"}")
@@ -1085,7 +1110,7 @@ class Natives(
     }
 
     private fun replacePresentation(e: Element, surface: Boolean) {
-        if (e.buffers) { if (e.asked != 0L) Exact.detachBuffers(e.id) } else unwindow(e)
+        if (e.buffers) { detachBuffers(e) } else unwindow(e)
         finishRedraws(e)
         e.presentation.clear()
         e.snapshotReady = false
@@ -1101,6 +1126,7 @@ class Natives(
                 unwindow(e)
                 e.presentation.attach()
                 e.surface = holder.surface
+                HostFacts.attached(view)
                 Exact.attachSurface(e.id, holder.surface, w, h) { e.window = it }
                 frameRate(e)
                 e.dirty = true
@@ -1139,12 +1165,21 @@ class Natives(
         modules[e.module]?.let { lifecycle.made(e.view, "${e.module}:${e.id}:${e.slot}:${e.generation}", it) }
     }
 
-    /** The module view the engine's hit names, while that allocation of that session is still mounted and enabled
-     * when its reply arrives. */
+    /** The frame whose view holds the window's focus, as exact2 was last told. */
+    private var focusedFrame: Element? = null
+
+    private fun frameFocused(e: Element, focused: Boolean) {
+        if (!focused && focusedFrame !== e) return
+        focusedFrame = e.takeIf { focused }
+        Exact.frameFocused(e.id, e.slot, e.generation, e.session, focused)
+    }
+
+    /** The module view or frame the engine's hit names, while that allocation of that session is still mounted and
+     * enabled when its reply arrives. */
     fun taker(id: Int, slot: Int, generation: Int, session: Long): View? {
         // A media element with a controller takes its gestures as a module's view does (LLP 1042.001 D4).
         val e = elements[id]?.takeIf {
-            (it.kind == 2 || (it.kind == 0 && players[it.view]?.lendable == false)) &&
+            ((it.kind == 1 && it.refusedFor == null) || it.kind == 2 || (it.kind == 0 && players[it.view]?.lendable == false)) &&
                 !it.parked && it.slot == slot && it.generation == generation && it.session == session
         } ?: return null
         return e.view.takeIf { !e.disabled && it.isEnabled }
@@ -1276,6 +1311,7 @@ class Natives(
         e.surface = surface
         // Not waited for: exact2's thread may be busy (the GPU module's first frame, right after the first content),
         // and the main thread would wait out that work in its first draw.
+        HostFacts.attached(e.view)
         Exact.attachSurface(e.id, surface, w, h) { e.window = it }
         frameRate(e)
         poll()
@@ -1311,7 +1347,15 @@ class Natives(
         }
     }
 
+    private fun detachBuffers(e: Element) {
+        if (e.asked == 0L) return
+        HostFacts.detached(e.view)
+        Exact.detachBuffers(e.id)
+        e.asked = 0L
+    }
+
     private fun unwindow(e: Element) {
+        if (e.surface != null) HostFacts.detached(e.view)
         // Waited for: after the attach posted before it, and before the surface goes.
         if (e.surface != null) Exact.detachSurface(e.id) { e.window.also { e.window = 0L } }
         if (e.view !is SurfaceView) e.surface?.release()
@@ -1331,14 +1375,15 @@ class Natives(
         if (e.kind == 0 && forget) MediaRecords.forget(e.id)
         if (e.parked) { waiting--; e.node.discardDisplayList(); return }
         byView.remove(e.view)
-        if (e.kind == 3) { if (e.buffers) { if (e.asked != 0L) Exact.detachBuffers(e.id); e.wrapped.clear() } else unwindow(e) }
+        if (e.kind == 3) { if (e.buffers) { detachBuffers(e); e.wrapped.clear() } else unwindow(e) }
         retire(e, reuse)
         e.node.discardDisplayList()
     }
 
     /** [e]'s view is kept for the next element of its kind, or goes. */
     private fun retire(e: Element, reuse: Boolean = true) {
-        if (e.kind == 2) retiring?.invoke(e.view)
+        if (e.kind == 1 || e.kind == 2) retiring?.invoke(e.view)
+        if (e === focusedFrame) frameFocused(e, false)
         e.eventBinding++
         if (pooled(e)) held--
         val module = e.module?.let { modules[it] }

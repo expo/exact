@@ -19,7 +19,7 @@ import { launchLocation as browserLocation } from './navigation.js';
 export const launchLocation = () => (checkpoint(), browserLocation());
 export { fontFamily } from './font-family.js';
 export { cssNames } from './regions.js';
-import { Head, markDocument, projectRoots, openTabs, prepareTabs, unopened, tp } from './document.js';
+import { Head, markDocument, projectRoots, Tabs, unopened, tp } from './document.js';
 export { Head, unopened, tp };
 export { canSetStatus, statusSubject } from './document.js';
 import { conforms, eq, equal, Refusal, Failed } from './shape.js';
@@ -60,7 +60,7 @@ import { Resources, Mutations, lateReaders, lateIdle } from './resources.js';
 import { Views, viewId } from './tree.js';
 import { KeyEvent, Propagating } from './events.js';
 import { Pres, Present, Sh, Input, pressFeedback } from './pieces.js';
-import { Booting, start, checkpoint, finishTaskScopes, Portals } from './mount.js';
+import { Booting, start, checkpoint, PrepareTasks, Portals } from './mount.js';
 export * from './clock.js';
 export * from './resources.js';
 export * from './tree.js';
@@ -391,7 +391,9 @@ export let Writes = null,
   Refused = null,
   Why = '',
   Sched = null;
-const HeldOutput = new Set(), SettledOutput = new WeakSet(), OutputInvocations = new WeakMap();
+// What settles physical output on a page freeze (output.js): null unless the plan makes sounds, haptics or MIDI
+let Output = null;
+export const useOutput = o => { Output = o; };
 // Cut by code point; a write's value or a source's error may be long, or private.
 const why = (step, m, c = [...m]) =>
     `while ${step}: ${c.length > WHY_MAX ? `${c.slice(0, WHY_MAX).join('')}… (${c.length - WHY_MAX} more characters in the journal)` : m}`,
@@ -518,7 +520,7 @@ export function commit(f, what = 'commit', finished) {
     }
     // gated tasks and sequences over the settled state, inside the rollback (LLP 1092 D8, LLP 1125 D2)
     step = 'arming its tasks and sequences';
-    prepareTabs();
+    Tabs.prepare?.();
     Sched?.gates();
     sound = Sounds.gate?.();
   } catch (e) {
@@ -555,7 +557,7 @@ export function commit(f, what = 'commit', finished) {
   }
   const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes],
     changed = Sched?.changed(queued), invocation = Invocation.id, origin = Origin.now();
-  if (hasOutput(cmds)) OutputInvocations.set(cmds, invocation);
+  Output?.made(cmds, invocation);
   // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view
   // transition defers too (review C3).
   if (KeyEvent || Propagating)
@@ -567,29 +569,22 @@ export function commit(f, what = 'commit', finished) {
   unpark();
   // Freeze releases streams and stops sequences even when the tree waits for a view transition.
   if (ok) {
-    finishTaskScopes();
+    PrepareTasks?.(); // retires the task preparations this commit superseded (mount.js)
     if (Sounds.frozen && Open.size) closeLetGo(inflight, say);
-    if (Sounds.frozen === true && !wasFrozen) {
-      Sounds.settling = true;
-      try {
-        for (const commands of new Set([...HeldOutput, cmds])) settleOutput(commands);
-        Sounds.committed?.(sound);
-      } finally {
-        Sounds.settling = false;
-      }
-    } else Sounds.committed?.(sound);
+    if (Output && Sounds.frozen === true && !wasFrozen) Output.freeze(cmds, sound);
+    else Sounds.committed?.(sound);
   }
   // What the commit would have sent and did not is refused, whatever stopped its tree update (a hook that threw, a
   // poisoned tree, a tail a view transition never ran): an answer's batches that wait for it too (ts-stream.js).
   let sent = 0;
   const unrun = why => {
-    HeldOutput.delete(cmds);
+    Output?.done(cmds);
     for (const go of out.splice(sent)) go.refused?.(why);
   };
   const link = Nav?.holdLink();
   const tail = Object.assign(
     () => {
-      HeldOutput.delete(cmds);
+      Output?.done(cmds);
       try {
         return Invocation.run(invocation, () => link ? Nav.withLink(link, update) : update());
       } finally {
@@ -606,7 +601,7 @@ export function commit(f, what = 'commit', finished) {
     Pres?.before({ ops: Probes?.gains() ?? [], still: !due() }, Views);
     try {
       flush();
-      openTabs();
+      Tabs.open?.();
       Sched?.made();
     } catch (e) {
       Poisoned = true;
@@ -627,7 +622,7 @@ export function commit(f, what = 'commit', finished) {
     while (sent < out.length) out[sent++]();
     if (Open.size) closeLetGo(inflight, say);
     for (const c of cmds) command(...c);
-    if (!SettledOutput.delete(cmds)) {
+    if (!Output?.settled(cmds)) {
       Sounds.apply?.(cmds);
       Sounds.midiApply?.(cmds);
     }
@@ -652,7 +647,7 @@ export function commit(f, what = 'commit', finished) {
   };
   // a Back or Forward is mirrored to the history first, and one the browser animated cuts (router.js `traversal`)
   const deferred = Sh && ok && !Traversal?.();
-  if (deferred && hasOutput(cmds)) HeldOutput.add(cmds);
+  if (deferred) Output?.hold(cmds);
   return deferred ? Sh.commit(tail, Queue, inflight, After, cmds.some(c => c[0] === 'startViewTransition')) : tail();
 }
 /** A commit made again after a write ended or the source became ready (the runner's `commit_again`). Refused while
@@ -804,23 +799,6 @@ export const Sounds = {
   settling: false,
   beatAt: null,
 };
-const physicalOutput = name => name === 'haptic' || Sounds.own.has(name);
-const hasOutput = commands => commands.some(([name]) => name === 'reload' || physicalOutput(name));
-function settleOutput(commands) {
-  if (!hasOutput(commands) || SettledOutput.has(commands)) return;
-  for (let i = 0; i < commands.length;) {
-    const [name, , origin] = commands[i];
-    if (!physicalOutput(name)) { i++; continue; }
-    say(`command ${name}`);
-    const refused = Invocation.run(OutputInvocations.get(commands) ?? 0, () => Origin.refused?.(name, origin));
-    if (refused) commands.splice(i, 1); else i++;
-  }
-  Sounds.apply?.(commands);
-  Sounds.midiApply?.(commands);
-  for (let i = commands.length - 1; i >= 0; i--) if (physicalOutput(commands[i][0])) commands.splice(i, 1);
-  SettledOutput.add(commands);
-  HeldOutput.delete(commands);
-}
 function command(name, args, origin) {
   const f = Hosts[name];
   say(`command ${name}`);
@@ -883,9 +861,6 @@ export const Store = {
   get(k) {
     return globalThis.__exactRender ? undefined : this.map.get(k);
   },
-  exclusive(k, work) {
-    return import('./storage-environment.js').then(m => m.exclusiveSecret(this, Kept('secret'), k, work));
-  },
   // Outside a render, keeping what is already kept is no write, as the runner's `Store::set`.
   set(k, v) {
     if (globalThis.__exactRender) throw new Error("a render's store is empty and refuses writes"); // LLP 1048.000 D9
@@ -915,62 +890,10 @@ export const Store = {
     this.writes.length = n;
     this.dirty = false;
   },
-  persist() {
-    const p = Kept('secret'),
-      jobs = [];
-    for (const [k, v] of this.writes.splice(0)) this.pending.set(k, { v, warned: false });
-    for (const [k, entry] of this.pending) {
-      const live = () => this.pending.get(k) === entry,
-        failed = e => {
-          if (!live()) return;
-          if (!Object.hasOwn(entry, 'before')) this.pending.delete(k);
-          if (!entry.warned) {
-            entry.warned = true;
-            say(`store ${k} failed: ${e}`);
-          }
-        },
-        write = () => {
-          try {
-            const before = localStorage.getItem(p + k);
-            if (Object.hasOwn(entry, 'before') && entry.before !== before) {
-              this.pending.delete(k);
-              return;
-            }
-            entry.before = before;
-            entry.v == null ? localStorage.removeItem(p + k) : localStorage.setItem(p + k, entry.v);
-            this.pending.delete(k);
-          } catch (e) {
-            failed(e);
-          }
-        };
-      if (Object.hasOwn(entry, 'before') && !this.leased?.has(k)) {
-        entry.retry ??= import('./storage-environment.js')
-          .then(m => m.retrySecretWrite(p + k, live, write))
-          .catch(failed)
-          .finally(() => {
-            delete entry.retry;
-          });
-        jobs.push(entry.retry);
-      } else write();
-    }
-    return Promise.all(jobs);
-  },
-  load() {
-    if (globalThis.__exactRender) return;
-    const p = Kept('secret');
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k.startsWith(p)) this.map.set(k.slice(p.length), localStorage.getItem(k));
-      }
-    } catch {}
-    // Another tab of the app wrote or removed a key, or cleared the store (LLP 1030.004 D2).
-    globalThis.addEventListener?.('storage', e => {
-      if (e.storageArea !== globalThis.localStorage) return;
-      if (e.key == null) for (const k of [...this.map.keys()]) this.peer(k, null);
-      else if (e.key.startsWith(p)) this.peer(e.key.slice(p.length), e.newValue);
-    });
-  },
+  // Kept across visits by store.js, which a plan whose data module reads or writes the store links; without one,
+  // nothing writes it and there is nothing to load.
+  persist() {},
+  load() {},
   /** Another tab's write of key `k` (`v`, or null removed): taken, unless this tab's own write of it is owed, and the
    * store's readers asked again, as after a write outside a commit (the runner's `store_changed`). */
   peer(k, v) {

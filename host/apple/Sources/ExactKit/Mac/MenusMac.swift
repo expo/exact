@@ -157,8 +157,10 @@ package final class MenuHost: NSObject {
         }
     }
     package init(presenter: Presenter) { self.presenter = presenter }
+    /// A toolbar or status item's menu while AppKit tracks it (`trackingBegan`).
+    private weak var itemMenu: InvokerMenu?
 
-    package func isOpen(_ node: NodeView) -> Bool { entries.contains { $0.popover === node } }
+    package func isOpen(_ node: NodeView) -> Bool { entries.contains { $0.popover === node } || itemMenu?.shows === node }
     /// Open as a popover, here or as the alert a confirmation becomes
     func showsAsPopover(_ node: NodeView) -> Bool { isOpen(node) || presenter?.alerts.isOpenAsPopover(node) == true }
     /// Open by `show-modal`, which HTML's popover commands leave open
@@ -307,7 +309,8 @@ package final class MenuHost: NSObject {
         if sourceId != nil && source == nil { presenter.session?.log("\(name) refused: no source has that id"); return }
         if showsModally(pop) { presenter.session?.log("\(name) ignored: \(id) is open as a modal dialog"); return }
         let open = showsAsPopover(pop)
-        if name == "hidePopover" || name == "togglePopover" && open { close(pop) }
+        if itemMenu?.shows === pop, name != "showPopover" { itemMenu?.cancelTracking() } // `trackingEnded` reports it
+        else if name == "hidePopover" || name == "togglePopover" && open { close(pop) }
         else if !open { show(pop, from: source) }
     }
     func show(_ pop: NodeView, from row: NodeView?, run: UInt32? = nil, contextMenu: Bool = false, bubbled: Bool = false) {
@@ -798,7 +801,22 @@ package final class MenuHost: NSObject {
         menu.source = source
         menu.autoenablesItems = false
         menu.delegate = self
+        NotificationCenter.default.addObserver(self, selector: #selector(trackingBegan), name: NSMenu.didBeginTrackingNotification, object: menu)
+        NotificationCenter.default.addObserver(self, selector: #selector(trackingEnded), name: NSMenu.didEndTrackingNotification, object: menu)
         return menu
+    }
+    /// The popover's `toggle` follows AppKit's tracking of the menu, not its
+    /// filling or `menuWillOpen`/`menuDidClose`, which an accessibility
+    /// client's read of a closed menu also sends.
+    @objc private func trackingBegan(_ note: Notification) {
+        guard let menu = note.object as? InvokerMenu, let pop = menu.shows ?? menu.source.flatMap(toolbarPopover(of:)) else { return }
+        menu.shows = pop; itemMenu = menu
+        presenter?.popoverEvents.changed(pop, open: true)
+    }
+    @objc private func trackingEnded(_ note: Notification) {
+        guard let menu = note.object as? InvokerMenu, itemMenu === menu, let pop = menu.shows else { return }
+        itemMenu = nil; menu.shows = nil
+        presenter?.popoverEvents.changed(pop, open: false)
     }
     /// A toolbar item's menu, filled as it opens: the button's own `press`
     /// first, as a click on it in the page runs before its menu shows (it
@@ -833,6 +851,7 @@ package final class MenuHost: NSObject {
             built.removeItem(item)
             menu.addItem(item)
         }
+        menu.shows = pop
         if presenter.statusItems.places(source) { presenter.statusItems.endMenu(menu) }
     }
     private func menuItem(of row: NodeView, action: Selector?) -> NSMenuItem {
@@ -1007,6 +1026,8 @@ package final class MenuHost: NSObject {
 /// popover it shows (LLP 1115.002 D2).
 final class InvokerMenu: NSMenu {
     weak var source: NodeView?
+    /// The popover it shows: as it was filled, until its tracking ends.
+    weak var shows: NodeView?
 }
 
 extension MenuHost: NSMenuDelegate {

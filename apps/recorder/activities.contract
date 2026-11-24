@@ -1,18 +1,21 @@
 // The Live Activity a take started from the recording control holds while it
 // records (LLP 1126.004 D4): iOS stops a recording an `AudioRecordingIntent`
 // starts unless the intent shows one. Each placement is public: that the phone
-// is recording is what a locked phone must show.
+// is recording is what a locked phone must show. Android shows it as an
+// ongoing notification titled `label`, counting up from `startedAt`.
 shape RecordingState
+  label: string
   startedAt: number
 
 component RecordingActivity
   props
+    label: string
     startedAt: number
   view
     view slot="lockScreen" data-privacy="public"
       row gap=8 align-items="center"
         image "symbol:sf/mic.fill" aria-label="Recording"
-        text "Recording" font-weight=600
+        text label font-weight=600
         time datetime=startedAt format="relative" font-variant-numeric="tabular-nums"
     view slot="compactLeading" data-privacy="public"
       image "symbol:sf/mic.fill" aria-label="Recording"
@@ -26,6 +29,6 @@ component RecordingActivity
       view slot="trailing" data-privacy="public"
         time datetime=startedAt format="relative" font-variant-numeric="tabular-nums"
       view slot="center" data-privacy="public"
-        text "Recording"
+        text label
       view slot="bottom" data-privacy="public"
         text "Open Recorder to stop."

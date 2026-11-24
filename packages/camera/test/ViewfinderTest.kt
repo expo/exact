@@ -5,6 +5,7 @@ import android.view.View
 import android.widget.ImageView
 import androidx.camera.core.Preview
 import androidx.camera.view.PreviewView
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Native
 import dev.exact.canvas.TrackConsumer
@@ -47,6 +48,7 @@ class ViewfinderTest {
     /** Delivers the already-leased track's callbacks, including a subscription made while backgrounded. */
     private class Track(private val source: VideoSource?) : TrackOwner {
         val consumers = LinkedHashSet<TrackConsumer>()
+        var lastCause = Cause.none
         var background = false
             set(value) {
                 field = value
@@ -54,7 +56,8 @@ class ViewfinderTest {
             }
         var liveCallbacks = 0
         override fun leased(id: String) = consumers.isNotEmpty()
-        override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, origin: String): () -> Unit {
+        override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, cause: Cause): () -> Unit {
+            lastCause = cause
             consumers += consumer
             liveCallbacks++
             consumer.liveVideo(source)
@@ -72,8 +75,8 @@ class ViewfinderTest {
         fun view(): View = module.view("exact-camera", "1", "finder", context.application,
             JSONObject().put("srcObject", "track")) { _, _ -> }
         fun show(): View = view().also {
-            module.bound("1", "finder", "srcObject", "app")
-            module.displayed("1", "finder", true, "app")
+            module.bound("1", "finder", "srcObject", "track", Cause("app"))
+            module.displayed("1", "finder", true, Cause("app"))
         }
         fun destroy(view: View) = module.destroyView(view)
     }
@@ -88,7 +91,7 @@ class ViewfinderTest {
             override fun unmuted() {}
             override fun ended() {}
         }
-        val finishPhoto = f.context.tracks.subscribe("track", photo, false)
+        val finishPhoto = f.context.tracks.subscribe("track", photo, false, Cause("app"))
         f.track.background = true
         assertNull(source.preview.surfaceProvider)
         f.destroy(first)
@@ -117,7 +120,7 @@ class ViewfinderTest {
         val replaced = f.track.consumers.single()
         f.addTrack("other-track")
         f.module.update(current, JSONObject().put("srcObject", "other-track"))
-        f.module.bound("1", "finder", "srcObject", "app")
+        f.module.bound("1", "finder", "srcObject", "other-track", Cause("app"))
         val active = f.track.consumers.single()
         for (stale in listOf(destroyed, replaced)) {
             stale.muted("background")
@@ -137,6 +140,35 @@ class ViewfinderTest {
         assertEquals(attachments, source.attachments)
         assertNull(source.preview.surfaceProvider)
         f.destroy(current)
+    }
+
+    @Test fun aRebuiltFinderPairsItsCurrentSourceWithTheCommitThatBoundIt() {
+        Host.agent = true
+        try {
+            val f = Fixture(null)
+            val view = f.show()
+            f.module.update(view, JSONObject())
+            f.module.update(view, JSONObject().put("srcObject", "track"))
+            assertTrue(f.track.consumers.isEmpty())
+            f.module.bound("1", "finder", "srcObject", "track", Cause("action"))
+            assertEquals("action", f.track.lastCause.origin)
+            f.addTrack("other")
+            f.module.bound("1", "finder", "srcObject", "other", Cause("tool"))
+            assertTrue(f.track.consumers.isEmpty())
+            f.destroy(view)
+            val rebuilt = f.view()
+            assertTrue(f.track.consumers.isEmpty())
+            f.module.update(rebuilt, JSONObject().put("srcObject", "other"))
+            assertEquals("tool", f.track.lastCause.origin)
+            f.module.bound("1", "finder", "srcObject", "other", Cause("app"))
+            assertEquals("app", f.track.lastCause.origin)
+            f.module.displayed("1", "finder", true, Cause("action"))
+            assertEquals("action", f.track.lastCause.origin)
+            assertEquals(1, f.track.consumers.size)
+            f.destroy(rebuilt)
+        } finally {
+            Host.agent = false
+        }
     }
 
     @Test fun aClipSelectsFramesByPresentationTimeAndLoopsFromTheTracksStart() {

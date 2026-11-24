@@ -180,7 +180,7 @@ package final class MenuHost {
             if valid(owner) { owner.rejectActiveProperties() }
             else { resetConfirmation(preservingPending: true) }
         }
-        sheets.sync()
+        sheets.sync(); endLeftBarMenu()
         var popovers: [String: NodeView] = [:]
         for (name, entry) in agentOpen {
             guard let pop = entry.popover, presenter.views[pop.id] === pop, pop.props["id"] == name,
@@ -407,6 +407,7 @@ package final class MenuHost {
             discardPendingConfirmations { $0.matches(pop) }
             if let owner = confirmation, owner.popover === pop { finish(owner, chosen: nil) }
             else { drop(name) }
+            if barMenu?.popover === pop { barMenuClosed(dismissing: true) }
             #if os(iOS)
             for case let button as MenuButton in overlays.values where button.popover === pop { button.dismissMenu() }
             for button in nativeMenus.values where button.popover === pop { button.dismissMenu() }
@@ -427,18 +428,8 @@ package final class MenuHost {
         (overlays[node.id] as? InvokerButton).map { $0.isHighlighted && $0.pressing === node } ?? false
     }
     func live(_ node: NodeView) -> Bool { presenter?.views[node.id] === node }
-    /// The order a menu shows its rows in for its trigger's `menuOrder`
-    /// `word`; unsaid, UIKit's `.automatic`, which shows a menu that opens
-    /// upward last row first (LLP 1115 §2: unsaid, the platform's).
-    package static func order(_ word: String?) -> UIContextMenuConfiguration.ElementOrder {
-        switch word {
-        case "fixed": .fixed
-        case "priority": .priority
-        default: .automatic
-        }
-    }
-    /// `inBar`: the node is a bar item's button, which the page hides while
-    /// the bar shows it: that hiding, and only that, does not count.
+    /// `bar`: the bar of a bar item's button, which the page hides while the
+    /// bar shows it: that hiding, and only that, does not count.
     /// A pull-down's rows, read as UIKit opens it: the invoker's press applies
     /// (synchronously), then what the surviving invoker opens now, as HTML
     /// runs a button's listeners before its invocation; a confirmation or
@@ -450,16 +441,16 @@ package final class MenuHost {
     /// a top-level `UIMenu` title draws a taller header and sets the rows
     /// about 10 pt lower. A bar item's pull-down is a hand-built bar item's
     /// `UIMenu(title:)`, taller header and all (LLP 1021, amended 2026-10-16).
-    package func pullDown(of v: NodeView, titled heading: String, inBar: Bool = false) -> UIMenu {
-        let rows = rows(of: v, inBar: inBar, heading: heading)
+    package func pullDown(of v: NodeView, titled heading: String, bar: (() -> UIView?)? = nil) -> UIMenu {
+        let rows = rows(of: v, bar: bar, heading: heading)
         if heading.isEmpty { return UIMenu(children: [rows]) }
-        return inBar ? UIMenu(title: heading, children: [rows]) : UIMenu(children: [UIMenu(title: heading, options: .displayInline, children: [rows])])
+        return bar != nil ? UIMenu(title: heading, children: [rows]) : UIMenu(children: [UIMenu(title: heading, options: .displayInline, children: [rows])])
     }
     /// A `heading` outside a bar is an inline section's, whose title UIKit
     /// draws only over rows of its own: the first untitled section's rows
     /// are its rows, and the other sections follow it.
-    private func rows(of v: NodeView, inBar: Bool, heading: String = "") -> UIDeferredMenuElement {
-        let headed = !heading.isEmpty && !inBar
+    private func rows(of v: NodeView, bar: (() -> UIView?)?, heading: String = "") -> UIDeferredMenuElement {
+        let inBar = bar != nil, headed = !heading.isEmpty && !inBar
         return UIDeferredMenuElement.uncached { [weak self, weak v, token = v.incarnation] completion in
             func current() -> NodeView? {
                 guard let v, v.incarnation == token, self?.presenter?.views[v.id] === v, self?.eligible(v, inBar: inBar) == true else { return nil }
@@ -477,7 +468,9 @@ package final class MenuHost {
                 }
                 return
             }
+            let stale = bar != nil && self.barMenuClosed() // (closed unseen: Escape, VoiceOver's escape)
             let items = self.items(of: invocation.target, opener: invoker)
+            if let bar, !items.isEmpty { self.barMenuOpened(invocation.target, from: invoker, in: bar, afterClose: stale) }
             if self.recordsGiven, !heading.isEmpty { self.givenHeaders[invocation.target.id, default: []].insert(heading) }
             guard headed, let first = items.first as? UIMenu, first.options.contains(.displayInline), first.title.isEmpty else { return completion(items) }
             completion(first.children + items.dropFirst())
@@ -894,7 +887,7 @@ package final class MenuHost {
     /// Whether `node`, a popover, is open: its confirmation presented, or,
     /// under the agent, its painted presentation shown.
     package func isOpen(_ node: NodeView) -> Bool {
-        if pendingConfirmations.contains(where: { $0.matches(node) }) || confirmation?.popover === node && confirmation?.finishing == false || sheets.isOpen(node) { return true }
+        if pendingConfirmations.contains(where: { $0.matches(node) }) || confirmation?.popover === node && confirmation?.finishing == false || sheets.isOpen(node) || barMenu?.popover === node { return true }
         #if os(iOS)
         if context.isOpen(node) || overlays.values.contains(where: { ($0 as? MenuButton).map { $0.popover === node && $0.isMenuOpen } == true }) { return true }
         if nativeMenus.values.contains(where: { $0.popover === node && $0.isMenuOpen }) { return true }
@@ -904,6 +897,7 @@ package final class MenuHost {
 
     /// Production and agent touches share HTML's light-dismiss exclusions.
     func lightDismiss(_ touched: UIView) {
+        barMenuClosed() // (UIKit's menu is outside the app's views, and a touch outside it dismisses it)
         var kept = Set<String>()
         var inside = agentOpen.first { _, entry in
             entry.popover.map { touched === $0 || touched.isDescendant(of: $0) } ?? false
@@ -974,6 +968,7 @@ package final class MenuHost {
             var keep = Set<String>(), current = ancestor
             while let name = current, keep.insert(name).inserted { current = agentOpen[name]?.ancestor }
             for (other, entry) in agentOpen where entry.popover?.props["popover"] != "manual" && !keep.contains(other) { drop(other) }
+            barMenuClosed(dismissing: true)
         }
         opened += 1
         let entry = Lifted(source: source, popover: pop, order: opened, ancestor: ancestor, context: context, substitutesMenu: substitutesMenu, presenter: presenter)
@@ -1083,10 +1078,10 @@ package final class MenuHost {
     /// Under the agent, the popovers (by id, with their incarnations) of
     /// the menu UIKit was last given to present: the one a menu opened
     /// with, and its submenus. A row of any other popover is not in the menu
-    /// UIKit shows, however alike their rows read. Emptied when an
-    /// invoker's menu ends; a bar item's pull-down reports no end, and its
-    /// rows no longer showing is the refusal then.
+    /// UIKit shows, however alike their rows read. Emptied when the menu ends.
     var presentedMenu: [UInt32: UInt64] = [:]
+    /// A bar item's pull-down UIKit shows (`barMenuOpened`).
+    var barMenu: BarMenu?
     private static func autofocus(in view: UIView) -> NodeView? {
         for sub in view.subviews {
             if let node = sub as? NodeView, let value = node.props["autofocus"], value != "false" { return node }

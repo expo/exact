@@ -199,7 +199,9 @@ impl<G: Game> Sim<G> {
         next.world.unobserve();
         next.restored_from = Some(s.args);
         next.overflow_logged = s.overflow_logged;
-        next.origin = s.origin;
+        // A restore is no fresh start: what was posted into the live world
+        // stays in its set (`origin.rs`).
+        next.origin = s.origin | self.origin;
         next.rebase_queue = true;
         next.restored = true;
         // Its save holds what `Game::first_frame` wrote, if it ran.

@@ -49,10 +49,10 @@ engine camera, interpolation, viewport/capacity and clock-reset facts.
 `FrameView.time` also carries the frame's timing: `interval_ms` since the
 canvas's previous drawn frame (0 after a rest), `display_period_ms`, the host's
 callback (`host.raw_ms`, `host.callback_ms`, `host.fastest_period_ms`) and
-`thermal_state` (`Unknown` off Apple). A hook steering by them, a frame budget
-or a thermal cap, answers `Hooks::max_fps`; the lower non-zero of it and
-`Game::max_fps` caps drawing. Register
-entities through `entities()` to get tick-interpolated `FrameView::pose`. Use
+`thermal_state` (Apple and Android live frames, `Unknown` elsewhere). Android
+moderate is `Serious`. A hook can adapt with `Hooks::max_fps`; the lower non-zero
+of it and `Game::max_fps` caps drawing. Register entities through `entities()`
+to get tick-interpolated `FrameView::pose`. Use
 `Pipelines<T>` for asynchronous candidate validation, `Needs::PENDING` until ready,
 and `error()` for a named rejected replacement. Never step or mutate the simulation.
 

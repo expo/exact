@@ -1057,10 +1057,10 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
-    /// Consume the exact120-byte paired transform packet from the owned input buffer.
+    /// Consume the exact 128-byte paired transform packet from the owned input buffer.
     pub fn transform_motion(&mut self, len: usize) -> u32 {
         let out = match self.host.as_mut() {
-            Some(host) if len == 120 && self.input.len() >= len => {
+            Some(host) if len == 128 && self.input.len() >= len => {
                 host.transform_motion(&self.input[..len])
             }
             Some(host) => crate::batch::WrappedBatch::new(
@@ -1099,18 +1099,17 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
     /// Move only a live header/target/token triple.
-    pub fn height_drag_update(&mut self, token: u64, height: f64, now_ms: f64) -> u32 {
-        let out = self
-            .host
-            .as_mut()
-            .map_or_else(not_booted, |h| h.height_drag_update(token, height, now_ms));
+    pub fn height_drag_update(&mut self, token: u64, height: f64, now_ms: f64, at_ms: f64) -> u32 {
+        let out = self.host.as_mut().map_or_else(not_booted, |h| {
+            h.height_drag_update(token, height, now_ms, at_ms)
+        });
         self.emit(out)
     }
     /// Apply the final sample and typed release action while held.
     /// At the engine's measured velocity (LLP 1057.001 §3).
-    pub fn height_drag_release(&mut self, token: u64, height: f64, now_ms: f64) -> u32 {
+    pub fn height_drag_release(&mut self, token: u64, height: f64, now_ms: f64, at_ms: f64) -> u32 {
         let out = self.host.as_mut().map_or_else(not_booted, |h| {
-            h.dispatch_height_measured(token, height, now_ms)
+            h.dispatch_height_measured(token, height, now_ms, at_ms)
         });
         self.emit(out)
     }
@@ -1153,19 +1152,20 @@ impl<D: DataSource> Bridge<D> {
         self.host.as_ref().is_some_and(|h| h.has_hold(token))
     }
 
-    /// Update presentation using a runtime-owned opaque handle.
-    pub fn hold_update(&mut self, token: u64, x: f64, y: f64, now_ms: f64) -> u32 {
+    /// Update presentation using a runtime-owned opaque handle, the value
+    /// sampled at `at_ms` on the input's own timeline.
+    pub fn hold_update(&mut self, token: u64, x: f64, y: f64, now_ms: f64, at_ms: f64) -> u32 {
         let out = self.host.as_mut().map_or_else(not_booted, |h| {
-            h.hold_update(token, exact_motion::Value::new(x, y), now_ms)
+            h.hold_update_at(token, exact_motion::Value::new(x, y), now_ms, at_ms)
         });
         self.emit(out)
     }
 
     /// Release (or cancel) a live hold after its authored action.
-    /// `cancel`: 0 releases at `vx, vy`, 1 cancels, 2 releases at the
-    /// engine's measured velocity (LLP 1057.001 §3).
-    pub fn hold_end(&mut self, token: u64, cancel: u32, vx: f64, vy: f64, now_ms: f64) -> u32 {
-        let end = match cancel {
+    /// `mode`: 0 releases at `vx, vy`, 1 cancels, 2 releases at the
+    /// engine's measured velocity (LLP 1057.001 §3), read `at`.
+    pub fn hold_end(&mut self, token: u64, mode: u32, vx: f64, vy: f64, now: f64, at: f64) -> u32 {
+        let end = match mode {
             0 => exact_motion::HoldEnd::Release {
                 velocity: exact_motion::Value::new(vx, vy),
             },
@@ -1173,7 +1173,7 @@ impl<D: DataSource> Bridge<D> {
                 let out = self
                     .host
                     .as_mut()
-                    .map_or_else(not_booted, |h| h.hold_end_measured(token, now_ms));
+                    .map_or_else(not_booted, |h| h.hold_end_measured(token, now, at));
                 return self.emit(out);
             }
             _ => exact_motion::HoldEnd::Cancel,
@@ -1181,7 +1181,7 @@ impl<D: DataSource> Bridge<D> {
         let out = self
             .host
             .as_mut()
-            .map_or_else(not_booted, |h| h.hold_end(token, end, now_ms));
+            .map_or_else(not_booted, |h| h.hold_end(token, end, now));
         self.emit(out)
     }
 

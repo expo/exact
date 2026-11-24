@@ -28,7 +28,7 @@ component DimmedPixels
         image "symbol:sf/lock.fill" -exact-tint-color="-exact-system-green"
         text "Lock" color="-exact-label"
       // Settings-style rows: a symbol in a colour of its own and one in the tint
-      list appearance="auto" testId="list" position="absolute" left=0 top=334 width=200 height=124
+      list appearance="auto" testId="list" position="absolute" left=0 top=318 width=200 height=124
         section
           row testId="own-row"
             image "symbol:sf/square.fill" color="-exact-system-indigo"
@@ -37,7 +37,7 @@ component DimmedPixels
             image "symbol:sf/square.fill" color="AccentColor"
             text "Locked"
       // An accent written below the roots' on controls: a switch, a slider and a list row's switch
-      column accent-color="-exact-system-teal" testId="teal" position="absolute" left=0 top=466 width=200 height=190
+      column accent-color="-exact-system-teal" testId="teal" position="absolute" left=0 top=450 width=200 height=190
         input type="checkbox" switch checked=on change=setOn aria-label="Defrost" testId="teal-switch" position="absolute" left=10 top=0
         // Kept from greying (`-exact-tint-adjustment`): a mark in the tint, and below a list row
         image "symbol:sf/square.fill" color="AccentColor" font-size=24 -exact-tint-adjustment="normal" testId="kept-symbol" position="absolute" left=120 top=2 width=24 height=24

@@ -35,6 +35,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.TrackConsumer
 import dev.exact.canvas.TrackEntry
@@ -56,10 +57,10 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         var camera = "back"
         var settings = JSONObject()
         var capabilities = JSONObject()
-        val consumers = LinkedHashMap<TrackConsumer, String>()
+        val consumers = LinkedHashMap<TrackConsumer, Cause>()
         val observers = LinkedHashSet<TrackConsumer>()
         var leased = false
-        var waiting: String? = null
+        var waiting: Cause? = null
         var platformMute: String? = null
         var frameRate: Double? = null
     }
@@ -74,13 +75,13 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
 
     /** Under the agent, each track for `state.extensions` (LLP 1133.008 §9, Disclosure). */
     private fun disclose() = context.state(JSONObject().put("videoTracks", JSONArray(tracks.values.map { t ->
-        shape(t).put("consumers", JSONArray(t.consumers.values.sorted())).put("observers", t.observers.size).put("lease", t.leased).put("waiting", t.waiting ?: JSONObject.NULL)
+        shape(t).put("consumers", JSONArray(t.consumers.values.map { it.origin }.sorted())).put("observers", t.observers.size).put("lease", t.leased).put("waiting", t.waiting?.origin ?: JSONObject.NULL)
     })))
     private fun error(code: String) = JSONObject().put("error", code)
 
     // The names
 
-    fun open(args: JSONObject, stream: String, reply: (JSONObject) -> Unit) {
+    fun open(args: JSONObject, stream: String, cause: Cause, reply: (JSONObject) -> Unit) {
         val constraints = args.optJSONObject("videoConstraints") ?: JSONObject()
         val make = {
             val t = Track("track-${context.session}-${nextId()}", stream)
@@ -105,14 +106,14 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         when (context.permission(PERMISSION).state) {
             "granted" -> CameraCapture.provider(context.application) { make() }
             "denied" -> reply(error("NotAllowedError"))
-            else -> context.askPermission(PERMISSION) {
+            else -> context.askPermission(cause, PERMISSION) {
                 context.changed("media-capture.cameraStatus")
                 if (context.permission(PERMISSION).state == "granted") CameraCapture.provider(context.application) { make() } else reply(error("NotAllowedError"))
             }
         }
     }
 
-    fun applyConstraints(args: JSONObject, reply: (JSONObject) -> Unit) {
+    fun applyConstraints(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         val t = tracks[args.optString("track")] ?: return reply(error("NotFoundError"))
         if (t.readyState != "live") return reply(shape(t))
         val next = args.optString("deviceId").ifEmpty { null }
@@ -120,7 +121,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         val rate = FrameRates.requested(args.opt("frameRate"))
         if (next != null && next != t.camera) {
             // Another camera under the same id (D1): a capture start (D6), refused while another lease holds the camera.
-            if (context.origin != "app" || !context.foreground) return reply(error("NotAllowedError"))
+            if (!cause.app || !context.foreground) return reply(error("NotAllowedError"))
             if (t.leased && CameraCapture.holders.size > 1) return reply(error("NotReadableError"))
             t.camera = next
             if (rate != null) t.frameRate = rate
@@ -145,11 +146,11 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
 
     fun stop(id: String): JSONObject { val t = tracks.getValue(id); end(t, "stopTrack"); return shape(t) }
 
-    fun setEnabled(id: String, enabled: Boolean): JSONObject {
+    fun setEnabled(id: String, enabled: Boolean, cause: Cause): JSONObject {
         val t = tracks.getValue(id)
         t.enabled = enabled
         if (!enabled && t.leased) { release(t); mute(t, "idle") }
-        if (enabled && !t.leased && t.consumers.isNotEmpty() && t.readyState == "live") lease(t, context.origin)
+        if (enabled && !t.leased && cause.app) t.consumers.values.firstOrNull { it.app }?.let { lease(t, it) }
         announce()
         return shape(t)
     }
@@ -194,13 +195,22 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
 
     /** The activity stopped or started again: the capture's lifecycle follows, and its tracks mute `background`. */
     fun foreground(shown: Boolean) {
-        if (!context.agent) CameraCapture.foreground(shown)
+        if (context.agent) {
+            if (shown) tracks.values.forEach(::checkHolder)
+        } else CameraCapture.foreground(shown)
         for (t in tracks.values) {
             if (t.readyState != "live" || (!shown && !t.leased)) continue
             t.platformMute = if (shown) overlay else "background"
             // A recreated viewfinder can subscribe before the foreground request reaches this extension.
-            if (shown && !t.leased && t.enabled && "app" in t.consumers.values) lease(t, "app")
+            if (shown && !t.leased && t.enabled) t.consumers.values.firstOrNull { it.app }?.let { lease(t, it) }
             if (t.leased) settle(t)
+        }
+    }
+
+    fun checkHolder(t: Track) {
+        if (t.leased && t.consumers.values.none { it.app }) {
+            release(t)
+            mute(t, "idle")
         }
     }
 
@@ -209,7 +219,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
 
     // Leases (D3)
 
-    override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, origin: String): () -> Unit {
+    override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, cause: Cause): () -> Unit {
         val t = tracks[id] ?: throw TrackError("NotFoundError")
         if (t.readyState == "ended") { consumer.ended(); return {} }
         val leave = {
@@ -220,20 +230,20 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
             disclose()
         }
         val leased = t.leased
-        t.consumers[consumer] = origin
+        t.consumers[consumer] = cause
         try {
             when {
                 t.leased -> {
                     consumer.liveVideo(if (context.agent) null else CameraCapture)
                     if (t.muted) consumer.muted(t.muteReason ?: "idle")
                 }
-                origin == "app" && t.enabled && context.foreground -> {
-                    say("${t.id}: a consumer takes the lease ($origin origin)")
-                    lease(t, origin)
+                cause.app && t.enabled && context.foreground -> {
+                    say("${t.id}: a consumer takes the lease ($cause origin)")
+                    lease(t, cause)
                     if (!t.leased) consumer.muted(t.muteReason ?: "idle")
                 }
                 else -> {
-                    say("${t.id}: a consumer takes no lease ($origin origin)")
+                    say("${t.id}: a consumer takes no lease ($cause origin)")
                     consumer.muted(t.muteReason ?: "idle")
                 }
             }
@@ -294,10 +304,11 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
 
     private fun settle(t: Track) { t.platformMute?.let { mute(t, it) } ?: unmute(t) }
 
-    private fun lease(t: Track, origin: String) {
-        if (t.leased || t.readyState != "live") return
+    /** The camera for [t], under [cause]: only the app's own opens it (§14), here as at every other start. */
+    private fun lease(t: Track, cause: Cause) {
+        if (t.leased || t.readyState != "live" || !cause.app || !context.foreground) return
         if (!context.agent && !CameraCapture.lease(context.application, t, this)) {
-            t.waiting = origin
+            t.waiting = cause
             CameraCapture.wait(t, this)
             say("${t.id}: waits for the camera, in use by another lease")
             mute(t, "in-use")
@@ -316,11 +327,13 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         if (!context.agent) CameraCapture.unlease(t)
     }
 
-    /** Another lease ended: a track of this session waiting for the camera takes it, with its kept origin. */
+    /** Another lease ended: a track of this session waiting for the camera takes it, under a consumer's that still
+     * stays. */
     fun retry(t: Track) {
-        val origin = t.waiting ?: return
+        t.waiting ?: return
         t.waiting = null
-        if (t.consumers.isNotEmpty() && t.readyState == "live" && t.enabled) lease(t, origin)
+        val cause = t.consumers.values.firstOrNull { it.app } ?: return
+        if (t.readyState == "live" && t.enabled) lease(t, cause)
     }
 
     fun interrupted(t: Track, reason: String?) { t.platformMute = reason ?: overlay; settle(t) }
@@ -458,7 +471,12 @@ internal object CameraCapture : VideoSource {
 
     fun rebind(next: String, rate: Double?) { selected = next; requestedFrameRate = rate; bind() }
 
-    fun foreground(shown: Boolean) { inFront = shown; started() }
+    fun foreground(shown: Boolean) {
+        // Every holder shares this CameraX lifecycle, including tracks from other owners.
+        if (shown) holders.toList().forEach { (track, owner) -> owner.checkHolder(track) }
+        inFront = shown
+        started()
+    }
 
     private fun started() {
         owner.registry.currentState = if (holders.isNotEmpty() && inFront) Lifecycle.State.STARTED else Lifecycle.State.CREATED

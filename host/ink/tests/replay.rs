@@ -6,6 +6,10 @@
 //! SHA-256 of each file. A renderer carried elsewhere or changed here must still draw
 //! each stream to its images. `host/painted/src/ink/stream_tests.rs` records them and
 //! names the command.
+//!
+//! `streams.large` lists the scenes too large to commit, Caltrain's screens and the
+//! heavy list, and how to record them. `EXACT_INK_STREAMS=<directory>` replays them
+//! too, from the directory that holds them.
 #![cfg(not(target_arch = "wasm32"))]
 
 mod stream;
@@ -19,27 +23,41 @@ const STREAMS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/streams");
 
 /// The most a channel of a replayed pixel may differ from the recording device's.
 ///
-/// Measured on an Apple M5 Ultra, 2026-11-23, replaying all 39 frames recorded on wgpu
-/// over Metal: wgpu over Metal returned every pixel exactly, and the direct Metal
-/// device differed on four frames of `images`, in 716 of their 6,300 pixels and by 2 at
-/// most, where the two generate mips differently. The bound is four times that. A
-/// rounding difference passes and a draw that is missing does not. Another GPU family
-/// may round further apart; measure there before raising it.
+/// Measured 2026-11-23 on the first 39 frames, recorded on an Apple M5 Ultra with wgpu
+/// over Metal. That device returned every pixel exactly. Direct Metal differed by 2 at
+/// most, on four frames of `images`, where the two generate mips differently. Direct3D
+/// 11 on a Radeon 8060S and on WARP, wgpu over DX12 and Vulkan there, and RADV and
+/// lavapipe on a Radeon 680M differed by 3 at most, in the same frames and in `blends`.
+/// The bound is above twice that: a rounding difference passes and a missing draw does
+/// not. Intel, NVIDIA and ARM GPUs are unmeasured; measure there before raising it.
 const STEPS: u8 = 8;
 
-fn read(name: &str) -> Vec<u8> {
-    std::fs::read(format!("{STREAMS}/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"))
+fn read(directory: &str, name: &str) -> Vec<u8> {
+    std::fs::read(format!("{directory}/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
-/// Each recorded file's name and SHA-256.
-fn manifest() -> Vec<(String, String)> {
-    let sums = String::from_utf8(read("SHA256SUMS")).unwrap();
-    (sums.lines())
-        .map(|line| {
-            let (sha256, name) = line.split_once("  ").expect("a hash and a name");
-            (name.to_owned(), sha256.to_owned())
-        })
-        .collect()
+/// Each recorded file's directory, name and SHA-256: the committed ones, then the
+/// large ones where `EXACT_INK_STREAMS` names their directory.
+fn manifest() -> Vec<(String, String, String)> {
+    let mut sets = vec![(STREAMS.to_owned(), read(STREAMS, "SHA256SUMS"))];
+    match std::env::var("EXACT_INK_STREAMS") {
+        Ok(large) => sets.push((large, std::fs::read(format!("{STREAMS}.large")).unwrap())),
+        Err(_) => {
+            eprintln!("EXACT_INK_STREAMS names no directory: the large streams are not replayed")
+        }
+    }
+    let mut files = Vec::new();
+    for (directory, sums) in sets {
+        let sums = String::from_utf8(sums).unwrap();
+        // A line of `streams.large` ends with the file's size.
+        for line in sums.lines().filter(|line| !line.starts_with('#')) {
+            let mut columns = line.split("  ").map(str::to_owned);
+            let sha256 = columns.next().unwrap();
+            let name = columns.next().expect("a hash and a name");
+            files.push((directory.clone(), name, sha256));
+        }
+    }
+    files
 }
 
 fn open() -> Option<Selected> {
@@ -56,8 +74,8 @@ fn open() -> Option<Selected> {
 
 /// The summed channel differences between `pixels` and the image `name`, and how many
 /// pixels have a channel more than `steps` apart.
-fn apart(name: &str, pixels: &[u8], steps: u8) -> (u64, usize) {
-    let image = tiny_skia::Pixmap::decode_png(&read(name)).unwrap();
+fn apart(directory: &str, name: &str, pixels: &[u8], steps: u8) -> (u64, usize) {
+    let image = tiny_skia::Pixmap::decode_png(&read(directory, name)).unwrap();
     assert_eq!(pixels.len(), image.data().len(), "{name}: its size");
     let (mut sum, mut over) = (0, 0);
     for (a, b) in (image.data().as_chunks::<4>().0.iter()).zip(pixels.as_chunks::<4>().0) {
@@ -107,16 +125,17 @@ impl std::fmt::Display for Replayed {
     }
 }
 
-fn replay(device: &mut Selected, scene: &str, stream: &Stream) -> Vec<Replayed> {
+/// Replay `stream` against its scene's images in `directory`.
+fn replay(device: &mut Selected, directory: &str, scene: &str, stream: &Stream) -> Vec<Replayed> {
     let frames = stream::replay(device, &stream.records).unwrap();
     (frames.iter().zip(stream.readbacks()).enumerate())
         .map(|(frame, (pixels, recorded))| {
             let frame = format!("{scene}.{frame}");
-            let (sum, beyond) = apart(&format!("{frame}.png"), pixels, 32);
+            let (sum, beyond) = apart(directory, &format!("{frame}.png"), pixels, 32);
             Replayed {
                 mean: sum as f64 / pixels.len() as f64,
                 beyond: beyond as f64 * 400. / pixels.len() as f64,
-                apart: apart(&format!("{frame}.ink.png"), pixels, STEPS).1,
+                apart: apart(directory, &format!("{frame}.ink.png"), pixels, STEPS).1,
                 exact: Sha256::digest(pixels)[..] == recorded,
                 frame,
             }
@@ -126,7 +145,7 @@ fn replay(device: &mut Selected, scene: &str, stream: &Stream) -> Vec<Replayed> 
 
 /// The first frame of the stream `name`, with the instance `at` left out.
 fn without_an_instance(name: &str, at: impl Fn(&Frame) -> usize) -> Stream {
-    let mut stream = Stream::decode(&read(name));
+    let mut stream = Stream::decode(&read(STREAMS, name));
     let frame = (stream.records.iter_mut())
         .find_map(|record| match record {
             Record::Render { frame, .. } => Some(frame),
@@ -145,8 +164,8 @@ fn without_an_instance(name: &str, at: impl Fn(&Frame) -> usize) -> Stream {
 #[test]
 fn every_file_is_the_one_recorded_and_every_stream_encodes_to_its_bytes() {
     let mut wrong = Vec::new();
-    for (name, sha256) in manifest() {
-        let bytes = read(&name);
+    for (directory, name, sha256) in manifest() {
+        let bytes = read(&directory, &name);
         let actual: String = (Sha256::digest(&bytes).iter())
             .map(|byte| format!("{byte:02x}"))
             .collect();
@@ -162,7 +181,7 @@ fn every_file_is_the_one_recorded_and_every_stream_encodes_to_its_bytes() {
 #[test]
 fn every_stream_replays_to_its_images() {
     let mut outside = Vec::new();
-    for (name, _) in manifest() {
+    for (directory, name, _) in manifest() {
         let Some(scene) = name.strip_suffix(".stream") else {
             continue;
         };
@@ -170,8 +189,8 @@ fn every_stream_replays_to_its_images() {
         let Some(mut device) = open() else {
             return;
         };
-        let stream = Stream::decode(&read(&name));
-        let frames = replay(&mut device, scene, &stream);
+        let stream = Stream::decode(&read(&directory, &name));
+        let frames = replay(&mut device, &directory, scene, &stream);
         println!(
             "{scene}: {} frames on {}, {} of them exactly the pixels of {}",
             frames.len(),
@@ -200,6 +219,7 @@ fn a_stream_with_one_instance_dropped_is_outside_its_band() {
     // The first draw of the first frame is the fill under its blended images.
     let fill = replay(
         &mut device,
+        STREAMS,
         "blends",
         &without_an_instance("blends.stream", |_| 0),
     );
@@ -213,6 +233,7 @@ fn a_stream_with_one_instance_dropped_is_outside_its_band() {
     };
     let glyph = replay(
         &mut device,
+        STREAMS,
         "list",
         &without_an_instance("list.stream", glyph),
     );

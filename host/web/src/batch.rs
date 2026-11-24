@@ -428,7 +428,7 @@ impl Batch {
     /// `{"op":"animate","id":…,"property":…,"delay":ms,"duration":ms,"values":[…]}`
     /// — a spring's frames, evenly spaced; `translate` values are `[x,y]`
     /// pairs, `[x,y,px,py]` with percentages of the box (chess diary #4),
-    /// the rest numbers. No values means stop playing the property.
+    /// scale values are `[x,y]` factors, the rest numbers. No values means stop playing the property.
     pub fn animate(
         &mut self,
         id: u32,
@@ -513,7 +513,7 @@ impl Batch {
             let (x, y) = (Shortest(*x), Shortest(*y));
             if property == "rotate" || pair && (*px != 0.0 || *py != 0.0) {
                 push_text!(&mut s, "[{},{},{},{}]", x, y, Shortest(*px), Shortest(*py));
-            } else if pair {
+            } else if pair || property == "scale" {
                 push_text!(&mut s, "[{},{}]", x, y);
             } else {
                 x.push_to(&mut s);

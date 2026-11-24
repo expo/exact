@@ -118,7 +118,7 @@ pub fn set_event_waker(waker: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) {
 pub use app::Composed;
 pub use hatches::Hatches;
 pub use host::{Host, HostError};
-pub use presenter::Presenter;
+pub use presenter::{Dropped, Presenter};
 
 /// Run `f` inside an atrace section on Android (Perfetto shows it on this
 /// thread); elsewhere just `f`.

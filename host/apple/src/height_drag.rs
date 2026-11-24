@@ -159,9 +159,17 @@ impl<D: DataSource> Host<D> {
     }
 
     /// Update only a live header/target/token triple; stale values are ignored.
-    pub fn height_drag_update(&mut self, serial: u64, height: f64, now_ms: f64) -> String {
+    /// `at_ms` is when the input was sampled, on its own timeline carried onto
+    /// this clock from where the drag began; the release velocity reads it.
+    pub fn height_drag_update(
+        &mut self,
+        serial: u64,
+        height: f64,
+        now_ms: f64,
+        at_ms: f64,
+    ) -> String {
         match self.turn.drag {
-            Some(drag) => (drag.height_update)(self, serial, height, now_ms),
+            Some(drag) => (drag.height_update)(self, serial, height, now_ms, at_ms),
             None => self.hold_refusal(super::transform_drag::UNLINKED),
         }
     }
@@ -172,16 +180,20 @@ impl<D: DataSource> Host<D> {
         serial: u64,
         height: f64,
         now_ms: f64,
+        at_ms: f64,
     ) -> String {
         let Some(drag) = self.live_height_drag(serial).filter(|drag| !drag.released) else {
             return self.finish(Batch::new(), None);
         };
-        let out = self.hold_update(serial, Value::scalar(height), now_ms);
+        let out = self.hold_update_at(serial, Value::scalar(height), now_ms, at_ms);
         // An accepted sample: record the constrained height shown, which the
         // release velocity follows (LLP 1057.001 §3).
-        if self.engine.now() == now_ms / 1000. {
+        let held = self
+            .engine
+            .value(motion_node(drag.target), Property::Height);
+        if self.engine.now() == now_ms / 1000. && held == Some(Value::scalar(height)) {
             if let Some(shown) = self.height_catch(drag.target) {
-                self.engine.track_hold(drag.token, now_ms / 1000., shown);
+                self.engine.track_hold(drag.token, at_ms / 1000., shown);
             }
         }
         out
@@ -199,14 +211,21 @@ impl<D: DataSource> Host<D> {
         if self.turn.drag.is_none() {
             return self.hold_refusal(super::transform_drag::UNLINKED);
         }
-        self.dispatch_height(serial, height, Some(velocity), now_ms)
+        self.dispatch_height(serial, height, Some(velocity), now_ms, now_ms)
     }
 
     /// The same, at the velocity the engine measured over the heights shown
-    /// (LLP 1057.001 §3): what the native bridge sends.
-    pub fn dispatch_height_measured(&mut self, serial: u64, height: f64, now_ms: f64) -> String {
+    /// (LLP 1057.001 §3) at `at_ms`, the release's input time: what the
+    /// native bridge sends.
+    pub fn dispatch_height_measured(
+        &mut self,
+        serial: u64,
+        height: f64,
+        now_ms: f64,
+        at_ms: f64,
+    ) -> String {
         match self.turn.drag {
-            Some(drag) => (drag.height_release)(self, serial, height, now_ms),
+            Some(drag) => (drag.height_release)(self, serial, height, now_ms, at_ms),
             None => self.hold_refusal(super::transform_drag::UNLINKED),
         }
     }
@@ -217,8 +236,9 @@ impl<D: DataSource> Host<D> {
         serial: u64,
         height: f64,
         now_ms: f64,
+        at_ms: f64,
     ) -> String {
-        self.dispatch_height(serial, height, None, now_ms)
+        self.dispatch_height(serial, height, None, now_ms, at_ms)
     }
 
     fn dispatch_height(
@@ -227,6 +247,7 @@ impl<D: DataSource> Host<D> {
         height: f64,
         velocity: Option<f64>,
         now_ms: f64,
+        at_ms: f64,
     ) -> String {
         let Some(drag) = self.live_height_drag(serial).filter(|drag| !drag.released) else {
             return self.finish(Batch::new(), None);
@@ -237,7 +258,7 @@ impl<D: DataSource> Host<D> {
         {
             return self.hold_refusal("invalid height release coordinates");
         }
-        if !now_ms.is_finite() {
+        if !now_ms.is_finite() || !at_ms.is_finite() {
             return self.hold_refusal("height drag: NonFinite");
         }
         if now_ms / 1000. < self.engine.now() {
@@ -265,10 +286,12 @@ impl<D: DataSource> Host<D> {
         }
         // Do not dispatch after a rejected clock/sample or failed layout.
         // Compose the final sample and action in one native batch.
-        if let Err(error) =
-            self.engine
-                .update_hold(drag.token, now_ms / 1000., Value::scalar(height))
-        {
+        if let Err(error) = self.engine.update_hold_at(
+            drag.token,
+            now_ms / 1000.,
+            at_ms / 1000.,
+            Value::scalar(height),
+        ) {
             return self.hold_refusal(&format!("height drag: {error:?}"));
         }
         self.now_ms = now_ms;
@@ -281,10 +304,10 @@ impl<D: DataSource> Host<D> {
         };
         // The shown (constrained) height is what the release velocity follows.
         self.engine
-            .track_hold(drag.token, now_ms / 1000., Value::scalar(height));
+            .track_hold(drag.token, at_ms / 1000., Value::scalar(height));
         let velocity = velocity.unwrap_or_else(|| {
             self.engine
-                .hold_velocity(drag.token, now_ms / 1000.)
+                .hold_velocity(drag.token, at_ms / 1000.)
                 .map_or(0., |v| v.x)
         });
         if let Some(active) = self.height_drag.as_mut() {
@@ -407,7 +430,7 @@ mod tests {
             .and_then(|t| t.split('"').next())
             .and_then(|t| t.parse().ok())
             .unwrap_or_else(|| panic!("{start}"));
-        h.height_drag_update(serial, 180., 5005.);
+        h.height_drag_update(serial, 180., 5005., 5005.);
         let batch = h.dispatch_height_held(serial, 160., 0., 5010.);
         assert!(batch.contains("\"error\":null"), "{batch}");
         let slot = |h: &Host<Empty>, name: &str| match h.runner.slot(name) {

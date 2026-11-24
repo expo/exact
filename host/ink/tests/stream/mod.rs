@@ -9,7 +9,8 @@
 //! the adapter made it: a `u8` tag, a `u32` byte length, then its arguments. Integers are
 //! little-endian `u32`s, bytes follow a `u32` count, and an instance is its 192 bytes. A
 //! texture is named by the order of its creation, from 1; 0 is none. Queries are not
-//! recorded.
+//! recorded. Retirements of textures (not targets) with no call between them are in
+//! name order, so that two recordings of a scene are the same bytes.
 //!
 //! `host/painted/src/ink/stream_tests.rs` records the streams; `tests/replay.rs` replays them.
 

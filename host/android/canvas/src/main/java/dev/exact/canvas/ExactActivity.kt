@@ -31,8 +31,17 @@ open class ExactActivity : Activity() {
     private var natives: Natives? = null
 
     /** A signed update activated ([Requests]): the open videos and pages are opened from its assets again, and its
-     * boot is good once the view draws it. */
-    internal fun assetsMoved() { natives?.reroot(); if (::view.isInitialized) view.blessNext() }
+     * boot is good once the view draws it; a control's press waits for that frame too. */
+    internal fun assetsMoved() {
+        natives?.reroot()
+        if (!::view.isInitialized) return
+        drawn = false
+        // A frame of the previous generation, already queued, no longer counts.
+        stops++
+        view.blessNext()
+        val start = stops
+        view.viewTreeObserver.registerFrameCommitCallback { if (start == stops) { drawn = true; Controls.ready(this) } }
+    }
     private var nativeState: Bundle? = null
     private var nativeStarted = false
     private var nativeResumed = false
@@ -145,8 +154,9 @@ open class ExactActivity : Activity() {
         else if (launching && arrived) {
             // The booted host read no launch location from the environment: it is given this intent's.
             if (again) Shares.request(this, intent)?.let { Exact.launchShare(it) } ?: launchUrl()?.let { Exact.launch(it) }
-            // A notification's tap that started the app: held until the first frame ([Activations]).
-            Activations.receive(this, intent)
+            // A notification's tap that started the app: held until the first frame ([Activations]); a control's
+            // press until the app is ready in front ([Controls]).
+            if (!Controls.receive(this, intent)) Activations.receive(this, intent)
         }
     }
 
@@ -165,6 +175,7 @@ open class ExactActivity : Activity() {
 
     private fun received(intent: android.content.Intent) {
         if (Auth.receive(this, intent)) return
+        if (Controls.receive(this, intent)) return
         if (Activations.receive(this, intent)) return
         if (Shares.isShare(intent)) Shares.request(this, intent)?.let { Exact.share(it) }
         else (intent.data?.toString() ?: pushed(intent))?.let { Exact.open(it) }
@@ -368,7 +379,9 @@ open class ExactActivity : Activity() {
             booting = true
         } else { device.tell(); Native.colors(colors); Native.window(size.first, size.second, density, edges) }
         if (!driven) { driven = true; driver = drive { dy -> view.scrollBy(dy) } }
+        val start = stops
         reader = ExactView(this, live) {
+            if (start == stops) { drawn = true; Controls.ready(this) }
             if (!ready) {
                 ready = true
                 // `start=N` for an app whose rows have one pitch: scrolled there before the driver starts.
@@ -582,6 +595,13 @@ open class ExactActivity : Activity() {
 
     /** The activity was stopped since its reader was made: Android discarded what that reader kept. */
     private var stopped = false
+    /** This start's reader has drawn a frame; one of an earlier start or generation, which [stops] tells apart, does
+     * not count. */
+    private var drawn = false
+    private var stops = 0
+
+    /** In front, with a frame drawn since it last started: where a control's press that opened the app runs. */
+    internal fun resumedAndDrawn() = nativeResumed && drawn
 
     /** The host does its frame work only while the activity is started (LLP 1115.001 D15.2), and a start after a
      * stop makes the reader again ([read]). */
@@ -621,10 +641,15 @@ open class ExactActivity : Activity() {
         super.onWindowFocusChanged(hasFocus)
         if (!hasFocus && reads()) pads.background()
         if (hasFocus) Activities.resumed()
+        // Over the keyguard's dismissal: focus comes once the phone is unlocked.
+        if (hasFocus) Controls.ready(this)
     }
 
     override fun onStop() {
         stopped = true
+        drawn = false
+        stops++
+        Controls.stopped(this)
         Exact.owner?.windowFrames?.detach(window)
         nativeStarted = false
         requests.foreground(false)
@@ -671,6 +696,7 @@ open class ExactActivity : Activity() {
         requests.resumed()
         Extensions.resumed()
         Activities.resumed()
+        Controls.ready(this)
     }
 
     override fun onPause() {

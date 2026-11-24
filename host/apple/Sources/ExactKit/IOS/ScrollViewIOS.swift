@@ -31,6 +31,13 @@ package final class PlainView: UIView {
     }
 }
 
+extension UIEdgeInsets {
+    /// Each side with `other`'s added.
+    func adding(_ other: UIEdgeInsets) -> UIEdgeInsets {
+        UIEdgeInsets(top: top + other.top, left: left + other.left, bottom: bottom + other.bottom, right: right + other.right)
+    }
+}
+
 /// A scroll container — the viewport over the document, and a node whose
 /// effective `overflow` scrolls. The platform pans it (LLP 1002 D4: scroll
 /// always wins; UIKit does not chain a pan out of a nested scroll view at
@@ -47,6 +54,52 @@ package class ScrollView: UIScrollView {
         super.layoutSubviews()
         syncIndicators()
         keepPlatformViewsOver()
+        holdPaddingClip()
+    }
+    /// Its node's padding edge, in the node's coordinates, while a border puts that edge inside the scroll view
+    /// (`NodeView.syncScrollCorner`), `inset` from its sides by the border's widths. It masks the layer, whose
+    /// coordinates scroll with the bounds, so each layout, which UIKit runs as the bounds move, puts it back over
+    /// the node's box, in that layout's own transaction and with no animation of its own. The mask cuts everything
+    /// in the layer, UIKit's scroll indicators too, which lie at the scroll view's edge: they keep inside it by the
+    /// same widths (`paddingInset`), between the border and the padding edge, where
+    /// [CSS has a scrollbar](https://drafts.csswg.org/css-overflow-3/#scrollbar-gutter-property).
+    private var paddingClip: CAShapeLayer?
+    func clip(toPaddingEdge edge: CGPath?, inset: UIEdgeInsets) {
+        guard let edge else {
+            if let clip = paddingClip, layer.mask === clip { layer.mask = nil }
+            paddingClip = nil
+            return paddingInset = .zero
+        }
+        let clip = paddingClip ?? CAShapeLayer()
+        if paddingClip == nil {
+            clip.anchorPoint = .zero
+            clip.fillColor = CGColor(gray: 1, alpha: 1)
+            // It is where the scroll is at once: a layer no view owns would ease to each new position.
+            clip.actions = ["position": NSNull(), "path": NSNull()]
+            paddingClip = clip
+        }
+        if clip.path != edge { clip.path = edge }
+        if layer.mask !== clip { layer.mask = clip }
+        holdPaddingClip()
+        paddingInset = inset
+    }
+    private func holdPaddingClip() {
+        guard let clip = paddingClip, layer.mask === clip else { return }
+        let origin = CGPoint(x: bounds.minX - frame.minX, y: bounds.minY - frame.minY)
+        if clip.position != origin { clip.position = origin }
+    }
+    /// What the padding edge's mask adds to both indicators' insets on each side: the border's widths while it
+    /// masks, else none. It moves as a difference, as the keyboard's and a page band's terms do
+    /// (`KeyboardAvoidanceIOS.swift`, `PageEdgesIOS.swift`), so each leaves the others' in place and the insets are
+    /// as they were once the border goes. D14's writer, which writes them whole, adds it (`ScrollInsetsIOS.write`).
+    var paddingInset = UIEdgeInsets.zero {
+        didSet {
+            guard paddingInset != oldValue else { return }
+            let moved = UIEdgeInsets(top: paddingInset.top - oldValue.top, left: paddingInset.left - oldValue.left,
+                                     bottom: paddingInset.bottom - oldValue.bottom, right: paddingInset.right - oldValue.right)
+            verticalScrollIndicatorInsets = verticalScrollIndicatorInsets.adding(moved)
+            horizontalScrollIndicatorInsets = horizontalScrollIndicatorInsets.adding(moved)
+        }
     }
     /// UIKit exposes an indicator and its thumb to accessibility even when
     /// the axis has no range. Keep the requested visibility across resizes

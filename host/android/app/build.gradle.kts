@@ -22,7 +22,10 @@ val widgets = providers.gradleProperty("widgets").orNull == "1"
 
 val app = providers.gradleProperty("app").get()
 val appDir = providers.gradleProperty("appDir").orNull?.let { file(it) } ?: rootDir.resolve("../../apps/$app")
-val manifest = JsonSlurper().parse(appDir.resolve("app.json")) as Map<*, *>
+// A game's manifest is the one its shells were generated with (`-PappManifest`, its `.shells/app.json`), which has
+// its `app` identity; the rest of the app (`modules/android`, `.exact/`) is in its directory.
+val manifestFile = providers.gradleProperty("appManifest").orNull?.let { file(it) } ?: appDir.resolve("app.json")
+val manifest = JsonSlurper().parse(manifestFile) as Map<*, *>
 val androidHost = (manifest["host"] as Map<*, *>?)?.get("android") as Map<*, *>?
 val packageId = providers.gradleProperty("applicationId").get()
 val backgroundPlayback = video && manifest["audio_session"] == "playback"
@@ -123,6 +126,79 @@ android {
     // app's activity, scripts/share-target.mjs, LLP 1133.024 D5), merged into the shell's manifest from the release source set's: an app that grants no device asks
     // for none, and one that uses no such package runs nothing beyond the shell's activity.
     val fragment = providers.gradleProperty("manifestFragment").orNull?.let { file(it).readText() }?.takeIf { it.isNotBlank() }
+    // The kernel's symbol vocabulary and Material shapes (LLP 1116.007 D3.1, LLP 1115.001 D14), including every role
+    // for computed dynamic/pinned items: a shortcut's and a control's icon. The lookup also keeps static and runtime
+    // resolution the same; the shortcuts below write a drawable for each role.
+    val schema = JsonSlurper().parse(rootDir.resolve("../../kernel/tables/schema.json")) as Map<*, *>
+    val symbols = (schema["symbols"] as List<*>).map { it as List<*> }
+    val glyphs = (schema["symbolGlyphs"] as List<*>).map { it as List<*> }.filter { it[1] == "material" }
+    val symbolKey = { name: String -> if (name.startsWith("sf/")) name else name.replace('.', '-').replace('_', '-') }
+    val symbolNames = linkedMapOf<String, String>()
+    symbols.forEach { symbolNames[it[0] as String] = it[0] as String }
+    symbols.forEach { row ->
+        val role = row[0] as String
+        val apple = row[1] as String
+        if (apple.isNotEmpty()) {
+            symbolNames.putIfAbsent(symbolKey(apple), role)
+            symbolNames.putIfAbsent("sf/$apple", role)
+        }
+    }
+    (schema["symbolAliases"] as List<*>).forEach {
+        val row = it as List<*>
+        symbolNames[row[0] as String] = row[1] as String
+    }
+    val iconName = { role: String -> "exact_shortcut_symbol_${role.replace('-', '_')}" }
+    // The app's controls (LLP 1126.004 D5): per row the bake offers here (`compat.inputs.controls`,
+    // bake/src/controls.rs) a Quick Settings tile, a `ControlTile` subclass named by the row's kind in UTF-8 hex so a
+    // placed tile keeps its row when the rows are reordered, with the row's title and its symbol's Material glyph (the
+    // app's icon without one). The services join the manifest below.
+    val controlServices = StringBuilder()
+    run {
+        val compat = out.resolve("rust/bake/compat.json").takeIf { it.isFile }?.let { JsonSlurper().parse(it) as Map<*, *> }
+        val rows = ((compat?.get("inputs") as Map<*, *>?)?.get("controls") as List<*>?).orEmpty().map { it as Map<*, *> }
+            .filter { ((it["placement"] as Map<*, *>)["offered"] as List<*>?).orEmpty().isNotEmpty() }
+        val dir = layout.buildDirectory.dir("controls").get().asFile
+        dir.deleteRecursively()
+        if (rows.isEmpty()) return@run
+        val kotlin = dir.resolve("java/dev/exact/app").apply { mkdirs() }
+        val values = dir.resolve("res/values").apply { mkdirs() }
+        val attr = { v: String -> v.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;") }
+        // A string resource's own escapes first, so a quotation mark stays one, then the XML's.
+        val text = { v: String ->
+            v.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "\\'").replace(Regex("^([@?])"), "\\\\$1")
+                .replace("&", "&amp;").replace("<", "&lt;")
+        }
+        val literal = { v: String? ->
+            v?.let { "\"" + it.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$").replace("\n", "\\n").replace("\r", "\\r") + "\"" } ?: "null"
+        }
+        val strings = StringBuilder()
+        val source = StringBuilder("package dev.exact.app\n")
+        for (row in rows) {
+            val control = row["control"] as Map<*, *>
+            val kind = control["kind"] as String
+            val name = "ExactControl_" + kind.toByteArray(Charsets.UTF_8).joinToString("") { "%02x".format(it) }
+            val intent = (((row["placement"] as Map<*, *>)["offered"] as List<*>)[0] as Map<*, *>)["intent"] as String
+            // A `.fill` name without its own glyph takes its outline's. A tile with no icon at all may be left out of the
+            // Quick Settings editor, so one without a glyph takes the app's icon, or the platform's default one.
+            val symbol = control["symbol"] as String
+            val role = symbolNames[symbolKey(symbol)] ?: symbolNames[symbolKey(symbol.removeSuffix(".fill"))]
+            val appIcon = providers.gradleProperty("appIcon").orNull ?: "@android:drawable/sym_def_app_icon"
+            val icon = "\n            android:icon=\"${role?.let { "@drawable/${iconName(it)}" } ?: appIcon}\""
+            strings.append("    <string name=\"${name.lowercase()}_title\">${text(control["title"] as String)}</string>\n")
+            source.append("\n/** The `$kind` control's tile. */\nclass $name : dev.exact.canvas.ControlTile(${literal(kind)}, ${literal(row["digest"] as String)}, " +
+                "${literal(intent)}, ${literal(control["url"] as String?)}, ${literal((control["authentication"] as String?) ?: "required")}, ${literal(control["description"] as String?)})\n")
+            controlServices.append("        <service android:name=\"dev.exact.app.$name\" android:exported=\"true\"\n" +
+                "            android:label=\"@string/${name.lowercase()}_title\"$icon\n" +
+                "            android:permission=\"android.permission.BIND_QUICK_SETTINGS_TILE\">\n" +
+                "            <intent-filter><action android:name=\"android.service.quicksettings.action.QS_TILE\" /></intent-filter>\n" +
+                "            <meta-data android:name=\"android.service.quicksettings.TOGGLEABLE_TILE\" android:value=\"false\" />\n" +
+                "        </service>\n")
+        }
+        values.resolve("exact_controls.xml").writeText("<resources>\n$strings</resources>\n")
+        kotlin.resolve("Controls.kt").writeText(source.toString())
+        sourceSets["main"].res.directories.add(dir.resolve("res").path)
+        sourceSets["main"].kotlin.directories.add(dir.resolve("java").path)
+    }
     // The app's widgets (LLP 1126.003 D9): per kind a provider subclass (Android names a provider by its class), its
     // `appwidget-provider` XML with D4's sizes, its initial and preview layout, and its receiver in the `:widgets`
     // process; and the rows `:widgets` reads (res/raw/exact_widgets.json). The receivers join the manifest below.
@@ -196,7 +272,7 @@ android {
         "android.permission.WAKE_LOCK",
     ) else emptyList()
     (linePermissions + playbackPermissions).distinct()
-        .takeIf { it.isNotEmpty() || fragment != null || lineFeatures.isNotEmpty() || widgetReceivers.isNotEmpty() }?.let { names ->
+        .takeIf { it.isNotEmpty() || fragment != null || lineFeatures.isNotEmpty() || widgetReceivers.isNotEmpty() || controlServices.isNotEmpty() }?.let { names ->
         val permissions = layout.buildDirectory.file("permissions/AndroidManifest.xml").get().asFile
         permissions.parentFile.mkdirs()
         // CAMERA implies the back camera and autofocus as required features, which would filter the app from a
@@ -249,7 +325,7 @@ android {
                 require(parts.size == 1 || (parts.size == 2 && parts[1] == "required=false")) { "Invalid feature: $it" }
                 "    <uses-feature android:name=\"${parts[0]}\" android:required=\"${parts.size == 1}\" />\n"
             } +
-            manifestChildren(fragment, services.entries.joinToString("") { service(it.key, it.value) } + playbackService + widgetReceivers) + "</manifest>\n")
+            manifestChildren(fragment, services.entries.joinToString("") { service(it.key, it.value) } + playbackService + widgetReceivers + controlServices) + "</manifest>\n")
         sourceSets["release"].manifest.srcFile(permissions)
         if (backgroundPlayback) {
             val debug = permissions.parentFile.resolve("debug/AndroidManifest.xml")
@@ -268,27 +344,6 @@ android {
         val attr = { v: String -> v.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;") }
         // A string resource's own escapes: a backslash, an apostrophe, and `@` or `?` leading.
         val text = { v: String -> attr(v).replace("\\", "\\\\").replace("'", "\\'").replace(Regex("^([@?])"), "\\\\$1") }
-        // The kernel's symbol vocabulary and Material shapes (LLP 1116.007 D3.1, LLP 1115.001 D14), including every
-        // role for computed dynamic/pinned items. The lookup also keeps static and runtime resolution the same.
-        val schema = JsonSlurper().parse(rootDir.resolve("../../kernel/tables/schema.json")) as Map<*, *>
-        val symbols = (schema["symbols"] as List<*>).map { it as List<*> }
-        val glyphs = (schema["symbolGlyphs"] as List<*>).map { it as List<*> }.filter { it[1] == "material" }
-        val symbolKey = { name: String -> if (name.startsWith("sf/")) name else name.replace('.', '-').replace('_', '-') }
-        val symbolNames = linkedMapOf<String, String>()
-        symbols.forEach { symbolNames[it[0] as String] = it[0] as String }
-        symbols.forEach { row ->
-            val role = row[0] as String
-            val apple = row[1] as String
-            if (apple.isNotEmpty()) {
-                symbolNames.putIfAbsent(symbolKey(apple), role)
-                symbolNames.putIfAbsent("sf/$apple", role)
-            }
-        }
-        (schema["symbolAliases"] as List<*>).forEach {
-            val row = it as List<*>
-            symbolNames[row[0] as String] = row[1] as String
-        }
-        val iconName = { role: String -> "exact_shortcut_symbol_${role.replace('-', '_')}" }
         res.deleteRecursively()
         res.resolve("drawable").mkdirs()
         symbols.forEach { row ->

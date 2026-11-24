@@ -68,7 +68,14 @@ impl<D: DataSource> Presenter<D> {
         }
         self.host.kernel().node(view).map_or(0., |node| {
             self.brush
-                .scroll_bounds(self.host.kernel(), self.host.content_region(), &node, None)
+                .scroll_bounds(
+                    self.host.kernel(),
+                    self.host.content_region(),
+                    &node,
+                    None,
+                    &|id| self.host.presented(id),
+                    self.host.scaled_presented(),
+                )
                 .max
                 .1
         })
@@ -218,6 +225,8 @@ impl<D: DataSource> Presenter<D> {
                     self.host.content_region(),
                     &node,
                     None,
+                    &|id| self.host.presented(id),
+                    self.host.scaled_presented(),
                 );
                 (node.key, bounds.max.1)
             };

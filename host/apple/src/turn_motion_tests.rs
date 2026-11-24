@@ -192,8 +192,8 @@ fn drags_link_with_drag_and_an_archive_without_refuses_their_entry_points() {
         let begun = host.height_drag_begin(header, sheet, 5_000.0);
         let entries = [
             host.transform_motion(&[0; 120]).finish(),
-            host.height_drag_update(1, 120.0, 5_016.0),
-            host.dispatch_height_measured(1, 120.0, 5_032.0),
+            host.height_drag_update(1, 120.0, 5_016.0, 5_016.0),
+            host.dispatch_height_measured(1, 120.0, 5_032.0, 5_032.0),
             host.dispatch_height_held(1, 120.0, 0.0, 5_048.0),
         ];
         (host.height_handles.len(), begun, entries)

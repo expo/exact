@@ -1,4 +1,7 @@
 import XCTest
+#if os(macOS)
+import AppKit
+#endif
 @testable import ExactKit
 @testable import ExactDrag
 
@@ -10,6 +13,20 @@ import XCTest
 /// answer, not the registry's refusal.
 final class TransformMotionOwnerTests: XCTestCase {
     override class func setUp() { super.setUp(); ExactDrag.install() } // LLP 1047.001 D4
+    func testPinchModelKeepsUniformScalesAndRefusesAPerAxisTarget() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let p = Presenter()
+        p.apply(wireBatch([["op": "create", "id": 1, "kind": "view"], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 100, "h": 100],
+            ["op": "present", "id": 1, "property": "scale", "x": 1.5, "y": 1.5]]))
+        let node = try XCTUnwrap(p.views[1])
+        XCTAssertEqual(node.transformDragModel()?.scale, 1.5)
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 1.5, "y": 0.5]]))
+        XCTAssertNil(node.transformDragModel())
+    }
+
     func testAPacketReachesItsRuntimeFromMain() throws {
         let runtime = Runtime()
         defer { runtime.destroy() }

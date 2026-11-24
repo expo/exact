@@ -4,13 +4,14 @@
 // (host/web/storage-environment.js `refuseCodeFromStrings`). A guarded probe (zod's) takes its fallback; what a
 // function needs of `Function` is the page's. A function's own `constructor` is still the page's (LLP 1027 D5).
 import { expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runtimeSource } from './tests/stand-ins.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const realHelpers = `export { ownWithout, redirectOf, signalDeadline, socketProtocols, within } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)}; `;
+const realHelpers = `export { fetchTarget, ownWithout, redirectOf, signalDeadline, socketProtocols, within } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)}; `;
 
 const STRING_CODE = `// A copy of the globals written back, as a module may: the module's own, never the page's.
 for (const name of ['Function', 'eval', 'Date']) globalThis[name] = globalThis[name];
@@ -50,7 +51,7 @@ const expectRefused = ({ thrown, kept, constructor, prototype, evalNew }) => {
 // gives a module those bindings, every spelling included, host/web-js/build.test.mjs checks on a built page.
 test('the JS target\'s Function and eval throw as on Hermes, and Function is still a function', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-string-code-'));
-  cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
+  writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js'));
   writeFileSync(resolve(dir, 'admission.js'), '' + realHelpers + 'export const fetchWith = () => Promise.reject(new Error("no fetch here")); export class FetchError extends Error {} export const coversPath = () => false; export const overlaying = { on: false }; export const inOverlay = api => new Error(api);\n');
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = null;\n');
   const page = globalThis.Function, pageDate = globalThis.Date;
@@ -71,7 +72,7 @@ test('the JS target\'s Function and eval throw as on Hermes, and Function is sti
 // `fetch`, …) are its own properties, with an object's semantics, and none of it reaches the page's.
 test("the JS target's module global keeps its own names as properties, never the page's", async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-global-'));
-  cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
+  writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js'));
   writeFileSync(resolve(dir, 'admission.js'), '' + realHelpers + 'export const fetchWith = () => Promise.reject(new Error("no fetch here")); export class FetchError extends Error {} export const coversPath = () => false; export const overlaying = { on: false }; export const inOverlay = api => new Error(api);\n');
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = null;\n');
   const page = { Function: globalThis.Function, Date: globalThis.Date, Math: globalThis.Math, eval: globalThis.eval };

@@ -472,7 +472,10 @@ export async function largestText(s, screen) {
       for (const a of obs.advice ?? []) if (a.kind === 'menu') omit(a.id);
       const before = found.size;
       const compared = { ...obs, items: (obs.items ?? []).filter(it => !projected.has(it.id) && !projected.has(it.of)) };
-      for (const f of judge(compared, null, { host: web ? 'web' : 'ios' })) if (LARGE_KINDS.has(f.kind) && !accepts(ACCEPT, f, nodes) && !found.has(`${f.kind} ${f.id}`)) found.set(`${f.kind} ${f.id}`, f);
+      for (const f of judge(compared, null, { host: web ? 'web' : 'ios' })) {
+        const key = `${f.kind} ${f.id} ${f.detail?.axis ?? ''}`;
+        if (LARGE_KINDS.has(f.kind) && !accepts(ACCEPT, f, nodes) && !found.has(key)) found.set(key, f);
+      }
       // Each page as its findings were read, before it scrolls on, so each finding is seen, not reproduced by hand.
       if (found.size > before && largeShots) { const shot = resolve(largeShots.dir, `${largeShots.host}-largest-${++largeShots.n}.png`); if (await s.screenshot(shot).then(() => true, () => false)) shots.push(shot); }
       let moved = false;

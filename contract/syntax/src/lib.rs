@@ -153,7 +153,7 @@ pub const HOST_COMMANDS: &[&str] = &[
     "relaunch",
     "removeAllRanges",
     "selectText",
-    // A field's range, or a reader text's source range (issue #274), by id.
+    // A field's range, or a reader text's source range, by id.
     // `setSelectionRange("editor", 4, 4)`.
     "setSelectionRange",
     "setRangeText",

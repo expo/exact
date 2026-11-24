@@ -9,7 +9,8 @@
 //! what that hides. Its boxes are not hit: a ghost is the web's
 //! `pointer-events: none` popover.
 use super::shadow::ShadowPaint;
-use super::{PaintOffset, Painter, Rect4, Shape, Walk};
+use super::{PaintOffset, Painter, Presented, Rect4, Shape, Walk};
+use exact_kernel::Kernel;
 use exact_kernel::{NodeKey, NodeRef, NodeType, PropId, ViewId};
 use tiny_skia::Transform;
 
@@ -154,10 +155,9 @@ impl Painter {
             (at.0 - f64::from(rect.0), at.1 - f64::from(rect.1)),
         );
         walk.reveal = Some(node.id);
-        // Painted after the walk, out of its ancestors: the row's own scheme
-        // (LLP 1034 §8), else the app's.
+        // Painted after the walk, out of its ancestors, in their scheme.
         let previous = self.dark;
-        self.dark = node.color_scheme_dark().unwrap_or(previous);
+        self.dark = scheme_of(walk.scene.kernel, walk.scene.presented, node.id).unwrap_or(previous);
         self.node(walk, node.id, ts, page, None);
         self.dark = previous;
         walk.reveal = reveal;
@@ -166,4 +166,23 @@ impl Painter {
             self.backend.pop_opacity();
         }
     }
+}
+
+/// The scheme `id` paints in (LLP 1034 §8): the nearest presented one (a
+/// node's `color-scheme`, else a report for its view) through its logical
+/// parents, as the walk carries it, for what is painted out of its
+/// ancestors; `None` is the session's.
+pub(crate) fn scheme_of(
+    kernel: &Kernel,
+    presented: &dyn Fn(ViewId) -> Presented,
+    id: ViewId,
+) -> Option<bool> {
+    let mut at = Some(id);
+    while let Some(id) = at {
+        if let Some(dark) = presented(id).dark {
+            return Some(dark);
+        }
+        at = kernel.node(id)?.parent;
+    }
+    None
 }

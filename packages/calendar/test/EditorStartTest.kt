@@ -2,6 +2,7 @@ package exact.calendar
 
 import android.app.Activity
 import android.content.Intent
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ExtensionInvokeTest.Host
 import dev.exact.canvas.Extensions
@@ -48,11 +49,11 @@ class EditorStartTest {
 
     @Test fun noCalendarAppIsNotFoundErrorAndTheNextCallShowsTheEditor() {
         shown(NoCalendarApp::class.java)
-        store.later("showEventEditor", event) { answers += it }
+        store.later("showEventEditor", event, Cause("app")) { answers += it }
         assertEquals("NotFoundError", answers.single().getString("error"))
 
         val activity = shown(Activity::class.java)
-        store.later("showEventEditor", event) { answers += it }
+        store.later("showEventEditor", event, Cause("app")) { answers += it }
         val made = shadowOf(activity).nextStartedActivityForResult
         assertEquals(Intent.ACTION_INSERT, made.intent.action)
         Extensions.activityResult(made.requestCode, Activity.RESULT_CANCELED, null)

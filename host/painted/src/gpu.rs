@@ -1137,7 +1137,7 @@ impl Backend for Gpu {
         ts: Transform,
         pivot: (f32, f32),
         _reference: (f32, f32),
-        base: [f32; 7],
+        base: [f32; 8],
     ) -> bool {
         self.record_layer(key, ts, pivot, base);
         true

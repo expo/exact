@@ -119,7 +119,9 @@ impl<D: DataSource> Presenter<D> {
                     );
                 }
                 self.brush.window_canvas = Some(view);
-                let above = self.frame();
+                let above = self
+                    .frame_for(crate::paint::FrameTarget::Window)
+                    .expect("CPU window overlay has pixels");
                 self.brush.window_canvas = None;
                 if let Some(below) = self
                     .brush
@@ -180,7 +182,9 @@ impl<D: DataSource> Presenter<D> {
         if self.surfaces.window_artifact.is_none() {
             return Ok(self.frame_for(crate::paint::FrameTarget::Window));
         }
-        let frame = self.frame();
+        let frame = self
+            .frame_for(crate::paint::FrameTarget::Window)
+            .expect("CPU window frame has pixels");
         if let Some(abi) = self
             .surfaces
             .window_artifact

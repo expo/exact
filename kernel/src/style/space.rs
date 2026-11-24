@@ -6,6 +6,25 @@ use super::{parse_pixel_length, Dimension, StyleId, StyleValue, StyleValueError,
 
 impl StyleValue<'_> {
     pub(crate) fn vec2(&self, style: StyleId) -> Result<Vec2, StyleValueError> {
+        if style == StyleId::Scale {
+            let value = match self {
+                StyleValue::Number(n) => Some(exact_motion::Value::new(*n, *n)),
+                StyleValue::Percent(n) => Some(exact_motion::Value::new(*n / 100.0, *n / 100.0)),
+                StyleValue::Vec2(x, y) => Some(exact_motion::Value::new(*x as f64, *y as f64)),
+                StyleValue::Text(t) => exact_motion::property::scale(t),
+                _ => None,
+            };
+            return value
+                .filter(|v| v.is_finite() && (v.x as f32).is_finite() && (v.y as f32).is_finite())
+                .map(|v| Vec2 {
+                    x: v.x as f32,
+                    y: v.y as f32,
+                })
+                .ok_or(StyleValueError::WrongKind {
+                    style,
+                    expected: "one or two scale factors (numbers or percentages), x then y",
+                });
+        }
         if matches!(
             style,
             StyleId::PressTranslate | StyleId::PressTranslatePercent

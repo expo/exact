@@ -492,5 +492,49 @@ fn a_picture_takes_the_last_animation_of_each_property_over_its_identity() {
     // A quarter of the width and half of 10, from 50 % and 10 points.
     assert_eq!(p.translate, (50.0, 5.0));
     // Opacity is the later animation's, from 1 towards 0.5; the scale rests.
-    assert_eq!((p.opacity, p.scale, p.rotate), (0.75, 1.0, 45.0));
+    assert_eq!((p.opacity, p.scale, p.rotate), (0.75, (1.0, 1.0), 45.0));
+}
+
+#[test]
+fn scale_interpolates_each_axis_in_keyframes_transitions_and_springs() {
+    use crate::{Change, Engine, Transitions};
+    let a = anim("flip 1s linear both", "from{scale:1 1}to{scale:3 0}");
+    assert_eq!(
+        Animations(vec![a.clone()]).picture(0.5, (100., 100.)).scale,
+        (2., 0.5)
+    );
+    assert_eq!(Property::Scale.components(), 2);
+    assert_eq!(Property::Scale.identity(), Some(Value::new(1., 1.)));
+    assert_eq!(
+        a.sample(0.5, Property::Scale, Value::new(1., 1.)),
+        Some(Value::new(2., 0.5))
+    );
+    let change = |value| Change {
+        node: 1,
+        property: Property::Scale,
+        value,
+        velocity: None,
+    };
+    for timing in ["scale 1s linear", "scale -exact-spring(180, 12, 1)"] {
+        let mut engine = Engine::new();
+        engine.observe(change(Value::new(1., 1.))).unwrap();
+        engine
+            .set_transitions(1, Transitions::parse(timing).unwrap())
+            .unwrap();
+        engine.observe(change(Value::new(3., 0.))).unwrap();
+        engine.advance(0.5).unwrap();
+        let v = engine.value(1, Property::Scale).unwrap();
+        assert!((v.x + 2. * v.y - 3.).abs() < 1e-9, "{timing}: {v:?}");
+        assert_ne!(v.y, 1.);
+        if timing.contains("spring") {
+            let frames = engine.spring_frames(1, Property::Scale).unwrap();
+            assert_eq!(frames.values.last(), Some(&Value::new(3., 0.)));
+            assert!(frames
+                .values
+                .iter()
+                .all(|v| (v.x + 2. * v.y - 3.).abs() < 1e-9));
+        } else {
+            assert_eq!(v, Value::new(2., 0.5));
+        }
+    }
 }

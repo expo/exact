@@ -153,7 +153,7 @@ export function install(exact, { passive = false } = {}) {
     // A determinate progress's `value` and `max` as written (LLP 1116 D8): the DOM's `value` is a number.
     if (el.tagName === 'PROGRESS') { for (const k of ['value', 'max']) if (el.hasAttribute(k)) props[k] = el.getAttribute(k); }
     else if ('value' in el && el.tagName !== 'BUTTON' && (!(el.tagName === 'OPTION' || el.type === 'checkbox' || el.type === 'radio') || el.hasAttribute('value'))) props.value = el.value;
-    // A password field's value is never agent output (#134): a fixed mark, whatever its length, and its `type` as the runner's tree gives it.
+    // A password field's value is never agent output: a fixed mark, whatever its length, and its `type` as the runner's tree gives it.
     if (el.tagName === 'INPUT' && el.type === 'password') { props.type = 'password'; if (props.value) props.value = '•••'; }
     // A checkbox's or radio's model value, as the runner's tree gives its `checked` row.
     if (el.$checked !== undefined) props.checked = el.$checked;

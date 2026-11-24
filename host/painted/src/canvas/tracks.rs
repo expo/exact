@@ -51,7 +51,7 @@ impl Tracks {
                 let base = basis.base;
                 let mut at = crate::paint::Presented::IDENTITY;
                 at.translate = (base[0], base[1]);
-                at.scale = base[2];
+                at.scale = (base[2], base[7]);
                 at.rotate = base[3];
                 at.opacity = base[4];
                 p.host().layer_tracks(key, &at, basis.reference).into()

@@ -187,7 +187,7 @@ final class HitOrderIOSTests: XCTestCase {
         XCTAssertTrue(hit(p, CGPoint(x: 360, y: 20)) === p.views[2], "the button around the native view")
     }
 
-    /// A button floating above a zero-height box (#721): a dock (4) of
+    /// A button floating above a zero-height box: a dock (4) of
     /// `pointer-events: none` boxes over the list, its zero-height box (5)
     /// holding a row (6) that overflows it upward, and in the row a capsule
     /// (7) whose clip leaves its shadow outside, so its children are in a

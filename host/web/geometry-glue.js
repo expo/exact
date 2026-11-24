@@ -8,28 +8,41 @@
 // `getBoundingClientRect`'s, through every transform and with every scroll
 // offset above it applied (LLP 1051.000 D1; the kernel's hosts compose the
 // same from their rows and the offsets their presenters note). `measure`
-// writes one inline `height` and restores it within the call, so no
-// rendering step sees it; it never goes through the host's `apply`, which
-// commits.
+// changes nothing the next rendering step sees: it takes motion off and
+// lays the node out at `height: auto` within the call, then puts both back.
 import { size } from './presence-glue.js';
 
 // Reply bits: answered, provisional.
 const ANSWERED = 1, PROVISIONAL = 2;
-// Animated properties that leave layout alone (keyframe keys, kebab-cased).
+// Animated properties that leave layout alone (keyframe keys, kebab-cased):
+// among them the paint that Contract's `keyframes` admit, the custom
+// properties Exact's own paint and press feedback animate (`css.rs`,
+// input-glue.js), and what its layout transition holds.
 const PAINT_ONLY = new Set(['transform', 'translate', 'scale', 'rotate', 'opacity', 'filter', 'backdrop-filter',
-  'color', 'background-color', 'box-shadow', 'clip-path', 'visibility',
+  'color', 'background-color', 'background-image', 'box-shadow', 'clip-path', 'visibility',
+  'border-color', 'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
+  'fill', 'stroke', 'stroke-dashoffset', 'r', 'cx', 'cy', 'x', 'y', 'rx', 'ry',
+  '--exact-tint', '--exact-scale', '--exact-scale-y', '--exact-translate-x', '--exact-translate-y', '--exact-translate-z',
+  '--exact-press-paint', '--exact-press-opacity', '--exact-press-color', '--exact-press-background-color',
   'offset', 'easing', 'composite', 'computed-offset']);
 const kebab = name => name.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
 
-// An animation that moves layout, running or held: a CSS transition names its
-// property; a keyframe effect names every property it animates.
-function movesLayout(animation) {
-  if (animation.playState !== 'running' && animation.playState !== 'paused') return false;
-  const names = typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition
+// The properties an animation plays, running or held: a CSS transition names
+// its property; a keyframe effect names every property it animates.
+function played(animation) {
+  if (animation.playState !== 'running' && animation.playState !== 'paused') return [];
+  return typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition
     ? [animation.transitionProperty]
-    : (animation.effect?.getKeyframes?.() ?? []).flatMap(frame => Object.keys(frame));
-  return names.some(name => !PAINT_ONLY.has(kebab(name)));
+    : (animation.effect?.getKeyframes?.() ?? []).flatMap(frame => Object.keys(frame).map(kebab));
 }
+const movesLayout = animation => played(animation).some(name => !PAINT_ONLY.has(name));
+const cssAnimation = animation => typeof CSSAnimation !== 'undefined' && animation instanceof CSSAnimation;
+const cssTransition = animation => typeof CSSTransition !== 'undefined' && animation instanceof CSSTransition;
+
+// Boxes a person or a write has scrolled, whose offsets a read must put back:
+// those scrolled when this loads, and each a `scroll` event names after.
+const scrolled = new Set();
+addEventListener('scroll', e => { if (e.target instanceof Element) scrolled.add(e.target); }, true);
 
 // An inline declaration back as it was, or gone.
 function restore(style, [name, value, priority]) {
@@ -42,48 +55,90 @@ addEventListener('compositionstart', e => composing.add(e.target), true);
 addEventListener('compositionend', e => composing.delete(e.target), true);
 
 function createGeometry(root) {
+  for (const a of root.querySelectorAll('*')) if (a.scrollTop || a.scrollLeft) scrolled.add(a);
   // Where the viewer sees `el`'s border box: its client rect.
   const frame = el => {
     const r = el.getBoundingClientRect();
     return [r.x, r.y, r.width, r.height];
   };
 
-  // Its border box at `height: auto`, every other style kept (D4): refused
-  // while it or an ancestor animates layout, since an inline write would
-  // cancel a CSS transition and lose to a running WAAPI one. Every scroller
-  // the write can move is put back: an ancestor, which anchoring may shift,
-  // and the node itself or a scroller inside it, whose offset is clamped
-  // when it grows.
+  // Its border box at `height: auto`, every other style kept, with motion
+  // in flight removed, as the kernel measures with presented heights removed
+  // (D4). Each transition and script animation that may move layout has its
+  // keyframes taken off for the read and put back, keeping its clock and
+  // its events: a transition reads at its end, anything else at the style
+  // under it. (WebKit stops applying a transition whose effect's target is
+  // cleared and set again.) One that plays `display` stays: taken off, its
+  // subtree could be `display: none` for the read, which cancels every
+  // animation in it. A CSS animation's keyframes are the stylesheet's, and
+  // setting them would cut it off from the sheet, so one that moves layout
+  // in the box or above it refuses the read; Contract's keyframes move
+  // layout only through a font's weight, stretch or variation settings.
+  //
+  // The height is an inline `!important` write, which outranks a sheet's
+  // `!important` detent height, with the transition timing zero so it
+  // starts no transition and cancels none. A box whose own height is in a
+  // CSS transition takes a script animation instead, since a style change
+  // would cancel that transition. Every scroller the pass can move is put
+  // back: an ancestor of a changed box, which anchoring may shift, and every
+  // scrolled box, whose offset is clamped when it shrinks.
   const auto = el => {
-    for (let a = el; a && a !== document.documentElement; a = a.parentElement) {
-      if (a.getAnimations().some(movesLayout)) return null;
-    }
-    const style = el.style;
-    const saved = ['height', 'transition'].map(name => [name, style.getPropertyValue(name), style.getPropertyPriority(name)]);
-    const scrollers = [];
+    const above = [];
+    for (let a = el.parentElement; a; a = a.parentElement) above.push(a);
+    if ([...el.getAnimations({ subtree: true }), ...above.flatMap(a => a.getAnimations())].some(a => cssAnimation(a) && movesLayout(a))) return null;
+    const outside = [];
+    for (let a = root.parentElement; a; a = a.parentElement) outside.push(...a.getAnimations());
+    const off = [...root.getAnimations({ subtree: true }), ...outside].flatMap(a => {
+      const names = cssAnimation(a) ? [] : played(a);
+      return names.some(name => !PAINT_ONLY.has(name)) && !names.includes('display') ? [[a, a.effect, a.effect.getKeyframes(), names]] : [];
+    });
+    const scrollers = new Map();
     const hold = a => {
-      scrollers.push([a, a.scrollLeft, a.scrollTop, ['overflow-anchor', a.style.getPropertyValue('overflow-anchor'), a.style.getPropertyPriority('overflow-anchor')]]);
+      if (scrollers.has(a)) return;
+      scrollers.set(a, [a.scrollLeft, a.scrollTop, ['overflow-anchor', a.style.getPropertyValue('overflow-anchor'), a.style.getPropertyPriority('overflow-anchor')]]);
       a.style.setProperty('overflow-anchor', 'none', 'important');
     };
-    for (let a = el.parentElement; a; a = a.parentElement) {
-      if (a.scrollHeight > a.clientHeight || a.scrollWidth > a.clientWidth) hold(a);
+    for (const moved of new Set([el, ...off.map(([, effect]) => effect.target)])) {
+      if (moved.scrollTop || moved.scrollLeft) hold(moved);
+      for (let a = moved.parentElement; a; a = a.parentElement) {
+        if (a.scrollHeight > a.clientHeight || a.scrollWidth > a.clientWidth) hold(a);
+      }
     }
-    for (const a of [el, ...el.querySelectorAll('*')]) if (a.scrollTop || a.scrollLeft) hold(a);
-    // Transitions off first, so neither write starts one.
-    style.setProperty('transition', 'none', 'important');
-    style.setProperty('height', 'auto', 'important');
-    const measured = size(getComputedStyle(el));
-    restore(style, saved[0]);
-    void getComputedStyle(el).height; // the height is back before transitions are
-    restore(style, saved[1]);
-    // Offsets land at once, since `scroll-behavior: smooth` animates an
-    // assignment (CSSOM View §7), and only where one moved, so no snap
-    // restarts and no pan is cancelled.
-    for (const [a, left, top] of scrollers) {
-      if (a.scrollLeft !== left || a.scrollTop !== top) a.scrollTo({ left, top, behavior: 'instant' });
+    for (const a of scrolled) {
+      if (!a.isConnected) scrolled.delete(a);
+      else if (a.scrollTop || a.scrollLeft) hold(a);
     }
-    for (const [a, , , anchor] of scrollers) restore(a.style, anchor);
-    return measured;
+    const ownHeight = off.some(([a, effect, , names]) => cssTransition(a) && effect.target === el && !effect.pseudoElement
+      && names.some(name => name === 'height' || name === 'block-size'));
+    const style = el.style, names = ownHeight ? [] : ['height', 'transition-duration', 'transition-delay'];
+    const saved = names.map(name => [name, style.getPropertyValue(name), style.getPropertyPriority(name)]);
+    let what;
+    try {
+      for (const [, effect] of off) effect.setKeyframes([]);
+      if (ownHeight) what = el.animate([{ height: 'auto' }, { height: 'auto' }], Infinity);
+      else {
+        style.setProperty('transition-duration', '0s', 'important');
+        style.setProperty('transition-delay', '0s', 'important');
+        style.setProperty('height', 'auto', 'important');
+      }
+      return size(getComputedStyle(el));
+    } finally {
+      what?.cancel();
+      if (saved.length) {
+        restore(style, saved[0]);
+        void getComputedStyle(el).height; // the height is back before the timing is
+        restore(style, saved[1]);
+        restore(style, saved[2]);
+      }
+      for (const [, effect, frames] of off) effect.setKeyframes(frames);
+      // Offsets land at once, since `scroll-behavior: smooth` animates an
+      // assignment (CSSOM View §7), and only where one moved, so no snap
+      // restarts and no pan is cancelled.
+      for (const [a, [left, top]] of scrollers) {
+        if (a.scrollLeft !== left || a.scrollTop !== top) a.scrollTo({ left, top, behavior: 'instant' });
+      }
+      for (const [a, [, , anchor]] of scrollers) restore(a.style, anchor);
+    }
   };
 
   // An image or video inside that waits for its natural size, or fonts still

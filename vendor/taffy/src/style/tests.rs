@@ -38,6 +38,7 @@ fn defaults_match() {
         display: Default::default(),
         item_is_table: false,
         item_is_replaced: false,
+        item_is_form_control: false,
         box_sizing: Default::default(),
         #[cfg(feature = "float_layout")]
         float: Default::default(),

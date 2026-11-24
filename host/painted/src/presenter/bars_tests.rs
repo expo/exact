@@ -707,6 +707,8 @@ fn bar_colour(pictures: &Rc<RefCell<Vec<Pixmap>>>) -> [u8; 4] {
     [c.red(), c.green(), c.blue(), c.alpha()]
 }
 
+#[path = "bars_tests/scheme.rs"]
+mod scheme;
 #[path = "bars_tests/scroll.rs"]
 mod scroll;
 

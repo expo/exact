@@ -26,6 +26,7 @@ import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExactRegions
 import dev.exact.canvas.ExtensionContext
@@ -91,11 +92,13 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "geofencingStatus" -> reply(status())
             "geofences" -> reply(JSONObject().put("exact:answer", store.answer()))
-            "addGeofence" -> allowed(reply) { add(args, reply) }
+            "addGeofence" -> allowed(cause, reply) { add(args, reply) }
             "removeGeofence" -> remove(args.optString("name"), reply)
             else -> reply(error("NotSupportedError"))
         }
@@ -135,15 +138,15 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** [then] once both decisions allow it: fine and coarse, then background location alone (D13). */
-    private fun allowed(reply: (JSONObject) -> Unit, then: () -> Unit) {
+    private fun allowed(cause: Cause, reply: (JSONObject) -> Unit, then: () -> Unit) {
         if (!playServices()) return reply(error("NotSupportedError"))
         val state = status().getString("state")
         when {
             state == "granted" -> then()
             state == "denied" -> reply(error("PERMISSION_DENIED"))
-            else -> fine {
+            else -> fine(cause) {
                 if (!has(FINE)) return@fine reply(error("PERMISSION_DENIED"))
-                background {
+                background(cause) {
                     context.changed("geofencing.geofencingStatus")
                     if (Build.VERSION.SDK_INT < 29 || has(BACKGROUND)) then() else reply(error("PERMISSION_DENIED"))
                 }
@@ -151,9 +154,9 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    private fun fine(done: () -> Unit) {
+    private fun fine(cause: Cause, done: () -> Unit) {
         if (has(FINE)) return done()
-        context.requestPermissions(arrayOf(FINE, COARSE)) { answered ->
+        context.requestPermissions(cause, arrayOf(FINE, COARSE)) { answered ->
             val a = context.activity
             if (FINE in answered && !has(FINE) && a != null && !a.shouldShowRequestPermissionRationale(FINE)) {
                 app.getSharedPreferences("exact.permissions", Context.MODE_PRIVATE).edit().putBoolean(FINE, true).apply()
@@ -164,9 +167,9 @@ class GeofencingModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** From Android 11 the platform opens the app's location settings page rather than a dialog; the request settles
      * when the activity resumes and the permission is read again. */
-    private fun background(done: () -> Unit) {
+    private fun background(cause: Cause, done: () -> Unit) {
         if (Build.VERSION.SDK_INT < 29 || has(BACKGROUND)) return done()
-        context.askPermission(BACKGROUND, done)
+        context.askPermission(cause, BACKGROUND, done)
     }
 
     // Fences (D10, D11)

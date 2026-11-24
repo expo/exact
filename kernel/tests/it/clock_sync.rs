@@ -56,7 +56,14 @@ fn a_bare_renewed_node_at_rest_is_not_forgotten_and_one_with_a_transition_is() {
     let change = |node: u64, property: Property, value: f64| Change {
         node,
         property,
-        value: Value::scalar(value),
+        value: Value::new(
+            value,
+            if property == Property::Scale {
+                value
+            } else {
+                0.
+            },
+        ),
         velocity: None,
     };
     let restated = |node: u64, opacity: f64, row: Transitions| MotionSync {

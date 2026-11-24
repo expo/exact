@@ -118,7 +118,7 @@ fn a_pressed_nodes_computed_transition_is_checked_as_an_authors() {
             "--exact-tint 1s",
             "opacity 1s",
             "none",
-            "--exact-scale 1s,scale 0s,--exact-scale 1s",
+            "--exact-scale 1s,scale 0s,--exact-scale 1s,--exact-scale-y 1s",
             "none",
             "none"
         ])

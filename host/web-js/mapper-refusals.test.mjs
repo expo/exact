@@ -5,13 +5,14 @@
 // `async` (js/bake/src/typescript.mjs `asyncContextHelper`), so each step after an `await` runs in the context
 // ts-data.js's `__exact_async_context` puts back.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 import { asyncContextHelper } from '../../js/bake/src/typescript.mjs';
 import { localImports } from './glue.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 const GLOBALS = ['location', 'exact', '__exact_async_context', '__exact_ordinary', 'fixture', 'captureCanvas'];
@@ -23,7 +24,7 @@ beforeAll(async () => {
   globalThis.location = { href: 'https://app.test/' };
   globalThis.fixture = fixture;
   dir = mkdtempSync(resolve(tmpdir(), 'exact-mapper-refusals-'));
-  for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   for (const name of ['grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js', 'storage-environment.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
   writeFileSync(resolve(dir, 'admission-real.js'), localImports(readFileSync(resolve(root, 'host/web-js/admission.js'), 'utf8')));
   // Every grant held; a request answers at once, counted.

@@ -7,7 +7,7 @@ import QuartzCore
 extension NodeView {
     func updateHeightDragGesture() {
         if presenter?.heightBindings[id]?.target != nil, heightRecognizer == nil {
-            let pan = UIPanGestureRecognizer(target: self, action: #selector(heightDragging(_:)))
+            let pan = TimedPan(target: self, action: #selector(heightDragging(_:)))
             #if !os(tvOS)
             pan.maximumNumberOfTouches = 1
             #endif
@@ -31,12 +31,18 @@ extension NodeView {
             && presenter?.heightBindings[id]?.target != nil
     }
     @objc func heightDragging(_ pan: UIPanGestureRecognizer) {
-        let translation = Double(pan.translation(in: window).y)
-        let time = CACurrentMediaTime()
+        // UIKit's translation starts where it recognized the pan, past its
+        // hysteresis. The drag is the finger's travel since it touched down:
+        // the hold begins there and then, and steps to the finger in its
+        // first sample, so the header stays under the finger and the release
+        // velocity counts the travel at the finger's pace.
+        let timed = pan as? TimedPan, down = timed?.down
+        let translation = down.map { Double(pan.location(in: nil).y - $0.point.y) } ?? Double(pan.translation(in: window).y)
+        let time = timed?.time(pan.state) ?? CACurrentMediaTime()
         switch pan.state {
         case .began:
             heightHold?.cancel()
-            heightHold = HeightDragHold(self, time: time)
+            heightHold = HeightDragHold(self, time: down?.time ?? time)
             // UIKit may deliver a coalesced drag entirely in its first sample.
             // Catch the current presentation, then apply that sample too.
             if let hold = heightHold as? HeightDragHold, !hold.move(downward: translation, time: time) {

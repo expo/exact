@@ -58,7 +58,9 @@ extension NavigationHost {
     func installSplit(_ p: Projection, first: [RouteController], rule: StackSplit, in parent: UIViewController) {
         let list = makeNavigation(first: first.first?.node)
         let detail = makeNavigation(first: nil)
-        let split = SplitIOS(list: list, detail: detail)
+        let split = SplitIOS(list: list, detail: detail) { [weak self] routes, nav, animated in
+            self?.writeStack(routes, in: nav, animated: animated, visible: true) ?? false
+        }
         split.listNode = rule.list
         split.rule = rule
         split.changed = { [weak self, weak split] in
@@ -87,21 +89,20 @@ extension NavigationHost {
     }
 
     /// The stack in the split's columns, its routes projected into each,
-    /// while UIKit moves neither them nor the columns (`changing`). Whether a
-    /// lifted header holds the write (`liftHeld`), which a later sync makes.
+    /// while UIKit moves neither them nor the columns (`changing`). Returns
+    /// whether a lifted header or a column move holds the projection.
     func syncSplit(_ split: SplitIOS, _ stack: [RouteController], animated: Bool) -> Bool {
         prepareRoutes(Array(stack.prefix(1)), in: split.list)
         prepareRoutes(Array(stack.dropFirst()), in: split.detail)
         let top = split.detailRoutes.last
-        if !split.shown.elementsEqual(stack, by: ===) {
-            // UIKit lays an arriving route out as it is given the stack: a lifted header must have left the layout by then
-            if liftHeld { return true }
-            lastTransition = "idle"
-        }
+        let changingRoutes = !split.shown.elementsEqual(stack, by: ===)
+        // UIKit lays an arriving route out as it is given the stack: a lifted header must have left the layout by then
+        if changingRoutes, liftHeld { return true }
         let location = stack.count > 1 ? stack.last.flatMap { split.rule?.locations[$0.node.id] } : nil
         let relocated = location != nil && split.topLocation != nil && location != split.topLocation && stack.last === split.detailRoutes.last
+        guard split.show(stack, animated: animated, relocated: relocated) else { return split.moving }
         split.topLocation = location
-        split.show(stack, animated: animated, relocated: relocated)
+        if changingRoutes { lastTransition = "idle" }
         // A press that opened a detail may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS)
         if let arrived = split.detailRoutes.last, arrived !== top { presenter.pressShows(arrived.node) }
         // A sidebar's selected row follows the detail's base, a `replace` of its item included (LLP 1127 D3, D7)

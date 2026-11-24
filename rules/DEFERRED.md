@@ -27,7 +27,7 @@ waits behind proving these shipped bindings in the app; Snapback2 stays deferred
 **Expanded (Charlie, 2026-10-08, option A for protocol-handler URL templates):**
 `app.json` `protocol_handlers` carries a complete custom-scheme URL through
 the existing navigation root as an encoded handler location (LLP 1038 D8).
-The OAuth/sign-in callback and return-link consumer of issue #268 can read its
+The OAuth/sign-in callback and return-link consumer can read its
 scheme and fragment. A no-router URL event remains deferred; Charlie's ruling
 keeps the navigation root requirement. Take: no second delivery mechanism is
 added.
@@ -305,7 +305,8 @@ with no `accept` (or `accept="*/*"`) may pick any file, with no trade.
 T3 Code's composer, whose drop, paste and Attach files are one path, `drop`
 takes files and folders of any type, and a paste carries its files
 (`ClipboardEvent.files`, pasted image data as a PNG), each a `doc:` handle
-(LLP 1069.010, "Files dropped or pasted").
+(LLP 1069.010, "Files dropped or pasted"); a drop's text and link are
+LLP 1094.001's (the gesture arena entry, below).
 Specific `accept` types remain bounded as above. `capture` stays refused
 (the camera is the `@exact/camera` package, §Components, 2026-10-23). Linux editing is v2
 (Charlie, 2026-09-21): web, iOS and macOS first; Linux reads.
@@ -427,7 +428,7 @@ a person drags the sheet to.
 **Expanded (Charlie, 2026-10-23, #854; part of LLP 1123 D7):** a presented
 route's `navigationSizing` is `page` (the default) or `form`, which iPadOS
 shows as UIKit's centred `.formSheet`; a host whose sheets have one size
-ignores it. T3 Code's Add environment sheet (#216) is the consumer, and Nathan
+ignores it. T3 Code's Add environment sheet is the consumer, and Nathan
 Schroeder implements it. Take: none offered; waived by Charlie. Still out:
 D7's `automatic` and `fitted`, which stay in stage 6.
 **Expanded (James, 2026-11-21: "We ideally can support any view and any role
@@ -488,7 +489,7 @@ word; nothing is admitted or taken by the rename.
 **Expanded (Charlie, 2026-10-12 menubar lane ruling, confirming 2026-10-08):**
 "menu bar: -exact-menu="app|file|edit|view|go|window|help" on button; root
 -exact-menu-remove="…" fixed ids; enabled follows disabled; agent taps button —
-OK for now". The coding-agent desktop app (#141) is the consumer (LLP 1021
+OK for now". The coding-agent desktop app is the consumer (LLP 1021
 §5.3). Take: none named; Charlie's approval admits this bounded extension.
 Built 2026-10-12: placement and root removal of the fixed standard-item ids
 in LLP 1021 §5.3. Develop remains in development builds.
@@ -604,7 +605,8 @@ app that runs one of its tools or opens one of its locations: `controls` in
 `app.json`, WidgetKit controls on Apple and Quick Settings tiles on
 Android. A press is the person's and enters as origin `action`; a recording
 control may start audio capture from a locked iPhone once that path is
-qualified on a device. Consumer: #710's app, which starts a voice recording
+qualified on a device, and on Android opens the app and records once it is
+in front. Consumer: #710's app, which starts a voice recording
 from the Lock Screen without opening. Take: none named; Charlie waives the trade. Still out
 (LLP 1126.004 §3): toggles, state providers, configurable controls, fixed
 tool arguments, a control's tool run in the extension, Live Activity
@@ -872,7 +874,7 @@ sockets, the ephemeral-port callback, an HTTP server for content, and `tcp:`
 and `http:` addresses, which are written down only (LLP 1133.005 §11, D5).
 
 
-**Expanded (Charlie, 2026-10-08, issue #283; focus lane, 2026-10-12):**
+**Expanded (Charlie, 2026-10-08; focus lane, 2026-10-12):**
 DOM `focusin`/`focusout` with target and related target information bubble to
 an ancestor without adding a Tab stop. The clipped content and row action
 wrappers in `issues/20261009-bubbling-focus-events.md` are the consumers.
@@ -1122,7 +1124,7 @@ names no take; `:focus-within` remains out.
 
 **Components** — roughly 15 built-in tags, not 40; roughly 12 Facet components, not 47.
 
-**Expanded (Charlie, 2026-10-12, issue #275 rangeedit ruling):**
+**Expanded (Charlie, 2026-10-12, rangeedit ruling):**
 “setRangeText: (b) fire one input (insertReplacementText) as recorded deviation;
 selectMode preserve; no undo step — for now”. Consumer: the issue's editor
 replacing `@name` with a reference. LLP 1069.001 records the web, AppKit, UIKit and Linux implementations
@@ -1981,8 +1983,9 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   `PointerEvent`'s `clientX`/`clientY`. Consumers: the two kanban builds
   (F4). Unblocks moving cards on a board without a hand-built drag. Take:
   none offered. Still out: reorder on row and nested lists (LLP 1094 §7),
-  drags into the app, multi-item drags, grids, a gesture arena; drags out
-  of the app are LLP 1094.000's, below.
+  a drag that gathers several items at its source, grids, a gesture arena;
+  drags out of the app are LLP 1094.000's, and drags into it, a drag of
+  several items included, LLP 1094.001's, below.
   **Expanded (LLP 1094.000; Charlie's waiver, no take; James Ide,
   2026-11-20: "Drags across apps are needed" and "We have a waiver"):** a
   node as a drag source to the system, `draggable` with
@@ -1991,10 +1994,17 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   Android. Consumer: the Landscapes template, whose cards
   Apple's Landmarks sample marks `.draggable`. Unblocks dropping a
   landmark's picture into another app or the other pane of a split screen.
-  Take: none offered. Still out: drags into the app beyond the file `drop`,
-  the `dragstart` and `dragend` events, an element's picture in a drag, a
-  drag that gathers several nodes, drags from a grouped list's rows, and a
-  gesture arena.
+  Take: none offered. Still out: the `dragstart` and `dragend` events, an
+  element's picture in a drag, a drag that gathers several nodes, drags from
+  a grouped list's rows, and a gesture arena; drags into the app are
+  LLP 1094.001's, next.
+  **Expanded (LLP 1094.001; the waiver that covers LLP 1094.000, no take;
+  James Ide, 2026-11-23: "Yes, we have a waiver"):** drags into the app:
+  `drop`'s `DragEvent` carries the drag's `text` and `url` beside its
+  `files`, on the web, macOS and Windows, then iOS and iPadOS, then Android.
+  Consumer: UI Gallery's drop zone. Unblocks a link or a sentence dragged
+  from another app into an Exact app. Still out: rich text, and a picture
+  given only as data where the host hands over no file.
   **Expanded (Charlie's panel on expo/exact#666, unanimous, 2026-11-15; LLP
   1057.001.000):** a zoomable scroll container, `-exact-min-zoom` and
   `-exact-max-zoom` on a scroller with one child and its `scrollZoom`, zoomed

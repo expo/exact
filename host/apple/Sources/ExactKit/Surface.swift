@@ -142,6 +142,7 @@ extension NodeView {
         setNeedsDisplay()
         #else
         syncEllipticalClip()
+        syncScrollCorner()
         needsDisplay = true
         #endif
     }

@@ -53,7 +53,7 @@ impl Reader<'_> {
                 let mut dark = Vec::new();
                 for _ in 0..n {
                     let p = Property::from_wire(self.u8()?).ok_or(DecodeError::BadAnimation)?;
-                    // Each value carries its property's components: one,
+                    // Each value carries its property's components: one, two for scale,
                     // four for `translate` (lengths, then percentages),
                     // four for a colour.
                     let mut c = [0.0f64; 4];

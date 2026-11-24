@@ -3,7 +3,7 @@ import AppKit
 import XCTest
 @testable import ExactKit
 
-/// HTML's `autocorrect="off"` on AppKit (#111): the text is kept as typed.
+/// HTML's `autocorrect="off"` on AppKit: the text is kept as typed.
 /// A textarea's text view and an input's field editor then make no spelling
 /// correction, smart quote or dash, or text replacement; without it each
 /// keeps what it had, AppKit's or the person's from the Substitutions menu.

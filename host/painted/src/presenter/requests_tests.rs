@@ -482,12 +482,12 @@ fn a_date_or_time_controls_press_asks_the_shell_for_its_picker_and_its_answer_is
     assert_eq!(asked.len(), 1);
     let (kind, request, body) = &asked[0];
     assert_eq!((*kind, body[0] as u32), (9, id(&p, "day")));
-    // Five strings, then the accent: none set.
+    // Five strings, then the accent and the scheme: neither set.
     assert_eq!(
-        strings(&body[..body.len() - 1], 1),
+        strings(&body[..body.len() - 2], 1),
         ["date", "2026-10-16", "2026-01-01", "2026-12-31", ""]
     );
-    assert_eq!(body.last(), Some(&0));
+    assert_eq!(body[body.len() - 2..], [0, 0]);
     // The answer is the person's choice: `change` runs, and the bound value moves.
     assert!(p.answer_request(*request, Some("2026-11-02")));
     p.run_commands(|| Nothing);
@@ -496,14 +496,10 @@ fn a_date_or_time_controls_press_asks_the_shell_for_its_picker_and_its_answer_is
     let asked = decode(p.take_requests());
     let body = &asked[0].2;
     assert_eq!(
-        strings(&body[..body.len() - 1], 1),
+        strings(&body[..body.len() - 2], 1),
         ["time", "", "", "", "60"]
     );
-    assert_eq!(
-        *body.last().unwrap() as u32,
-        0xffff_0000,
-        "its accent-color"
-    );
+    assert_eq!(body[body.len() - 2] as u32, 0xffff_0000, "its accent-color");
     // A dismissal changes nothing, and is journaled.
     assert!(p.answer_request(asked[0].1, None));
     assert_eq!(value(&p, "at"), "");

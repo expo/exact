@@ -46,8 +46,8 @@ final class AttachSurface {
     private weak var label: NSTextField?
     /// While input is allowed, the app's own trackpad and wheel events, which hold no button or modifier: a person's
     /// scroll, pinch, rotation or swipe in progress, and when the last of them came.
-    private var gestureMonitor: Any?
-    private var gesturing = false, lastGesture = 0.0
+    private var gestureMonitor: Any?, liveScrollEnd: NSObjectProtocol?
+    private var gesturing = false, scrolling = false, lastGesture = 0.0
     private var closeObserver: NSObjectProtocol?
     private var shownObserver: NSKeyValueObservation?
 
@@ -167,7 +167,7 @@ final class AttachSurface {
         if window.attachedSheet != nil { return ["error": "background: a sheet is up on the window", "refused": "background"] }
         // A wheel event a quarter second old with no phase is a wheel still turning.
         if NSEvent.pressedMouseButtons != 0 || !NSEvent.modifierFlags.intersection([.shift, .control, .option, .command]).isEmpty
-            || gesturing || ProcessInfo.processInfo.systemUptime - lastGesture < 0.25 {
+            || gesturing || scrolling || ProcessInfo.processInfo.systemUptime - lastGesture < 0.25 {
             return ["error": "person-input: a mouse button, a modifier key or a trackpad gesture is down in the app; input waits for the person's own to end", "refused": "person-input"]
         }
         return nil
@@ -193,11 +193,23 @@ final class AttachSurface {
     }
 
     private func watchGestures(_ on: Bool) {
-        if !on { gestureMonitor.map(NSEvent.removeMonitor); gestureMonitor = nil; gesturing = false; return }
+        if !on {
+            gestureMonitor.map(NSEvent.removeMonitor); gestureMonitor = nil; gesturing = false; scrolling = false
+            liveScrollEnd.map(NotificationCenter.default.removeObserver); liveScrollEnd = nil
+            return
+        }
         guard gestureMonitor == nil else { return }
+        // A scroll AppKit runs on its own thread (responsive scrolling) sends the monitor only its first
+        // events; the end of a live scroll in this window is the scroll's.
+        liveScrollEnd = NotificationCenter.default.addObserver(forName: NSScrollView.didEndLiveScrollNotification, object: nil, queue: .main) { [weak self] note in
+            guard let self, (note.object as? NSView)?.window === window else { return }
+            scrolling = false
+            lastGesture = ProcessInfo.processInfo.systemUptime
+        }
         gestureMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .magnify, .rotate, .swipe, .smartMagnify]) { [weak self] event in
             let moving: NSEvent.Phase = [.began, .changed, .stationary, .mayBegin]
-            self?.gesturing = !event.phase.intersection(moving).isEmpty || !event.momentumPhase.intersection(moving).isEmpty
+            let held = !event.phase.intersection(moving).isEmpty || !event.momentumPhase.intersection(moving).isEmpty
+            if event.type == .scrollWheel { self?.scrolling = held } else { self?.gesturing = held }
             self?.lastGesture = ProcessInfo.processInfo.systemUptime
             return event
         }

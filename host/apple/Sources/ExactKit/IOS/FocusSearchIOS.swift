@@ -65,6 +65,13 @@ package final class Viewport: ScrollView {
     var pageMargins = UIEdgeInsets.zero
     /// The control bars over its page's scrollers, each by its edge (`ControlBars.sync`, LLP 1131).
     var controlBars: [ObjectIdentifier: ControlBars.Weak] = [:]
+    /// The bars an authored `edge-effect` registers, by bar id: the edge and the scroller, `nil` for
+    /// none (LLP 1123 D12, `ControlBars.setBarEdgeEffects`).
+    var authoredBars: [UInt32: (edge: UIRectEdge, scroller: UInt32?)] = [:]
+    /// The bar views that hold a scroll edge element interaction, and whether a reach pass is owed for
+    /// one that moved window (`ControlBars.register`, `ControlBars.moved`).
+    var edgeBars: [ObjectIdentifier: ControlBars.Weak] = [:]
+    var edgesOwed = false
     /// Its tint as UIKit last gave it undimmed (its window's, or an embedder's), which a dimmed
     /// view cannot read (`NodeView.carriedTint`)
     private(set) var restingTint: UIColor?

@@ -2350,13 +2350,15 @@ sign-in callback and the app's own document types are shared by both installs.
 A brand that ships as its own store app is another app, not a variant: one directory and manifest per brand,
 sharing its screens and data code through workspace packages ([one app under several brands](recipes/white-label.md)).
 
-## Controls (Control Center, the Lock Screen, the Action button)
+## Controls (Control Center, the Lock Screen, the Action button, Quick Settings)
 
 A control is a button the system draws outside the app; a press runs one of
 the app's tools or opens one of its locations (LLP 1126.004). iOS and iPadOS
 18 and later draw them: the build puts each offered control in the app's
 WidgetKit extension, where the person adds it to Control Center, the Lock
-Screen or the Action button. Android, the Mac and the watch do not yet.
+Screen or the Action button. Android draws each as a Quick Settings tile,
+which the person adds by editing Quick Settings. The Mac and the watch do not
+yet.
 
 Declare each in `app.json`:
 
@@ -2395,8 +2397,9 @@ and puts it in `compat.inputs.controls` and the compatibility id, so any
 change to a row, its tool's signature or its effects is a new binary. The
 web has no binary and its id does not move.
 
-1. A host other than iOS and iPadOS (the Mac, Android, the watch, tvOS,
-   visionOS, Linux, Windows): omitted, `control-host`.
+1. A host other than iOS, iPadOS and Android (the Mac, the watch, tvOS,
+   visionOS, Linux, Windows): omitted, `control-host`. Android's placement
+   is below.
 2. A build that packages no control extension: omitted, `control-metadata`.
    The Apple build on Linux is one, since only Xcode extracts a control's App
    Intents metadata; so is `--extensions` without `controls`.
@@ -2413,7 +2416,50 @@ web has no binary and its id does not move.
    iOS 18, as a `LiveActivityIntent`.
 7. Any other tool: omitted, `control-process`.
 
-An offered control is a `ControlWidgetButton` in the widget extension, which
+On Android every control is offered from Android 10 as a tile, but a tool
+known to start camera, screen or speech capture (`control-capture`). A press
+is the person's action (origin `action`) everywhere, and starts at most the
+two captures below:
+
+- a `url`: `"intent": "open"`. The tile opens the app at the location,
+  asking for the device credential if needed. On a cold app launch the URL
+  is the launch location. On Android 14 and 15, a tap before the first PIN
+  unlock after reboot can leave Quick Settings open without asking for the
+  PIN. Unlock the device and tap the tile again.
+- a tool whose reach can start or restart a capture (the microphone, a
+  recorder, or a capture its arguments decide): `"intent": "foreground"`. A
+  tile grants no microphone, so the tile opens the app, and the press runs
+  once the app is in front, unlocked, drawn and its data ready. While it
+  runs and the app shows, it may call `getUserMedia` for audio alone and
+  `startMediaRecorder`, which the microphone starts for; anything else it
+  or its tasks try is refused as for any background action, a camera,
+  speech recognition and every permission prompt included. With the
+  microphone's permission not yet granted, `getUserMedia` fails
+  `NotAllowedError`, and the app asks in its own UI. So does a Live
+  Activity the tool starts (`startActivity`), which Android shows as a
+  notification: with notifications off it fails, and the app asks with
+  `requestNotificationPermission()` (Recorder shows the request when a
+  press finds them off). The control needs `device.microphone`
+  (`grant-needs`); `device.microphone-background` keeps a take the person
+  leaves running. The press runs at once or not at all (`busy` with other
+  work running), and pressing another tile, leaving the app or the screen
+  turning off ends it. On a Lock Screen that holds a credential, `required`
+  and `local` ask for it first, then open the app; `always` is refused
+  there. The press is dropped if the app is not ready within 20 seconds of
+  the click.
+- any other tool: `"intent": "tool"`. The press runs where it is, in a
+  session booted with no view if none shows. On a Lock Screen that holds a
+  credential, `required` and `local` ask for it and then press, leaving the
+  person where they were; a swipe lock, or a keyguard Smart Lock trusts,
+  asks for nothing. `always` runs there.
+
+A tile is the system's, in its inactive appearance, with the row's `title`,
+its `description` beneath, and the Material glyph of its `symbol` (a `.fill`
+name without one takes its outline's; with none at all, the app's icon or
+the platform's default one). Its service is named by the control's kind,
+so a placed tile survives reordering the rows.
+
+On iOS an offered control is a `ControlWidgetButton` in the widget extension, which
 an app with controls and no widgets or Live Activities also gets, linking no
 Exact runtime. Its WidgetKit kind is `<app id>.control.<kind>`. Its intent is
 compiled into both the app and the extension and is not discoverable, so
@@ -2426,7 +2472,9 @@ extension's copy refuses without running anything.
 A press enters only through a host's native entry, `Runner::press_control`,
 with the compiled control's kind and digest; on Apple, the tool door's
 `exact_tool` export takes it as op `press`, and the app's generated intent
-calls `ExactTools.press`. It is for tool controls (a host opens a URL control
+calls `ExactTools.press`; on Android, the tile's `onClick` calls
+`Native.press`. A tile that opens the app names a one-use record it left in
+the app's process, so a replayed or stale launch presses nothing. It is for tool controls (a host opens a URL control
 itself). The runner runs the tool as the person's action
 (origin `action`), refused `unavailable` when the installed control's
 digest is not the plan's, and `busy` while the same control's press waits or
@@ -2441,6 +2489,14 @@ web, which compiles no control, says `absent`:
 
 ```
 bun scripts/agent.mjs ios --app <app> "state controls"
+```
+
+On an Android device or emulator, add a tile and press it from adb
+(`<id>/dev.exact.app.ExactControl_<kind in UTF-8 hex>`):
+
+```
+adb shell cmd statusbar add-tile <id>/dev.exact.app.ExactControl_7265636f7264
+adb shell cmd statusbar click-tile <id>/dev.exact.app.ExactControl_7265636f7264
 ```
 
 A qualification build (LLP 1126.004 §6d) offers on iOS what items 5 and 7
@@ -2944,7 +3000,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 
 | Available on every executor | Notes on Hermes |
 | --- | --- |
-| `fetch`, `Headers`, `Response` | Grant-checked; `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. Natively a request holds at most 4 MiB, its URL, headers and body together: a larger one is refused before anything is sent (`FetchError`, kind `Refused`, `native request exceeds 4 MiB …`), so send a larger body from a file with `exactBodyFrom`. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host opens it when it sends the request, under `fs.read` as `readFile` is, and streams it from disk as the request goes out, with the size it had when opened as its `Content-Length`; the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing, and a 300 MB video costs half a megabyte of memory (LLP 1133.008.000 D4). Exact sets no bound on its size; the server answers 413 for one it will not take. A file cut shorter while it is sent fails the request, naming the path; a file changed in place while it is sent sends a mix, so leave it alone until the reply. Two hosts still read the file whole and refuse one over 64 MiB, naming why: the web, for a file the app wrote with `writeFile` or `appendFile` (a picked file, a recorded video or an `exactBodyTo` reply is the browser's own Blob, and streams), and the asynchronous executor (`EXACT_HTTP_ASYNC`), with kind `Unsupported`. With `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file or a denied path rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. `cache` is Fetch's `"default"` (unsaid), `"no-store"`, `"reload"`, `"no-cache"`, `"force-cache"` or `"only-if-cached"`, controlling the native cache for a resource's `GET` and the browser's cache on the web; any other value is a `TypeError`, and a module that names it needs `typescriptRuntime` 11. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
+| `fetch`, `Headers`, `Response` | On the web, a relative URL resolves against the document base before the grant check. Native data modules have no document origin and take absolute URLs. `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. Natively a request holds at most 4 MiB, its URL, headers and body together: a larger one is refused before anything is sent (`FetchError`, kind `Refused`, `native request exceeds 4 MiB …`), so send a larger body from a file with `exactBodyFrom`. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host opens it when it sends the request, under `fs.read` as `readFile` is, and streams it from disk as the request goes out, with the size it had when opened as its `Content-Length`; the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing, and a 300 MB video costs half a megabyte of memory (LLP 1133.008.000 D4). Exact sets no bound on its size; the server answers 413 for one it will not take. A file cut shorter while it is sent fails the request, naming the path; a file changed in place while it is sent sends a mix, so leave it alone until the reply. Two hosts still read the file whole and refuse one over 64 MiB, naming why: the web, for a file the app wrote with `writeFile` or `appendFile` (a picked file, a recorded video or an `exactBodyTo` reply is the browser's own Blob, and streams), and the asynchronous executor (`EXACT_HTTP_ASYNC`), with kind `Unsupported`. With `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file or a denied path rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. `cache` is Fetch's `"default"` (unsaid), `"no-store"`, `"reload"`, `"no-cache"`, `"force-cache"` or `"only-if-cached"`, controlling the native cache for a resource's `GET` and the browser's cache on the web; any other value is a `TypeError`, and a module that names it needs `typescriptRuntime` 11. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
 | `structuredClone` | No transfer list |
 | `ReadableStream`, `WritableStream`, `TransformStream`, their readers, writers and controllers, `CountQueuingStrategy`, `ByteLengthQueuingStrategy` | WHATWG Streams, with `pipeTo`, `pipeThrough`, `tee`, `for await` and `ReadableStream.from`. No byte streams: `type: "bytes"` and a BYOB reader are a `TypeError` |
 | `DecompressionStream`, `CompressionStream` | WHATWG Compression's `"deflate"`, `"deflate-raw"` and `"gzip"`, worked by native code in the turn that writes each chunk: 8 MB of JSON inflates from 1.4 MB in about 25 ms of that turn's budget, and writing it in slices with `await scheduler.yield()` between spreads it over turns of their own. Its errors are the standard's `TypeError`s: corrupt data, data after the end, input that ends before its end at `close()`, a chunk that is not an `ArrayBuffer` or view. One stream may span many writes: Discord's `zlib-stream` (one zlib stream across a socket's messages, each ending in a sync flush) inflates message by message, each write's output queued once it settles; keep a `read()` pending, as a write waits for one |
@@ -2981,9 +3037,23 @@ refuses `ws:` from an `https:` page except to loopback. A render-server page's
 doesn't hold a scheme-wide `net.fetch` line: a source that needs one keeps its
 placeholder in the rendered page, and the client fetches it after adoption.
 
-For `fetch` with the default `redirect: "follow"`, native hosts check each
+In the browser, a website's `fetch('/_data/page.json')` starts at the base URL's origin root and
+`fetch('data/page.json')` starts at the document base, including a `<base href>`.
+A stream uses the same base. The resolved URL needs an ordinary grant. For
+unrelated HTTPS sites, `net.fetch https:` admits every HTTPS origin in the browser.
+There is no grant spelling for just the current page's origin.
+
+For a JS request render, pass the trusted absolute page URL to `renderer(dist)`'s
+returned function. Both root-relative and directory-relative fetches resolve against that URL. A path-only render and a page made at build use `app.origin`
+in `app.json`. With neither source of an origin, write an absolute fetch URL.
+The renderer takes no origin from request headers. Grant each public API origin
+or an applicable subdomain wildcard for a server-side read, and use
+`credentials: 'omit'` for public data. Visitor credentials and scheme-wide
+network grants wait for the browser. The internal wasm browser target ignores `credentials`. When a browser `Request` carries a body, that target needs the bytes explicitly: `fetch(req, {body: await req.arrayBuffer()})`.
+
+For `fetch` with the default `redirect: "follow"`, native hosts and the JS render server check each
 redirect target against the source's `net.fetch` grants before contacting it.
-The web lets the browser follow and checks only the final response URL. On
+In the browser, Exact checks the final response URL after the browser follows redirects. On
 render-server pages, CSP `connect-src` allows the page's own origin and the
 app's granted origins, while request admission uses the source's grants. A hop
 outside the page origin and app grants is blocked before contact (`Network` on
@@ -6077,17 +6147,23 @@ component Reopen
 ### Files dropped or pasted
 
 A `drop` hands its action a `DragEvent` whose `files` are `doc:` handles of
-any type, a folder's included; a `paste`'s `ClipboardEvent` has `files` too,
-image data with no file (a screenshot) as one `image.png`. Read them as any
-`doc:` path, under `fs.read doc:/`; `storage.fs.stat(path).isDirectory` tells
-a folder. A file drag over a `textarea` or `input` whose node or an ancestor
-declares `drop` lands there, not as path text in the field. `dragenter` and
-`dragleave` bracket the drag over a node, for a drop overlay
-([grammar](contract-grammar.md#pointer)):
+any type, a folder's included, whose `text` is the drag's plain text and
+whose `url` is its link, each `""` when it has none; a `paste`'s
+`ClipboardEvent` has `files` too, image data with no file (a screenshot) as
+one `image.png`. Read files as any `doc:` path, under `fs.read doc:/`;
+`storage.fs.stat(path).isDirectory` tells a folder. A file drag over a
+`textarea` or `input` whose node or an ancestor declares `drop` lands there,
+not as path text in the field; a drag of plain text over a field is the
+field's unless the field declares `drop`, and on Windows, where a field takes
+no drag, it lands on the `drop` above. An app can show an overlay at
+`dragenter`; the `drop` action clears it when the drop lands, and
+`dragleave` otherwise ([grammar](contract-grammar.md#pointer)):
 
 ```text
 action took(e: DragEvent)
   paths = e.files
+  if e.url != ""
+    links = links.concat([e.url])
 action pasted(e: ClipboardEvent)
   if e.files.length > 0
     paths = e.files
@@ -6098,16 +6174,18 @@ column dragenter=entered dragleave=left drop=took
 
 | Host | `drop`, `dragenter`, `dragleave` | `ClipboardEvent.files` |
 | --- | --- | --- |
-| Web (JS and wasm targets) | yes: Chromium's handles, else read-only copies; a folder's entry as a read-only folder | `clipboardData.files`, read-only copies |
-| macOS | yes: every file URL Finder drags, a field forwarding the drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
+| Web (JS and wasm targets) | yes: Chromium's handles, else read-only copies; a folder's entry as a read-only folder; `text/plain` and `text/uri-list` | `clipboardData.files`, read-only copies |
+| macOS | yes: file URLs, promised files (Photos', an Exact app's), strings and links, a field forwarding a file drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
 | iOS | none (declared; the driver's drag forms answer `unsupported`) | file URLs, else the pasteboard's image as `image.png` |
 | tvOS | none | empty: tvOS has no pasteboard |
-| Windows | yes, files and folders in Explorer selection order, including over an editable field | empty (text only) |
+| Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
 | Linux, Android, terminal | none | empty (text only) |
 
-The driver: `tap <target> drop <path…>` (files and folders), `tap <target>
-dragenter <path…>` and `tap <target> dragleave`, `type <target> paste --file
-<path…>` and `type <target> paste --image <png>`.
+The driver: `tap <target> drop [<path…>] [--text "…"] [--url "…"]` (files,
+folders, text and a link), `tap <target> dragenter …` and `tap <target>
+dragleave`, `type <target> paste --file <path…>` and `type <target> paste
+--image <png>`. A test drops with `tap "zone" drop file "a.pdf" text "…" url
+"…"`, with at least one of those parts.
 
 ### Shares from other apps (`share_target`)
 

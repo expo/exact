@@ -28,16 +28,6 @@ const requestCredentials = (input, init) => {
   const given = init?.credentials;
   return String(given === undefined ? input instanceof Request ? input.credentials : 'same-origin' : given);
 };
-// Bun's Request discards `credentials` and reports `include`. Keep Fetch's effective value in the render realm.
-class RenderRequest extends Request {
-  constructor(input, init) {
-    super(input, init);
-    const credentials = requestCredentials(input, init);
-    if (!['omit', 'same-origin', 'include'].includes(credentials)) throw new TypeError('credentials must be omit, same-origin or include');
-    Object.defineProperty(this, 'credentials', { value: credentials });
-  }
-  clone() { return new RenderRequest(super.clone(), { credentials: this.credentials }); }
-}
 // Promise reactions and async functions run outside the host's callback wrapper. Their promise's realm owns the
 // rejection; an Error's realm also identifies a callback chained from a host promise, such as a response body read.
 const rejectionOwners = new WeakMap();
@@ -184,7 +174,9 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   const cache = new Map();
   const files = p => { let v = cache.get(p); if (!v) { v = read(p.replace(/^\.?\//, '')); if (p.endsWith('.wasm')) v = new WebAssembly.Module(v); cache.set(p, v); } return v; };
   // Every render's fetches share one HTTP cache, for as long as each answer's headers allow (http-cache.mjs).
-  const fetched = closed ? () => Promise.reject(new Error('network data is unavailable during Markdown compilation')) : cachingFetch(fetch);
+  const outbound = globalThis.fetch;
+  const fetched = closed ? () => Promise.reject(new Error('network data is unavailable during Markdown compilation'))
+    : cachingFetch((input, init) => outbound(input, { ...init, credentials: 'omit' }));
   const name = unesc(/<title>([^<]*)<\/title>/.exec(shell)?.[1] ?? '');
   // The head's fields a crawler reads after the title and viewport, as page.rs `page_head` writes them.
   const crawled = (out, location) => {
@@ -278,16 +270,76 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
       timers.add(id); return id;
     };
     const stopTimer = id => { timers.delete(id); clearTimeout(id); };
-    const fetchOwned = (input, init) => {
-      if (disposed) return Promise.reject(owner.signal.reason);
-      const credentials = requestCredentials(input, init);
-      const url = input instanceof Request ? input.url : String(input);
-      // No visitor exists here. Decide before the HTTP cache or network can answer anonymously (LLP 1048.000 D9).
-      if (credentials === 'include' || (credentials === 'same-origin' && new URL(url).origin === ctx.__exactRenderOrigin))
-        return Promise.reject(Object.assign(new Error('fetch() with credentials'), { renderDeferred: true }));
+    // A path-only render has an origin only when the app configured one. Never send
+    // the synthetic URL used by the router to the network.
+    class PageRequest extends Request {
+      constructor(input, init) {
+        if (!(input instanceof Request) && input !== undefined) {
+          const value = String(input);
+          try { input = new URL(value, document.URL).href; }
+          catch (error) {
+            if (!document.URL && URL.canParse(value, 'https://render.invalid/'))
+              throw Object.assign(new TypeError("relative fetch has no page origin: set app.origin in app.json, pass an absolute HTTP(S) page URL to the renderer, or write an absolute fetch URL"), {kind: 'Refused'});
+            throw error;
+          }
+        }
+        super(input, init);
+        // Bun reports "include" on every Request. Preserve Fetch's effective credentials for anonymous renders.
+        const credentials = requestCredentials(input, init);
+        if (!['omit', 'same-origin', 'include'].includes(credentials)) throw new TypeError('credentials must be omit, same-origin or include');
+        Object.defineProperty(this, 'credentials', { value: credentials });
+      }
+      clone() { return new PageRequest(super.clone(), { credentials: this.credentials }); }
+    }
+    const fetchOwned = async (input, init, admits) => {
+      if (disposed) throw owner.signal.reason;
       const given = init?.signal, signal = given === undefined && input instanceof Request ? input.signal : given;
-      return fetched(input, { ...init, signal: signal ? AbortSignal.any([owner.signal, signal]) : owner.signal })
-        .then(noted, error => { read.fresh = 0; throw error; });
+      const options = { ...init, signal: signal ? AbortSignal.any([owner.signal, signal]) : owner.signal };
+      let request = new PageRequest(input, options), followed = false;
+      const credentials = request.credentials;
+      for (const key of ['host', 'cookie', 'cookie2']) request.headers.delete(key);
+      try {
+        for (let hops = 0; ; hops++) {
+          // A render is anonymous even when it reaches the page's origin through a redirect.
+          if (credentials === 'include' || (credentials === 'same-origin' && [location.origin, ctx.__exactRenderOrigin].includes(new URL(request.url).origin)))
+            throw Object.assign(new Error('fetch() with credentials'), { renderDeferred: true });
+          if (request.redirect !== 'follow') return noted(await fetched(request));
+          const response = await fetched(request.body ? request.clone() : request, { redirect: 'manual' });
+          const to = [301, 302, 303, 307, 308].includes(response.status) ? response.headers.get('location') : null;
+          if (!to) {
+            if (followed) {
+              const mark = r => Object.defineProperties(r, {
+                redirected: {value: true}, url: {value: response.url}, clone: {configurable: true, writable: true, value() { return mark(Response.prototype.clone.call(this)); }}
+              });
+              mark(response);
+              read.fresh = 0;
+            }
+            return noted(response);
+          }
+          response.body?.cancel().catch(() => {});
+          if (hops >= 20) throw new TypeError('fetch exceeded 20 redirects');
+          const from = new URL(request.url), target = new URL(to, from);
+          if (target.username || target.password) throw new TypeError('fetch cannot redirect to a URL with credentials');
+          if (!(admits ? admits(target.href, true) : target.origin === from.origin)) {
+            if (admits?.(target.href, false))
+              throw Object.assign(new Error("fetch() redirected outside the render server's grants"), { renderDeferred: true, unavailable: 'a network grant held by the reader' });
+            throw Object.assign(new Error(`outside the app's grants (net.fetch): redirected to ${target.origin}`), { kind: 'Refused' });
+          }
+          const headers = new Headers(request.headers);
+          if (target.origin !== from.origin) for (const key of ['authorization', 'proxy-authorization', 'cookie']) headers.delete(key);
+          const get = (response.status === 301 || response.status === 302) && request.method === 'POST' ||
+            response.status === 303 && request.method !== 'GET' && request.method !== 'HEAD';
+          if (get) {
+            for (const key of ['content-encoding', 'content-language', 'content-location', 'content-type', 'content-length']) headers.delete(key);
+            request.body?.cancel().catch(() => {});
+          }
+          request = new PageRequest(target.href, { method: get ? 'GET' : request.method, headers, body: get ? null : request.body,
+            cache: request.cache, mode: request.mode, referrer: request.referrer, referrerPolicy: request.referrerPolicy,
+            integrity: request.integrity, keepalive: request.keepalive, signal: options.signal, credentials });
+          followed = true;
+        }
+      } catch (error) { read.fresh = 0; throw error; }
+      finally { request.body?.cancel().catch(() => {}); }
     };
     // No code from a string, by any route (a function's own `constructor` too): as on Hermes, and as the page under
     // the render server's CSP, which admits no `'unsafe-eval'`. The module's `Function` and `eval` throw Hermes's
@@ -305,7 +357,7 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
       innerWidth: 390, innerHeight: 844,
       matchMedia: media => ({ media, matches: prefers.has(media.replace(/\s+/g, '')), addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }),
       setTimeout: later, clearTimeout: stopTimer, queueMicrotask: fn => queueMicrotask(() => callback(fn)),
-      performance, console, Request: RenderRequest, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal,
+      performance, console, Request: PageRequest, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal,
       ReadableStream, WritableStream, TransformStream, CountQueuingStrategy, ByteLengthQueuingStrategy, CompressionStream, DecompressionStream,
       fetch: fetchOwned,
       crypto: { subtle: new Proxy(crypto.subtle, { get: (subtle, name) => !operations.has(name) ? Reflect.get(subtle, name) : (...a) => {
@@ -326,7 +378,21 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
     try { script.runInContext(ctx); } catch (error) { dispose(); throw error; }
     // What loading the bundle read is every render's alike.
     Object.assign(read, { fresh: Infinity, random: false });
-    return { ctx, location, read, prefers, dispose, errors };
+    const at = (path) => {
+      const explicit = URL.canParse(path) ? new URL(path) : null;
+      if (explicit && !['https:', 'http:'].includes(explicit.protocol)) throw new TypeError('render needs a page path or an absolute HTTP(S) URL');
+      const trusted = explicit?.origin ?? ctx.__exactRenderOrigin;
+      const page = new URL(path, 'http://render.invalid');
+      // Only a complete URL from the embedder supplies an authority. A request target, even
+      // one starting with two slashes, contributes only its path and query.
+      document.URL = trusted ? trusted + page.pathname + page.search : undefined;
+      const url = new URL(document.URL ?? 'http://render.invalid' + page.pathname + page.search);
+      Object.assign(location, { pathname: page.pathname, search: page.search, href: url.href, origin: url.origin });
+      document.baseURI = new URL(base, url.origin).href;
+      return page;
+    };
+    at(base);
+    return { ctx, at, read, prefers, dispose, errors };
   };
   // The next render's realm, made once the last render is done and nothing waits (`render.ahead` false turns it off).
   let ahead = null, making = false;
@@ -337,12 +403,12 @@ export function renderer(dist, { closed = false, read = path => readFileSync(res
   };
   /** Begin at the page's boot state; `finish` settles its data and composes the document. */
   async function begin(location, viewport = PAGE, faults) {
-    const url = new URL(location, 'http://render.invalid');
     const made = ahead ?? realm();
     ahead = null;
     const { ctx, read } = made;
     if (faults !== undefined) ctx.__exactLaunchFaults = faults;
-    Object.assign(made.location, { pathname: url.pathname, search: url.search, href: url.href });
+    let url;
+    try { url = made.at(location); } catch (error) { made.dispose(); throw error; }
     Object.assign(made.ctx, { innerWidth: viewport.width, innerHeight: viewport.height });
     made.prefers.clear();
     for (const [on, query] of [[fixedScheme ? fixedScheme === 'dark' : viewport.dark, '(prefers-color-scheme:dark)'], [viewport.reducedMotion, '(prefers-reduced-motion:reduce)'], [viewport.reducedTransparency, '(prefers-reduced-transparency:reduce)']]) if (on) made.prefers.add(query);

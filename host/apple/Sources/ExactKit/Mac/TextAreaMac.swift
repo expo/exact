@@ -313,7 +313,7 @@ package final class TextArea: NSTextView {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(plain, forType: .string)
     }
-    // DOM's clipboard events, before the editor's own (#125, Clipboard.swift).
+    // DOM's clipboard events, before the editor's own (Clipboard.swift).
     package override func copy(_ sender: Any?) {
         NodeView.fieldEdit(owner, #selector(NodeView.copy(_:))) {
             guard let markup, let storage = textStorage else { super.copy(sender); return }
@@ -637,7 +637,7 @@ extension NSTextView {
     }
 
     /// No correction keeps the text as typed, as HTML's `autocorrect="off"`
-    /// asks (#111): no smart quotes or dashes and no text replacement, which
+    /// asks: no smart quotes or dashes and no text replacement, which
     /// AppKit would otherwise apply after a pause in typing. What the view
     /// had (AppKit's, or the person's from the Substitutions menu) is held,
     /// and given back once correction is allowed again: for the window's one
@@ -698,7 +698,7 @@ final class Field: NSTextField {
 /// tells the field's node what that one tells nobody: each change of the
 /// text an input method is composing (`markedTextChanged`), and a `copy`,
 /// `cut` or `paste` before it happens, for the node or an ancestor that
-/// hears one (#125).
+/// hears one.
 final class FieldEditor: NSTextView {
     override func mouseDown(with event: NSEvent) { pressingField(owner, event, self) { super.mouseDown(with: event) } }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { NodeView.countsFirstMouse(event) || super.acceptsFirstMouse(for: event) }

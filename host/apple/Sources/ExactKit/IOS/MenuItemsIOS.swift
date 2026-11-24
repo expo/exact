@@ -2,6 +2,16 @@
 import UIKit
 
 extension MenuHost {
+    /// The order a menu shows its rows in for its trigger's `menuOrder`
+    /// `word`; unsaid, UIKit's `.automatic`, which shows a menu that opens
+    /// upward last row first (LLP 1115 §2: unsaid, the platform's).
+    package static func order(_ word: String?) -> UIContextMenuConfiguration.ElementOrder {
+        switch word {
+        case "fixed": .fixed
+        case "priority": .priority
+        default: .automatic
+        }
+    }
     package func rejectActiveMenuProperties(in pop: NodeView) {
         for row in pop.menuRowsThroughSections {
             row.rejectNativeActiveProperties(on: "UIAction")
@@ -43,6 +53,7 @@ extension MenuHost {
                 let id = row.id, token = row.incarnation
                 let image = image(of: row)
                 let action = UIAction(title: face.title, image: image) { [weak self] action in
+                    self?.barMenuClosed() // A pick dismisses the menu.
                     // The row this menu showed, not a recycled view's next node,
                     // and still enabled: a disabled or inert button does nothing (HTML)
                     func current() -> NodeView? {

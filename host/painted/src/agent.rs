@@ -322,9 +322,7 @@ fn answer_line<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
                 .any(|k| request.get(*k).is_some())
             {
                 if cfg!(windows) {
-                    return p
-                        .agent_file_drag(id(), &request)
-                        .unwrap_or_else(|e| error(&e));
+                    return p.agent_drag(id(), &request).unwrap_or_else(|e| error(&e));
                 }
                 return error(&format!("unsupported: the {HOST_NAME} host takes no drag from outside the app (no `drop`, `dragenter` or `dragleave`); drop is supported on web, macOS and Windows"));
             }

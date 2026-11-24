@@ -305,7 +305,10 @@ export function res(
     r.slept = false;
     // In a render, keep the call that gave the answer taken: the checkpoint lists the answer in `open` when that call
     // watched a document or was refused storage or visitor credentials (checkpoint.js `answers`)
-    if (globalThis.__exactRender) r.renderCall = call;
+    if (globalThis.__exactRender) {
+      r.renderCall = call;
+      if (!globalThis.__exactProduction) for (const url of call?.urls ?? []) (r.renderUrls ??= new Set()).add(url);
+    }
     r.stand = null;
     r.stale = false;
     r.passed = undefined;
@@ -349,7 +352,6 @@ export function res(
             }
             return;
           }
-          if (globalThis.__exactRender && !globalThis.__exactProduction) for (const url of t.call?.urls ?? []) (r.renderUrls ??= new Set()).add(url);
           // what the first frame showed, said once the answer is taken
           const stood = r.stale && r.stand && [eq(p.v, r.value), r.stand];
           take(p.v, t.args, t.origin, t.generation, t.madeBy);

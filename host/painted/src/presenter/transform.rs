@@ -35,6 +35,7 @@ impl<D: DataSource> Presenter<D> {
         &mut self,
         binding: TransformDragBinding,
         now_ms: f64,
+        at_ms: f64,
     ) -> Result<Option<Hold>, String> {
         let Some(revision) = self.transform_revision(binding) else {
             return Ok(None);
@@ -43,8 +44,6 @@ impl<D: DataSource> Presenter<D> {
             return Ok(None);
         };
         let primary = pair.translate();
-        let mut velocity = VelocityTracker::new();
-        velocity.push(now_ms / 1000., primary.value);
         let view = self
             .host
             .kernel()
@@ -53,21 +52,26 @@ impl<D: DataSource> Presenter<D> {
             .id;
         self.set_collection_interaction(Some(view));
         self.dirty = true;
-        Ok(Some(Hold {
+        let mut held = Hold {
             primary,
-            velocity,
+            velocity: VelocityTracker::new(),
             kind: HeldKind::Transform {
                 binding,
                 pair,
                 revision,
             },
-        }))
+            sampled: None,
+            lifting: false,
+        };
+        held.sample(at_ms, Value::ZERO, primary.value);
+        Ok(Some(held))
     }
     pub(super) fn move_transform_drag(
         &mut self,
         held: &mut Hold,
         delta: Value,
         now_ms: f64,
+        at_ms: f64,
     ) -> Result<bool, String> {
         let HeldKind::Transform {
             binding,
@@ -89,7 +93,7 @@ impl<D: DataSource> Presenter<D> {
             self.host
                 .transform_drag_update(pair, binding, [value, pair.scale().value], now_ms)?;
         if accepted {
-            held.velocity.push(now_ms / 1000., value);
+            held.sample(at_ms, delta, value);
             self.dirty = true;
         }
         Ok(accepted)
@@ -126,7 +130,7 @@ impl<D: DataSource> Presenter<D> {
                 .value(pair.scale().token.node(), exact_motion::Property::Scale)
                 .expect("live scale"),
         ];
-        let velocities = [held.velocity.estimate(now_ms / 1000.), Value::ZERO];
+        let velocities = [held.release_velocity(), Value::ZERO];
         let dispatched = self
             .host
             .dispatch_transform_held(pair, binding, values, velocities, now_ms);

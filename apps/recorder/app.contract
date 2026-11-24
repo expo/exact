@@ -13,6 +13,7 @@
 // no live transcript, since a control may not start speech recognition.
 use getUserMedia, stopTrack, microphoneStatus, MediaStream, MediaStreamTrack, MicrophoneStatus from "@exact/media-capture"
 use startMediaRecorder, stopMediaRecorder, pauseMediaRecorder, resumeMediaRecorder, mediaRecorderState, audioLevel, MediaRecorderInfo, RecordedMedia, AudioLevel from "@exact/recording"
+use notificationStatus, requestNotificationPermission, NotificationStatus from "@exact/notifications"
 use RecordingActivity, RecordingState from "./activities.contract"
 use startSpeechRecognition, stopSpeechRecognition, abortSpeechRecognition, speechRecognitionState, speechRecognitionStatus, speechRecognitionAvailability, installSpeechRecognition, SpeechRecognitionInfo, SpeechRecognitionState, SpeechRecognitionStatus, SpeechRecognitionAvailability, SpeechRecognitionInstall from "@exact/speech-recognition"
 
@@ -44,8 +45,11 @@ component Recorder
   state activityId = ""
   // Whether the running press started a take that records.
   state pressedTake = false
+  // A press's activity did not start with notifications off: Android shows it as one, and only the app may ask.
+  state askNotify = false
   resource clock = exactTime() as shape Clock
   resource mic = microphoneStatus() as shape MicrophoneStatus else empty()
+  resource notify = notificationStatus() as shape NotificationStatus else empty()
   resource library = takes() as shape Takes else empty()
   // Once a second, for the take's level: the bars are the waveform view's own, read below the runner (D13).
   resource level = audioLevel(track=trackId, interval=1000) as shape AudioLevel else empty()
@@ -70,6 +74,7 @@ component Recorder
   mutation pressOpened as shape MediaStream then pressArm
   mutation pressStarted as shape MediaRecorderInfo then pressBegun
   mutation ended as shape ActivityHandle then forget
+  mutation allowed as shape NotificationStatus refreshes notify
   derive recording = recorderId != ""
   derive visibleTakes = library.takes.filter(t => t.name != takeName)
   derive busy = pending(opened) or pending(started) or pending(saved) or pending(transcribed) or pending(shown) or pending(pressOpened) or pending(pressStarted) or pending(ended)
@@ -106,14 +111,24 @@ component Recorder
     if activityId != "" and not recording and not busy
       dismiss()
     else if not recording and not busy
-      send shown = startActivity("recording", RecordingState(startedAt=clock.epochAtZero + performanceNow()))
+      send shown = startActivity("recording", RecordingState(label="Recording", startedAt=clock.epochAtZero + performanceNow()))
   action capture
     match shown
       case some(a)
         activityId = a.id
+        askNotify = false
         send pressOpened = getUserMedia(audio=true, apple.categoryOptions=["mixWithOthers"])
       case none
         activityId = ""
+  // The activity is refused with notifications off (Android shows it as one); only the app may ask for them.
+  task unannounced when failed(shown) key=true
+    change(needNotify)
+  // Android shows the activity as a notification; elsewhere a refused activity needs no notifications.
+  action needNotify
+    askNotify = match notify.android { case some(a) => not a.areNotificationsEnabled or a.channels.filter(c => c.id == "default" and c.importance == "none").length > 0, case none => false }
+  action allowNotify
+    askNotify = false
+    send allowed = requestNotificationPermission()
   action pressArm
     match pressOpened
       case some(s)
@@ -137,7 +152,7 @@ component Recorder
   // The activity's id is kept until its end is answered, so a failed end is tried again at the next.
   action dismiss
     if activityId != ""
-      send ended = endActivity(activityId, RecordingState(startedAt=0), "immediate")
+      send ended = endActivity(activityId, RecordingState(label="", startedAt=0), "immediate")
   action forget
     activityId = ""
   // Supersedes the microphone's request, whatever stage it is at.
@@ -242,6 +257,14 @@ component Recorder
       if pending(opened)
         button press=cancelRecord testId="cancel-record"
           text "Cancel"
+      if askNotify
+        text "Recording from Quick Settings shows a notification while it records, so Recorder needs its notifications on." testId="notify-needed" font-size=13 color="-exact-secondary-label"
+        if notify.state == "prompt"
+          button press=allowNotify testId="notify-allow"
+            text "Allow Notifications"
+        else
+          button press=openSettings testId="notify-settings"
+            text "Open Settings"
       if denied
         text "The microphone is off for Recorder. Turn it on in Settings to record." testId="denied" font-size=13 color="-exact-secondary-label"
         button press=openSettings testId="open-settings"

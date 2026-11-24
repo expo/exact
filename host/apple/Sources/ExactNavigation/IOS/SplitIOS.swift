@@ -23,6 +23,7 @@ private final class SplitController: UISplitViewController {
 }
 
 final class SplitIOS: NSObject, UISplitViewControllerDelegate {
+    private let write: ([UIViewController], UINavigationController, Bool) -> Bool
     let controller: UISplitViewController = SplitController(style: .doubleColumn)
     /// The list's column, N0: the stack's root route.
     let list: UINavigationController
@@ -68,7 +69,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// moves its location, and is a new detail all the same (`show`).
     var rule: StackSplit?
     var topLocation: String?
-    /// The stack last shown, root first, shown again once UIKit has expanded or collapsed.
+    /// The latest requested stack, root first, reapplied when the move settles.
     private var stack: [RouteController] = []
     /// What `changed` last reported.
     private var told: Showing?
@@ -80,7 +81,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private var move: Move?
     private enum Move { case expanding, collapsing }
 
-    init(list: UINavigationController, detail: UINavigationController) {
+    init(list: UINavigationController, detail: UINavigationController,
+         write: @escaping ([UIViewController], UINavigationController, Bool) -> Bool) {
+        self.write = write
         self.list = list
         self.detail = detail
         super.init()
@@ -176,56 +179,54 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// `show(_:)` reveals a new detail under a list shown over it, and the
     /// list over the detail alone when the stack goes back to its root
     /// (LLP 1127 D6); collapsed, it pushes and pops N1. `relocated`: N1's
-    /// top stays and shows another location.
-    func show(_ stack: [RouteController], animated: Bool, relocated: Bool = false) {
-        guard let root = stack.first else { return }
-        let moved = relocated || !self.stack.elementsEqual(stack, by: ===), hadDetail = self.stack.count > 1
+    /// top stays and shows another location. Returns whether the projection
+    /// went through, including a stack already in place.
+    @discardableResult
+    func show(_ stack: [RouteController], animated: Bool, relocated: Bool = false) -> Bool {
+        guard let root = stack.first else { return false }
         self.stack = stack
         // UIKit is moving N1 between the columns: the stack shows once it has
         // expanded or collapsed (`settle`). Written now, the columns would be
         // set from the split's state before the move, and UIKit, finding
         // them changed, pushed the detail twice and asserted.
-        if moving { return }
+        if moving { return false }
         let rest = Array(stack.dropFirst())
         let current = detailRoutes
+        // Compare with the installed columns so a request kept during a move still reveals its detail
+        let moved = relocated || list.stackRoutes.first !== root || !current.elementsEqual(rest, by: ===)
+        let hadDetail = !current.isEmpty
         let within = !current.isEmpty && !rest.isEmpty
             && NavigationRules.isPushOrPop(from: current.map(ObjectIdentifier.init), to: rest.map(ObjectIdentifier.init))
         let column: [UIViewController] = [root] + (nested ? [detail] : [])
-        if !Self.same(list.viewControllers, column) { list.setViewControllers(column, animated: false) }
-        if controller.isCollapsed {
-            if rest.isEmpty {
-                // Nested, UIKit pops N1, which keeps its routes and its transition for the pop; out of sight, it empties
-                if nested { reveal(.primary, animated: animated) } else if !Self.same(detail.viewControllers, [empty]) {
-                    keepTransition([])
-                    detail.setViewControllers([empty], animated: false)
-                }
-                return
-            }
-            // Nested, a push or pop within N1 animates as a pushed stack's does
-            // (`NavigationHost.sync`), and so does a route that takes the place
-            // of N1's top (a `replace`) as UIKit's push
-            let arrives = !current.isEmpty && !current.contains { $0 === rest.last }
-            let beneath = rest.count > 1 ? rest[rest.count - 2] : root
-            keepTransition(rest)
-            if !Self.same(detail.viewControllers, rest) {
-                if nested, within || arrives, let top = rest.last, !current.contains(where: { $0 === top }) { willPush(top, beneath) }
-                detail.setViewControllers(rest, animated: animated && (within || arrives) && nested)
-            }
-            if !nested { reveal(.secondary, animated: animated) }
-            return
+        if !Self.same(list.viewControllers, column), !write(column, list, false) { return false }
+        let collapsed = controller.isCollapsed
+        if collapsed, nested, rest.isEmpty {
+            // Let UIKit pop nested N1 with its routes and zoom still in place
+            reveal(.primary, animated: animated)
+            return true
         }
-        // Expanded, a push within N1, or a route that takes the place of its top over the same base, is UIKit's
-        // push, zooming as a pushed stack's does (`NavigationHost.sync`); a new base replaces the last at once
         let next: [UIViewController] = rest.isEmpty ? [empty] : rest
-        keepTransition(rest)
-        let arrivesOnBase = rest.count > 1 && current.first === rest.first && !current.contains { $0 === rest.last }
-        if !Self.same(detail.viewControllers, next) {
-            if within || arrivesOnBase, rest.count > 1, let top = rest.last, !current.contains(where: { $0 === top }) { willPush(top, rest[rest.count - 2]) }
-            detail.setViewControllers(next, animated: animated && (within || arrivesOnBase))
+        let writingDetail = !Self.same(detail.viewControllers, next)
+        if !collapsed || !rest.isEmpty || writingDetail { keepTransition(rest) }
+        if writingDetail {
+            // Animate within N1 when it is nested or expanded. Expanded, a replacement over the
+            // same base arrives as a push and a replacement of the base swaps in place.
+            let arrives = !current.isEmpty && !current.contains { $0 === rest.last }
+            let movesWithinDetail = collapsed ? nested && (within || arrives)
+                : within || (arrives && rest.count > 1 && current.first === rest.first)
+            if movesWithinDetail, let top = rest.last, !current.contains(where: { $0 === top }), collapsed || rest.count > 1 {
+                willPush(top, rest.count > 1 ? rest[rest.count - 2] : root)
+            }
+            guard write(next, detail, animated && movesWithinDetail) else { return false }
         }
-        guard moved else { return }
-        if !rest.isEmpty, [.oneOverSecondary, .twoOverSecondary].contains(controller.displayMode) { reveal(.secondary, animated: animated) }
-        if rest.isEmpty, hadDetail, controller.displayMode == .secondaryOnly { reveal(.primary, animated: animated) }
+        if collapsed {
+            // UIKit animates the push of N1 itself when it is outside N0
+            if !rest.isEmpty, !nested { reveal(.secondary, animated: animated) }
+        } else if moved {
+            if !rest.isEmpty, [.oneOverSecondary, .twoOverSecondary].contains(controller.displayMode) { reveal(.secondary, animated: animated) }
+            if rest.isEmpty, hadDetail, controller.displayMode == .secondaryOnly { reveal(.primary, animated: animated) }
+        }
+        return true
     }
 
     /// N1's own transition for `rest`, the routes it holds: its base's zoom,

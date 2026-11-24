@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import exact.backgroundtransfer.Lifecycle.Abort
@@ -159,12 +160,13 @@ class BackgroundTransferModule internal constructor(context: ExtensionContext, m
         }
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         if (destroyed) return
-        // A later call can change the context while this one waits its turn.
-        val authority = context.authority
-        val origin = context.origin
-        val person = context.userActivation
+        val authority = cause.authority
+        val origin = cause.origin
+        val person = cause.userActivation
         if (name == "backgroundFetchStatus") {
             reply(JSONObject().put("available", true).put("state", if (denied) "denied" else "granted"))
             return
@@ -196,7 +198,7 @@ class BackgroundTransferModule internal constructor(context: ExtensionContext, m
         }
     }
 
-    /** [person]: the call came inside a person's activation window ([ExtensionContext.userActivation]). */
+    /** [person]: the call came inside a person's activation window ([Cause.userActivation]). */
     private fun start(args: JSONObject, authority: String, origin: String, person: Boolean, reply: (JSONObject) -> Unit) {
         val id = args.getString("id")
         val list = args.getJSONArray("requests")

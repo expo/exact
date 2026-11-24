@@ -24,6 +24,25 @@ macro_rules! canvas_jni_frames {
             with(|h| h.frame_loaded(id as u32, key, session as u64));
         }
 
+        /// The reader's iframe took the platform's focus or lost it.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_frameFocused(
+            _env: *mut JNIEnv,
+            _class: jclass,
+            id: jint,
+            slot: jint,
+            generation: jint,
+            session: jlong,
+            focused: $crate::canvas::jni_sys::jboolean,
+        ) {
+            let key = $crate::canvas::ModuleKey {
+                index: slot as u32,
+                generation: generation as u32,
+            };
+            let focused = focused != $crate::canvas::jni_sys::JNI_FALSE;
+            with(|h| h.frame_focused(id as u32, key, session as u64, focused));
+        }
+
         /// An iframe's `FrameNavigation` record (LLP 1020.002 D2).
         #[no_mangle]
         #[allow(clippy::too_many_arguments)]

@@ -135,7 +135,7 @@ final class StoreRefreshTests: XCTestCase {
         // Due 10 s after its window booted, however long the process ran
         // before: a boot starts on the live clock, not at its zero. Read
         // here, before the waits below, which under load can outlast it. A
-        // task's timer is Foundation's (#1144): its row's due time.
+        // task's timer is Foundation's: its row's due time.
         let due = try XCTUnwrap(readers[0].taskTimers.nextDue, "the short task's timer is armed")
         XCTAssertTrue((booting + 10000...booted + 10000).contains(due), "due \(due), booted between \(booting) and \(booted)")
         app.sharedStore.firstPixel()

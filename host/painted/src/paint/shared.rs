@@ -122,6 +122,11 @@ impl Painter {
         clip: Option<Rect4>,
     ) {
         let hit_space = walk.hit_space;
+        // A subtree painted out of its ancestors (a stage's route, a split's
+        // pane) keeps the scheme they give it.
+        let previous = self.dark;
+        self.dark =
+            super::scheme_of(walk.scene.kernel, walk.scene.presented, id).unwrap_or(previous);
         self.without_grid(grid::changes_axes(ts), |painter| {
             let offset = if painter.flatten == Some(id) {
                 offset
@@ -132,6 +137,7 @@ impl Painter {
                 painter.node_at_inner(walk, id, ts, offset, clip);
             });
         });
+        self.dark = previous;
         walk.hit_space = hit_space;
     }
 
@@ -206,7 +212,7 @@ impl Painter {
         let turned_by_reader = |id| {
             let p = (walk.scene.presented)(id);
             p.lowered & crate::host::lower::LOWER_TRANSFORM != 0
-                && (p.rotate != 0.0 || p.scale * p.press <= 0.0)
+                && (p.rotate != 0.0 || p.scale.0 * p.press <= 0.0 || p.scale.1 * p.press <= 0.0)
         };
         let upright = transform.kx == 0.0
             && transform.ky == 0.0

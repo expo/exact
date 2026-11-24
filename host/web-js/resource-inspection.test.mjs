@@ -361,6 +361,7 @@ test.each([
         ['title', 'title', [], 'Hello'],
       ], pending: [], readers: [0, 2] });
       document.head.append(cp);
+      await import('/host/web-js/page-checkpoint.js'); // a rendered page's entry links its reader (build.mjs)
       const rt = await import('/host/web-js/rt.js'), { resEach } = await import('/host/web-js/each.js');
       const { answers } = await import('/host/web-js/checkpoint.js');
       const requests = [];
@@ -402,6 +403,7 @@ test('a page rendered at another location seeds no answer and journals that it r
       cp.type = 'application/vnd.exact.checkpoint';
       cp.textContent = JSON.stringify({ location: '/elsewhere', answers: [['title', 'title', [], 'Hello']], pending: [], readers: [] });
       document.head.append(cp);
+      await import('/host/web-js/page-checkpoint.js'); // a rendered page's entry links its reader (build.mjs)
       const rt = await import('/host/web-js/rt.js');
       const requests = [];
       rt.data.answer = (source, args) => {
@@ -427,6 +429,7 @@ test('an early input whose element is gone is dropped and journaled', async () =
       cp.type = 'application/vnd.exact.checkpoint';
       cp.textContent = JSON.stringify({ location: '/elsewhere', answers: [], pending: [] });
       document.head.append(cp);
+      await import('/host/web-js/page-checkpoint.js'); // a rendered page's entry links its reader (build.mjs)
       const root = document.getElementById('exact-root') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'exact-root' }));
       const gone = root.appendChild(document.createElement('button')), kept = document.body.appendChild(document.createElement('button'));
       const clicks = [];
@@ -1111,6 +1114,7 @@ test('a resource idle at its first settlement shows its placeholder over a build
       cp.type = 'application/vnd.exact.checkpoint';
       cp.textContent = JSON.stringify({ location: '/', answers: [['kept', 'echo', [], 'page answer']] });
       document.head.append(cp);
+      await import('/host/web-js/page-checkpoint.js'); // a rendered page's entry links its reader (build.mjs)
       const rt = await import('/host/web-js/rt.js');
       // the source is not ready until `ready`; a write's never answers
       const asked = [];
@@ -1241,6 +1245,7 @@ test('a build-time answer is journaled as one until an answer lands, and a place
       cp.type = 'application/vnd.exact.checkpoint';
       cp.textContent = JSON.stringify({ location: '/', answers: [] });
       document.head.append(cp);
+      await import('/host/web-js/page-checkpoint.js'); // a rendered page's entry links its reader (build.mjs)
       const rt = await import('/host/web-js/rt.js'), { install, reader } = await import('/host/web-js/store-reader.js');
       localStorage.setItem(rt.Kept('secret') + 'token', 'private');
       install(['token']);

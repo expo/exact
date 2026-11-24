@@ -687,7 +687,7 @@ fn an_argument_group_with_no_reader_is_released_after_its_successor_is_asked() {
     let calls = calls.lock().unwrap().clone();
     let at = |want: &Json| calls.iter().position(|c| c == want);
     let asked_b = at(
-        &json!({ "extension": "sensor", "source": "level", "args": { "track": "b", "interval": 50.0 } }),
+        &json!({ "extension": "sensor", "source": "level", "origin": "app", "args": { "track": "b", "interval": 50.0 } }),
     );
     let released_a = at(
         &json!({ "extension": "sensor", "release": "level", "args": { "track": "a", "interval": 50.0 } }),
@@ -948,8 +948,7 @@ fn a_reader_whose_gate_closed_releases_its_live_source() {
     let mut parked = Vec::new();
     pump(&mut r, &mut parked);
     let group = |track: &str| json!({ "track": track, "interval": 50.0 });
-    let asked =
-        |track: &str| json!({ "extension": "sensor", "source": "level", "args": group(track) });
+    let asked = |track: &str| json!({ "extension": "sensor", "source": "level", "origin": "app", "args": group(track) });
     let released =
         |track: &str| json!({ "extension": "sensor", "release": "level", "args": group(track) });
     let whole = json!({ "extension": "sensor", "release": "level" });

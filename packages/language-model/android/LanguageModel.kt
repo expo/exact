@@ -13,6 +13,7 @@
 //   process.
 package exact.languagemodel
 
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -225,7 +226,7 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** A prompt's response: made now, generated once its session is free. */
-    private fun respond(s: ModelSession, args: JSONObject, streaming: Boolean): ModelResponse {
+    private fun respond(s: ModelSession, args: JSONObject, streaming: Boolean, request: Int?): ModelResponse {
         var schema: JSONObject? = null
         var typed = false
         val c = args.opt("responseConstraint")
@@ -238,7 +239,7 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
         val input = args.opt("input") as? String ?: throw Refused("TypeError", "`input` is a string")
         serial += 1
         val r = ModelResponse("response-$serial", s, schema, typed, args.optBoolean("omitResponseConstraintInput"), !streaming,
-            input, context.request, args.optJSONObject("android") ?: JSONObject())
+            input, request, args.optJSONObject("android") ?: JSONObject())
         responses[r.id] = r
         r.request?.let { byRequest[it] = r }
         s.count += 1
@@ -317,10 +318,10 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
         return (0 until outputs.length()).any { outputs.optJSONObject(it)?.optString("type") == "tool-call" }
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, reply)
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
 
-    override fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) {
-        val origin = context.origin
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
+        val origin = cause.origin
         val session = { sessions[args.optString("session")] }
         try {
             when (name) {
@@ -330,7 +331,7 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
                     val s = session() ?: return reply(error("InvalidStateError"))
                     // ML Kit generates only for the app in the foreground (D10).
                     if (!context.foreground) return reply(JSONObject().put("error", "NotAllowedError").put("reason", "background"))
-                    val r = respond(s, args, name == "promptStreaming")
+                    val r = respond(s, args, name == "promptStreaming", cause.request)
                     if (name == "promptStreaming") return reply(JSONObject().put("id", r.id).put("session", s.id))
                     val settle = { done: ModelResponse ->
                         when {

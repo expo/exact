@@ -203,7 +203,7 @@ struct Saved {
     journal_next: u64,
     overflow_logged: bool,
     published: std::collections::BTreeMap<String, crate::values::Stored>,
-    // The least privileged origin posted into the world, 0 for the app's (`origin.rs`).
+    // The set of origins posted into the world, 0 for the app's (`origin.rs`).
     origin: u8,
 }
 // Host-only phase: one tick is 1_000_000 units. Only the bounded remainder is
@@ -326,7 +326,7 @@ pub struct Sim<G: Game> {
     present_owed: bool,
     pub(crate) development_edits: bool,
     pub(crate) edits_admitted: bool,
-    // The least privileged origin posted since the fresh start (`origin.rs`).
+    // The set of origins posted since the fresh start (`origin.rs`).
     origin: u8,
     game: PhantomData<G>,
 }

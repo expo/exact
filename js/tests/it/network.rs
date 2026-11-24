@@ -18,6 +18,29 @@ const HBC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/network.hbc"));
 const LIMIT: Duration = Duration::from_secs(30);
 const SHAPE: &str = "shape Result\n  text: string\n  order: string\n";
 
+#[test]
+fn relative_fetch_names_the_missing_native_origin() {
+    use exact_runner::{DataSource, Store};
+    let mut module = Module::loaded(HBC.to_vec(), "test.network", "net.fetch http:").unwrap();
+    let plan = contract::compile(&format!(
+        "{SHAPE}component App\n  resource row = one(\"\", \"data.json\", \"GET\") as shape Result\n  view\n    text row.text\n"
+    )).unwrap();
+    module.bind(&plan);
+    let error = module
+        .answer(
+            &mut Store::default(),
+            "one",
+            &[Value::str(""), Value::str("data.json"), Value::str("GET")],
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("no document origin on this host: write an absolute URL"),
+        "{error}"
+    );
+}
+
 #[derive(Default)]
 struct Counts {
     arrived: usize,

@@ -127,7 +127,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package var arrangeShift = CGPoint.zero
     /// How far its scroller's scroll moves a sticky box (LLP 1083, `Sticky.swift`).
     package var stickyOffset = CGPoint.zero
-    package var scale: CGFloat = 1
+    package var scale = CGPoint(x: 1, y: 1)
     package var rotate: CGFloat = 0
     var rotationAxis: [Double] = [0, 0, 0]
     weak package var presenter: Presenter?
@@ -563,7 +563,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
 
     func updateMaterial() {
         let requested = props["backgroundMaterial"]
-        defer { applyBackdrop(); syncGlassSlot(); syncGlassGroup(); syncMenuPanelScroll() }
+        defer { applyBackdrop(); syncGlassSlot(); syncGlassGroup(); syncScrollCorner() }
         let kind = requested ?? (needsSheetMaterial ? "sheet" : paintedMenuRadius != nil && !unevenCorners ? "glass" : nil)
         if materialKind != kind {
             releaseGlassIsolation()
@@ -1148,7 +1148,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         let ownScroller = kind == "text" || isTextControl
         let ox = ownScroller ? "visible" : s["overflow_x"]?.string ?? "visible", oy = ownScroller ? "visible" : s["overflow_y"]?.string ?? "visible"
         if ((ox == "scroll" || ox == "auto") || (oy == "scroll" || oy == "auto")) && scroll == nil {
-            let sv = ChainingScrollView(frame: bounds)
+            let sv = ChainingScrollView(frame: bounds, everyWheelEvent: needsEveryWheelEvent)
             sv.pointerOwner = self
             sv.collectionWillScroll = { [weak self] in
                 guard let self else { return }
@@ -1306,9 +1306,9 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         if let row = superview as? NodeView, row.style["appearance"] != nil { row.needsLayout = true } // its bezel (FormRowsMac.swift)
         if focusVisible { noteFocusRingMaskChanged() } // the ring follows the box
         layerPaintCache = nil
-        if hasBoxPaint || clipsToBounds || clipBox != nil { applyClipRadius() }
+        if hasBoxPaint || clipsToBounds || clipBox != nil || scroll != nil { applyClipRadius() } // a scroller's corner is its scroll view's
         syncEllipticalClip()
-        if materialView != nil { applyMaterialRadius(); syncMenuPanelScroll() }
+        if materialView != nil { applyMaterialRadius() }
         if !backdropOperations.isEmpty { applyBackdrop() }
         // Border, gradient and image sublayers follow the new size.
         if layerBoxEligible && (hasBoxPaint || kind == "image") { needsDisplay = true }

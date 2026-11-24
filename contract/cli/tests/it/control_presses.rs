@@ -432,3 +432,74 @@ fn an_answer_a_press_kept_is_the_presss_after_it_ends() {
         "{logs}"
     );
 }
+
+#[test]
+fn a_control_that_opens_the_app_is_pressed_from_it_in_front() {
+    let app = App::new("foreground");
+    let mut r = boot(&app);
+    let (go, jot) = (digest(&r, "go"), digest(&r, "jot"));
+    let compat = serde_json::json!({ "inputs": { "controls": [
+        { "control": { "kind": "go" }, "placement": { "offered": [{ "from": "10", "intent": "foreground" }] } },
+        { "control": { "kind": "jot" }, "placement": { "offered": [{ "from": "10", "intent": "tool" }] } },
+    ] } });
+    r.place_controls(&compat.to_string());
+    let front = CallHow {
+        foreground: true,
+        ..CallHow::default()
+    };
+    // Each is pressed only from where its placement says.
+    let err = r.press_control("go", &go, CallHow::default()).unwrap_err();
+    assert!(err.contains("opens the app"), "{err}");
+    let err = r.press_control("jot", &jot, front.clone()).unwrap_err();
+    assert!(err.contains("where it is pressed"), "{err}");
+
+    // A page hidden by the time the press dispatches refuses it.
+    let page = r.page();
+    r.set_page(exact_runner::Page {
+        hidden: true,
+        ..page
+    })
+    .unwrap();
+    r.press_control("go", &go, front.clone()).unwrap();
+    settle(&mut r);
+    let hidden = &calls(&r)[0];
+    assert_eq!(
+        (hidden["outcome"].as_str(), hidden["reason"].as_str()),
+        (Some("refused"), Some("unavailable")),
+        "{hidden}"
+    );
+    assert!(r.take_requests().iter().all(|o| o.target != "logged"));
+
+    r.set_page(page).unwrap();
+    r.press_control("go", &go, front).unwrap();
+    settle(&mut r);
+    assert_eq!(calls(&r)[1]["origin"], "action", "{}", logs(&r));
+    answer_add(&mut r);
+    assert_eq!(calls(&r)[1]["outcome"], "ok", "{}", logs(&r));
+}
+
+#[test]
+fn a_press_that_opened_the_app_loses_the_persons_names_once_cancelled() {
+    let app = App::new("opened-cancelled");
+    let mut r = boot(&app);
+    let go = digest(&r, "go");
+    let compat = serde_json::json!({ "inputs": { "controls": [
+        { "control": { "kind": "go" }, "placement": { "offered": [{ "from": "10", "intent": "foreground" }] } },
+    ] } });
+    r.place_controls(&compat.to_string());
+    let front = CallHow {
+        foreground: true,
+        ..CallHow::default()
+    };
+    let id = r.press_control("go", &go, front).unwrap();
+    settle(&mut r);
+    assert_eq!(calls(&r)[0]["origin"], "action");
+    let reply = r.call_agent("cancel", &format!(r#"{{"op":"cancel","id":{id}}}"#));
+    assert!(reply.unwrap().unwrap().contains("running"));
+    answer_add(&mut r);
+    assert!(
+        logs(&r).contains("person-required"),
+        "its `then` may not ask for the pin: {}",
+        logs(&r)
+    );
+}

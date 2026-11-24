@@ -546,7 +546,7 @@ export function exercise(source: string): string {
     const nf=new Intl.NumberFormat('en-US');
     out['en-US resolved roundingMode']=[nf,new Intl.NumberFormat('en-US',{roundingMode:'floor'} as Intl.NumberFormatOptions),new Intl.NumberFormat('en-US',{notation:'compact',roundingMode:'halfEven'} as Intl.NumberFormatOptions)]
       .map(f=>String((f.resolvedOptions() as {roundingMode?:string}).roundingMode)).concat([String(nf.format===nf.format),typeof Object.getOwnPropertyDescriptor(Intl.NumberFormat.prototype,'format')?.get]);
-    // Intl.Locale and its week (#118): the tag, every field, and getWeekInfo(), or the error's name.
+    // Intl.Locale and its week: the tag, every field, and getWeekInfo(), or the error's name.
     const fields=['baseName','language','script','region','variants','calendar','caseFirst','collation','firstDayOfWeek','hourCycle','numeric','numberingSystem'];
     const locale=(tag:unknown,options?:object):string[]=>{
       try{const l:any=new (Intl as any).Locale(tag,options);return [String(l),...fields.map(f=>String(l[f])),JSON.stringify(l.getWeekInfo()),Object.prototype.toString.call(l),JSON.stringify(l)];}

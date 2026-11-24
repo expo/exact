@@ -42,11 +42,11 @@ reading in it.
 
 ## Before you call it done
 
-`verify` (`verify ios`) checks the first screen, test ends and a relaunch, light and dark.
-A modal alert at a test's end gets one finding. Answer it to check the page beneath,
-including at the largest text size. Web reloads check saved
-values even with an alert open; changed values are findings, and an `aria-invalid`
-field is a draft. Screenshots: `.exact/verify/`. End a test on each screen to check it.
+Web and iOS `verify` check the launch, test ends and relaunch in light and dark.
+Answer a modal alert to check the screen beneath at the largest text size.
+A `squeezed` scroller names its port and content extent. Web reloads check saved
+values even under alerts. Changed values are findings. An `aria-invalid` field is a draft.
+Screenshots are in `.exact/verify/`. End a test on each screen.
 Accept a design finding in app.json: `"verify": {"accept":
 [{"finding": "contrast", "node": "<testId>", "why": "…"}]}`.
 Drive: `agent web --storage s1 …`.

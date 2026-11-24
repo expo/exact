@@ -202,7 +202,7 @@ impl Context {
             extension,
             agent,
             session: "1".into(),
-            origin: RefCell::new("app".into()),
+            origin: RefCell::new("none".into()),
             request: Cell::new(None),
             foreground: Cell::new(true),
             now,

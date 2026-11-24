@@ -300,7 +300,10 @@ test('screen fixtures publish through one file transaction and preserve old file
       });
       await exact.extensions.call({ extension:'capture', source:'ready' });
       const directory = 'app:/tmp/My Captures';
-      const paths = [0, 1].map(n => directory + '/screen-' + n + '.png');
+      // Each capture names its images by a random id (screen-capture/web `captureId`): pinned here, so the test
+      // knows the paths before a capture writes them.
+      crypto.getRandomValues = bytes => bytes.fill(0);
+      const paths = [0, 1].map(n => directory + '/screen-' + '0'.repeat(32) + '-' + n + '.png');
       await files.write(paths[0], new Uint8Array([7]));
       await files.mkdir(paths[1]);
       const screens = [{left:0, top:0, width:64, height:40, devicePixelRatio:1.25},
@@ -319,13 +322,13 @@ test('screen fixtures publish through one file transaction and preserve old file
         const image = await createImageBitmap(new Blob([await files.read(path)]));
         const size = [image.width, image.height]; image.close(); return size;
       }));
-      return {failed, preserved, aborted, afterAbort, count:answer.captures.length, sizes};
+      return {failed, preserved, aborted, afterAbort, written:answer.captures.map(c => c.path), paths, sizes};
     });
     expect(result.failed.error).toBe('EncodingError');
     expect(result.preserved).toEqual([7]);
     expect(result.aborted).toBe('AbortError');
     expect(result.afterAbort).toEqual([[7], [8]]);
-    expect(result.count).toBe(2);
+    expect(result.written).toEqual(result.paths);
     expect(result.sizes).toEqual([[80, 50], [160, 80]]);
   } finally { await browser.close(); server.stop(true); }
 });

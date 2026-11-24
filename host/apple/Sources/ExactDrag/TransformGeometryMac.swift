@@ -4,7 +4,8 @@ import ExactKit
 
 extension NodeView {
     package func transformDragModel() -> TransformDragPosition? {
-        TransformDragPosition(x: Double(translate.x), y: Double(translate.y), scale: Double(scale))
+        guard scale.x == scale.y else { return nil }
+        return TransformDragPosition(x: Double(translate.x), y: Double(translate.y), scale: Double(scale.x))
     }
     package func transformDragPresentation() -> TransformDragPosition? {
         guard rotate == 0, let layer else { return nil }
@@ -24,7 +25,7 @@ extension Presenter {
         var ancestor: NSView? = handle
         while let view = ancestor {
             if view !== target {
-                if let node = view as? NodeView, node.translate != .zero || node.scale != 1 || node.rotate != 0 { return nil }
+                if let node = view as? NodeView, node.translate != .zero || node.scale != CGPoint(x: 1, y: 1) || node.rotate != 0 { return nil }
                 if let layer = view.layer {
                     if !layer.affineTransform().isIdentity || !(layer.presentation()?.affineTransform().isIdentity ?? true) { return nil }
                     if (layer.animationKeys() ?? []).contains(where: { $0.contains("transform") || $0.contains("position") || $0.contains("bounds") }) { return nil }

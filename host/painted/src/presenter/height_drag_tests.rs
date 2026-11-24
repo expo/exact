@@ -289,8 +289,11 @@ fn agent_contact_phases_drive_presenter_and_refuse_malformed_or_second_down() {
     assert!(p.collection_interaction().is_none());
 }
 
+/// The driver's move keeps its own timeline while the clock stands still: the
+/// release velocity is the move's, 130 px in 80 ms (LLP 1057.001 §3), and the
+/// lift where the finger already was is no sample.
 #[test]
-fn agent_height_drag_releases_at_rest_without_advancing_time() {
+fn agent_height_drag_releases_at_the_moves_pace_without_advancing_time() {
     let mut p = boot(APP);
     let handle = id(&p, "handle");
     for command in [
@@ -305,8 +308,29 @@ fn agent_height_drag_releases_at_rest_without_advancing_time() {
         assert_eq!(p.host.now(), 0.);
     }
     assert_eq!(text(&p, "count"), "1");
-    assert_eq!(text(&p, "velocity"), "0");
+    let velocity: f64 = text(&p, "velocity").parse().unwrap();
+    assert!((velocity - 1625.).abs() < 1e-6, "{velocity}");
     assert!(text(&p, "seen").parse::<f64>().unwrap() > 180.);
+}
+
+/// A pause before the lift is sampled: the same drag held 120 ms releases at
+/// rest (LLP 1057.001 §6).
+#[test]
+fn agent_height_drag_paused_before_its_lift_releases_at_rest() {
+    let mut p = boot(APP);
+    let handle = id(&p, "handle");
+    for command in [
+        format!(r#"{{"op":"tap","id":{handle},"phase":"down","x":200,"y":340}}"#),
+        r#"{"op":"tap","phase":"move","dx":0,"dy":-130,"ms":80}"#.into(),
+        r#"{"op":"tap","phase":"hold","ms":120}"#.into(),
+        r#"{"op":"tap","phase":"up"}"#.into(),
+    ] {
+        let reply: serde_json::Value =
+            serde_json::from_str(&crate::agent::handle(&mut p, &command)).unwrap();
+        assert!(reply.get("error").is_none(), "{reply}");
+    }
+    assert_eq!(text(&p, "count"), "1");
+    assert_eq!(text(&p, "velocity"), "0");
 }
 
 #[test]

@@ -647,10 +647,10 @@ uint32_t exact_share_land(ExactRuntime rt);
  * 63 = scrolldragend: UTF-8 velocityX,velocityY[,targetLeft,targetTop]: UIKit's
  *      release velocity in points (CSS px) per millisecond, positive as
  *      scrollLeft/scrollTop grow, and where the momentum will rest, when known.
- * 6 = key (keydown), 43 = keyup and 44 = keycapture (#140): UTF-8 chord (`Shift+Meta+b`),
+ * 6 = key (keydown), 43 = keyup and 44 = keycapture: UTF-8 chord (`Shift+Meta+b`),
  *      optionally newline, KeyboardEvent.code (`KeyB`, "" unknown), newline,
  *      true|false for repeat, and optionally newline, true|false for isComposing;
- * 46 = focusin, 47 = focusout (#283): UTF-8 `<target byte length>:<target id>`
+ * 46 = focusin, 47 = focusout: UTF-8 `<target byte length>:<target id>`
  *      then `0` (no relatedTarget) or `1<related id>`;
  * 64 = host look states (UTF-8 bits: 1 hover, 2 focus-visible); presentation only.
  * any other kind is refused with an error batch.
@@ -716,11 +716,13 @@ void exact_list_covered(ExactRuntime rt, uint32_t view, double start, double end
 /* Property: 0 translate, 1 scale, 2 rotate, 3 opacity. Begin replies with a
  * hold op {token:decimal-string,x,y}. Tokens belong to this runtime incarnation.
  * Check liveness before an authored action; final update, action, then end. */
-/* Authored header binding, generational keys and live Height token. */
+/* Authored header binding, generational keys and live Height token. A sample's
+ * at_ms is the input's own time, carried onto the clock from where the drag
+ * began; the release velocity reads it and now_ms moves the clock. */
 uint32_t exact_height_drag_begin(ExactRuntime rt, uint64_t handle_key, uint64_t target_key, double now_ms);
-uint32_t exact_height_drag_update(ExactRuntime rt, uint64_t token, double height, double now_ms);
+uint32_t exact_height_drag_update(ExactRuntime rt, uint64_t token, double height, double now_ms, double at_ms);
 /* The release velocity is the engine's, over the heights shown (LLP 1057.001 §3). */
-uint32_t exact_height_drag_release(ExactRuntime rt, uint64_t token, double height, double now_ms);
+uint32_t exact_height_drag_release(ExactRuntime rt, uint64_t token, double height, double now_ms, double at_ms);
 uint32_t exact_transform_motion(uint32_t rt, uint32_t len);
 /* Arrange (reorderFor / reorderdrop, LLP 1041 §8.5): the platform recognizes
  * the contact on the handle view. scroll_top is the List's actual offset as
@@ -757,10 +759,11 @@ uint32_t exact_has_hold(ExactRuntime rt, uint64_t token);
 /* A scroller marked `scrollTimeline` (the page, for page 1) now stands at
  * left, top CSS px: the scroll and view timelines it drives, presented. */
 uint32_t exact_timeline_scrolled(ExactRuntime rt, uint32_t page, uint32_t view, double left, double top);
-uint32_t exact_hold_update(ExactRuntime rt, uint64_t token, double x, double y, double now_ms);
+/* at_ms: when the input was sampled, as for a height drag. */
+uint32_t exact_hold_update(ExactRuntime rt, uint64_t token, double x, double y, double now_ms, double at_ms);
 /* cancel: 0 releases at vx, vy; 1 cancels; 2 releases at the velocity the
- * engine measured over the hold's values (LLP 1057.001 §3). */
-uint32_t exact_hold_end(ExactRuntime rt, uint64_t token, uint32_t cancel, double vx, double vy, double now_ms);
+ * engine measured over the hold's values (LLP 1057.001 §3), read at at_ms. */
+uint32_t exact_hold_end(ExactRuntime rt, uint64_t token, uint32_t cancel, double vx, double vy, double now_ms, double at_ms);
 /* A recognition threshold exact2 defines itself: 0 the swipe knee, 1 its
  * resistance, 2 the leading edge a swipe yields, 3 the drag slop (LLP 1057.001 §3). */
 double exact_gesture_constant(uint32_t which);

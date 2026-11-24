@@ -5,11 +5,17 @@ import { engineTests } from '../../../scripts/coverage.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
 import { runtimeSource, standIns } from './stand-ins.mjs';
 import { decodePng } from '../../../scripts/png.mjs';
+import { fixture as glueContext } from '../glue-fixture.mjs';
 
 const { chromium: test } = await engineTests(['chromium']);
 const host = glueDeclarations(readFileSync(new URL('../glue.js', import.meta.url), 'utf8'), ['apply', 'bootNow', 'reportColors']);
 const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'rt-link.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'elements.js', 'shape.js'];
 const standins = standIns(runtime);
+// What the wasm host's boot reads, as the shared glue fixture keeps it for the agent tests: a primitive as it is,
+// anything else a stand-in that does nothing, and each wasm export a no-op. The page's own globals are its own.
+const sharedContext = glueContext();
+const shared = Object.entries(sharedContext).map(([name, value]) => [name, value === null || typeof value !== 'object' && typeof value !== 'function', value === null || typeof value !== 'object' && typeof value !== 'function' ? value : null]);
+const sharedWasm = Object.keys(sharedContext.wasm);
 
 // The data module supplies one valid list; both targets use the real browser replayer.
 const draw = `export const drawer = {
@@ -94,7 +100,7 @@ for (const target of ['js', 'wasm', 'wasm-reload']) for (const agent of [false, 
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
     await page.goto(`${server.url}${agent ? '?agent=1' : ''}`);
-    await page.evaluate(async ({ target, agent, host }) => {
+    await page.evaluate(async ({ target, agent, host, shared, sharedWasm }) => {
       globalThis.exact = {};
       // Outside agent mode, wait for the first-geometry fallbacks to finish before collecting their closures.
       const timers = [], schedule = window.setTimeout.bind(window);
@@ -147,6 +153,10 @@ for (const target of ['js', 'wasm', 'wasm-reload']) for (const agent of [false, 
           toldOffset: null, followOffset: noop, now: () => 0, appRootFontSize: noop, inputReady: false,
           startClock: noop, afterPaint: noop, loadGpuIfNeeded: noop, agentMode: agent,
         };
+        // (an empty list where iterated, and never a promise)
+        const idle = new Proxy(function () {}, { get: (_, k) => k === Symbol.iterator ? function* () {} : k === 'then' || typeof k === 'symbol' ? undefined : idle, apply: () => idle });
+        for (const [name, plain, value] of shared) if (!(name in services) && !(name in globalThis)) services[name] = plain ? value : idle;
+        for (const name of sharedWasm) exact.wasm[name] ??= () => 0;
         services.host = services;
         const dispatch = new Function(...Object.keys(services), `${host}; return { apply, bootNow };`)(...Object.values(services));
         mount = id => dispatch.apply({ ops: [{ op: 'canvas2d', id, watch: true }] });
@@ -172,7 +182,7 @@ for (const target of ['js', 'wasm', 'wasm-reload']) for (const agent of [false, 
       };
       globalThis.drawn = () => root.querySelector('canvas')?.width === 600 && root.querySelector('canvas')?.getContext('2d').getImageData(0, 0, 1, 1).data[3] === 255;
       globalThis.retained = () => refs.filter(r => r.deref()).length;
-    }, { target, agent, host });
+    }, { target, agent, host, shared, sharedWasm });
     for (let i = 0; i < 41; i++) {
       await page.evaluate(() => cycle());
       await page.waitForFunction(() => drawn());

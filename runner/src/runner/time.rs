@@ -229,6 +229,10 @@ impl<D: DataSource> Runner<D> {
     /// told: each reads the resolved table after the commit, as after
     /// `set_place`.
     pub(super) fn take_set_locale(&mut self, from: usize) {
+        // A call's work leaves it to D4a's filter, which refuses it (`calls.rs`).
+        if self.cause().is_call() {
+            return;
+        }
         let mut i = from;
         while i < self.commands.len() {
             if self.commands[i].name != "setLocale" {

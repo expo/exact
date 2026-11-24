@@ -392,6 +392,21 @@ component Sleeping
         .find(|resource| plan.str(resource.source) == "mirror")
         .unwrap();
     assert!(source.owner.is_some());
+    // The instance's path, by which the boot's instance takes the page's
+    // answer (LLP 1035.005.004 D8).
+    let rendered = Runner::boot(
+        plan.clone(),
+        Data::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let path = (0..rendered.resources.len())
+        .find_map(|i| rendered.owned_row(i))
+        .unwrap()
+        .path
+        .clone();
     let seed = Checkpoint {
         answers: vec![(
             plan.str(source.name).into(),
@@ -399,6 +414,7 @@ component Sleeping
             vec![Value::Number(1.)],
             Value::Number(91.),
         )],
+        instances: vec![(0, path)],
         ..Default::default()
     };
     let mut r = Runner::boot_checkpoint(

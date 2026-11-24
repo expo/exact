@@ -375,7 +375,7 @@ fn geometry_retarget_and_new_none_declaration_arrive_while_held_before_cancellat
     accepted(&p.send(&mut host));
     assert_eq!(
         current(&host, p.identity[2]),
-        [MotionValue::new(99.0, 0.0), MotionValue::scalar(2.0)]
+        [MotionValue::new(99.0, 0.0), MotionValue::new(2.0, 2.0)]
     );
     assert_eq!(host.springs().engine().now(), 0.2);
     assert!(tokens.into_iter().all(|token| !host.has_hold(token)));
@@ -402,7 +402,7 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
             .unwrap()
             .style
             .scale,
-        2.0
+        exact_kernel::Vec2 { x: 2., y: 2. }
     );
     assert_eq!(current(&host, p.identity[2]), before);
     p.op = 13;
@@ -434,7 +434,10 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
     assert!(p.tokens.into_iter().all(|token| host.has_hold(token)));
     assert_eq!(
         current(&host, p.identity[2]),
-        [MotionValue::new(23.75, -8.25), MotionValue::scalar(1.375)]
+        [
+            MotionValue::new(23.75, -8.25),
+            MotionValue::new(1.375, 1.375)
+        ]
     );
     assert!(p.send(&mut host).contains("\"accepted\":false"));
     for (token, velocity) in p
@@ -454,7 +457,7 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
             .spring_descriptor(p.identity[2], Property::Scale)
             .unwrap()
             .target,
-        MotionValue::scalar(2.0)
+        MotionValue::new(2.0, 2.0)
     );
 }
 
@@ -463,7 +466,7 @@ fn replacing_one_property_cleans_old_survivor_without_cancelling_successor() {
     let (mut host, mut p) = held();
     let target = id(&host, "photo");
     let (replacement, _) = host
-        .begin_hold(target, Property::Scale, MotionValue::scalar(1.8), 110.0)
+        .begin_hold(target, Property::Scale, MotionValue::new(1.8, 1.8), 110.0)
         .unwrap()
         .unwrap();
     p.now = 1e9;
@@ -472,7 +475,7 @@ fn replacing_one_property_cleans_old_survivor_without_cancelling_successor() {
     assert!(host.has_hold(replacement.token.serial()));
     assert!(!host.has_hold(p.tokens[0]));
     assert_eq!(host.springs().engine().now(), 0.11);
-    assert_eq!(current(&host, p.identity[2])[1], MotionValue::scalar(1.8));
+    assert_eq!(current(&host, p.identity[2])[1], MotionValue::new(1.8, 1.8));
     assert_eq!(count(&host, "released"), 0.0);
 }
 

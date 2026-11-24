@@ -448,15 +448,6 @@ impl Lowerer<'_> {
                         Property::from_author_name(n)
                             .is_some_and(|p| p.is_color() || p == Property::BoxShadow)
                     });
-                    if a.name == "scale" && value.split_whitespace().nth(1).is_some() {
-                        ok = false;
-                        errors.push(LowerError {
-                            id: "lower-keyframes",
-                            message: format!("`scale=\"{value}\"` in `keyframes {}`: exact2's `scale` is one factor for both axes, here and on a row; a per-axis scale is not built. For a fold, animate `rotate=\"-90deg x\"` or `rotate=\"90deg y\"`; for a bar, animate `translate` inside `overflow=\"hidden\"`", decl.name),
-                            span: a.span,
-                        });
-                        continue;
-                    }
                     // A design token is the colour it stands for (LLP 1121 D3).
                     let value = match colour.then(|| crate::keyframes::tokens(&value, &self.theme))
                     {

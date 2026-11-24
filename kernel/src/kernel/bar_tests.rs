@@ -82,8 +82,13 @@ fn a_bar_is_placed_along_its_edge_by_align_self_and_held_by_its_margins() {
     assert_eq!(frame(&k, 3), (145.0, 47.0, 100.0, 20.0));
     assert_eq!(frame(&k, 4), (16.0, 67.0, 358.0, 20.0));
     assert_eq!(
-        k.arena.observations.bars.depths.get(&slot(&k, 4)),
-        Some(&28.0)
+        k.arena
+            .observations
+            .bars
+            .slots
+            .get(&slot(&k, 4))
+            .map(|s| s.depth),
+        Some(28.0)
     );
 }
 

@@ -279,6 +279,7 @@ impl<D: DataSource> Presenter<D> {
             roots: &roots,
             hidden: &|id| host.route_hidden_but(id, &[beneath]),
             presented: &|id| host.presented(id),
+            scaled_presented: host.scaled_presented(),
             paths: &|id| host.presented_path(id),
             filters: &|id| host.presented_filter(id),
             scroll: &self.scroll,

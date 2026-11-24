@@ -235,12 +235,19 @@ final class ContextMenuLifetimeIOSTests: XCTestCase {
     func testASourceThatStopsNamingThePopoverEndsTheMenuAndReturnsTheRow() throws {
         if ExactEnv.agentPaints { throw XCTSkip("the agent paints the popover (D4)") }
         let p = presenter()
-        _ = try opened(p)
+        defer { p.menus.reset() }
+        let (interaction, configuration, _) = try opened(p)
+        let source = try XCTUnwrap(p.views[1])
+        XCTAssertTrue(source.becomeFirstResponder())
+        p.menus.context.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: nil)
+        XCTAssertTrue(p.menus.focus.suspended)
         let row = try XCTUnwrap(p.views[3]), pop = try XCTUnwrap(p.views[2])
         p.apply(wireBatch([["op": "props", "id": 1, "clear": ["contextPopover"]]]))
         XCTAssertNil(p.menus.context.open)
         XCTAssertTrue(row.superview === pop.container, "back without waiting for willEnd")
-        XCTAssertTrue(try XCTUnwrap(p.views[1]).interactions.compactMap { $0 as? UIContextMenuInteraction }.isEmpty)
+        XCTAssertNil(interaction.view)
+        XCTAssertFalse(p.menus.focus.suspended)
+        XCTAssertTrue(source.isFirstResponder)
     }
 
     func testAConfigurationThatNeverShowsIsNoMenuAndADroppedRowStaysOut() throws {
@@ -278,6 +285,69 @@ final class ContextMenuLifetimeIOSTests: XCTestCase {
         p.menus.context.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
         XCTAssertTrue(source.isFirstResponder, "and back when it has ended")
         XCTAssertEqual(events, [], "neither blur nor focus reaches the app")
+    }
+
+    private func showWebLinkMenu(_ p: Presenter) throws -> (NodeView, UIContextMenuInteraction, UIContextMenuConfiguration) {
+        p.apply(wireBatch([["op": "props", "id": 1, "clear": ["contextPopover"], "set": ["href": "https://example.com/detail"]]]))
+        let source = try XCTUnwrap(p.views[1])
+        let interaction = try XCTUnwrap(source.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
+        let host = p.menus.context
+        let configuration = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: CGPoint(x: 20, y: 20)))
+        XCTAssertEqual(host.open?.isLink, true)
+        _ = try XCTUnwrap(host.menu(try XCTUnwrap(host.open)))
+        XCTAssertTrue(source.becomeFirstResponder())
+        host.contextMenuInteraction(interaction, willDisplayMenuFor: configuration, animator: nil)
+        XCTAssertTrue(p.menus.focus.suspended)
+        XCTAssertFalse(source.isFirstResponder)
+        return (source, interaction, configuration)
+    }
+
+    func testAWebLinkMenuReturnsFocusWhenItsLinkBecomesAnInAppLink() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("the agent paints the popover (D4)") }
+        XCTAssertNil(ExactEnv.appMetadata["ExactOrigin"], "the fixture has no declared origin")
+        let p = presenter()
+        defer { p.menus.reset(); window.isHidden = true }
+        let (source, interaction, _) = try showWebLinkMenu(p)
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["href": "/detail"]]]))
+        XCTAssertNil(p.menus.context.open)
+        XCTAssertNil(interaction.view, "the in-app link has no interaction")
+        XCTAssertFalse(p.menus.focus.suspended)
+        XCTAssertTrue(source.isFirstResponder, "the link gets its focus back without willEndFor")
+    }
+
+    func testAWebLinkMenuReturnsFocusWhenAnAuthoredMenuReplacesIt() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("the agent paints the popover (D4)") }
+        let p = presenter()
+        defer { p.menus.reset(); window.isHidden = true }
+        let (source, interaction, configuration) = try showWebLinkMenu(p)
+        let host = p.menus.context
+        p.apply(wireBatch([["op": "props", "id": 9, "set": ["contextPopover": "m"]]]))
+        XCTAssertNil(host.open)
+        XCTAssertNil(interaction.view)
+        XCTAssertFalse(p.menus.focus.suspended)
+        XCTAssertTrue(source.isFirstResponder)
+
+        p.menus.focus.setAside()
+        host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
+        XCTAssertTrue(p.menus.focus.suspended, "a late dismissal leaves a later focus suspension alone")
+    }
+
+    func testAWebLinkMenuKeepsFocusAsideUntilDismissalEnds() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("the agent paints the popover (D4)") }
+        let p = presenter()
+        defer { p.menus.reset(); window.isHidden = true }
+        let (source, interaction, configuration) = try showWebLinkMenu(p)
+        let host = p.menus.context
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["href": "https://example.com/other"]]]))
+        XCTAssertNil(host.open)
+        XCTAssertTrue(interaction.view === source)
+        XCTAssertTrue(p.menus.focus.suspended, "the interaction keeps focus aside during dismissal")
+        let dismissal = Animation()
+        host.contextMenuInteraction(interaction, willEndFor: configuration, animator: dismissal)
+        XCTAssertFalse(source.isFirstResponder)
+        dismissal.finish()
+        XCTAssertFalse(p.menus.focus.suspended)
+        XCTAssertTrue(source.isFirstResponder)
     }
 
     func testAPressThatClearsItsSourcesPopoverEndsTheMenuAndItsInteraction() throws {

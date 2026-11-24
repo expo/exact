@@ -25,6 +25,9 @@ impl Painter {
             );
         }
         walk.dialog = Some(node.id);
+        // Lifted out of its ancestors, it keeps their scheme.
+        let previous = self.dark;
+        self.dark = scheme_of(walk.scene.kernel, walk.scene.presented, node.id).unwrap_or(previous);
         self.node(
             walk,
             node.id,
@@ -32,6 +35,7 @@ impl Painter {
             (alert.offset.0.into(), alert.offset.1.into()),
             Some((0., 0., self.viewport.0, self.viewport.1)),
         );
+        self.dark = previous;
         walk.dialog = None;
     }
     pub(super) fn alert_title(

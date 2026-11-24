@@ -48,6 +48,7 @@ import androidx.credentials.exceptions.publickeycredential.CreatePublicKeyCreden
 import androidx.credentials.exceptions.publickeycredential.GetPublicKeyCredentialDomException
 import androidx.credentials.exceptions.publickeycredential.SignalCredentialStateException
 import androidx.credentials.pendingGetCredentialRequest
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -70,11 +71,13 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
     private val made = HashMap<String, String>()
     private val signals = mutableSetOf<CancellationSignal>()
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "getClientCapabilities" -> reply(capabilities())
-            "create" -> create(args, reply)
-            "get" -> get(args, reply)
+            "create" -> create(args, cause, reply)
+            "get" -> get(args, cause, reply)
             "signalUnknownCredential" -> signal(SignalUnknownCredentialRequest(args.toString()), args, reply)
             "signalAllAcceptedCredentials" -> signal(SignalAllAcceptedCredentialIdsRequest(args.toString()), args, reply)
             "signalCurrentUserDetails" -> signal(SignalCurrentUserDetailsRequest(args.toString()), args, reply)
@@ -132,14 +135,14 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
 
     // Ceremonies
 
-    private fun refused(reply: (JSONObject) -> Unit): Boolean {
-        if (context.origin != "app") { reply(JSONObject().put("error", "NotAllowedError").put("message", "person-required")); return true }
+    private fun refused(cause: Cause, reply: (JSONObject) -> Unit): Boolean {
+        if (!cause.app) { reply(JSONObject().put("error", "NotAllowedError").put("message", "person-required")); return true }
         if (context.activity == null || !context.visible) { reply(JSONObject().put("error", "NotAllowedError").put("message", "the app is not in front")); return true }
         return false
     }
 
-    private fun create(args: JSONObject, reply: (JSONObject) -> Unit) {
-        if (refused(reply)) return
+    private fun create(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
+        if (refused(cause, reply)) return
         val options = args.optJSONObject("publicKey") ?: return reply(JSONObject().put("error", "TypeError"))
         if (marked(options.optJSONObject("user")?.optString("id"))) return reply(JSONObject().put("error", "NotAllowedError").put("message", "a lock's user handle is the lock's alone"))
         if (args.optString("mediation") == "conditional") return reply(JSONObject().put("error", "NotSupportedError").put("message", "conditional create is not built on Android"))
@@ -166,8 +169,8 @@ class PasskeysModule(context: ExtensionContext) : ExactExtension(context) {
         })
     }
 
-    private fun get(args: JSONObject, reply: (JSONObject) -> Unit) {
-        if (refused(reply)) return
+    private fun get(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
+        if (refused(cause, reply)) return
         val options = args.optJSONObject("publicKey") ?: return reply(JSONObject().put("error", "TypeError"))
         val json = options.toString()
         val conditionally = args.optString("mediation") == "conditional"

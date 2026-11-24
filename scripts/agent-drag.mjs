@@ -6,6 +6,7 @@ import { DRAG_BOUNDS, REACH_MS, reaches } from '../host/apple/touches.mjs';
 import { layoutArgs, perfOp, layoutBox } from './agent-inspect.mjs';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
+import { FIELDS } from '../host/web/drag-in.js';
 
 /** Observed only while CDP holds a finger. Cancellation ends the DOM pointer
  * stream even though the driver still has to lift its injected touch. */
@@ -145,6 +146,11 @@ export function dragArguments(opts) {
 
 /** The words of a drag's text: a quoted target or read, escapes included, is one word. */
 export const dragWords = text => text.match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s]+/g) ?? [];
+
+/** The words of a drag in after its kind (`tap <target> drop …`), a quoted one whole and unquoted, in either quote:
+ * `--text "Mount Fuji"`, `'/tmp/a b.txt'`. */
+export const dragInWords = text => dragWords(text).map((w) => w.length < 2 || w[0] !== w.at(-1) || !`"'`.includes(w[0]) ? w
+  : w[0] === '"' ? inputJSON(w) : w.slice(1, -1).replace(/\\'/g, "'"));
 
 /** Parse the drag portion of one CLI operation; quoted reads belong to the preceding leg. */
 export function parseDrag(s, text) {
@@ -530,24 +536,34 @@ export const folderTree = (dir, prefix = '') => readdirSync(dir, { withFileTypes
 /** The driver's pasted paths: a file's bytes, a folder's tree. */
 export const driverFiles = (paths) => paths.map((p) => statSync(p).isDirectory() ? { name: basename(p), files: folderTree(p) } : { name: basename(p), bytes: readFileSync(p).toString('base64') });
 
-/** `tap <target> drop|dragenter <path…>` and `tap <target> dragleave` on Chrome; returns the drag it leaves held. */
+/** `tap <target> drop|dragenter [<path…>] [--text "…"] [--url "…"]` and `tap <target> dragleave` on Chrome; returns
+ * the drag it leaves held. */
 export async function fileDrag({ kind, opts, id, x, y, dragged, call, evaluate }) {
-  // A drag of files from the desktop as Chrome takes one (`Input.dispatchDragEvent`, the paths themselves, so
-  // its DataTransfer is the browser's own, folders included): it comes over the point, then drops there, or
-  // is cancelled. A drop no element accepts is refused before Chrome would open the files itself.
+  // A drag from outside the page as Chrome takes one (`Input.dispatchDragEvent`, the paths themselves, so its
+  // DataTransfer is the browser's own, folders included, with the text as `text/plain` and the link as
+  // `text/uri-list`): it comes over the point, then drops there, or is cancelled. A drop no element takes is
+  // refused before Chrome would open the files or follow the link itself.
+  // Out of the page first, then cancelled: Chrome sends the page no dragleave for a bare cancel
+  const away = async (held) => {
+    await call('Input.dispatchDragEvent', { type: 'dragOver', x: -1, y: -1, data: held.data });
+    await call('Input.dispatchDragEvent', { type: 'dragCancel', x: -1, y: -1, data: held.data });
+  };
   if (kind === 'dragleave') {
     if (!dragged) throw new Error('no drag is held over the page');
-    // Out of the page first: Chrome sends the page no dragleave for a bare cancel.
-    await call('Input.dispatchDragEvent', { type: 'dragOver', x: -1, y: -1, data: dragged.data });
-    await call('Input.dispatchDragEvent', { type: 'dragCancel', x: -1, y: -1, data: dragged.data });
+    await away(dragged);
     dragged = null;
   } else {
-    const data = { items: [], files: opts[kind], dragOperationsMask: 1 };
-    if (kind === 'drop' && !await evaluate(`(() => { const dt = new DataTransfer(); dt.items.add(new File([], 'probe')); const over = new DragEvent('dragover', { clientX: ${x}, clientY: ${y}, bubbles: true, cancelable: true, dataTransfer: dt }); (document.elementFromPoint(${x}, ${y}) ?? exact.views.get(${id})).dispatchEvent(over); return over.defaultPrevented; })()`)) {
-      if (dragged) { await call('Input.dispatchDragEvent', { type: 'dragCancel', x: dragged.x, y: dragged.y, data: dragged.data }); dragged = null; }
-      throw new Error(`view ${id} took no drop (nothing at its middle accepts a file drag)`);
+    const { text, url } = opts, files = opts[kind];
+    const items = [...(text !== undefined ? [{ mimeType: 'text/plain', data: text }] : []), ...(url !== undefined ? [{ mimeType: 'text/uri-list', data: url }] : [])];
+    const data = { items, files, dragOperationsMask: 1 };
+    // The probe's drag carries the same types; an editable field under the point inserts plain text itself
+    const probe = `const dt = new DataTransfer(); ${files.length ? "dt.items.add(new File([], 'probe'));" : ''} ${items.map((i) => `dt.setData(${JSON.stringify(i.mimeType)}, ${JSON.stringify(i.data)});`).join(' ')}`;
+    if (kind === 'drop' && !await evaluate(`(() => { ${probe} const over = new DragEvent('dragover', { clientX: ${x}, clientY: ${y}, bubbles: true, cancelable: true, dataTransfer: dt }); const at = document.elementFromPoint(${x}, ${y}) ?? exact.views.get(${id}); at.dispatchEvent(over); const field = at.closest(${JSON.stringify(FIELDS)}); return over.defaultPrevented || (!!field && dt.types.includes('text/plain') && !dt.types.includes('Files')); })()`)) {
+      // A drag held over the page leaves it as `dragleave` takes it away, and the caller holds none (`error.dragged`)
+      if (dragged) await away(dragged);
+      throw Object.assign(new Error(`view ${id} took no drop: nothing at its middle takes this drag`), { dragged: null });
     }
-    if (!dragged || dragged.data.files.join('\n') !== data.files.join('\n')) await call('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data });
+    if (!dragged || JSON.stringify([dragged.data.items, dragged.data.files]) !== JSON.stringify([items, files])) await call('Input.dispatchDragEvent', { type: 'dragEnter', x, y, data });
     await call('Input.dispatchDragEvent', { type: 'dragOver', x, y, data });
     if (kind === 'drop') { await call('Input.dispatchDragEvent', { type: 'drop', x, y, data }); dragged = null; } else dragged = { x, y, data };
   }

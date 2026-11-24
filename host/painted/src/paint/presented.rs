@@ -19,16 +19,16 @@ pub struct Presented {
     /// `translate`'s percentages of the border box (chess diary #4),
     /// resolved where the box is painted ([`Presented::translate_at`]).
     pub translate_percent: (f32, f32),
-    /// Uniform.
-    pub scale: f32,
+    /// Factors, x then y.
+    pub scale: (f32, f32),
     /// Host feedback, multiplied into scale without entering the motion engine.
     pub press: f32,
     /// Host feedback: x px, x percent, y px, y percent.
     pub press_translate: [f32; 4],
-    /// How far a press shows its pressed paint, 0 to 1 (LLP 1061 D7): the
-    /// painter mixes the node's background and its subtree's text toward
-    /// its press colours by it.
-    pub press_paint: f32,
+    /// Progress toward the pressed background (LLP 1061 D7).
+    pub press_background: f32,
+    /// Progress toward the pressed foreground (LLP 1061 D7).
+    pub press_color: f32,
     /// Degrees.
     pub rotate: f32,
     /// The presented rotation axis, including an animated axis.
@@ -57,10 +57,11 @@ impl Presented {
         dark: None,
         translate: (0.0, 0.0),
         translate_percent: (0.0, 0.0),
-        scale: 1.0,
+        scale: (1.0, 1.0),
         press: 1.0,
         press_translate: [0.; 4],
-        press_paint: 0.0,
+        press_background: 0.0,
+        press_color: 0.0,
         rotate: 0.0,
         rotate_axis: exact_kernel::style::space::RotateAxis([0.0, 0.0, 1.0]),
         opacity: 1.0,
@@ -81,10 +82,11 @@ impl Presented {
             dark: None,
             translate: (s.translate.x, s.translate.y),
             translate_percent: (s.translate_percent.x, s.translate_percent.y),
-            scale: s.scale,
+            scale: (s.scale.x, s.scale.y),
             press: 1.0,
             press_translate: [0.; 4],
-            press_paint: 0.0,
+            press_background: 0.0,
+            press_color: 0.0,
             rotate: rotation.x as f32,
             rotate_axis: exact_kernel::style::space::RotateAxis(
                 exact_motion::rotation::axis(rotation).map(|v| v as f32),
@@ -98,6 +100,18 @@ impl Presented {
         }
     }
 
+    pub(crate) fn background(
+        &self,
+        node: &exact_kernel::NodeRef<'_>,
+        kernel: &exact_kernel::Kernel,
+        dark: bool,
+    ) -> [u8; 4] {
+        BoxPaint::capture(node, kernel, dark)
+            .presented(&self.colors)
+            .states(node, self, dark)
+            .background
+    }
+
     /// The used translation of a `w` × `h` border box: its lengths plus
     /// its percentages of the box, as CSS resolves `translate`.
     pub fn translate_at(&self, w: f32, h: f32) -> (f32, f32) {
@@ -109,13 +123,13 @@ impl Presented {
     }
 
     pub(super) fn changes_axes(&self) -> bool {
-        self.scale * self.press != 1.0 || self.rotate != 0.0
+        self.scale.0 * self.press != 1.0 || self.scale.1 * self.press != 1.0 || self.rotate != 0.0
     }
 
     pub(super) fn moves(&self) -> bool {
         self.translate != (0.0, 0.0)
             || self.translate_percent != (0.0, 0.0)
-            || self.scale != 1.0
+            || self.scale != (1.0, 1.0)
             || self.press != 1.0
             || self.press_translate != [0.; 4]
             || self.rotate != 0.0
@@ -136,7 +150,7 @@ impl Presented {
         let (tx, ty) = self.translate_at(w, h);
         Transform::from_translate(cx + dx + tx, cy + dy + ty)
             .pre_rotate(self.rotate)
-            .pre_scale(self.scale * self.press, self.scale * self.press)
+            .pre_scale(self.scale.0 * self.press, self.scale.1 * self.press)
             .pre_translate(-cx, -cy)
     }
 
@@ -226,11 +240,12 @@ impl super::PaintedBox {
             // Recompute only the former in the unscaled tracking geometry.
             if clips_self {
                 if let Some(clip) = self.shape_clips.first_mut() {
-                    clip.inverse = ts.pre_translate(rect.0, rect.1).invert().map(|t| {
-                        let inverse = [t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0., 0., 1.];
-                        self.projective
-                            .map_or(inverse, |(outer, ..)| super::space::mul3(&inverse, &outer))
-                    });
+                    clip.inverse = super::space::inverse_affine(ts.pre_translate(rect.0, rect.1))
+                        .map(|t| {
+                            let inverse = [t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0., 0., 1.];
+                            self.projective
+                                .map_or(inverse, |(outer, ..)| super::space::mul3(&inverse, &outer))
+                        });
                 }
             }
             self.unpress = Transform::identity();
@@ -354,7 +369,7 @@ impl BoxPaint {
     /// The box with its pressed background (LLP 1061 D7) `progress` of the
     /// way over its own.
     pub(super) fn pressed(mut self, style: &StyleProps, progress: f32, dark: bool) -> BoxPaint {
-        if progress > 0.0 && style.mask.has(exact_kernel::StyleId::PressBackgroundColor) {
+        if progress != 0.0 && style.mask.has(exact_kernel::StyleId::PressBackgroundColor) {
             let pressed = super::rgba(style.press_background_color.resolve(dark));
             self.background = press_mix(self.background, pressed, progress);
         }
@@ -398,7 +413,7 @@ impl BoxPaint {
         {
             paint
         } else {
-            paint.pressed(node.style, shown.press_paint, dark)
+            paint.pressed(node.style, shown.press_background, dark)
         }
     }
 
@@ -439,19 +454,37 @@ impl BoxPaint {
 /// than darkens.
 pub(super) fn press_mix(from: [u8; 4], to: [u8; 4], t: f32) -> [u8; 4] {
     let [a, b] = [from, to].map(|c| Value::rgba8(c[0], c[1], c[2], c[3]));
-    let t = f64::from(t.clamp(0.0, 1.0));
-    let mix = |x: f64, y: f64| x + (y - x) * t;
-    let w = mix(a.w, b.w);
-    match w > 0.0 {
-        true => Value::rgba(mix(a.x, b.x) / w, mix(a.y, b.y) / w, mix(a.z, b.z) / w, w).to_rgba8(),
-        false => [0, 0, 0, 0],
-    }
+    a.lerp(b, f64::from(t)).to_rgba8()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tiny_skia::Point;
+
+    #[test]
+    fn per_axis_scale_composes_press_and_rejects_collapsed_hits() {
+        let shown = Presented {
+            scale: (-2.0, 0.5),
+            press: 0.5,
+            ..Presented::IDENTITY
+        };
+        let ts = shown.transform((0., 0., 100., 100.), (50., 50.));
+        assert_eq!(bbox(ts, (0., 0., 100., 100.)), (0., 37.5, 100., 25.));
+        assert!(shown.changes_axes());
+        let collapsed = Presented {
+            scale: (1., 0.),
+            ..Presented::IDENTITY
+        };
+        let ts = collapsed.transform((0., 0., 100., 100.), (50., 50.));
+        assert!(super::super::space::inverse_affine(ts).is_none());
+        assert_eq!(bbox(ts, (0., 0., 100., 100.)), (0., 50., 100., 0.));
+        assert!(Presented {
+            scale: (1., 0.5),
+            ..Presented::IDENTITY
+        }
+        .moves());
+    }
 
     #[test]
     fn a_layout_springs_size_overshoot_is_clamped_to_zero() {
@@ -485,7 +518,10 @@ mod tests {
             (10.0, 20.0, 100.0, 10.0)
         );
         // An authored scale stays about the center.
-        let both = Presented { scale: 0.5, ..grow };
+        let both = Presented {
+            scale: (0.5, 0.5),
+            ..grow
+        };
         assert_eq!(map(&both, 10.0, 20.0), (40.0, 22.0));
     }
 }

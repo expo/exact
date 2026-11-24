@@ -1,5 +1,5 @@
-//! The frozen 120-byte v2 transform packet; op 13's velocities are measured
-//! by the engine, so the packet's three velocity slots must be zero.
+//! The 128-byte v3 transform packet; op 13's velocities are measured by the
+//! engine, so the packet's three velocity slots must be zero.
 use exact_kernel::{NodeKey, TransformDragBinding};
 use exact_motion::Value;
 use exact_runner::Event;
@@ -12,16 +12,19 @@ pub(super) struct Input {
     pub(super) tokens: [u64; 2],
     pub(super) values: [f64; 6],
     pub(super) now_ms: f64,
+    /// When the input was sampled, on its own timeline carried onto the
+    /// clock from where the drag began: the times the release velocity reads.
+    pub(super) at_ms: f64,
 }
 impl Input {
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, &'static str> {
         use exact_plan::bytes::Reader;
-        if bytes.len() != 120 {
+        if bytes.len() != 128 {
             return Err("malformed transform length");
         }
         let decode = || -> Result<Self, exact_plan::PlanError> {
             let mut r = Reader::new(bytes);
-            if r.u32()? != 2 {
+            if r.u32()? != 3 {
                 return Err(exact_plan::PlanError::BadCount(0));
             }
             let op = r.u32()?;
@@ -42,6 +45,7 @@ impl Input {
                 *v = r.f64()?;
             }
             let now_ms = r.f64()?;
+            let at_ms = r.f64()?;
             Ok(Self {
                 op,
                 runtime,
@@ -50,6 +54,7 @@ impl Input {
                 tokens,
                 values,
                 now_ms,
+                at_ms,
             })
         };
         let input = decode().map_err(|_| "malformed transform input")?;
@@ -82,6 +87,9 @@ impl Input {
         if !self.now_ms.is_finite() || self.now_ms < 0.0 || self.now_ms / 1000.0 < floor {
             return Err("invalid transform clock");
         }
+        if !self.at_ms.is_finite() {
+            return Err("invalid transform sample time");
+        }
         if [10, 11, 14].contains(&self.op) && self.tokens != [0; 2] {
             return Err("unused transform tokens must be zero");
         }
@@ -101,7 +109,7 @@ impl Input {
     pub(super) fn samples(&self) -> [Value; 2] {
         [
             Value::new(self.values[0], self.values[1]),
-            Value::scalar(self.values[2]),
+            Value::new(self.values[2], self.values[2]),
         ]
     }
 }

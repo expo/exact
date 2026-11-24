@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 // calls.js's WebMCP binding (LLP 1133.023 D8) against a fake `document.modelContext`
 // (https://webmachinelearning.github.io/webmcp/, §4.2 registerTool), over a stub runtime: calls.js is copied beside
@@ -11,7 +12,7 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 async function load(registerTool) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-webmcp-'));
-  cpSync(resolve(ROOT, 'host/web-js/calls.js'), resolve(dir, 'calls.js'));
+  writeFileSync(resolve(dir, 'calls.js'), runtimeSource('calls.js'));
   writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false,timers:[]},data={},After=[],Clocked=[],Resources=[],Mutations=[],Origin={now:()=>'app'},journal=[],say=x=>journal.push(x),order=()=>0,drive=()=>{},time=()=>{},report=f=>({value:f(),pending:false});
 export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};`);
   writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');

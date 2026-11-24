@@ -361,6 +361,36 @@ final class IframeAutomationTests: XCTestCase {
         XCTAssertEqual(run(arm, "evaluate", ["expression": "1"], id: "plain")["error"] as? String, "NotSupportedError")
     }
 
+    /// A promise nothing holds pends, as BiDi's does, though WebKit collects
+    /// it and fails the call: the call ends with its document. A script that
+    /// does not parse is still refused.
+    func testAPromiseNothingHoldsPendsUntilItsDocumentEnds() throws {
+        let arm = try arm(), seen = Seen()
+        let (handle, _) = mount(arm, seen)
+        defer { arm.destroy(handle) }
+        let page = call(arm, "evaluate", ["expression": "new Promise(() => {})"])
+        let world = call(arm, "evaluate", ["expression": "new Promise(() => {})", "sandbox": "t3"])
+        // Garbage, to have WebKit collect both promises.
+        let churn = "(() => { let n = 0; for (let i = 0; i < 400; i++) n += new Array(100000).fill(i).length; return n })()"
+        for _ in 0..<5 {
+            XCTAssertNil(run(arm, "evaluate", ["expression": churn])["error"])
+            XCTAssertNil(run(arm, "evaluate", ["expression": churn, "sandbox": "t3"])["error"])
+            pause(0.3)
+        }
+        XCTAssertNil(page.value, "the page's world: \(page.value ?? [:])")
+        XCTAssertNil(world.value, "a sandbox: \(world.value ?? [:])")
+        XCTAssertEqual(run(arm, "evaluate", ["expression": "1 +"])["error"] as? String, "SyntaxError")
+        XCTAssertEqual(run(arm, "evaluate", ["expression": "1 } let __exactArguments = 0; {"])["error"] as? String, "SyntaxError",
+                       "parsed with the call's own parameter")
+        XCTAssertEqual(run(arm, "evaluate", ["expression": "Promise.reject(Object.create(null))"])["error"] as? String, "Error",
+                       "an exception that is no text still answers")
+        XCTAssertNil(run(arm, "evaluate", ["expression": "Object.prototype.then = (_, no) => no(new Error('then')), 1"])["error"])
+        XCTAssertEqual(run(arm, "evaluate", ["expression": "missing"])["error"] as? String, "ReferenceError", "a page's then is not ours")
+        XCTAssertNil(run(arm, "evaluate", ["expression": "location.href = '/other', 1"])["error"])
+        XCTAssertEqual(answered(page)["error"] as? String, "AbortError")
+        XCTAssertEqual(answered(world)["error"] as? String, "AbortError")
+    }
+
     #if os(macOS)
     /// A key the page leaves unhandled, which WebKit sends on through
     /// `NSApp.sendEvent`, is neither a person's (the frame stays the agent's)

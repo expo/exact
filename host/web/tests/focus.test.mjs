@@ -243,7 +243,7 @@ for (const target of ['wasm', 'js']) for (const origin of ['fragment', 'route'])
   }
 }), 60000);
 
-// The wasm host's key wire, and the early queue's copy of it (#140): the chord, its code, repeat and isComposing.
+// The wasm host's key wire, and the early queue's copy of it: the chord, its code, repeat and isComposing.
 test('the key wire carries isComposing on its fourth line',()=>{
   for (const file of ['../glue.js','../document-glue.js']) {
     const keyChord=Function(`${glueDeclarations(readFileSync(new URL(file,import.meta.url),'utf8'),['keyChord'])}; return keyChord;`)();

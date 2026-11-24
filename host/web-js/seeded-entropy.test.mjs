@@ -1,10 +1,11 @@
 import { test, expect, spyOn } from 'bun:test';
-import { cpSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { webCompiler } from './module.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 test('module-body crypto refuses direct calls, helpers and async continuations before drawing browser entropy', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
@@ -79,12 +80,12 @@ export async function answer(): Promise<string> {
 
 test('a crypto draw requires a pending turn and refuses before consuming entropy', async () => {
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/entropy-lifetime-test-'));
-  cpSync(resolve(root, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
+  writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js'));
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = {};');
   writeFileSync(resolve(dir, 'admission.js'), `export const overlaying = { on: false };
 export const inOverlay = api => new Error(api + ' in an overlay');
 export class FetchError extends Error {}
-export const socketProtocols = null, fetchWith = null, ownWithout = null, redirectOf = null, signalDeadline = {};
+export const fetchTarget = x => x, socketProtocols = null, fetchWith = null, ownWithout = null, redirectOf = null, signalDeadline = {};
 `);
   const values = spyOn(globalThis.crypto, 'getRandomValues'), uuid = spyOn(globalThis.crypto, 'randomUUID');
   const ordinary = Object.getOwnPropertyDescriptor(globalThis, '__exact_ordinary');

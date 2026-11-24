@@ -237,11 +237,25 @@ pub(super) fn publish(
             || tree.tables.anon(slot).is_some();
         arena.set_frame(slot, frame);
         // A bar's slot depth is what it reserves of its parent (LLP 1123 D12), and one that
-        // took no slot reserves none
+        // took no slot reserves none; its rectangle, in the layout's space as its frame is, is
+        // where the scrollers beneath it are read from
         if arena.observations.bars.styled.contains(slot) {
-            match arena.taffy(slot).and_then(|n| tree.bar_depth(n)) {
-                Some(depth) => arena.observations.bars.depths.insert(slot, depth),
-                None => arena.observations.bars.depths.remove(&slot),
+            let node = arena.taffy(slot);
+            let held = node
+                .and_then(|n| Some((tree.bar_depth(n)?, tree.bar_slot(n)?)))
+                .map(|(depth, r)| crate::kernel::bar::Slot {
+                    depth,
+                    rect: [
+                        ox + r.left + shift.t.0,
+                        oy + r.top + shift.t.1,
+                        r.right - r.left,
+                        r.bottom - r.top,
+                    ],
+                });
+            let slots = &mut arena.observations.bars.slots;
+            match held {
+                Some(s) => slots.insert(slot, s),
+                None => slots.remove(&slot),
             };
         }
         arena.consume_layout_flags(slot);
@@ -349,6 +363,11 @@ impl LayoutTree {
     /// The depth of the slot the bar `node` was last laid out in.
     pub(crate) fn bar_depth(&self, node: NodeId) -> Option<f32> {
         self.taffy.bar_depth(node)
+    }
+
+    /// The slot the bar `node` was last laid out in, from its parent's border-box origin.
+    pub(crate) fn bar_slot(&self, node: NodeId) -> Option<taffy::geometry::Rect<f32>> {
+        self.taffy.bar_slot(node)
     }
 
     /// `node`'s used margins on its last layout, top right bottom left, an

@@ -191,10 +191,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   2026-10-09.)
 - **A menu opens white on a dark page.** Cause: `scheme=fixed` tokens colour the
   boxes they are written on, but the app's scheme is still the device's, so the
-  platform's menus, sheets and alerts stay light. Fix: an always-dark design says
-  `"userInterfaceStyle": "dark"` in `app.json` (or `color-scheme="dark"` on the
-  root); a menu in the brand's colours writes `background-color` and `color` on its
-  `popover` column, which the web draws and its rows take. (#552, 2026-11-14.)
+  platform's menus, sheets, alerts and pickers stay light. Fix: an always-dark design
+  writes `color-scheme="dark"` on the root, which every host's surfaces take, or says
+  `"userInterfaceStyle": "dark"` in `app.json`, which Android, Linux and Windows do not
+  read; a menu in the brand's colours writes `background-color` and `color` on its
+  `popover` column, which the web draws and its rows take. (#552, 2026-11-14; #1469.)
 
 - **The app is wider than the window, and its tests still pass.** A box with
   `width="100%"` and padding is wider than its parent by the padding (`content-box`, as
@@ -315,10 +316,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   so the binding can skip unrelated changes. Found in the harness's matrix
   animation, 2026-10-10; LLP 1017.003 D6 describes the field mask.
 
-- **`scale` accepts one factor for both axes.** A keyframe with `scale="0 1"`
-  is refused. To grow a progress bar horizontally, translate a full-width fill
-  inside an `overflow="hidden"` box. Verified by the heavy-list benchmark's
-  Contract build (2026-10-29).
+- **`scale` takes x then y.** `scale="1 0.5"` keeps the width and halves the
+  height. A single value applies to both axes. Rows, keyframes and transitions
+  use the same factors; percentages work too (`scale="100% 50%"`).
 
 - **A tap that changes one row of a long list takes ~80 ms on the web.** Cause: the
   mutation answers the whole list (10,000 rows), and on the JS target a Rust
@@ -2219,7 +2219,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   key with explicit curve parameters, which Bun cannot read back (`startNet` in
   `host/web-js/conformance/net.mjs`), so every `conform.mjs` run fails, the async
   lane's `conform` and `conform-browsers` steps included. Fix: put
-  Homebrew's OpenSSL 3 first (`PATH=/opt/homebrew/bin:$PATH`). (#1148, 2026-10-30.)
+  Homebrew's OpenSSL 3 first (`PATH=/opt/homebrew/bin:$PATH`). (2026-10-30.)
 - **An `EXACT_WEB_DIST` build compiles, then fails renaming its stage.** The
   destination's parent directory does not exist. Create that parent before
   running `host/web/build.mjs --wasm` with an external dist path.

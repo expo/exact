@@ -131,7 +131,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // What motion writes over the author's style, which `restore` puts back: the lift's `z-index` and `position`, the
   // `transition` that keeps a held property from animating, and each held property (`scale` as `--exact-scale` on a
   // pressable, `cssProperty`)
-  const overwritten=['z-index','position','transition','translate','scale','--exact-scale','--exact-translate-x','--exact-translate-y','--exact-translate-z','rotate','opacity','height'];
+  const overwritten=['z-index','position','transition','translate','scale','--exact-scale','--exact-scale-y','--exact-translate-x','--exact-translate-y','--exact-translate-z','rotate','opacity','height'];
   const animations=new Map(), held=new Map(), authored=new Map(), drags=new Map(), waitingShape=new WeakMap();
   const raised=new Set();
   const active=new Map(), heightBindings=new Map(); let reconciling=false;
@@ -144,11 +144,13 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   // A translate frame is `[x,y]` lengths, or `[x,y,px,py]` with percentages
   // of the box, which the browser resolves (chess diary #4).
   const axis=(l,p)=>p?(l?`calc(${l}px + ${p}%)`:`${p}%`):`${l}px`;
-  const css=(property,value)=>property==='translate'?`${axis(value[0],value[2])} ${axis(value[1],value[3])}`:property==='rotate'?`${value[1]||0} ${value[2]||0} ${value[3]||(!(value[1]||value[2])?1:0)} ${value[0]}deg`:property==='height'?`${Math.max(0,value[0])}px`:String(value[0]);
+  const css=(property,value)=>property==='translate'?`${axis(value[0],value[2])} ${axis(value[1],value[3])}`:property==='rotate'?`${value[1]||0} ${value[2]||0} ${value[3]||(!(value[1]||value[2])?1:0)} ${value[0]}deg`:property==='scale'?`${value[0]} ${value[1]??value[0]}`:property==='height'?`${Math.max(0,value[0])}px`:String(value[0]);
   const composedTranslate=el=>getComputedStyle(el).getPropertyValue('--exact-translate-composes').trim()==='1';
   const cssValues=(el,property,value)=>property==='translate'&&composedTranslate(el)
     ? {translate:css(property,value),'--exact-translate-x':axis(value[0],value[2]),'--exact-translate-y':axis(value[1],value[3]),'--exact-translate-z':'0px'}
-    : {[cssProperty(el,property)]:css(property,value)};
+    : property==='scale'&&cssProperty(el,property)==='--exact-scale'
+      ? {'--exact-scale':String(value[0]),'--exact-scale-y':String(value[1]??value[0])}
+      : {[cssProperty(el,property)]:css(property,value)};
   const writeValue=h=>{for(const [p,v] of Object.entries(cssValues(h.el,h.property,h.value)))h.el.style.setProperty(p,v);};
   const call=(op,h,value=[0,0],t=now())=>request({op,view:h.view,property:h.property,token:h.token??0,x:value[0],y:value[1],now:t});
   const local=h=>h && h.generation===generation() && views.get(h.view)===h.el && h.el.isConnected && held.get(key(h.view,h.property))===h;
@@ -475,8 +477,11 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   function sample(el,property) {
     const text=getComputedStyle(el).getPropertyValue(cssProperty(el,property)), numbers=text.trim().split(/\s+/);
     if(property==='translate') return translation(el,text);
-    if(property==='scale' && numbers.length>1 && Number(numbers[0])!==Number(numbers[1])) return null;
-    return [text==='none'?(property==='scale'?1:0):parseFloat(text),0];
+    if(property==='scale') {
+      if(cssProperty(el,property)==='--exact-scale')return [parseFloat(text),parseFloat(getComputedStyle(el).getPropertyValue('--exact-scale-y'))||0];
+      return text==='none'?[1,1]:[Number(numbers[0]),Number(numbers[1]??numbers[0])];
+    }
+    return [text==='none'?0:parseFloat(text),0];
   }
   function adopt(view,property,reply,adopted) {
     const el=views.get(view);
@@ -496,7 +501,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
     const el=b.targetEl,view=b.target;
     own(view,el);
     const pair=['translate','scale'].map((property,i)=>({view,property,el,token:i?reply.scaleToken:reply.translateToken,
-      generation:generation(),runtime:b.runtime,value:i?[reply.value[2],0]:reply.value.slice(0,2)}));
+      generation:generation(),runtime:b.runtime,value:i?[reply.value[2],reply.value[2]]:reply.value.slice(0,2)}));
     // BOTH records and recognizer ownership precede any synchronous begin batch.
     for(const h of pair)held.set(key(view,h.property),h);
     for(const h of pair)cancelProperty(view,h.property,el);
@@ -525,7 +530,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   }
   function pairCurve(animation) {
     const props=new Set(animation.effect.getKeyframes().flatMap(frame=>Object.keys(frame))
-      .filter(p=>!['offset','computedOffset','easing','composite'].includes(p)).map(p=>p==='--exact-scale'?'scale':p));
+      .filter(p=>!['offset','computedOffset','easing','composite'].includes(p)).map(p=>['--exact-scale','--exact-scale-y'].includes(p)?'scale':p));
     return {pair:props.has('translate')||props.has('scale'),coupled:[...props].some(p=>p!=='translate'&&p!=='scale')};
   }
   function transformSnapshot(b) {
@@ -550,7 +555,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       // stays identity. Refuse unsupported active curves, not decompose them.
       for(const a of el.getAnimations()) {
         if(a.effect?.target!==el||['idle','finished'].includes(a.playState))continue;
-        const forbidden=['rotate','transform','transformOrigin','transform-origin','perspective','zoom',...(el===b.targetEl?[]:['translate','scale','--exact-scale','--exact-press-factor'])];
+        const forbidden=['rotate','transform','transformOrigin','transform-origin','perspective','zoom',...(el===b.targetEl?[]:['translate','scale','--exact-scale','--exact-scale-y','--exact-press-factor'])];
         if(forbidden.includes(a.transitionProperty)||a.effect.getKeyframes().some(frame=>forbidden.some(p=>p in frame)))return null;
         const curve=pairCurve(a);if(el===b.targetEl&&curve.pair&&curve.coupled)return null;
       }
@@ -779,7 +784,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
       cancelProperty(id,property);
       if(!op.values.length || held.has(k)) return;
       const el=views.get(id); if(!el) return;
-      const animation=el.animate(op.values.map(value=>cssValues(el,property,Array.isArray(value)?value:[value,0])),
+      const animation=el.animate(op.values.map(value=>cssValues(el,property,Array.isArray(value)?value:[value])),
         {delay:op.delay,duration:op.duration,easing:'linear',fill:'backwards'});
       // Started where the engine lowered it (`at`, the host's clock), not
       // when the browser next commits a pending animation, two frames later
@@ -877,7 +882,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         return [to[0]-k*(from[0]-a.value[0]),to[1]-k*(from[1]-a.value[1]),a.value[2]*k];
       }
       function present(d,v) {
-        d.value=v;d.pair[0].value=v.slice(0,2);d.pair[1].value=[v[2],0];
+        d.value=v;d.pair[0].value=v.slice(0,2);d.pair[1].value=[v[2],v[2]];
         for(const h of d.pair)if(local(h))writeValue(h);
         if(d.binding.targetEl.style.getPropertyValue('--exact-drag-timeline'))followTimelines();
       }
@@ -930,7 +935,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         // An action/receipt may replace exactly one property. Independently end
         // each original; local/token checks never retire its replacement.
         api.end(d.pair[0],velocity.slice(0,2),cancel);
-        api.end(d.pair[1],[velocity[2],0],cancel);
+        api.end(d.pair[1],[velocity[2],velocity[2]],cancel);
         clearContact(d);
       }
       on('pointerdown',e=>{
@@ -1177,7 +1182,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         for(const companion of drag.holds.slice(1)) {
           const base=companion.base[0];
           const value=progress===caught?base:progress<caught?base*progress/caught:base+(1-base)*(progress-caught)/(1-caught);
-          track(companion,[value,0]);
+          track(companion,[value,companion.property==='scale'?value:0]);
         }
         e.preventDefault(); if(e.type==='pointermove') e.stopPropagation(); return true;
       };
@@ -1217,7 +1222,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
       if(cs.visibility!=='visible'||cs.transform!=='none'||cs.perspective!=='none'||!['none','0deg'].includes(cs.rotate)
         ||!['none','1'].includes(cs.scale)||!['1','normal',''].includes(cs.zoom)||el!==b.row&&translate.some(v=>v!==0))return null;
       for(const a of el.getAnimations())if(a.effect?.target===el&&!['idle','finished'].includes(a.playState)) {
-        const forbidden=['scale','--exact-scale','--exact-press-factor','rotate','transform','perspective','zoom',...(el===b.row?[]:['translate'])];
+        const forbidden=['scale','--exact-scale','--exact-scale-y','--exact-press-factor','rotate','transform','perspective','zoom',...(el===b.row?[]:['translate'])];
         if(forbidden.includes(a.transitionProperty)||a.effect.getKeyframes().some(f=>forbidden.some(p=>p in f)))return null;
       }
     }

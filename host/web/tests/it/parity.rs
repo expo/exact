@@ -38,7 +38,7 @@ fn every_case_has_a_unique_name_and_a_spring_case_carries_frames() {
     let json = exact_web::parity::cases_json();
     assert!(json.contains("\"name\":\"spring\""));
     assert!(
-        json.contains("\"frames\":[[1,0],"),
+        json.contains("\"frames\":[[1,1],"),
         "{}",
         &json[json.len() - 300..]
     );

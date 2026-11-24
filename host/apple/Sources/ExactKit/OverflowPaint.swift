@@ -96,7 +96,7 @@ enum OverflowPaint {
     static func inParent(_ own: CGRect, of layer: CALayer) -> CGRect {
         guard let parent = layer.superlayer else { return own }
         let rect = eased(own, of: layer)
-        let keys = ["transform.translation.x", "transform.translation.y", "transform.scale", "transform.rotation.z", "position.x", "position.y"]
+        let keys = ["transform.translation.x", "transform.translation.y", "transform.scale.x", "transform.scale.y", "transform.rotation.z", "position.x", "position.y"]
         var ranges: [String: ClosedRange<CGFloat>] = [:]
         for name in layer.animationKeys() ?? [] {
             guard let track = layer.animation(forKey: name) as? CAKeyframeAnimation,
@@ -115,24 +115,47 @@ enum OverflowPaint {
         probe.isGeometryFlipped = layer.isGeometryFlipped; probe.transform = layer.transform
         holder.addSublayer(probe)
         var paint = rect
-        if ranges["transform.scale"] != nil || ranges["transform.rotation.z"] != nil {
+        if ranges["transform.rotation.z"] != nil {
             let pivot = CGPoint(x: layer.bounds.minX + layer.anchorPoint.x * layer.bounds.width,
                                 y: layer.bounds.minY + layer.anchorPoint.y * layer.bounds.height)
-            let radius = hypot(max(abs(rect.minX - pivot.x), abs(rect.maxX - pivot.x)),
-                               max(abs(rect.minY - pivot.y), abs(rect.maxY - pivot.y)))
+            func maximum(_ key: String) -> CGFloat {
+                let model = abs(scalar(layer, key))
+                return ranges[key].map { max(model, abs($0.lowerBound), abs($0.upperBound)) } ?? model
+            }
+            let radius = hypot(max(abs(rect.minX - pivot.x), abs(rect.maxX - pivot.x)) * maximum("transform.scale.x"),
+                               max(abs(rect.minY - pivot.y), abs(rect.maxY - pivot.y)) * maximum("transform.scale.y"))
             paint = CGRect(x: pivot.x - radius, y: pivot.y - radius, width: 2 * radius, height: 2 * radius)
-            let model = max(abs(scalar(layer, "transform.scale.x")), abs(scalar(layer, "transform.scale.y")))
-            let scale = ranges["transform.scale"].map { max(model, abs($0.lowerBound), abs($0.upperBound)) } ?? model
-            probe.setValue(scale, forKeyPath: "transform.scale")
+            probe.setValue(1, forKeyPath: "transform.scale.x")
+            probe.setValue(1, forKeyPath: "transform.scale.y")
             probe.setValue(0, forKeyPath: "transform.rotation.z")
         }
-        let axes = keys.filter { $0 != "transform.scale" && $0 != "transform.rotation.z" && ranges[$0] != nil }
+        let axes = keys.filter {
+            $0 != "transform.rotation.z" && ranges[$0] != nil &&
+                (ranges["transform.rotation.z"] == nil || !$0.hasPrefix("transform.scale."))
+        }
+        let scales = ranges["transform.rotation.z"] == nil &&
+            (ranges["transform.scale.x"] != nil || ranges["transform.scale.y"] != nil)
+        var sx = scalar(layer, "transform.scale.x"), sy = scalar(layer, "transform.scale.y")
+        if scales {
+            probe.setValue(1, forKeyPath: "transform.scale.x")
+            probe.setValue(1, forKeyPath: "transform.scale.y")
+        }
         var reach = layer.convert(rect, to: parent)
         func include(_ axis: Int) {
-            guard axis < axes.count else { reach = reach.union(probe.convert(paint, to: holder)); return }
+            guard axis < axes.count else {
+                let base = probe.transform
+                // Setting a negative x through KVC changes its decomposition.
+                // Apply both factors together so y keeps its own sign.
+                if scales { probe.transform = CATransform3DScale(base, sx, sy, 1) }
+                reach = reach.union(probe.convert(paint, to: holder))
+                probe.transform = base
+                return
+            }
             let key = axes[axis], span = ranges[key]!
             for value in [span.lowerBound, span.upperBound] {
-                probe.setValue(value, forKeyPath: key)
+                if key == "transform.scale.x" { sx = value }
+                else if key == "transform.scale.y" { sy = value }
+                else { probe.setValue(value, forKeyPath: key) }
                 include(axis + 1)
             }
         }

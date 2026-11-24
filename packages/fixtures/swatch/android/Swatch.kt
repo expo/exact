@@ -7,6 +7,7 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.View
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -47,7 +48,7 @@ class SwatchModule(context: ExtensionContext) : ExactExtension(context) {
         (view.background as? GradientDrawable)?.setColor(tint)
     }
 
-    override fun displayed(session: String, id: String, shown: Boolean, origin: String) = say(session, "displayed $id $shown $origin")
+    override fun displayed(session: String, id: String, shown: Boolean, cause: Cause) = say(session, "displayed $id $shown $cause")
 
-    override fun bound(session: String, id: String, prop: String, origin: String) = say(session, "bound $id $prop $origin")
+    override fun bound(session: String, id: String, prop: String, cause: Cause) = say(session, "bound $id $prop $cause")
 }

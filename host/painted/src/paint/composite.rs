@@ -61,7 +61,7 @@ impl Painter {
         self.row_refuse();
         let f = canvas.frame;
         if f.width <= 0. || f.height <= 0. {
-            self.boxless_audio(walk, canvas);
+            self.unpainted(walk, canvas);
             return;
         }
         let mut painter = self.apart(walk.scene.kernel, f.width, f.height);
@@ -180,6 +180,7 @@ mod tests {
             roots: &kernel.roots(),
             hidden: &|_| false,
             presented: &|_| Presented::IDENTITY,
+            scaled_presented: &Default::default(),
             paths: &|_| None,
             filters: &|_| None,
             scroll: &BTreeMap::new(),

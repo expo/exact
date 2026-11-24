@@ -705,7 +705,9 @@ pub fn resolve_with(
             Some(match p {
                 Property::Opacity => Value::scalar(v.opacity as f64),
                 Property::Translate => Value::new(v.translate.0 as f64, v.translate.1 as f64),
-                Property::Scale => Value::scalar((v.scale * v.press) as f64),
+                Property::Scale => {
+                    Value::new((v.scale.0 * v.press) as f64, (v.scale.1 * v.press) as f64)
+                }
                 Property::Rotate => Value::scalar(v.rotate as f64),
                 Property::R => Value::scalar(v.svg[0]? as f64),
                 Property::StrokeDashoffset => Value::scalar(v.svg[1]? as f64),

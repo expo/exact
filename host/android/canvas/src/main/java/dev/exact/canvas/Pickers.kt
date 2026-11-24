@@ -4,8 +4,11 @@ import android.app.Activity
 import android.app.DatePickerDialog
 import android.app.Dialog
 import android.app.TimePickerDialog
+import android.content.Context
 import android.content.DialogInterface
+import android.content.res.Configuration
 import android.text.format.DateFormat
+import android.view.ContextThemeWrapper
 import android.view.ViewTreeObserver
 import android.widget.DatePicker
 import android.widget.TimePicker
@@ -34,6 +37,8 @@ class ExactPicker internal constructor(
     /** The control's `accent-color` (opaque ARGB), where it or an ancestor sets one: the picker is in its colours,
      * the author's word over the device's (LLP 1115). */
     val accent: Int? = null,
+    /** The control's scheme (LLP 1034 §8): dark, light, or null for the device's. The picker is drawn in it. */
+    val dark: Boolean? = null,
 ) {
     /** The dialog's title; null for the platform's ("Select date"). */
     var title: String? = null
@@ -197,7 +202,7 @@ object FrameworkPickers : Pickers {
         val day = picker.day()
         var chosen: LocalDate? = null
         val ok = { d: LocalDate -> if (picker.kind == "date") picker.allows(picker.value(d, null)) else picker.allows(d) }
-        val dialog = object : DatePickerDialog(activity, { _, y, m, dd -> chosen = LocalDate.of(y, m + 1, dd) }, day.year, day.monthValue - 1, day.dayOfMonth) {
+        val dialog = object : DatePickerDialog(schemed(activity, picker.dark), { _, y, m, dd -> chosen = LocalDate.of(y, m + 1, dd) }, day.year, day.monthValue - 1, day.dayOfMonth) {
             override fun onDateChanged(view: DatePicker, year: Int, month: Int, dayOfMonth: Int) {
                 super.onDateChanged(view, year, month, dayOfMonth)
                 getButton(DialogInterface.BUTTON_POSITIVE)?.isEnabled = ok(LocalDate.of(year, month + 1, dayOfMonth))
@@ -219,7 +224,7 @@ object FrameworkPickers : Pickers {
         var chosen: LocalTime? = null
         val ok = { h: Int, m: Int -> picker.allows(picker.value(day, picker.time(h, m))) }
         val clock = picker.hour24 ?: DateFormat.is24HourFormat(activity)
-        val dialog = object : TimePickerDialog(activity, { _, h, m -> chosen = picker.time(h, m) }, t.hour, t.minute, clock) {
+        val dialog = object : TimePickerDialog(schemed(activity, picker.dark), { _, h, m -> chosen = picker.time(h, m) }, t.hour, t.minute, clock) {
             override fun onTimeChanged(view: TimePicker, hourOfDay: Int, minute: Int) {
                 super.onTimeChanged(view, hourOfDay, minute)
                 getButton(DialogInterface.BUTTON_POSITIVE)?.isEnabled = ok(hourOfDay, minute)
@@ -247,4 +252,17 @@ object FrameworkPickers : Pickers {
         d.window!!.decorView.viewTreeObserver.addOnDrawListener(ViewTreeObserver.OnDrawListener { if (!told) { told = true; drawn() } })
         d.show()
     }
+}
+
+/** [activity] in the scheme [dark] names, so a dialog made from it resolves its theme's `-night` resources (or not)
+ * whatever the device's; itself for null. */
+internal fun schemed(activity: Activity, dark: Boolean?): Context {
+    if (dark == null) return activity
+    // Only the night bits: the rest (orientation, size, font scale) still follows the activity's.
+    val night = if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+    val config = Configuration().apply {
+        uiMode = (activity.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night
+    }
+    val theme = activity.packageManager.getActivityInfo(activity.componentName, 0).themeResource
+    return ContextThemeWrapper(activity, theme).apply { applyOverrideConfiguration(config) }
 }

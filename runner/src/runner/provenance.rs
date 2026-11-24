@@ -207,6 +207,14 @@ impl Cause {
         Cause::begin(origin, id, true)
     }
 
+    /// A remote Play or Pause (the lock screen, headphones, Control Center,
+    /// media keys): the person's act on one declared control outside the
+    /// app's UI, so an `action` as a control's press is, with D4a's command
+    /// rules and no invocation's grants (LLP 1133.023 D7a).
+    pub(in crate::runner) const fn remote_control() -> Cause {
+        Cause::begin(CallOrigin::Action, 0, true)
+    }
+
     /// A model's tool handler (LLP 1133.016 D10): a tool's, no invocation's.
     pub(in crate::runner) const fn model_tool() -> Cause {
         Cause::begin(CallOrigin::Tool, 0, false)

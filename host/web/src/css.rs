@@ -154,7 +154,12 @@ pub(crate) fn css_text_in(
                 let (mut text, spring_skipped) = transition_css(t);
                 // Transition the authored base below the press's animation stack.
                 for (compose, property, name, bases) in [
-                    (press, Property::Scale, "scale", &["--exact-scale"][..]),
+                    (
+                        press,
+                        Property::Scale,
+                        "scale",
+                        &["--exact-scale", "--exact-scale-y"][..],
+                    ),
                     (
                         shift,
                         Property::Translate,
@@ -422,9 +427,11 @@ pub(crate) fn css_text_in(
             (StyleId::Perspective, RowValue::Number(n)) if *n == 0.0 => {
                 out.push_str("perspective:none;")
             }
-            (StyleId::Scale, RowValue::Number(n)) if press => {
+            (StyleId::Scale, RowValue::Vec2(v)) if press => {
                 out.push_str("--exact-scale:");
-                num_into(&mut out, *n as f32);
+                num_into(&mut out, v.x);
+                out.push_str(";--exact-scale-y:");
+                num_into(&mut out, v.y);
                 out.push(';');
             }
             (StyleId::PressTranslate, RowValue::Vec2(v)) => {
@@ -443,7 +450,7 @@ pub(crate) fn css_text_in(
             (StyleId::PressTranslatePercent, _) => {}
             (StyleId::PressScale, RowValue::Number(n)) => {
                 if press {
-                    out.push_str("scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;--exact-press:");
+                    out.push_str("scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1)) calc(var(--exact-scale-y,1) * var(--exact-press-factor,1))!important;--exact-press:");
                     num_into(&mut out, *n as f32);
                     out.push(';');
                 }
@@ -737,8 +744,14 @@ pub fn press_keyframes_css(text: &str) -> String {
         out.push_str(part);
         let declaration = part.rsplit_once('{').map_or(part, |(_, d)| d);
         if let Some(value) = declaration.strip_prefix("scale:") {
-            out.push_str("--exact-scale:");
-            out.push_str(value);
+            if let Some(v) = exact_motion::property::scale(value.trim_end_matches(';')) {
+                push_text!(
+                    &mut out,
+                    "--exact-scale:{};--exact-scale-y:{};",
+                    Shortest32(v.x as f32),
+                    Shortest32(v.y as f32)
+                );
+            }
         } else if let Some(value) = declaration.strip_prefix("translate:") {
             let Some((px, pct)) =
                 exact_kernel::style::space::translate(value.trim_end_matches(';'))
@@ -867,7 +880,7 @@ fn apple_corner(style: &StyleProps, id: StyleId) -> bool {
 /// Whether a row's value is one CSS declaration here.
 fn lowered(id: StyleId, value: &RowValue<'_>) -> bool {
     match value {
-        RowValue::Vec2(_) => id == StyleId::Translate,
+        RowValue::Vec2(_) => matches!(id, StyleId::Translate | StyleId::Scale),
         // Apple's affordances: no CSS property (LLP 1077 §5).
         RowValue::SymbolPalette(_) => false,
         _ if matches!(
@@ -1105,6 +1118,13 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
         RowValue::RotateAxis(_) | RowValue::SymbolPalette(_) => {}
         RowValue::Tracks(tracks) => out.push_str(tracks.css()),
         RowValue::Placement(placement) => out.push_str(&placement.css()),
+        RowValue::Vec2(v) if id == StyleId::Scale => {
+            num_into(out, v.x);
+            if v.x != v.y {
+                out.push(' ');
+                num_into(out, v.y);
+            }
+        }
         RowValue::Vec2(v) => {
             num_into(out, v.x);
             out.push_str("px ");

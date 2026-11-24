@@ -18,7 +18,7 @@ private struct FocusSnapshot {
 }
 
 extension Presenter {
-    /// A bubbling `focusin` or `focusout` at a listening ancestor (#283).
+    /// A bubbling `focusin` or `focusout` at a listening ancestor.
     var onFocusEvent: ((UInt32, String, String, String?) -> Void)? {
         get { focusEvents.onEvent }
         set { focusEvents.onEvent = newValue }

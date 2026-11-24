@@ -222,7 +222,9 @@ where
         let start_padding = if is_rtl { padding.right } else { padding.left };
         let end_padding = if is_rtl { padding.left } else { padding.right };
         // EXACT PATCH 5: replaced pixels do not enlarge scrollable overflow.
-        if style.is_compressible_replaced() {
+        // EXACT PATCH 82: nor does a form control's natural size, which its
+        // measure answers even when its box is narrower.
+        if style.is_compressible_replaced() || style.is_form_control() {
             let padding_box = size - border.sum_axes();
             Rect { left: 0.0, top: 0.0, right: padding_box.width, bottom: padding_box.height }
         } else { Rect {

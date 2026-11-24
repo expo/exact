@@ -58,6 +58,7 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Files
@@ -90,15 +91,18 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     private class ViewState {
         var view: View? = null
         var src: String? = null
-        var changes = 0
-        var reports = 0
+        var boundSrc: String? = null
         var shown = false
-        var madeBy = "app"
+        /** The commits that last showed it and bound its `srcObject`, in whatever order their reports come: it
+         * consumes under the less privileged of the two. */
+        var shownBy = Cause.none
+        var boundBy = Cause.none
+        val madeBy get() = shownBy.lower(boundBy)
         var sub: Sub? = null
         var picture: Bitmap? = null
     }
 
-    private class Sub(val track: String, val origin: String) : TrackConsumer {
+    private class Sub(val track: String, val cause: Cause) : TrackConsumer {
         var live = false
         private var source: VideoSource? = null
         var leave: () -> Unit = {}
@@ -131,21 +135,17 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     private fun say(line: String) = context.log("camera: $line")
     private fun error(code: String) = JSONObject().put("error", code)
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
-        when (name) {
-            "takePhoto" -> takePhoto(args, reply)
-            "getPhotoCapabilities" -> reply(capabilities(args))
-            "picture" -> reply(JSONObject().put("path", picture ?: ""))
-            else -> reply(error("NotSupportedError"))
-        }
-    }
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
 
-    override fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         val tap = (preferred as? JSONObject)?.optString("tap")
         when (name) {
-            "takePhotoWithCameraApp" -> cameraApp(PHOTO, args, tap, reply)
-            "recordVideoWithCameraApp" -> cameraApp(VIDEO, args, tap, reply)
-            else -> later(name, args, reply)
+            "takePhoto" -> takePhoto(args, cause, reply)
+            "getPhotoCapabilities" -> reply(capabilities(args))
+            "picture" -> reply(JSONObject().put("path", picture ?: ""))
+            "takePhotoWithCameraApp" -> cameraApp(PHOTO, args, tap, cause, reply)
+            "recordVideoWithCameraApp" -> cameraApp(VIDEO, args, tap, cause, reply)
+            else -> reply(error("NotSupportedError"))
         }
     }
 
@@ -218,8 +218,9 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             }
         }
         val v = state(id)
-        if (!props.has("srcObject")) v.src = ""
-        else props.optString("srcObject").let { if (it != v.src) { v.src = it; v.changes += 1 } }
+        val src = props.opt("srcObject") as? String
+        if (src != v.src && v.boundSrc == v.src) v.boundSrc = null
+        v.src = src
         reconcile(id)
     }
 
@@ -233,18 +234,18 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         v.sub = null
     }
 
-    override fun displayed(session: String, id: String, shown: Boolean, origin: String) {
+    override fun displayed(session: String, id: String, shown: Boolean, cause: Cause) {
         val v = state(id)
         v.shown = shown
-        if (shown) v.madeBy = origin
+        if (shown) v.shownBy = cause
         reconcile(id)
     }
 
-    override fun bound(session: String, id: String, prop: String, origin: String) {
+    override fun bound(session: String, id: String, prop: String, value: Any?, cause: Cause) {
         if (prop != "srcObject") return
         val v = state(id)
-        v.reports += 1
-        v.madeBy = origin
+        v.boundSrc = value as? String
+        v.boundBy = cause
         reconcile(id)
     }
 
@@ -253,9 +254,12 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     private fun reconcile(id: String) {
         val v = views[id] ?: return
         val src = v.src ?: ""
-        val want = v.view != null && v.shown && src.isNotEmpty() && v.reports >= v.changes && context.tracks.lookup(src)?.kind == "video"
-        v.sub?.let { if (!want || it.track != src) { blank(v); it.leave(); v.sub = null } }
-        v.sub?.let { if (want && !it.live && v.madeBy == "app" && it.origin != "app") { it.leave(); v.sub = null } }
+        val want = v.view != null && v.shown && src.isNotEmpty() && src == v.boundSrc && context.tracks.lookup(src)?.kind == "video"
+        v.sub?.let {
+            if (!want || it.track != src || it.cause.origin != v.madeBy.origin) {
+                blank(v); it.leave(); v.sub = null
+            }
+        }
         if (!want || v.sub != null) return
         val sub = Sub(src, v.madeBy)
         sub.onLive = { source -> show(v, sub, source) }
@@ -315,15 +319,15 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** Under the agent, each photo for `state.extensions` (§9, Disclosure), by path and SHA-256; a photo from the camera
      * app names no track. */
-    private fun disclose(path: String, track: String?, bytes: ByteArray, into: JSONArray = photos) {
+    private fun disclose(path: String, track: String?, bytes: ByteArray, cause: Cause, into: JSONArray = photos) {
         val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-        val entry = JSONObject().put("path", path).put("sha256", sha).put("origin", context.origin)
+        val entry = JSONObject().put("path", path).put("sha256", sha).put("origin", cause.origin)
         if (into === photos) entry.put("track", track ?: JSONObject.NULL)
         into.put(entry)
         context.state(JSONObject().put("photos", photos).put("videos", videos))
     }
 
-    private fun takePhoto(args: JSONObject, reply: (JSONObject) -> Unit) {
+    private fun takePhoto(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         val entry = context.tracks.lookup(args.optString("track")) ?: return reply(error("NotFoundError"))
         if (entry.kind != "video") return reply(error("NotSupportedError"))
         val s = entry.state?.invoke() ?: JSONObject()
@@ -337,7 +341,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             val bytes = agentBytes(entry.id) ?: return reply(error("UnknownError"))
             try { dev.exact.canvas.Files.write(file, bytes) } catch (e: java.io.IOException) { return reply(error("UnknownError")) }
             say("took $path (${bytes.size} bytes, the agent's picture)")
-            disclose(path, entry.id, bytes)
+            disclose(path, entry.id, bytes, cause)
             return reply(photo(path, file))
         }
         val source = entry.video?.invoke() ?: return reply(error("InvalidStateError"))
@@ -345,8 +349,8 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         val capture = try { imageCapture(source, args, android) } catch (e: TrackError) { return reply(error(e.code)) }
         if (android.optBoolean("shutterSound", true) || Build.VERSION.SDK_INT < 33 || MediaActionSound.mustPlayShutterSound()) sound.play(MediaActionSound.SHUTTER_CLICK)
         // A photo in flight is a consumer: its lease holds until the file is written (D3).
-        val holder = Sub(entry.id, "app")
-        holder.leave = context.tracks.subscribe(entry.id, holder, false, "app")
+        val holder = Sub(entry.id, cause)
+        holder.leave = context.tracks.subscribe(entry.id, holder, false, cause)
         capture.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), ContextCompat.getMainExecutor(context.application),
             object : ImageCapture.OnImageSavedCallback {
                 override fun onImageSaved(output: ImageCapture.OutputFileResults) {
@@ -382,7 +386,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     private var cameraAppSettle: (() -> Unit)? = null
 
     /** The answer of `takePhotoWithCameraApp` or `recordVideoWithCameraApp`, [tap] the agent's on its sheet. */
-    private fun cameraApp(shot: Shot, args: JSONObject, tap: String?, reply: (JSONObject) -> Unit) {
+    private fun cameraApp(shot: Shot, args: JSONObject, tap: String?, cause: Cause, reply: (JSONObject) -> Unit) {
         if (cameraAppUp) return reply(error("InvalidStateError"))
         val ext = shot.ext
         val path = args.optString("path").ifEmpty { null }?.let { if (it.endsWith(".$ext")) it else "$it.$ext" } ?: "app:/tmp/camera/${++taken}.$ext"
@@ -396,16 +400,18 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             file.parentFile?.mkdirs()
             try { Files.write(file, bytes) } catch (e: IOException) { return reply(error("UnknownError")) }
             say("camera app took $path (${bytes.size} bytes, the agent's ${shot.noun})")
-            disclose(path, null, bytes, if (shot === VIDEO) videos else photos)
+            disclose(path, null, bytes, cause, if (shot === VIDEO) videos else photos)
             return reply(if (shot === VIDEO) video(path, file) else photo(path, file))
         }
-        val request = context.request
+        // The camera app opens for the app's own call alone, as admission says: any other cause, or none, fails closed.
+        if (!cause.app) return reply(error("NotAllowedError"))
+        val request = cause.request
         val camera = android.Manifest.permission.CAMERA
         if (!declares(camera) || held(camera)) return openCameraApp(shot, request, path, args, reply)
         cameraAppUp = true
         cameraAppRequest = request
         cameraAppState = AtomicInteger(UP)
-        context.askPermission(camera) {
+        context.askPermission(cause, camera) {
             cameraAppUp = false
             if (cameraAppState.get() == LET_GO) return@askPermission reply(error("AbortError"))
             if (held(camera)) return@askPermission openCameraApp(shot, request, path, args, reply)

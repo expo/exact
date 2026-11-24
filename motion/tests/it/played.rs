@@ -100,7 +100,7 @@ fn a_hold_takes_it_from_where_it_stands() {
     let mut e = Engine::new();
     linear(&mut e);
     observe_value(&mut e, Property::Translate, Value::ZERO);
-    observe_value(&mut e, Property::Scale, Value::scalar(1.0));
+    observe_value(&mut e, Property::Scale, Value::new(1.0, 1.0));
     e.frame();
     observe_value(&mut e, Property::Translate, Value::new(100.0, 0.0));
     assert!(e.play_transition(NODE, Property::Translate).is_some());

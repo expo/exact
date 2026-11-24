@@ -299,6 +299,11 @@ impl Event {
         {
             return None;
         }
+        // A `play` or `pause` carries nothing, or `remote` for a remote
+        // command's (`event.rs`).
+        if matches!(kind, EventKind::Play | EventKind::Pause) && !matches!(value, "" | "remote") {
+            return None;
+        }
         if matches!(kind, EventKind::Timeupdate | EventKind::Durationchange)
             && !exact_num::parse_f64(value).ok()?.is_finite()
         {

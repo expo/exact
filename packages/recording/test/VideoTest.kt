@@ -20,6 +20,7 @@ import androidx.camera.video.Recording
 import androidx.camera.video.RecordingStats
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.util.Consumer
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactActivity
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Extensions
@@ -113,7 +114,7 @@ class VideoTest {
         val context = ExtensionContext(RuntimeEnvironment.getApplication(), "recording")
         var consumers = 0
         val owner = object : TrackOwner {
-            override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, origin: String): () -> Unit {
+            override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, cause: Cause): () -> Unit {
                 consumers++
                 consumer.liveVideo(null)
                 return { consumers-- }
@@ -124,7 +125,7 @@ class VideoTest {
         val module = RecordingModule(context)
         fun call(name: String, args: JSONObject): JSONObject {
             var answer: JSONObject? = null
-            module.later(name, args) { answer = it }
+            module.later(name, args, null, Cause("app")) { answer = it }
             return requireNotNull(answer)
         }
         val start = call("startMediaRecorder", JSONObject().put("stream", "video-test-stream").put("path", "app:/data/video-test"))
@@ -247,7 +248,7 @@ class VideoTest {
         val media = MediaCaptureModule(context)
         fun call(name: String, args: JSONObject): JSONObject {
             var answer: JSONObject? = null
-            media.later(name, args) { answer = it }
+            media.later(name, args, null, Cause("app")) { answer = it }
             return requireNotNull(answer)
         }
         val take = VideoTake("reenabled", "app:/data/reenabled.mp4", File(app.cacheDir, "reenabled.mp4"), context, 5000.0, {})
@@ -261,8 +262,8 @@ class VideoTest {
                 override fun muted(reason: String) {}
                 override fun unmuted() {}
                 override fun ended() {}
-            }, false, "app")
-            take.leave = context.tracks.subscribe(id, take, true, "app")
+            }, false, Cause("app"))
+            take.leave = context.tracks.subscribe(id, take, true, Cause("app"))
             val original = requireNotNull(Encoder.active)
             val cases = requireNotNull(FrameRateTest.Provider.bound).useCases.toSet()
             assertEquals(3, cases.size)

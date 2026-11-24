@@ -532,14 +532,16 @@ package final class Runtime {
     /// DOM's `beforeunload` (36) at a node that hears it (studio diary R17).
     package func beforeunload(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 36, 0, now)) } }
 
-    package func heightDragUpdate(_ token: UInt64, height: Double, now: Double) -> Batch {
+    /// `at`: when the input was sampled, on its own timeline carried onto the
+    /// clock from where the drag began; the release velocity reads it.
+    package func heightDragUpdate(_ token: UInt64, height: Double, now: Double, at: Double) -> Batch {
         return on {
-            read(exact_height_drag_update(rt, token, height, now))
+            read(exact_height_drag_update(rt, token, height, now, at))
         }
     }
-    package func heightDragRelease(_ token: UInt64, height: Double, now: Double) -> Batch {
+    package func heightDragRelease(_ token: UInt64, height: Double, now: Double, at: Double) -> Batch {
         return on {
-            read(exact_height_drag_release(rt, token, height, now))
+            read(exact_height_drag_release(rt, token, height, now, at))
         }
     }
     package func reorderBegin(_ handle: UInt32, scrollTop: Double, now: Double) -> Batch {
@@ -564,15 +566,19 @@ package final class Runtime {
     package func timelineScrolled(_ view: UInt32?, left: Double, top: Double) -> Batch {
         on(layout: true) { read(exact_timeline_scrolled(rt, view == nil ? 1 : 0, view ?? 0, left, top)) }
     }
-    package func holdUpdate(_ token: UInt64, x: Double, y: Double, now: Double) -> Batch {
+    /// `at`: when the input was sampled, as for a height drag; the clock's
+    /// own time when the hold's velocity is never measured.
+    package func holdUpdate(_ token: UInt64, x: Double, y: Double, now: Double, at: Double? = nil) -> Batch {
         return on {
-            read(exact_hold_update(rt, token, x, y, now))
+            read(exact_hold_update(rt, token, x, y, now, at ?? now))
         }
     }
-    /// `measured`: release at the engine's own velocity estimate (LLP 1057.001 §3).
-    package func holdEnd(_ token: UInt64, cancel: Bool, measured: Bool = false, vx: Double = 0, vy: Double = 0, now: Double) -> Batch {
+    /// `measured`: release at the engine's own velocity estimate (LLP 1057.001 §3),
+    /// read `at` the release's input time.
+    package func holdEnd(_ token: UInt64, cancel: Bool, measured: Bool = false, vx: Double = 0, vy: Double = 0,
+                         now: Double, at: Double? = nil) -> Batch {
         return on {
-            read(exact_hold_end(rt, token, cancel ? 1 : measured ? 2 : 0, vx, vy, now))
+            read(exact_hold_end(rt, token, cancel ? 1 : measured ? 2 : 0, vx, vy, now, at ?? now))
         }
     }
     package func swiperight(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 12, 0, now)) } }
@@ -1153,7 +1159,7 @@ package final class Runtime {
     }
     /// `ask`, read on the owner after the jobs queued before it and never
     /// waited for (LLP 1072 T3): `answer` runs there with the reply, the
-    /// `CACurrentMediaTime` it was read at and the owner's `jobsBegun` then;
+    /// `hostMediaTime` it was read at and the owner's `jobsBegun` then;
     /// the reply is nil for a runtime destroyed or replaced since. The read
     /// begins no work, so it is not counted among the owner's jobs.
     package func askLater(_ export: @escaping (ExactRuntime, Int) -> UInt32, _ request: String,
@@ -1161,9 +1167,9 @@ package final class Runtime {
         let lease = completionLease
         Owner.shared.post(counted: false) { [self] in
             let job = Owner.shared.jobsBegun
-            guard accepts(lease) else { return answer(nil, CACurrentMediaTime(), job) }
+            guard accepts(lease) else { return answer(nil, hostMediaTime(), job) }
             let len = export(rt, write(request))
-            answer(String(decoding: Data(bytes: exact_out(rt), count: Int(len)), as: UTF8.self), CACurrentMediaTime(), job)
+            answer(String(decoding: Data(bytes: exact_out(rt), count: Int(len)), as: UTF8.self), hostMediaTime(), job)
         }
     }
     /// A command's ruling (`share`, LLP 1069.003; `saveFile`, LLP 1069.010):

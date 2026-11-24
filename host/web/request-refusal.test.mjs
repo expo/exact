@@ -8,17 +8,18 @@ import { spawnSync } from 'node:child_process';
 import { Worker } from 'node:worker_threads';
 import { boundedHttpBody, request, streamed } from './http-body.js';
 import { deferredFulfill, refusal } from './navigation/requests.js';
-import { admittingGrant, admitsNetwork, coversPath, createGrantSet, grantError, grantWords, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
-import { createRequestExecutor, createSecretFacade, fetchWith, redirectOf } from '../web-js/admission.js';
+import { bundledAsset, admittingGrant, admitsNetwork, coversPath, createGrantSet, grantError, grantWords, sameGrantDeclaration, scopedGrantSet } from './grant-admission.js';
+import { createRequestExecutor, createSecretFacade, fetchTarget, fetchWith, redirectOf } from '../web-js/admission.js';
 import { cdpBrowser, chromium } from '../../scripts/agent-launch.mjs';
 import { need } from '../../scripts/coverage.mjs';
 import { builtFile } from '../web-js/content-names.mjs';
 import { localImports } from '../web-js/glue.mjs';
+import { runtimeSource, stageRuntime } from './tests/stand-ins.mjs';
 const { unavailable } = chromium(), chromeTest = need('chrome', unavailable);
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 // The real `redirectOf` and `ownWithout`, for a stub `admission.js` written beside a module under test
-const realHelpers = `export { ownWithout, redirectOf, signalDeadline, socketProtocols, within } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)}; `;
+const realHelpers = `export { fetchTarget, ownWithout, redirectOf, signalDeadline, socketProtocols, within } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)}; `;
 const sets = new Map();
 const normalizers = new Map();
 function builtNormalizer(target, run = spawnSync) {
@@ -293,10 +294,18 @@ test('TypeScript fetch exposes FetchError kinds while a late host module keeps b
   Object.defineProperty(globalThis, 'Headers', { configurable: true, writable: true, value: class extends NativeHeaders {
     constructor(value) { if (value && Object.keys(value).some(name => name.includes(' '))) throw new TypeError('Invalid header name'); super(value); }
   } });
+  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  Object.defineProperty(globalThis, 'document', { configurable: true, value: { baseURI: new URL('/mount/', origin.url).href } });
   try {
+    expect(fetchTarget('/assets/feed.json', {exactStream: () => {}, exactLongPoll: {cursor: 'since', from: 'seq'}})).toBe(origin.url.origin + '/assets/feed.json');
+    expect((await fetchWith(set, 'data.json')).url).toBe(new URL('/mount/data.json', origin.url).href);
+    expect((await request({ op: 'request', method: 'GET', url: 'data.json', headers: {} }, { grantSet: set, controllers: new Set() })).kind).toBe(0);
+    globalThis.document.baseURI = 'https://ungranted.test/path/';
+    await expect(fetchWith(set, '/data.json')).rejects.toMatchObject({ kind: 'Refused' });
+    globalThis.document.baseURI = origin.url.href;
     await expect(fetchWith(set, 'https://outside.test/')).rejects.toMatchObject({ name: 'FetchError', kind: 'Refused', message: "outside the app's grants (net.fetch)" });
     await expect(fetchWith(set, 'http://[')).rejects.toMatchObject({ name: 'FetchError', kind: 'Network' });
-    await expect(fetchWith(set, '/relative')).rejects.toMatchObject({ name: 'FetchError', kind: 'Network' });
+    expect((await fetchWith(set, '/relative')).url).toBe(new URL('/relative', origin.url).href);
     await expect(fetchWith(set, origin.url, { headers: { 'Bad Name': 'x' } })).rejects.toMatchObject({ name: 'FetchError', kind: 'Network' });
     await expect(fetchWith(set, '/assets/runtime.wasm', { headers: { 'Bad Name': 'x' } })).rejects.toMatchObject({ name: 'FetchError', kind: 'Network' });
     expect(await (await fetchWith(set, origin.url)).text()).toBe('ok');
@@ -311,6 +320,7 @@ test('TypeScript fetch exposes FetchError kinds while a late host module keeps b
   } finally {
     origin.stop(true);
     if (locationDescriptor) Object.defineProperty(globalThis, 'location', locationDescriptor); else delete globalThis.location;
+    if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor); else delete globalThis.document;
     if (headersDescriptor) Object.defineProperty(globalThis, 'Headers', headersDescriptor); else delete globalThis.Headers;
   }
 });
@@ -320,9 +330,12 @@ test('a bodyless same-origin assets GET is host I/O on the JS target', async () 
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'location');
   Object.defineProperty(globalThis, 'location', { configurable: true, value: { href: origin.url.href, origin: origin.url.origin } });
   try {
+    const asset = '/assets/runtime.wasm', initial = origin.url.origin + '/mount' + asset;
+    expect(bundledAsset(asset, initial, origin.url.origin + '/mount/assets/next.wasm')).toBe(true);
+    expect(bundledAsset(asset, initial, origin.url.origin + '/mount/next')).toBe(false);
     expect(await (await fetchWith(normalized(''), '/assets/runtime.wasm')).text()).toBe('/assets/runtime.wasm');
     expect(await (await fetchWith(normalized(''), '/assets/runtime.wasm', null)).text()).toBe('/assets/runtime.wasm');
-    await expect(fetchWith(normalized(''), '/assets/runtime.wasm', { method: 'POST' })).rejects.toMatchObject({ kind: 'Network' });
+    await expect(fetchWith(normalized(''), '/assets/runtime.wasm', { method: 'POST' })).rejects.toMatchObject({ kind: 'Refused' });
   } finally {
     origin.stop(true);
     if (descriptor) Object.defineProperty(globalThis, 'location', descriptor); else delete globalThis.location;
@@ -448,11 +461,12 @@ test('sealed native tuples still require valid source grammar and exact decoded 
 
 test('the production file command refuses a source outside the admitted fs.read prefix', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-files-admission-'));
-  writeFileSync(resolve(dir, 'files.js'), readFileSync(resolve(ROOT, 'host/web-js/files.js'), 'utf8')
+  // The real modules files.js needs, and a stand-in for any other it imports; the test's own below replace some.
+  stageRuntime(dir, ['rt-link.js', 'pointer.js', 'url.js'], {}, ['files.js']);
+  writeFileSync(resolve(dir, 'files.js'), runtimeSource('files.js')
     .replace("from './rt.js'", "from './rt-stub.js'").replace("from './navigation.js'", "from './navigation-stub.js'"));
-  writeFileSync(resolve(dir, 'rt-stub.js'), `export const journal=[],clock={now:0,agent:true},inflight={n:0},Hosts={},OnHooks={},Views=new Map(),data={appId:'test.files'};export const nextTicket=()=>1,viewId=()=>1,painted=()=>Promise.resolve(),pressFeedback=()=>{};\n`); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
+  writeFileSync(resolve(dir, 'rt-stub.js'), `export const journal=[],clock={now:0,agent:true},inflight={n:0},Hosts={},OnHooks={},Views=new Map(),data={appId:'test.files'};export const nextTicket=()=>1,viewId=()=>1,painted=()=>Promise.resolve(),pressFeedback=()=>{};\n`);
   writeFileSync(resolve(dir, 'navigation-stub.js'), `export { inertAncestor, liveById } from './navigation.js';\nexport const reportPlace=()=> ['en','UTC','1'].join(String.fromCharCode(0));\n`);
-  cpSync(resolve(ROOT, 'host/web-js/pointer.js'), resolve(dir, 'pointer.js'));
   writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8')));
   for (const name of ['grant-admission.js', 'address-space.js', 'faults.js', 'navigation.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
   const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
@@ -465,6 +479,10 @@ test('the production file command refuses a source outside the admitted fs.read 
     await import(pathToFileURL(resolve(dir, 'files.js')).href);
     runtime.Hosts.saveFile('export', 'app:/data/notes.json', 'notes.json');
     expect(runtime.journal.at(-1)).toContain('outside the app\'s fs.read grants');
+    // and the admitted prefix is not refused: the grant check itself ran
+    const said = runtime.journal.length;
+    runtime.Hosts.saveFile('export', 'app:/elsewhere/ok.json', 'ok.json');
+    expect(runtime.journal.slice(said).filter(line => line.includes('refused'))).toEqual([]);
   } finally {
     if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor); else delete globalThis.document;
     delete globalThis.exact;
@@ -636,7 +654,7 @@ test('a body read from a file is bounded by the deadline, and a socket refuses o
 // rejection unhandled (Astra, post-landing).
 test('a pre-aborted exactBodyFrom fetch rejects once, reads nothing, and leaves nothing unhandled', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-fetch-abort-'));
-  for (const name of ['ts-fetch.js', 'ts-body-from.js']) cpSync(resolve(ROOT, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-fetch.js', 'ts-body-from.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   writeFileSync(resolve(dir, 'admission.js'), '' + realHelpers + 'export class FetchError extends Error { constructor(kind, message) { super(message); this.kind = kind; } } export const coversPath = () => { globalThis.bodyReads = (globalThis.bodyReads ?? 0) + 1; return true; }; export const fetchWith = async () => { globalThis.sentBodies = (globalThis.sentBodies ?? 0) + 1; return new Response(); }; export const overlaying = { on: false }; export const inOverlay = api => new Error(api);\n');
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = {};\n');
   const unhandled = [];
@@ -656,8 +674,8 @@ test('a pre-aborted exactBodyFrom fetch rejects once, reads nothing, and leaves 
 // or a stream registered, and a later change to the options is not the request's.
 test('the JS target checks and takes the redirect mode once, as fetch is called', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-fetch-redirect-'));
-  writeFileSync(resolve(dir, 'ts-fetch.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), 'utf8'));
-  writeFileSync(resolve(dir, 'ts-body-from.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-body-from.js'), 'utf8'));
+  writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js'));
+  writeFileSync(resolve(dir, 'ts-body-from.js'), runtimeSource('ts-body-from.js'));
   writeFileSync(resolve(dir, 'admission.js'), `${realHelpers}export class FetchError extends Error { constructor(kind, message) { super(message); this.kind = kind; } } export const coversPath = () => { globalThis.redirectReads = (globalThis.redirectReads ?? 0) + 1; return true; }; export const fetchWith = async (set, input, init, expires, redirect) => { globalThis.redirectSent = redirect; return new Response(); }; export const overlaying = { on: false }; export const inOverlay = api => new Error(api);\n`);
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = {};\n');
   writeFileSync(resolve(dir, 'storage-fs.js'), 'export const requestBody = async () => new Blob([\'x\']);\n');
@@ -888,7 +906,7 @@ test('ts-data installs the native Store facade and a later gpu-glue shader uses 
   writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8')));
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(set)});\n`);
   for (const name of ['grant-admission.js', 'address-space.js', 'faults.js', 'navigation.js', 'gpu-glue.js', 'gpu-assets.js', 'gpu-pads.js', 'gpu-tier.js', 'gpu-refusal.js', 'pace.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
-  cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js')); cpSync(resolve(ROOT, 'host/web-js/shape.js'), resolve(dir, 'shape.js')); cpSync(resolve(ROOT, 'host/web-js/uploads.js'), resolve(dir, 'uploads.js'));
+  writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js')); writeFileSync(resolve(dir, 'shape.js'), runtimeSource('shape.js')); writeFileSync(resolve(dir, 'uploads.js'), runtimeSource('uploads.js'));
   writeFileSync(resolve(dir, 'gpu.js'), `export default async()=>{};export const gpu_load=async()=>{},gpu_shader_names=()=> '["shader"]',gpu_shaders_clear=()=>{},gpu_shader=()=>true,gpu_unload=()=>{},gpu_child_view=()=>{};\n`);
   const descriptors = Object.fromEntries(['fetch', 'document', 'window', 'requestAnimationFrame', 'cancelAnimationFrame', 'devicePixelRatio'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]));
   const shaderFetches = [], browserFetch = async input => { shaderFetches.push(String(input)); return new Response('shader'); };
@@ -906,8 +924,9 @@ test('ts-data installs the native Store facade and a later gpu-glue shader uses 
   try {
     const ts = await import(`${pathToFileURL(resolve(dir, 'ts-data.js')).href}?ts=${Date.now()}`), data = { q: [] };
     ts.install(data);
-    expect(data.answer('read', [], new Map([['token', 'value']]))).toEqual({ v: 'value', store: true, effects: undefined, watches: new Set() });
-    expect(data.answer('kept', [], new Map([['exact.kept.answer', 'private']]))).toEqual({ v: 'null', store: false, effects: undefined, watches: new Set() });
+    // `madeBy`: the call that made the answer (ts-data.js, since 68e12e8a5)
+    expect(data.answer('read', [], new Map([['token', 'value']]))).toEqual({ v: 'value', store: true, effects: undefined, watches: new Set(), madeBy: expect.objectContaining({ name: 'read', origin: 'app', settled: true }) });
+    expect(data.answer('kept', [], new Map([['exact.kept.answer', 'private']]))).toEqual({ v: 'null', store: false, effects: undefined, watches: new Set(), madeBy: expect.objectContaining({ name: 'kept', origin: 'app', settled: true }) });
     expect(data.grantSet).toBeUndefined();
     await import(`${pathToFileURL(resolve(dir, 'gpu-glue.js')).href}?late=${Date.now()}`);
     expect(shaderFetches.some(url => url.endsWith('/shaders/shader.wgsl'))).toBe(true);
@@ -954,7 +973,7 @@ export function answer(name, args, store, storage) {
   writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8')));
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(normalized('fs.read app:/data'))});\n`);
   for (const name of ['grant-admission.js', 'address-space.js', 'faults.js', 'navigation.js', 'storage-environment.js', 'http-body.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
-  for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) cpSync(resolve(ROOT, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-fetch.js', 'ts-stream.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   try {
     const ts = await import(`${pathToFileURL(resolve(dir, 'ts-data.js')).href}?shape=${Date.now()}`), data = { q: [] };
     ts.install(data);
@@ -1020,7 +1039,7 @@ test("the JS target refuses a data module's clock, randomness and timers as Herm
   const build = readFileSync(resolve(ROOT, 'host/web-js/build.mjs'), 'utf8');
   const bound = JSON.parse(/const bound = (\[[^\]]*\]);/.exec(build)[1].replaceAll("'", '"').replace(/\s+/g, ''));
   const guards = resolve(dir, 'ts-fetch.js');
-  cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), guards);
+  writeFileSync(guards, runtimeSource('ts-fetch.js'));
   writeFileSync(resolve(dir, 'admission.js'), '' + realHelpers + 'export const fetchWith = () => Promise.reject(new Error("no fetch here")); export class FetchError extends Error {} export const coversPath = () => false; export const overlaying = { on: false }; export const inOverlay = api => new Error(api);\n');
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = null;\n');
   const fixture = resolve(ROOT, 'js/tests/fixtures/inputs.ts');
@@ -1063,14 +1082,14 @@ test("the JS target refuses a data module's clock, randomness and timers as Herm
 
 // LLP 1016.000 D3 on the JS target: a data module's own socket, request or
 // event source refuses with the wasm target's words (module-glue.js), in every
-// spelling, so no frame leaves past the grants (#126).
+// spelling, so no frame leaves past the grants.
 test("the JS target refuses a data module's own WebSocket, XMLHttpRequest and EventSource as the wasm target does", async () => {
   const { transformSync } = await import('rolldown/utils');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-io-'));
   const build = readFileSync(resolve(ROOT, 'host/web-js/build.mjs'), 'utf8');
   const bound = JSON.parse(/const bound = (\[[^\]]*\]);/.exec(build)[1].replaceAll("'", '"').replace(/\s+/g, ''));
   const guards = resolve(dir, 'ts-fetch.js');
-  cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), guards);
+  writeFileSync(guards, runtimeSource('ts-fetch.js'));
   writeFileSync(resolve(dir, 'admission.js'), '' + realHelpers + 'export const fetchWith = () => Promise.reject(new Error("no fetch here")); export class FetchError extends Error {} export const coversPath = () => false; export const overlaying = { on: false }; export const inOverlay = api => new Error(api);\n');
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = null;\n');
   const source = resolve(dir, 'source.js');
@@ -1121,13 +1140,13 @@ export function answer(name, args, store, storage) {
 }`);
     writeFileSync(resolve(dir, 'ts-data.js'), readFileSync(resolve(ROOT, 'host/web-js/ts-data.js'), 'utf8')
       .replace('__APP_TS__', './source.js').replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
-    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();'); cpSync(resolve(ROOT, 'host/web-js/rt-link.js'), resolve(dir, 'rt-link.js'));
+    writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0},journal=[],Resources=[],inflight={n:0};export const drive=()=>{},time=()=>{},Origin={now:()=>"app"};export const checkpoint=()=>({kept:null});export const commit=f=>f();export const R=()=>{};export const painted=()=>Promise.resolve();export const canvasCommitted=()=>Promise.resolve();');
     writeFileSync(resolve(dir, 'rt-link.js'), "import * as rt from './rt.js'; export { rt };\n");
     writeFileSync(resolve(dir, 'names.js'), `export const sourceTypes=${JSON.stringify(Object.fromEntries([...methods, 'open', 'work', 'directories', 'document', 'known-folder', 'known-copy'].map(n => [n, [[], 's']])))};`);
     writeFileSync(resolve(dir, 'admission.js'), localImports(readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8')));
     writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${JSON.stringify(normalized(spec))});`);
     for (const name of ['grant-admission.js', 'address-space.js', 'faults.js', 'navigation.js', 'http-body.js', 'storage-environment.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
-    cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js')); cpSync(resolve(ROOT, 'host/web-js/shape.js'), resolve(dir, 'shape.js')); cpSync(resolve(ROOT, 'host/web-js/uploads.js'), resolve(dir, 'uploads.js'));
+    writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js')); writeFileSync(resolve(dir, 'shape.js'), runtimeSource('shape.js')); writeFileSync(resolve(dir, 'uploads.js'), runtimeSource('uploads.js'));
     // No storage adapters are installed: a grant refusal must not need them.
     try {
       const ts = await import(pathToFileURL(resolve(dir, 'ts-data.js')).href), data = { q: [] };

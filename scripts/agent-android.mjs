@@ -247,6 +247,11 @@ export function androidDeploy(app, bin, env) {
   };
 }
 
+/** The app the shell's Gradle build packages: its name, its directory (where `modules/android` and `.exact/` are) and,
+ * for a game, the manifest its shells were generated with (`.shells/app.json`, which has its `app` identity). */
+export const gradleApp = app => [`-Papp=${app.name}`, `-PappDir=${app.dir}`,
+  ...(app.manifest.game ? [`-PappManifest=${resolve(app.workspace, 'app.json')}`] : [])];
+
 /** The app's `kind` crate's Cargo.toml, beside app.json or in the workspace generated for it (scripts/app-shells.mjs). */
 export const crateManifest = (app, kind) => [resolve(app.dir, kind, 'Cargo.toml'), resolve(app.workspace, kind, 'Cargo.toml')].find(existsSync);
 
@@ -1155,7 +1160,6 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
   copyStaticTreeIfPresent(resolve(app.dir, 'assets'), resolve(staged, 'assets/app/assets'));
   // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
   if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
-  // A game's resolved manifest (with its `app` identity) is the one its shells were generated with.
   // A date or time control's picker is Compose Material 3's, linked only for a plan that has one (LLP 1115.001.000 D2).
   const compose = uses.includes('dates') ? ['-Pcompose=1'] : [];
   const compat = JSON.parse(readFileSync(resolve(out, 'compat.json'), 'utf8')), development = compat.embedded?.trust !== 'production';
@@ -1176,7 +1180,7 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
     // Without file watching Gradle reads its inputs to decide what is up to date; a watcher that missed an edit
     // shipped the reader's old classes once (LLP 1159.002 D1). A daemon started in the locks' own Gradle home would
     // outlive the home.
-    assembled = runGradle(['--no-watch-fs', ...(env.CI || graph.env.GRADLE_USER_HOME ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
+    assembled = runGradle(['--no-watch-fs', ...(env.CI || graph.env.GRADLE_USER_HOME ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', ...gradleApp(app),
       `-Pabis=${abis.join(',')}`, `-PexactDevelopment=${development ? '1' : '0'}`, `-PapplicationId=${androidPackageId(app.manifest)}`, `-PappName=${app.displayName}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PvideoBuildDir=${dirs.video}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
       ...developmentApkArgs(development, profile, bundle), ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...(launch.theme ? [`-PappTheme=${launch.theme}`] : []), ...compose, ...video, ...widgetArgs, ...extensionArgs(app, out, config, bound, firebase, development), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env), ...graph.env } }, process.platform, { lockAdvice: maven.length && !writeLocks ? `${app.name}: Gradle locks or verification metadata do not match its dependencies; for an intended graph change, run ${androidLockCommand(app)}, then review and commit gradle.lockfile and gradle-verification.xml` : null });
@@ -1194,7 +1198,7 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
   writeFileSync(resolve(dirname(apk), 'exact-build.json'), JSON.stringify({ started, package: androidPackageId(app.manifest), abis, libraries: abis.map(abi => built(ANDROID_ABIS[abi])), workspace: app.workspace ?? app.dir,
     bakeStarted, bakes: bakes.flatMap(receipt => receipt.linkedInputs ?
       [{ ...receipt.linkedInputs, products: receipt.products.filter(({path}) => receipt.linkedInputs.paths.includes(path)) }] : []),
-    sources: [...READER_SOURCES, ...[resolve(app.dir, 'modules/android')].filter(existsSync), ...icons.files, ...launch.files] }) + '\n');
+    sources: [...READER_SOURCES, resolve(app.dir, 'modules/android'), ...icons.files, ...launch.files] }) + '\n');
   // What its bake inlined of each setting (LLP 1153 D4), bound to the APK, for a drive to compare with their sources.
   recordBuiltSettings(apk, app, out);
   return apk;

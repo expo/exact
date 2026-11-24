@@ -14,6 +14,24 @@ class OverflowClipTests: XCTestCase {
          "border_radius": 16, "border_width": 2, "border_color_top": [0, 0, 255, 255]]
     }
 
+    func testScaleTracksKeepSeparateOverflowExtrema() {
+        let parent = CALayer(), child = CALayer()
+        parent.bounds = CGRect(x: 0, y: 0, width: 200, height: 200)
+        child.bounds = CGRect(x: 0, y: 0, width: 100, height: 100)
+        child.anchorPoint = .zero
+        parent.addSublayer(child)
+        for (axis, values) in [("x", [1.0, -2.0]), ("y", [1.0, 0.1])] {
+            let track = CAKeyframeAnimation(keyPath: "transform.scale.\(axis)")
+            track.values = values
+            child.add(track, forKey: axis)
+        }
+        let reach = OverflowPaint.inParent(child.bounds, of: child)
+        XCTAssertEqual(reach.minX, -200, accuracy: 1e-6)
+        XCTAssertEqual(reach.maxX, 100, accuracy: 1e-6)
+        XCTAssertEqual(reach.minY, 0, accuracy: 1e-6)
+        XCTAssertEqual(reach.maxY, 100, accuracy: 1e-6)
+    }
+
     func testOneAxisClipsPaintAndHitsWithOverlaysAndMaterials() throws {
         #if os(macOS)
         _ = NSApplication.shared

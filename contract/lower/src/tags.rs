@@ -508,7 +508,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "focusout" => AttrTarget::Handler("focusout"),
         "key" => AttrTarget::Handler("key"),
         "keycapture" => AttrTarget::Handler("keycapture"),
-        // DOM's `keyup`: a key's release, bubbling as `key` does (#140).
+        // DOM's `keyup`: a key's release, bubbling as `key` does.
         "keyup" => AttrTarget::Handler("keyup"),
         "submit" => AttrTarget::Handler("submit"),
         "load" => AttrTarget::Handler("load"),

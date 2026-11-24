@@ -3,11 +3,12 @@ import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 // package event's request to a less public space than the page's is refused before it is sent (LLP 1133.036 D6), as
 // a TypeScript source's is. And its request counts as I/O out until it settles, so a render waits for it (held.js).
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { localImports } from './glue.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 // `net.fetch http://127.0.0.1:9`, as the compiler normalizes it (exact-web-js `normalize-grants`).
@@ -17,7 +18,7 @@ const browserFetch = globalThis.fetch;
 let dir, data, sent = [], answers = [];
 beforeAll(async () => {
   dir = mkdtempSync(resolve(tmpdir(), 'exact-fetches-'));
-  for (const name of ['fetches.js', 'shape.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['fetches.js', 'shape.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   mkdirSync(resolve(dir, 'navigation'));
   writeFileSync(resolve(dir, 'navigation/network.js'), hostFixtureFile(resolve(root, 'host/web/navigation/network.js')));
   for (const name of ['grant-admission.js', 'faults.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));

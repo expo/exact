@@ -378,7 +378,7 @@ fn displayed_velocity_and_companion_catch_are_continuous_past_resistance_knee() 
     for (view, property, value) in [
         (row, Property::Translate, Value::new(80., 0.)),
         (companion, Property::Opacity, Value::scalar(0.4)),
-        (companion, Property::Scale, Value::scalar(0.4)),
+        (companion, Property::Scale, Value::new(0.4, 0.4)),
     ] {
         let token = p
             .host
@@ -397,6 +397,9 @@ fn displayed_velocity_and_companion_catch_are_continuous_past_resistance_knee() 
     assert_eq!(p.host.presented(companion).opacity, before.opacity);
     assert_eq!(p.host.presented(companion).scale, before.scale);
     p.pointer_move(x + 30., 40., 30.).unwrap();
+    let scale = p.host.presented(companion).scale;
+    assert!(scale.0 > 0.);
+    assert_eq!(scale.1, scale.0);
     let held = p.contact.as_ref().unwrap().hold.as_ref().unwrap();
     let velocity = held.velocity.estimate(0.03).x;
     assert!(

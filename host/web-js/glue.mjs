@@ -20,7 +20,7 @@ export const HOST_WEB_GLUE = [
   'auth-glue.js', 'storage-environment.js', 'http-body.js', 'faults.js', 'address-space.js',
   // The scroll to a location's fragment, at its first (router.js; LLP 1153 D5).
   'fragment.js',
-  'drag-out.js', 'drag-input.js',
+  'drag-out.js', 'drag-input.js', 'drag-in.js',
 ];
 
 /** `code`, the source of `file`, with each constant in `names` that it declares true written false, so the bundler
@@ -63,7 +63,7 @@ export const localImports = text => text.replace(/(\b(?:from|import)\s*\(?\s*)([
 // reads storage-environment.js, so it ships in base, not only with storage.
 const WEB_HOST_GROUPS = {
   base: ['glue.js', 'navigation.js', 'audio-session.js', 'frame-messages.js', 'frame-navigation.js', 'textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js', 'input-glue.js', 'agent-input.js',
-    'http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'media-glue.js', 'drag-out.js', 'list-selection.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'live-time-glue.js', 'document-glue.js',
+    'http-body.js', 'grant-admission.js', 'faults.js', 'address-space.js', 'media-glue.js', 'drag-out.js', 'drag-in.js', 'list-selection.js', 'markup-editor.js', 'atoms.js', 'decorations.js', 'live-time-glue.js', 'document-glue.js',
     'motion-glue.js', 'group-glue.js', 'collection-glue.js', 'canvas2d-glue.js', 'presence-glue.js', 'picker-glue.js',
     'documents-glue.js', 'storage-environment.js', 'auth-glue.js', 'image-glue.js', 'geometry-glue.js', 'resize-glue.js', 'intersect-glue.js', 'sound-glue.js', 'midi-glue.js', 'prompt-glue.js', 'alert-message.js', 'wakelock-glue.js', 'orientationlock-glue.js', 'menu-rows.js', 'fragment.js'],
   module: ['module-glue.js', 'module-worker.js', 'module-binary.js', 'module-prelude.js'],

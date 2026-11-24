@@ -1,10 +1,11 @@
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 import { expect, test } from 'bun:test';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 // A data module's `scheduler` on the JS target (LLP 1141.001 D10), ts-fetch.js as it is: with no
 // browser `scheduler.yield` (Bun has none, nor has Safari), a yield resolves in a task of its own, after
@@ -14,8 +15,8 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 test('a yield without the browser scheduler resolves in a later task; postTask and an overlay refuse', async () => {
   expect(globalThis.scheduler).toBeUndefined();
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-scheduler-'));
-  cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
-  writeFileSync(resolve(dir, 'admission.js'), `export { ownWithout, redirectOf, signalDeadline, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
+  writeFileSync(resolve(dir, 'ts-fetch.js'), runtimeSource('ts-fetch.js'));
+  writeFileSync(resolve(dir, 'admission.js'), `export { fetchTarget, ownWithout, redirectOf, signalDeadline, socketProtocols } from ${JSON.stringify(pathToFileURL(resolve(ROOT, 'host/web-js/admission.js')).href)};
 export class FetchError extends Error {} export const overlaying = { on: false }; export const inOverlay = what => new Error(what + ' in an overlay');
 export const fetchWith = () => Promise.reject(new Error('no fetch'));\n`);
   writeFileSync(resolve(dir, 'admission-data.js'), 'export const tsGrantSet = {};\n');
@@ -39,7 +40,7 @@ export const fetchWith = () => Promise.reject(new Error('no fetch'));\n`);
 
 test('sample history keeps only its requested tail across large clock jumps and hidden spans', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-sample-bound-'));
-  cpSync(resolve(ROOT, 'host/web-js/samples.js'), resolve(dir, 'samples.js'));
+  writeFileSync(resolve(dir, 'samples.js'), runtimeSource('samples.js'));
   writeFileSync(resolve(dir, 'rt.js'), 'export const clock={now:0};');
   try {
     const { samples } = await import(pathToFileURL(resolve(dir, 'samples.js')).href);
@@ -76,7 +77,7 @@ test('sample history keeps only its requested tail across large clock jumps and 
 
 test('live tool deadlines refresh time and arm a wake without unrelated commits; the agent clock stays explicit', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-call-clock-')), old = globalThis.exact;
-  cpSync(resolve(ROOT, 'host/web-js/calls.js'), resolve(dir, 'calls.js'));
+  writeFileSync(resolve(dir, 'calls.js'), runtimeSource('calls.js'));
   // Keep the production dispatcher: its callback result decides whether an advance continues.
   const runtime = readFileSync(resolve(ROOT, 'host/web-js/clock.js'), 'utf8');
   const advance = runtime.slice(runtime.indexOf('export function advance('), runtime.indexOf('let driving ='));
@@ -119,7 +120,7 @@ export const time=()=>{if(!clock.agent)clock.now=Math.max(clock.now,wall.now)};\
 
 test('a queued tool call waits at most five seconds behind a running call', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-call-wait-')), old = globalThis.exact;
-  cpSync(resolve(ROOT, 'host/web-js/calls.js'), resolve(dir, 'calls.js'));
+  writeFileSync(resolve(dir, 'calls.js'), runtimeSource('calls.js'));
   writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:true,timers:[]},data={},After=[],Clocked=[],Resources=[],Mutations=[],Origin={now:()=>'app'},say=()=>{},order=()=>0,drive=()=>{},time=()=>{};
 export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};`);
   writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');
@@ -166,7 +167,7 @@ export const Invocation={id:0,pending:new Set()},Writes=null,stood=()=>{};`);
 
 test('a live wake\'s deadline timer moves with a budget an event raises after delivery', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-wake-budget-'));
-  cpSync(resolve(ROOT, 'host/web-js/wakes.js'), resolve(dir, 'wakes.js'));
+  writeFileSync(resolve(dir, 'wakes.js'), runtimeSource('wakes.js'));
   writeFileSync(resolve(dir, 'rt.js'), `export const clock={now:0,agent:false},wall={now:0},inflight={n:0},data={},After=[],Clocked=[],Mutations=[],drive=()=>{};
 export const time=()=>{clock.now=Math.max(clock.now,wall.now)};`);
   writeFileSync(resolve(dir, 'held.js'), 'export const Counting=new Set(),heldTickets=()=>[];');

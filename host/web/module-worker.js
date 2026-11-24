@@ -12,6 +12,7 @@ const checkpoint = () => new Promise(resolve => {
   channel.port1.onmessage = () => { channel.port1.close(); channel.port2.close(); resolve(); };
   channel.port2.postMessage(null);
 });
+let pageBase;
 let context = null, storage = null, admitted = null, tail = Promise.resolve(), stream = null;
 const pending = new Map();
 // Each request's owning call's map, so a withdrawal (door 16) reaches it from any turn (module-glue.js does the same).
@@ -101,6 +102,7 @@ const evaluate = (indirect => source => indirect(source))(eval);
 
 function init(message) {
   admitted = message.admitted;
+  pageBase = message.base;
   // Disable accidental browser I/O before the module captures globals: a
   // function, so `new WebSocket(url)` refuses by name too, as the JS target's
   // ts-fetch.js does. The prelude refuses the clock and every timer but an
@@ -132,7 +134,12 @@ function init(message) {
   self.__exact_keys = keyStore(message.storage, self.indexedDB);
   evaluate(message.binary);
   self.__exact_browser_secrets = true;
+  self.__exact_fetch_base = () => pageBase;
   evaluate(message.prelude);
+  const WorkerRequest = self.Request;
+  if (WorkerRequest) self.Request = class extends WorkerRequest {
+    constructor(input, init) { super(input === undefined || input instanceof WorkerRequest ? input : new URL(input, pageBase), init); }
+  };
   self.__exact_storage = storage.capability;
   self.__exact_install_storage();
   evaluate(message.script);
@@ -282,6 +289,7 @@ self.onmessage = ({ data }) => {
   if (data.op !== 'turn') return;
   const done = deferred();
   const run = tail.then(async () => {
+    pageBase = data.base;
     const before = deliveries;
     try { await turn(data.request, done); }
     catch (error) { storage?.retire(context?.owner); context = null; done.reject(error); }

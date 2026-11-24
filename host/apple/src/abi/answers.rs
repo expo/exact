@@ -185,6 +185,7 @@ fn press<D: exact_runner::DataSource>(
         cold: v["cold"] == true,
         hidden: v["hidden"] == true,
         digest: None,
+        foreground: false,
     };
     let kind = v["control"].as_str().unwrap_or_default();
     let digest = v["digest"].as_str().unwrap_or_default();

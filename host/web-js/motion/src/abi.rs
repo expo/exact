@@ -63,6 +63,21 @@ pub extern "C" fn m_translate(len: u32) -> u32 {
     1
 }
 
+/// Parse CSS scale into x and y factors in the scratch.
+#[no_mangle]
+pub extern "C" fn m_scale(len: u32) -> u32 {
+    let text = unsafe { String::from_utf8_lossy(&IO[..len as usize]).into_owned() };
+    match exact_motion::property::scale(&text) {
+        Some(v) => {
+            unsafe {
+                SCRATCH[..2].copy_from_slice(&[v.x, v.y]);
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
 /// A node's four targets after a commit at `now` seconds: translate as its
 /// lengths and its percentages of the box.
 #[no_mangle]
@@ -73,7 +88,8 @@ pub extern "C" fn m_observe(
     y: f64,
     px: f64,
     py: f64,
-    scale: f64,
+    sx: f64,
+    sy: f64,
     rotate_len: u32,
     opacity: f64,
     supplied: u32,
@@ -87,7 +103,7 @@ pub extern "C" fn m_observe(
         .observe(
             node as u64,
             [
-                x, y, px, py, scale, rotation.x, opacity, rotation.y, rotation.z, rotation.w,
+                x, y, px, py, sx, sy, rotation.x, opacity, rotation.y, rotation.z, rotation.w,
             ],
             (supplied != 0).then(|| Value::new(vx, vy)),
             now,

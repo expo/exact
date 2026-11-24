@@ -306,6 +306,10 @@ impl Walker<'_> {
                 reach.restart |= constraints(named("track")) != Level::None;
             }
             ("@exact/screen-capture", "captureScreens") => reach.display = Level::Known,
+            (
+                "@exact/camera",
+                "takePhoto" | "takePhotoWithCameraApp" | "recordVideoWithCameraApp",
+            ) => reach.camera = Level::Known,
             _ => {}
         }
     }

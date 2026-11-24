@@ -348,7 +348,9 @@ witness. This is Exact application policy and remains local.
 On Unix, `AppDirectories::snapshot` pins only roots that already exist and
 leaves the others absent for that invocation. A read-only widget refresh can
 therefore run first-launch application logic without creating the app's data,
-cache or temporary directories. `exact-js` selects it only for a snapshot;
+cache or temporary directories. Reads under an absent root report ENOENT,
+just like reads of absent files under an existing root.
+`exact-js` selects it only for a snapshot;
 `missing_snapshot_roots_do_not_prevent_activation_or_create_app_directories`
 is the direct consumer test. This is LLP 1126 D8 application policy and
 remains local.

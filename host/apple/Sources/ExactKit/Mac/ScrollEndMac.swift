@@ -22,12 +22,17 @@ extension NodeView {
         if let old {
             NotificationCenter.default.removeObserver(self, name: NSScrollView.willStartLiveScrollNotification, object: old)
             NotificationCenter.default.removeObserver(self, name: NSScrollView.didEndLiveScrollNotification, object: old)
+            NotificationCenter.default.removeObserver(self, name: NSScrollView.didLiveScrollNotification, object: old)
             scrollEnd?.reset()
         }
         guard let sv else { return }
         NotificationCenter.default.addObserver(self, selector: #selector(liveScrollStarted(_:)), name: NSScrollView.willStartLiveScrollNotification, object: sv)
         NotificationCenter.default.addObserver(self, selector: #selector(liveScrollEnded(_:)), name: NSScrollView.didEndLiveScrollNotification, object: sv)
+        NotificationCenter.default.addObserver(self, selector: #selector(liveScrollMoved), name: NSScrollView.didLiveScrollNotification, object: sv)
     }
+    /// Each move of a live scroll is the person's, though AppKit may run it on
+    /// its own thread and send the wheel handler only its first event.
+    @objc func liveScrollMoved() { presenter?.personScrolls += 1 }
     @objc func liveScrollStarted(_ note: Notification) {
         presenter?.personScrolls += 1 // a trackpad's or a scroller's: a fragment's scroll not yet made stays unmade (Fragment.swift)
         guard (handlers.contains("scrollend") || presenter?.session?.timerAdmissions.enabled == true), note.object as AnyObject? === scroll else { return }

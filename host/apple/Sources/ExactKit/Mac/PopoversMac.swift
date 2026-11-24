@@ -343,18 +343,5 @@ extension NodeView {
               let radius = props["defaultSurfaceRadius"].flatMap(Double.init) else { return nil }
         return CGFloat(radius)
     }
-
-    /// A scrolling menu's rows are its scroll view's, beside the panel and
-    /// not in its content: the scroll view takes the panel's corner while
-    /// the panel is there, as iOS's does (`syncDefaultSurfaceScroll`), so a
-    /// row scrolled against an edge stays inside the corners.
-    func syncMenuPanelScroll() {
-        guard let scroll else { return }
-        let corner = materialView != nil && paintedMenuRadius != nil ? effectiveCornerSizes(in: bounds).first?.width ?? 0 : 0
-        guard corner > 0 || (scroll.layer?.cornerRadius ?? 0) > 0 else { return }
-        scroll.wantsLayer = true
-        scroll.layer?.cornerRadius = corner
-        if corner > 0 { scroll.layer?.masksToBounds = true }
-    }
 }
 #endif

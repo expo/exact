@@ -33,6 +33,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -229,10 +230,10 @@ class MotionModule(context: ExtensionContext) : ExactExtension(context) {
         return JSONObject().put("surface", surface).put("sensor", sensor)
     }
 
-    override fun displayed(surface: String, shown: Boolean, origin: String) {
+    override fun displayed(surface: String, shown: Boolean, cause: Cause) {
         if (shown) hidden.remove(surface) else hidden.add(surface)
-        if (!shown) leased.add(surface) else if (origin == "app") leased.remove(surface)
-        context.log("motion: surface $surface displayed $shown ($origin origin), its inputs ${if (active(surface)) "run" else "paused"}")
+        if (!shown) leased.add(surface) else if (cause.app) leased.remove(surface)
+        context.log("motion: surface $surface displayed $shown ($cause origin), its inputs ${if (active(surface)) "run" else "paused"}")
         pauseFeeds()
         restart()
     }

@@ -871,3 +871,17 @@ fn a_tap_scrolls_the_page_clear_of_its_own_sticky_header() {
     assert!(mid >= 60.0, "{mid}");
     p.tap(under).unwrap();
 }
+
+#[test]
+fn the_reader_is_offered_a_frame_under_the_finger_as_a_module_view() {
+    let mut p = boot(
+        "component App\n  view\n    column\n      iframe testId=\"frame\" src=\"https://example.com/\" width=200 height=100\n      box testId=\"after\" width=200 height=100\n",
+    );
+    p.frame();
+    let id = {
+        let k = p.host().kernel();
+        k.node_by_key(k.find_by_test_id("frame")[0]).unwrap().id
+    };
+    assert_eq!(p.reader_module(20., 20., 1.)[0], id as i32);
+    assert_eq!(p.reader_module(20., 150., 1.)[0], 0);
+}

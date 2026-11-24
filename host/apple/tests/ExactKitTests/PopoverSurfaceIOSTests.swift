@@ -225,7 +225,7 @@ final class PopoverSurfaceIOSTests: XCTestCase {
         XCTAssertEqual(node.effectiveCornerSizes(in: node.bounds).first?.width, authoredCorner ?? (expected ? 30 : 0), "corners", file: file, line: line)
         XCTAssertEqual(node.shadowCaster != nil, expected, "painted shadow", file: file, line: line)
         if let scroll = node.scroll {
-            XCTAssertEqual(scroll.layer.cornerRadius, expected && authoredCorner == nil ? 30 : 0, "scroll clip", file: file, line: line)
+            XCTAssertEqual(scroll.layer.cornerRadius, authoredCorner ?? (expected ? 30 : 0), "scroll clip", file: file, line: line)
             let image = shot(try XCTUnwrap(window))
             if authoredCorner == nil {
                 XCTAssertEqual(pixel(image, CGPoint(x: 41, y: 201))[1], expected ? 0 : 255, "painted corner", file: file, line: line)

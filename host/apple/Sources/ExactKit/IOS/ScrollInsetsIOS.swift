@@ -51,7 +51,12 @@ package struct ScrollInsetsIOS: Equatable {
             let platform = edges(UIEdgeInsets(top: adjusted.top - inset.top, left: adjusted.left - inset.left,
                                               bottom: adjusted.bottom - inset.bottom, right: adjusted.right - inset.right))
             let consumed = (scroll as? BandConsumer)?.consumedBand ?? [0, 0, 0, 0]
-            let next = insets(terms: terms, rows: rows, held: held, band: band(of: scroll, in: owner), platform: platform, consumed: consumed)
+            var next = insets(terms: terms, rows: rows, held: held, band: band(of: scroll, in: owner), platform: platform, consumed: consumed)
+            // The indicators keep inside a padding edge that masks the scroll view (`ScrollView.clip(toPaddingEdge:inset:)`)
+            if let clip = (scroll as? ScrollView)?.paddingInset, clip != .zero {
+                next.verticalIndicator = next.verticalIndicator.adding(clip)
+                next.horizontalIndicator = next.horizontalIndicator.adding(clip)
+            }
             let half = 0.5 / max(scroll.traitCollection.displayScale, 1)
             if !near(inset, next.content, half) { scroll.contentInset = next.content }
             if !near(scroll.verticalScrollIndicatorInsets, next.verticalIndicator, half) {

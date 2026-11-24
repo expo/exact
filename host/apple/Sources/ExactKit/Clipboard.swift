@@ -10,7 +10,7 @@
 // A text field's or text area's own editing (its field editor, NSTextView,
 // UITextField, UITextView) fires them too, before its own cut, copy or
 // paste, which an action that calls `preventDefault()` cancels, as the DOM's
-// default action is (#125).
+// default action is.
 #if os(macOS)
 import AppKit
 #else
@@ -287,7 +287,7 @@ extension Agent {
         // The page's shortcuts hear the chord before the handlers, as the
         // web's capture listener does: a button declaring Meta+V takes it.
         // Its release comes up through the `keyup` handlers last, whatever
-        // took the down, as the web driver's (#140).
+        // took the down, as the web driver's.
         // Command's own keyup after it, without its own bit, as a keyboard's.
         defer { if edit == "paste" { v.presenter?.keyUp(at: v, "v", held: "Meta+", code: "KeyV"); v.presenter?.keyUp(at: v, "Meta", held: "", code: "MetaLeft") } }
         if edit == "paste", let presenter = v.presenter {

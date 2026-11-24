@@ -638,10 +638,10 @@ arguments for settings, messages for things that happen once. A paused world hol
 a message for its first tick after the pause.
 
 A message carries who posted it (LLP 1133.022 D6). One from a tool's commit, or
-a wake's, arrives marked with that origin; the world keeps the least privileged
-origin it has heard until a fresh start (and saves it), and marks each string it
-`emit`s with it, so the `message=` handler runs as that origin and a tool cannot
-start a device through the world. A person's or the app's own post leaves no mark;
+a wake's, arrives marked with its origins; the world keeps every origin it has
+heard until a fresh start (and saves them), and marks each string it `emit`s
+with that set, so the `message=` handler runs under each one's rules and a tool
+cannot start a device through the world. A person's or the app's own post leaves no mark;
 `state` shows `origin` only for a marked world. The runner and the engine carry the
 mark; a game never sees it.
 

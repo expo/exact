@@ -668,13 +668,13 @@ macro_rules! host {
         }
         /// Update an eligible header's live token.
         #[no_mangle]
-        pub extern "C" fn exact_height_drag_update(rt: u32, token: u64, height: f64, now_ms: f64) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.height_drag_update(token, height, now_ms), |n| n)
+        pub extern "C" fn exact_height_drag_update(rt: u32, token: u64, height: f64, now_ms: f64, at_ms: f64) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.height_drag_update(token, height, now_ms, at_ms), |n| n)
         }
         /// Final sample then typed action; the caller ends the token afterward.
         #[no_mangle]
-        pub extern "C" fn exact_height_drag_release(rt: u32, token: u64, height: f64, now_ms: f64) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.height_drag_release(token, height, now_ms), |n| n)
+        pub extern "C" fn exact_height_drag_release(rt: u32, token: u64, height: f64, now_ms: f64, at_ms: f64) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.height_drag_release(token, height, now_ms, at_ms), |n| n)
         }
         /// Arrange: catch a handle's row at the List's actual scrollTop.
         #[no_mangle]
@@ -729,13 +729,13 @@ macro_rules! host {
         }
         /// Change a held property's presentation.
         #[no_mangle]
-        pub extern "C" fn exact_hold_update(rt: u32, token: u64, x: f64, y: f64, now_ms: f64) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.hold_update(token, x, y, now_ms), |n| n)
+        pub extern "C" fn exact_hold_update(rt: u32, token: u64, x: f64, y: f64, now_ms: f64, at_ms: f64) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.hold_update(token, x, y, now_ms, at_ms), |n| n)
         }
         /// End ownership once, with velocity in displayed units/second.
         #[no_mangle]
-        pub extern "C" fn exact_hold_end(rt: u32, token: u64, cancel: u32, vx: f64, vy: f64, now_ms: f64) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.hold_end(token, cancel, vx, vy, now_ms), |n| n)
+        pub extern "C" fn exact_hold_end(rt: u32, token: u64, cancel: u32, vx: f64, vy: f64, now_ms: f64, at_ms: f64) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.hold_end(token, cancel, vx, vy, now_ms, at_ms), |n| n)
         }
         /// A threshold exact2 defines itself, by index (`exact_motion::gesture::CONSTANTS`); NaN past the end.
         #[no_mangle]

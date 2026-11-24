@@ -285,7 +285,7 @@ final class AccessibilityTests: XCTestCase {
         withExtendedLifetime(w) {}
     }
     /// LLP 1116 D8: a drawn `role="progressbar"` is AppKit's progress
-    /// indicator (#278), its value `aria-valuenow` between `aria-valuemin`
+    /// indicator, its value `aria-valuenow` between `aria-valuemin`
     /// and `aria-valuemax` (ARIA's 0 and 100 where unsaid), `aria-valuetext`
     /// its description, and its children unread.
     func testARangeRoleIsOneElementWithItsValue() {

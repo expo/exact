@@ -25,6 +25,7 @@ import android.os.Build
 import android.os.CancellationSignal
 import android.security.keystore.KeyGenParameterSpec
 import dev.exact.canvas.ExactAuthenticator
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -57,10 +58,12 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
     private val waiting = mutableSetOf<Waiting>()
     private var said: String? = null
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "localAuthStatus" -> reply(status())
-            "authenticate" -> authenticate(args, reply)
+            "authenticate" -> authenticate(args, cause, reply)
             else -> reply(JSONObject().put("error", "NotSupportedError"))
         }
     }
@@ -201,9 +204,9 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
         if (crypto != null) built.authenticate(crypto, signal, executor, callback) else built.authenticate(signal, executor, callback)
     }
 
-    private fun authenticate(args: JSONObject, reply: (JSONObject) -> Unit) {
+    private fun authenticate(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         // Presence is not delegable (D12); the runner refuses first, and this holds without it.
-        if (context.origin != "app") return reply(JSONObject().put("error", "PERMISSION_DENIED").put("message", "person-required"))
+        if (!cause.app) return reply(JSONObject().put("error", "PERMISSION_DENIED").put("message", "person-required"))
         val words = args.optJSONObject("android") ?: JSONObject()
         val named = words.optJSONArray("allowedAuthenticators")
         val authenticators = when {
@@ -211,7 +214,7 @@ class LocalAuthModule(context: ExtensionContext) : ExactExtension(context), Exac
             args.optBoolean("biometricOnly") -> Authenticators.BIOMETRIC_WEAK
             else -> Authenticators.BIOMETRIC_WEAK or Authenticators.DEVICE_CREDENTIAL
         }
-        prompt(context.request, args.optString("reason"), authenticators, words, { result, error ->
+        prompt(cause.request, args.optString("reason"), authenticators, words, { result, error ->
             if (error != null) return@prompt reply(error)
             val out = JSONObject().put("timestamp", System.currentTimeMillis().toDouble())
             if (Build.VERSION.SDK_INT >= 30 && result != null) {

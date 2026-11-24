@@ -19,6 +19,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -38,12 +39,14 @@ class AlarmsModule(context: ExtensionContext) : ExactExtension(context) {
         if (!context.agent) live = WeakReference(this)
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "alarmStatus", "alarmStatusSync" -> reply(status())
             "alarms", "alarmsSync" -> reply(JSONObject().put("exact:answer", list()))
-            "requestAlarmPermission" -> request { reply(status()) }
-            "scheduleAlarm" -> schedule(args, reply)
+            "requestAlarmPermission" -> request(cause) { reply(status()) }
+            "scheduleAlarm" -> schedule(args, cause, reply)
             "cancelAlarm" -> { AlarmRing.cancel(app, args.optString("tag")); changed(); reply(JSONObject()) }
             "pauseAlarm" -> reply(pause(args.optString("tag")))
             "resumeAlarm" -> reply(resume(args.optString("tag")))
@@ -98,9 +101,9 @@ class AlarmsModule(context: ExtensionContext) : ExactExtension(context) {
 
     // MARK: the request (D7): notifications first, then exact alarms; each skipped when decided
 
-    private fun request(done: () -> Unit) {
+    private fun request(cause: Cause, done: () -> Unit) {
         if (Build.VERSION.SDK_INT >= 33 && notifications() == "prompt") {
-            context.askPermission(Manifest.permission.POST_NOTIFICATIONS) {
+            context.askPermission(cause, Manifest.permission.POST_NOTIFICATIONS) {
                 if (notifications() == "granted") askExact(done) else done()
             }
         } else if (notifications() == "granted") askExact(done) else done()
@@ -114,7 +117,7 @@ class AlarmsModule(context: ExtensionContext) : ExactExtension(context) {
 
     // MARK: the sends (D2, D7, D9)
 
-    private fun schedule(args: JSONObject, reply: (JSONObject) -> Unit) {
+    private fun schedule(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         val tag = args.optString("tag")
         val title = args.optString("title")
         val at = args.optDouble("at").takeIf { args.has("at") && !it.isNaN() }
@@ -136,7 +139,7 @@ class AlarmsModule(context: ExtensionContext) : ExactExtension(context) {
             }
         }
         // `asks`: while `prompt` the request runs first, then the schedule (D7).
-        if (state() == "prompt") request(set) else set()
+        if (state() == "prompt") request(cause, set) else set()
     }
 
     private fun pause(tag: String): JSONObject {

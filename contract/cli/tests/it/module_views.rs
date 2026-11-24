@@ -15,7 +15,7 @@ const INTERFACE: &str = r#"{
   "name": "@fixture/swatch",
   "version": "1.0.0",
   "views": {
-    "swatch-box": { "props": { "tint": { "type": "string", "binds": true }, "caption": "option<string>" },
+    "swatch-box": { "props": { "tint": { "type": "option<string>", "binds": true }, "caption": "option<string>" },
       "events": ["message"], "displayed": true }
   },
   "names": []
@@ -457,7 +457,7 @@ fn a_view_hears_each_change_with_its_commit_s_origin() {
     assert!(reports(&told).is_empty(), "nothing is placed yet");
 
     r.act("show", Vec::new()).unwrap();
-    assert_eq!(reports(&told), ["displayed true app", "bound tint app"]);
+    assert_eq!(reports(&told), ["bound tint app", "displayed true app"]);
     let id = view_id(&r);
     assert_eq!(r.view_origin(id, None), Some(CallOrigin::App));
 
@@ -481,6 +481,56 @@ fn a_view_hears_each_change_with_its_commit_s_origin() {
     );
 }
 
+#[test]
+fn clearing_and_rebinding_the_same_value_reports_the_new_commits_origin() {
+    let app = App::new(
+        "unbind",
+        r#"component App
+  state tint: option<string> = some("red")
+  state hidden = false
+  action hide
+    hidden = true
+  action clear
+    tint = none
+    hidden = false
+  action restore
+    tint = some("red")
+  view
+    swatch-box tint=tint display=(hidden ? "none" : "block")
+"#,
+        &[],
+    );
+    let (mut r, told) = boot(&app);
+    r.bind_extensions(&["swatch"], &[]);
+    assert_eq!(reports(&told), ["displayed true app", "bound tint app"]);
+    let id = view_id(&r);
+    r.act("hide", Vec::new()).unwrap();
+    assert_eq!(reports(&told), ["displayed false app"]);
+    r.act("clear", Vec::new()).unwrap();
+    let changes: Vec<_> = told
+        .lock()
+        .unwrap()
+        .drain(..)
+        .filter(|r| r.get("view").is_some())
+        .collect();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0]["bound"], "tint");
+    assert_eq!(changes[0].get("value"), Some(&Json::Null));
+    assert_eq!(changes[1]["displayed"], true);
+    assert_eq!(r.view_origin(id, Some("tint")), None);
+    r.act_from(CallOrigin::Action, "restore", Vec::new())
+        .unwrap();
+    assert_eq!(r.view_origin(id, Some("tint")), Some(CallOrigin::Action));
+    assert!(told
+        .lock()
+        .unwrap()
+        .drain(..)
+        .any(|r| { r["bound"] == "tint" && r["value"] == "red" && r["origin"] == "action" }));
+    r.act("restore", Vec::new()).unwrap();
+    assert!(reports(&told).is_empty());
+    assert_eq!(r.view_origin(id, Some("tint")), Some(CallOrigin::Action));
+}
+
 /// A view a tool's commit shows is reported with the tool's origin, which
 /// the runner keeps: a capture start that follows is admitted with it.
 #[test]
@@ -489,7 +539,7 @@ fn a_view_a_tool_shows_is_reported_with_the_tool_s_origin() {
     let (mut r, told) = boot(&app);
     r.bind_extensions(&[], &["swatch"]);
     r.act_from(CallOrigin::Tool, "show", Vec::new()).unwrap();
-    assert_eq!(reports(&told), ["displayed true tool", "bound tint tool"]);
+    assert_eq!(reports(&told), ["bound tint tool", "displayed true tool"]);
     assert_eq!(r.view_origin(view_id(&r), None), Some(CallOrigin::Tool));
     r.act("unshow", Vec::new()).unwrap();
     assert_eq!(reports(&told), ["displayed false app"]);

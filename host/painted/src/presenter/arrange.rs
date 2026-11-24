@@ -176,6 +176,8 @@ impl<D: DataSource> Presenter<D> {
             primary,
             velocity,
             kind: HeldKind::Arrange(token),
+            sampled: None,
+            lifting: false,
         }))
     }
     pub(super) fn move_arrange(

@@ -32,6 +32,21 @@ final class PressFeedbackMacTests: XCTestCase {
         NSEvent.mouseEvent(with: type, location: node.convert(NSPoint(x: x, y: y), to: nil), modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
     }
 
+    func testPressMultipliesBothScaleAxes() throws {
+        let (p, v) = fixture(style: ["press_scale": 0.5, "transform_origin": [0.0, 0.0]])
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 2.0, "y": 0.5]]))
+        let unpressed = v.drawnPoint(.zero, in: p.root)
+        v.press = PressFeedback(from: 0.5, to: 0.5, start: 0)
+        v.layoutOffset = CGPoint(x: 7, y: 11)
+        v.applyTransform()
+        let t = try XCTUnwrap(v.layer).affineTransform()
+        XCTAssertEqual(t.a, 1, accuracy: 1e-9)
+        XCTAssertEqual(t.d, 0.25, accuracy: 1e-9)
+        let origin = v.drawnPoint(.zero, in: p.root)
+        XCTAssertEqual(origin.x, unpressed.x + 7, accuracy: 1e-6)
+        XCTAssertEqual(origin.y, unpressed.y + 11, accuracy: 1e-6)
+    }
+
     func testTheButtonHeldInsidePressesAndADragOutReleases() throws {
         let (p, v) = fixture()
         var pressed: [UInt32] = []
@@ -309,7 +324,7 @@ final class PressFeedbackMacTests: XCTestCase {
     func testThePressFoldsIntoTheEnginesScaleAboutTheOrigin() throws {
         let (p, v) = fixture(style: ["press_scale": 0.97, "transform_origin": [["pct": 0], ["pct": 0]]])
         v.press = PressFeedback(from: 0.97, to: 0.97, start: 0)
-        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 2.0]]))
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 2.0, "y": 2.0]]))
         let t = try XCTUnwrap(v.layer?.affineTransform())
         XCTAssertEqual(t.a, 2 * 0.97, accuracy: 1e-9, "the engine's write keeps the press")
         XCTAssertEqual(t.tx, 0, accuracy: 1e-9, "about the top-left corner, which stays put")
@@ -318,7 +333,7 @@ final class PressFeedbackMacTests: XCTestCase {
 
     func testTheTransformTurnsAboutTheTransformOrigin() throws {
         let (p, v) = fixture(style: [:])
-        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 0.5]]))
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 0.5, "y": 0.5]]))
         // Unset: the centre (100, 50) stays put.
         XCTAssertEqual(v.layer?.affineTransform(), CGAffineTransform(a: 0.5, b: 0, c: 0, d: 0.5, tx: 50, ty: 25))
         // `right 10px`: (200, 10) stays put; a style change re-applies it.
@@ -338,7 +353,7 @@ final class PressFeedbackMacTests: XCTestCase {
         reference.frame = NSRect(x: 260, y: 50, width: 100, height: 50)
         p.root.addSubview(reference); p.views[2] = reference
         reference.wantsLayer = true
-        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 0.5]]))
+        p.apply(wireBatch([["op": "present", "id": 1, "property": "scale", "x": 0.5, "y": 0.5]]))
         let (scaled, top) = (try XCTUnwrap(v.layer?.frame), try XCTUnwrap(reference.layer?.frame))
         XCTAssertEqual(scaled.minY, top.minY, accuracy: 1e-9)
         XCTAssertEqual(scaled.height, top.height, accuracy: 1e-9)

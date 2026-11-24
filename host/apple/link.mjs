@@ -161,7 +161,7 @@ export function appleLaunchLinkArgs(destination, product) {
 /** The dylibs an executable's load commands name (`LC_LOAD_DYLIB` and its
  * weak, re-export, lazy and upward forms), every slice of a universal one.
  * Read from the file, since `otool` takes a path ending in `name(member)`
- * for an archive's member (#234). */
+ * for an archive's member. */
 export function loadedDylibs(executable) {
   return [...new Set(machoCommands(executable).flatMap(commands => commands.flatMap(({ cmd, bytes }) => {
     if (![0xc, 0x80000018, 0x8000001f, 0x20, 0x80000023].includes(cmd)) return [];
@@ -255,7 +255,7 @@ export function recordMinimumOS(executable, version) {
  * one asked for: AppKit draws its design by that number, so a link that
  * records another (as SwiftPM's did, LLP 1069.011 §7) changes every app's
  * look without a word. Compare major.minor in every slice, reading the file
- * directly so the same check runs on Linux and accepts names ending in parentheses (#234). */
+ * directly so the same check runs on Linux and accepts names ending in parentheses. */
 export function assertLinkedSdk(executable, expected) {
   const majorMinor = (v) => String(v).split('.').slice(0, 2).map(Number).join('.');
   for (const commands of machoCommands(executable)) {

@@ -45,6 +45,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// The route on top of the stack in front: the one the person sees.
     var activeRoute: RouteController? { (navigation?.topViewController ?? bootOwner?.route ?? primaryPlain?.route) as? RouteController }
     private(set) var syncing = false
+    /// Child lists, commands and the greatest published sequence held for the next projection.
+    private var heldSync: Batch?
+    /// The queued continuation owns `heldSync` after the synchronous pass limit.
+    private var syncContinuation: DispatchWorkItem?
+    private var syncYieldReported = false
     /// A pop UIKit committed with no call Exact heard is followed in the next turn (`followPopsNextTurn`).
     var followOwed = false
     private var mounting = false
@@ -192,20 +197,53 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Whether this boot's first batch looked for the tablist the boot
     /// covered (`adoptBootCover`); every boot covers its own.
     private(set) var bootCoverSeen = false
-    var ownedReported: Set<String> = []
+    var reportedDiagnostics: Set<String> = []
     var replayingHatches = false
     private var coversPending = false
     /// Whether the session's view last took the whole of its own for a bar.
     var tookWholeView = false
-    var pendingSync = false
-    /// Whether a stack's write waits for a transition or a move UIKit runs there (`writable`, `runHeldSync`).
+    /// A visible projection waits for a transition or a cover answer.
+    var projectionHeld = false
+    /// A refused write in the visible projection counts while its retry is active.
+    var pendingSync: Bool { projectionHeld || stackWriteRefusals.values.contains { $0.visible && !$0.exhausted } }
+    /// Whether another tab's stack write waits for a transition or a move UIKit runs there (`writable`, `runHeldSync`).
     var tabsHeld = false
+    struct StackWriteRefusal {
+        private struct Controller { weak var value: UIViewController? }
+        private let held: [Controller]
+        private let wanted: [Controller]
+        let visible: Bool
+        let difference: String
+        var exhausted: Bool
+
+        init(held: [UIViewController], wanted: [UIViewController], visible: Bool, difference: String, exhausted: Bool) {
+            self.held = held.map { Controller(value: $0) }
+            self.wanted = wanted.map { Controller(value: $0) }
+            self.visible = visible
+            self.difference = difference
+            self.exhausted = exhausted
+        }
+
+        func matches(held: [UIViewController], wanted: [UIViewController]) -> Bool {
+            self.held.elementsEqual(held) { $0.value === $1 } && self.wanted.elementsEqual(wanted) { $0.value === $1 }
+        }
+    }
+    /// The latest refusal for each stack the current projection still owes.
+    var stackWriteRefusals: [ObjectIdentifier: StackWriteRefusal] = [:]
+    /// The refusal that used each stack's timer budget, kept across projections.
+    var exhaustedStackWrites: [ObjectIdentifier: StackWriteRefusal] = [:]
+    var stackWritesOwed: Bool { !stackWriteRefusals.isEmpty }
+    /// A refused setter has a retry pending or running (`retryStackWrite`).
+    var stackWriteRetry = false
+    /// A tab resync, yielded projection or refused-write retry is scheduled.
+    var syncScheduled: Bool { resyncOwed || syncContinuation != nil || stackWriteRetry }
     /// The press whose commit a deferred sync still owes (PressHandoffIOS).
     private weak var pendingPress: PressHandoff?
     /// A deferred projection, a removed owner or UIKit's disagreement with
-    /// the router still owes a sync, whatever the next batch holds.
+    /// the router still owes a sync, even for a batch that only fills list rows.
     var syncOwed: Bool {
-        if pendingSync || tabsHeld || changing || windowless || nativeMove == .ownerRemoved || !settled || splitAskOwed
+        if heldSync != nil || pendingSync || tabsHeld || stackWritesOwed || changing || windowless
+            || nativeMove == .ownerRemoved || !settled || splitAskOwed
             || primaryNavigation?.transitionCoordinator != nil || split?.inTransition == true
             || presentedNavigations.contains(where: { $0.transitionCoordinator != nil }) { return true }
         if nativeMove == .transition {
@@ -431,8 +469,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         #endif
     }
 
-    /// Initial containment is ready before child frames. It does not present
-    /// a sheet or flush focus commands from the partially applied batch.
+    /// Install containment before child frames. The batch's final sync
+    /// projects held requests and can present sheets and flush focus.
     func installInitialOwner(_ batch: Batch) {
         guard bootOwner == nil else { return }
         guard primaryOwner == nil, !syncing, presenter.session?.view?.window != nil else { giveBackBootCover(); return }
@@ -476,7 +514,14 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
 
     /// The runtime restarts (`Presenter.reset`): its next boot covers the
     /// tablist again, for its first batch to adopt or give back.
-    func rebooting() { bootCoverSeen = false; heardSplit = nil }
+    func rebooting() {
+        bootCoverSeen = false
+        heardSplit = nil
+        heldSync = nil
+        syncContinuation?.cancel()
+        syncContinuation = nil
+        syncYieldReported = false
+    }
 
     /// A native primary container coming or going changes the view the
     /// session takes (ExactViewIOS `fit`, LLP 1123 D1), whatever its bars
@@ -492,26 +537,69 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
 
     func sync(_ batch: Batch) {
         presenter.listRowDependencies = nil
-        // Installing or moving a controller can synchronously cause layout.
-        // That layout must not start another containment handoff inside this one.
         syncCalls += 1
-        guard !syncing else { return }
+        // Keep child lists for lifted nodes, commands for boot ownership and sequences for press attribution.
+        // The next pass reads everything else from the tree.
+        if syncing || syncContinuation != nil {
+            var held = heldSync ?? Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)
+            held.ops.append(contentsOf: batch.ops.filter { $0.op == .children || $0.op == .command })
+            held.sequence = max(held.sequence, batch.sequence)
+            heldSync = held
+            return
+        }
+        var next = batch
+        // Apply work held during the initial install after the enclosing batch's ops
+        if let held = heldSync {
+            next.ops.append(contentsOf: held.ops)
+            next.sequence = max(next.sequence, held.sequence)
+            heldSync = nil
+        }
+        syncing = true
+        defer {
+            syncing = false
+            if presenter.session?.view?.window != nil {
+                settleScrollEdges()
+                presenter.flushPendingFocus(); presenter.elementScrolls.flush()
+            }
+        }
+        let passLimit = 8
+        for _ in 0..<passLimit {
+            syncProjection(next)
+            #if os(iOS)
+            endBootTransfer()
+            #endif
+            guard let held = heldSync else {
+                syncYieldReported = false
+                return
+            }
+            heldSync = nil
+            next = held
+        }
+        heldSync = next
+        let continuation = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            syncContinuation = nil
+            guard let held = heldSync else { return }
+            heldSync = nil
+            sync(held)
+        }
+        syncContinuation = continuation
+        DispatchQueue.main.async(execute: continuation)
+        if !syncYieldReported {
+            syncYieldReported = true
+            presenter.session?.log("navigation: \(passLimit) synchronous projection passes left work to run on the main queue's next turn")
+        }
+    }
+
+    private func syncProjection(_ batch: Batch) {
         tabsHeld = false
+        stackWriteRefusals.removeAll()
         let window = presenter.session?.view?.window
         windowless = presenter.session != nil && window == nil
         // With no session (a presenter on its own) nothing is projected or owed.
         if presenter.session == nil { settled = true }
         guard window != nil else { return }
         nativeMove = .none; settled = false
-        syncing = true
-        // On every return, run the edge passes it held from a route's layout while it ran
-        defer {
-            #if os(iOS)
-            endBootTransfer()
-            #endif
-            syncing = false; settleScrollEdges()
-            presenter.flushPendingFocus(); presenter.elementScrolls.flush()
-        }
         guard let p = projection(batch) else {
             if bootOwner != nil || transferringBootOwner != nil { reset(clearFocus: false) }
             settled = true; return
@@ -538,14 +626,14 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // Initial content draws before a presentation covers it.
         if parts.count > 1, let session = presenter.session, session.firstDrawMs == nil { return }
         guard !changing, !presenter.modalHost.inTransition else {
-            pendingSync = true
+            projectionHeld = true
             // The split's own transition (`show(_:)`, a rotation) ends where no stack's delegate hears it
             if let transition = split?.controller.transitionCoordinator { runHeld(after: transition) }
             owePress()
             reportCovers()
             return
         }
-        pendingSync = false
+        projectionHeld = false
         // The press a deferred sync is owed to: what this sync presents or
         // pushes is that press's work, and it is owed again if this defers too.
         let owed = pendingPress.flatMap { $0 === presenter.pressHandoff ? $0 : nil }
@@ -583,7 +671,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             // Write a stack with a transition UIKit runs there (or left there, off screen) once it is over; one that
             // holds the routes already is projected now
             if let transition = nav.transitionCoordinator, !nav.stackRoutes.elementsEqual(stack, by: ===) {
-                tabsHeld = true
+                held = true
                 runHeld(after: transition)
                 continue
             }
@@ -609,20 +697,19 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                     prepareZoomPush(top, beneath: stack[stack.count - 2] as? RouteController)
                 }
                 #endif
-                nav.setViewControllers(nav.stackFront + stack, animated: (pushOrPop || arrives) && index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && !crossFading && nav.view.window != nil)
+                let animated = (pushOrPop || arrives) && index == owners.count - 1 && mounted.count == boundaries.count
+                    && !ExactEnv.agentFreezes && !unanimated && !crossFading && nav.view.window != nil
+                guard writeStack(nav.stackFront + stack, in: nav, animated: animated, visible: true) else { continue }
                 lastTransition = "idle"
                 // A press that pushed may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS).
                 if pushOrPop || arrives { presenter.pressShows((stack.last as? RouteController)?.node) }
             }
             ApplyProfile.time("nav.layout") { nav.view.layoutIfNeeded() }
         }
-        if held {
-            pendingSync = true
-        } else {
-            unanimated = false
-        }
+        projectionHeld = held
+        if !pendingSync { unanimated = false }
         if mounted.count > common {
-            pendingSync = true
+            projectionHeld = true
             presenter.modalHost.closeTop()
             return
         }
@@ -638,7 +725,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             presenter.pressShows(wanted[part].last?.node) // a route pushed in the sheet as it opens
             watchPops(nav)
             nav.view.layoutIfNeeded()
-            pendingSync = boundaries.count > mounted.count + 1
+            projectionHeld = held || boundaries.count > mounted.count + 1
             let preceding = part.lowerBound > 0 ? wanted[part.lowerBound - 1].node : nil
             presenter.modalHost.present(route, navigation: nav, from: background,
                                      preceding: preceding, owner: owner)
@@ -782,9 +869,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
     }
 
-    /// A sync deferred behind a running transition is owed to the press
-    /// whose work it is (`owed`, else the live press while its work runs):
-    /// that press's handoff waits for it. A newer press owns it instead.
+    /// Keep the handoff until the deferred projection runs. Use `owed`
+    /// when retrying that press's work, or the press dispatching now.
+    /// A newer press takes over the debt.
     private func owePress(_ owed: PressHandoff? = nil) {
         guard let press = owed ?? presenter.pressHandoff.flatMap({ $0.working ? $0 : nil }) else { return }
         if pendingPress !== press { pendingPress?.pending = false; pendingPress?.settle() }
@@ -796,14 +883,14 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// still held, as when the answer moved nothing, is given to UIKit.
     func liftAnswered() {
         guard !liftHeld, !syncing, pendingSync else { return }
-        pendingSync = false
+        projectionHeld = false
         resync()
     }
 
     func modalDidDismiss() {
         // A presentation or dismissal ended: run the edge passes that a selection made during it owes, when no sync is pending
         guard pendingSync else { return settleScrollEdges() }
-        pendingSync = false
+        projectionHeld = false
         sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
         presenter.syncModal()
     }
@@ -917,7 +1004,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
 
     /// A history jump uses navigation; the authored Back control handles the adjacent intent.
     func goBack(from source: String, to destination: String) {
-        pendingSync = true
+        projectionHeld = true
         guard let session = presenter.session, let root = container,
               let location = session.runtime.visitLocation(destination) else {
             presenter.session?.log("Back history refused: the destination has no router visit; the declared stack is restored")
@@ -1210,7 +1297,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// A stack Exact retired: its delegate slot leaves Exact, and its handle
     /// goes.
     func retireStack(_ nav: UINavigationController) {
-        guard let stack = stacks.removeValue(forKey: ObjectIdentifier(nav)) else { return }
+        let id = ObjectIdentifier(nav)
+        stackWriteRefusals.removeValue(forKey: id)
+        exhaustedStackWrites.removeValue(forKey: id)
+        guard let stack = stacks.removeValue(forKey: id) else { return }
         stack.proxy.retire()
         guard stack.hatched else { return }
         _ = presenter.session?.natives.navigationHatch(nav, built: false, showsBar: stack.showsBar, label: stack.label)
@@ -1258,9 +1348,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for controller in controllers.values { presenter.pressHandoff?.drop(controller.node) } // reset: no route of a press stays
         controllers.removeAll()
         routeIDs = []
-        pendingSync = false
+        projectionHeld = false
         pendingPress?.pending = false; pendingPress?.settle(); pendingPress = nil
         lastTransition = "idle"; reselected = nil; tabsHeld = false
+        stackWriteRefusals.removeAll()
+        exhaustedStackWrites.removeAll()
         if clearFocus { presenter.cancelPendingFocus() }
         #if os(iOS)
         scrollsToTopSelection?.scrollsToTop = false

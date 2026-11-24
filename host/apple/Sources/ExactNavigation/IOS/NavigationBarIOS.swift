@@ -1379,7 +1379,7 @@ extension NavigationHost {
                 // The menu reads its rows through this incarnation of the
                 // button's view, so it is made again; an item made before the
                 // view existed had a press, and a tap now opens the menu.
-                made.bar.menu = presenter.menus.pullDown(of: button, titled: i.menuTitle, inBar: true)
+                made.bar.menu = presenter.menus.pullDown(of: button, titled: i.menuTitle, bar: { [weak self, weak c] in c?.navigationController.flatMap { self?.shownBar(of: $0) } })
                 made.bar.target = nil
                 made.bar.action = nil
             }
@@ -1392,7 +1392,7 @@ extension NavigationHost {
         let item: UIBarButtonItem
         if let button {
             // A pull-down: UIKit opens it on tap (`MenuHost.pullDown`).
-            let menu = presenter.menus.pullDown(of: button, titled: i.menuTitle, inBar: true)
+            let menu = presenter.menus.pullDown(of: button, titled: i.menuTitle, bar: { [weak self, weak c] in c?.navigationController.flatMap { self?.shownBar(of: $0) } })
             item = image.map { UIBarButtonItem(image: $0, menu: menu) } ?? UIBarButtonItem(title: i.title, menu: menu)
         } else {
             item = image.map { UIBarButtonItem(image: $0, style: .plain, target: press, action: action) }

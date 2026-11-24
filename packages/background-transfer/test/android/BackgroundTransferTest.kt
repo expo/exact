@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.content.Context
 import android.os.Looper
 import android.os.HandlerThread
+import dev.exact.canvas.Cause
 import dev.exact.canvas.Exact
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Extensions
@@ -126,6 +127,8 @@ class BackgroundTransferTest {
     private companion object {
         const val NAME = "background-transfer"
         const val AUTHORITY = "net.fetch https://example.test\nfs.write app:/data"
+        /** The app's call, with the authority its source holds. */
+        val APP = Cause("app", authority = AUTHORITY)
     }
     private val main get() = shadowOf(Looper.getMainLooper())
     private val app: Context get() = RuntimeEnvironment.getApplication()
@@ -183,7 +186,6 @@ class BackgroundTransferTest {
         }), atLoad = listOf(NAME))
         Extensions.bind(app)
         Extensions.firstFrame()
-        context.authority = AUTHORITY
         main.idle()
     }
     private fun close() {
@@ -231,12 +233,12 @@ class BackgroundTransferTest {
      */
     private fun forwarded(id: String, activated: Boolean): JSONObject {
         val args = named(id).put("requests", JSONArray().put(JSONObject().put("url", "https://example.test/$id")))
-        val body = JSONObject().put("send", "backgroundFetch").put("args", args).put("authority", AUTHORITY)
+        val body = JSONObject().put("send", "backgroundFetch").put("args", args).put("origin", "app").put("authority", AUTHORITY)
         return JSONObject(host(if (activated) body.put("userActivation", true) else body)!!)
     }
     private fun call(name: String, args: JSONObject = JSONObject()): JSONObject {
         var answer: JSONObject? = null
-        module!!.later(name, args) { answer = it }
+        module!!.later(name, args, null, APP) { answer = it }
         main.idle()
         return answer!!
     }
@@ -259,7 +261,7 @@ class BackgroundTransferTest {
         assertEquals("", answer.getString("result"))
         val key = key()
         val kept = store.get(key)!!
-        assertEquals(context.authority, kept.getString("source"))
+        assertEquals(AUTHORITY, kept.getString("source"))
         assertEquals("app", kept.getString("origin"))
         assertEquals("visitor", kept.getString("title"))
         assertEquals(base.path + "/data", kept.getString("data"))
@@ -267,7 +269,7 @@ class BackgroundTransferTest {
         assertEquals("https://example.test/a%2Fb", kept.getJSONArray("requests").getJSONObject(0).getString("url"))
         assertFalse(kept.toString().contains("token=private") || kept.toString().contains("secret"))
         assertEquals("secret", transport.secrets.values.single().getJSONArray("headers").getJSONObject(0).getString("value"))
-        assertEquals(context.authority, transport.secrets.values.single().getString("authority"))
+        assertEquals(AUTHORITY, transport.secrets.values.single().getString("authority"))
         // Nothing marked the call a person's: a start is a program's, though the app shows.
         assertEquals(Lifecycle.Intent.Ordinary, record(key).intent)
         assertEquals(setOf(key to Job.Work), platform.jobs.toSet())
@@ -642,7 +644,7 @@ class BackgroundTransferTest {
         run(key(), 1)
         assertTrue(File(base, "data/transfers/visitor/0").isFile)
         var retired: JSONObject? = null
-        module!!.later("retireBackgroundFetch", named()) { retired = it }
+        module!!.later("retireBackgroundFetch", named(), null, APP) { retired = it }
         main.idle()
         assertNull(retired)
         assertEquals(JSONObject.NULL, call("backgroundFetchRegistration", named()).get("exact:answer"))
@@ -746,7 +748,7 @@ class BackgroundTransferTest {
         // The store opens: the same call removes it, and answers once the record is gone.
         transport.failing = emptySet()
         var gone: Boolean? = null
-        module!!.later("retireBackgroundFetch", named()) { gone = !it.has("error") && store.durable().records[key] == null }
+        module!!.later("retireBackgroundFetch", named(), null, APP) { gone = !it.has("error") && store.durable().records[key] == null }
         main.idle()
         assertEquals(true, gone)
         assertTrue(transport.secrets.isEmpty())
@@ -765,7 +767,7 @@ class BackgroundTransferTest {
         start()
         start("other")
         var retired: JSONObject? = null
-        module!!.later("retireBackgroundFetch", named()) { retired = it }
+        module!!.later("retireBackgroundFetch", named(), null, APP) { retired = it }
         main.idle()
         assertNull(retired)
         // Another call's write fails: the process goes on as its successor, and the retirement's removal is unknown.

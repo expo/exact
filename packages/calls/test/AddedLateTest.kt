@@ -6,6 +6,7 @@ import android.telecom.DisconnectCause
 import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallControlScope
 import androidx.core.telecom.CallEndpointCompat
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ExtensionInvokeTest.Host
 import java.util.UUID
@@ -53,7 +54,7 @@ class AddedLateTest {
     private fun entry(state: String) = JSONObject().put("id", "c").put("state", state).put("direction", "incoming")
     private fun ringing() = CallsModule.Live(entry("ringing")).also { calls["c"] = it }
     private fun list(e: JSONObject) {
-        module.later("exact:listed", JSONObject().put("entries", JSONArray().put(e))) {}
+        module.later("exact:listed", JSONObject().put("entries", JSONArray().put(e)), null, Cause("app")) {}
         shadowOf(Looper.getMainLooper()).idle()
     }
 

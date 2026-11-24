@@ -32,6 +32,20 @@
     var idleRefusal = binary.idleRefusal,
       socketOwner = env.sockets.socketOwner,
       listenOwner = env.sockets.listenOwner;
+    // The browser realm supplies the page's base at the fetch call. Native data sources
+    // have no document. Bake leaves the request for the host that will run the app.
+    var pageBase = global.__exact_fetch_base;
+    delete global.__exact_fetch_base;
+    var BrowserRequest = global.Request, BrowserURL = global.URL;
+    function fetchURL(value) {
+      if (pageBase) {
+        try { return new BrowserURL(value, pageBase()).href; }
+        catch (error) { throw new FetchError({ kind: "Network", message: error.message }); }
+      }
+      if (!/^[a-z][a-z0-9+.-]*:/i.test(value.trim()) && host(12, "bake", "") !== "1")
+        throw new FetchError({ kind: "Refused", message: "relative fetch has no document origin on this host: write an absolute URL" });
+      return value;
+    }
     // Capture the browser's composition before app code can replace it.
     var PlatformAbortSignal = global.AbortSignal, composeSignals = PlatformAbortSignal.any;
     function watchAbort(signal, aborted) {
@@ -103,7 +117,6 @@
       return errors.quiet(Promise.reject(errors.quietReason(e)));
     }
     function report(url, init, special) {
-      url = String(url);
       if (host(12, "bake", "") === "1") {
         var baked = new Error("fetch() in an error event's listener is never sent at bake");
         baked.kind = "Unavailable";
@@ -125,6 +138,7 @@
           ),
           true
         );
+      try { url = fetchURL(url); } catch (error) { return reportRefused(error, true); }
       var refused = special || !/^https?:/i.test(url) ? "a request that is not plain HTTP" : "",
         plain;
       if (!refused && init != null) {
@@ -179,8 +193,17 @@
                   : "fetch() is unavailable in a stream's mapper: fetch in the answer that opens the stream"
               )
         );
-      if (!reporter && !running && errors.dispatching()) return report(url, init, !!(listen || own || child));
+      if (pageBase && BrowserRequest && url instanceof BrowserRequest) {
+        var given = init || {}, options = Object.create(given);
+        ["method", "headers", "body", "signal", "cache", "redirect"].forEach(function (name) {
+          var value = given[name];
+          Object.defineProperty(options, name, { value: value === undefined ? url[name] : value });
+        });
+        init = options;
+        url = url.url;
+      }
       url = String(url); // read once: the URL checked here and below is the one the host is sent
+      if (!reporter && !running && errors.dispatching()) return report(url, init, !!(listen || own || child));
       if (!child && /^exact-process:/i.test(url))
         return Promise.reject(
           new TypeError(
@@ -242,6 +265,13 @@
         extracted = binary.requestBody(raw, method, headers);
       } catch (e) {
         return refusedWith(e);
+      }
+      if (!listen && !own && !child) {
+        // Only a browser's bundled asset GET keeps its authored path for the host.
+        var asset = pageBase && streamOption === undefined && !(init && (init.exactPrefetch || init.exactBodyFrom !== undefined)) && method === "GET" && raw == null && !Array.from(headers.entries()).length &&
+          /^\/assets\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/.test(url);
+        try { if (!asset) url = fetchURL(url); }
+        catch (error) { return refusedWith(error); }
       }
       var bytes = extracted.bytes,
         body = extracted.text;

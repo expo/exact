@@ -1349,7 +1349,7 @@ const sources: Sources = {
   editImport: async ([client, proposal, index, mode, shownGen, value, picked]) => {
     // A mapped token's value in one mode changed before accepting: the import held again whole, with the edit, the old
     // one dropped, every role override still offered and the card's choice carried: on 1.18 recorded first, so the
-    // server carries it (choice.ts); before, by the page's flips on the new one (#6).
+    // server carries it (choice.ts); before, by the page's flips on the new one.
     const at = session;
     const r = heldReview.get(proposal), ops = (heldOps.get(proposal) ?? []).map(o => ({ ...o, whens: o.whens?.map((w: any) => ({ ...w })) }));
     const op = ops[index];

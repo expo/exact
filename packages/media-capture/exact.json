@@ -159,6 +159,11 @@
     },
     {
       "send": "applyConstraints",
+      "origin": {
+        "none": [
+          "action"
+        ]
+      },
       "grants": [
         "device.camera"
       ],

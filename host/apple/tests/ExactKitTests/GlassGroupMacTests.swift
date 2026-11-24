@@ -265,7 +265,7 @@ final class GlassGroupMacTests: XCTestCase {
         try assertBlue(try XCTUnwrap(Capture.windowServerPicture(of: root)), at: NSPoint(x: 40, y: 40), "zero-scale glass leaves the ground")
 
         p.apply(wireBatch([
-            ["op": "present", "id": 3, "property": "scale", "x": 1.0, "y": 0.0],
+            ["op": "present", "id": 3, "property": "scale", "x": 1.0, "y": 1.0],
             ["op": "style", "id": 2, "style": ["clip_path": ["commands": [
                 ["M", [0, 0]], ["L", [60, 0]], ["L", [60, 60]], ["L", [0, 60]], ["Z", []],
             ]]]],

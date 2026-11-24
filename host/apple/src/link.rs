@@ -357,9 +357,9 @@ pub struct DragLinks<D: DataSource> {
     pub height_begin:
         fn(&mut crate::Host<D>, exact_kernel::NodeKey, exact_kernel::NodeKey, f64) -> String,
     /// `exact_height_drag_update`.
-    pub height_update: fn(&mut crate::Host<D>, u64, f64, f64) -> String,
+    pub height_update: fn(&mut crate::Host<D>, u64, f64, f64, f64) -> String,
     /// `exact_height_drag_release`.
-    pub height_release: fn(&mut crate::Host<D>, u64, f64, f64) -> String,
+    pub height_release: fn(&mut crate::Host<D>, u64, f64, f64, f64) -> String,
 }
 
 impl<D: DataSource> Clone for DragLinks<D> {

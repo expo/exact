@@ -176,10 +176,10 @@ fn a_held_active_is_the_press_paint_until_real_input_lets_it_go() {
         reports(&mut p),
         [json!({"kind": "held", "state": null, "reason": "input", "revision": 1})]
     );
-    p.clock(now + 260.);
+    p.clock(now + 310.);
     assert_eq!(pixel(&mut p, at), BLUE, "the real press's");
-    p.pointer_up(at.0, at.1, now + 260.).unwrap();
-    p.clock(now + 500.);
+    p.pointer_up(at.0, at.1, now + 310.).unwrap();
+    p.clock(now + 550.);
     assert_eq!(pixel(&mut p, at), GREEN);
     assert!(p.held().is_none());
 }
@@ -440,7 +440,7 @@ fn a_live_held_press_eases_in_and_out() {
   action go
     presses = presses + 1
   view
-    box press=go width=80 height=40 testId="pad" -exact-press-scale=0.6
+    box press=go width=80 height=40 testId="pad" -exact-press-scale=0.6 transition="scale 100ms linear"
 "#;
     let (mut p, error) = Presenter::boot_with_fixture_fonts(
         &plan(source),
@@ -469,8 +469,87 @@ fn a_live_held_press_eases_in_and_out() {
             "{state:?} scale at 10 ms: {scale}"
         );
         p.tick(now + 400.);
+        p.frame();
         assert_eq!(p.host().presented(pad).press, landed);
     }
+}
+
+#[test]
+fn a_held_press_reverses_with_css_shortening_and_negative_delay() {
+    let source = APP.replace(
+        "box press=go disabled=off",
+        "box press=go -exact-press-scale=0.6 transition=\"scale 200ms linear -40ms\" disabled=off",
+    );
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan(&source),
+        (),
+        (400., 400.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert_eq!(error, None);
+    let card = view(&p, "card");
+    let scale = |p: &Presenter<()>, expected: f32| {
+        let actual = p.host().presented(card).press;
+        assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+    };
+
+    p.hold(card, Some(crate::host::press::HoldState::Active), None)
+        .unwrap();
+    scale(&p, 0.92);
+    p.tick(60.);
+    scale(&p, 0.8);
+    p.frame();
+    p.hold(card, None, None).unwrap();
+    scale(&p, 0.84);
+    p.tick(100.);
+    scale(&p, 0.92);
+    p.hold(card, Some(crate::host::press::HoldState::Active), None)
+        .unwrap();
+    scale(&p, 0.856);
+    p.tick(229.);
+    scale(&p, 0.6);
+    assert!(!p.host().motion());
+}
+
+#[test]
+fn a_held_spring_retargets_with_its_velocity() {
+    let source = APP.replace(
+        "box press=go disabled=off",
+        "box press=go -exact-press-scale=0.6 transition=\"scale -exact-spring(100, 10, 1), color -exact-spring(100, 10, 1)\" disabled=off",
+    ).replace("background-color = \"#0000ff\"", "background-color = \"#0000ff\"\n            color = \"#ff0000\"");
+    let (mut p, error) = Presenter::boot_with_fixture_fonts(
+        &plan(&source),
+        (),
+        (400., 400.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert_eq!(error, None);
+    let card = view(&p, "card");
+    p.hold(card, Some(crate::host::press::HoldState::Active), None)
+        .unwrap();
+    p.tick(40.);
+    p.frame();
+    let before = p.host().presented(card);
+    p.hold(card, None, None).unwrap();
+    assert_eq!(p.host().presented(card).press, before.press);
+    p.tick(50.);
+    assert!(
+        p.host().presented(card).press < before.press,
+        "the scale is still moving inward"
+    );
+    assert!(
+        p.host().presented(card).press_color < before.press_color,
+        "the colour starts its release from rest"
+    );
+    p.tick(2000.);
+    assert_eq!(p.host().presented(card).press, 1.);
+    assert!(!p.host().motion());
 }
 
 #[test]
@@ -515,6 +594,7 @@ fn a_held_press_let_go_with_its_contact_off_the_node_unpaints() {
     let card = target(&p, "card", "active");
     assert_eq!(serve(&mut p, vec![hold(2, card)])[0]["state"], "active");
     p.pointer_move(at.0, at.1 + 300., 10.).unwrap();
+    p.frame();
     serve(&mut p, vec![hold(3, Value::Null)]);
     p.clock(600.);
     assert_eq!(pixel(&mut p, at), GREEN);
@@ -528,14 +608,60 @@ fn a_held_press_on_a_painted_control_shows_its_pressed_look() {
     let native = view(&p, "native");
     let held = target(&p, "native", "active");
     assert_eq!(serve(&mut p, vec![hold(1, held)])[0]["state"], "active");
-    assert!(p.brush.presses(native));
+    // What the button's face paints its pressed look from.
+    let look = |p: &Presenter<()>| {
+        let shown = p.host().presented(native);
+        [shown.press_background, shown.press_color]
+    };
+    assert_eq!(look(&p), [1.; 2]);
     // A contact's press on another control leaves it pressed too.
     let at = ground(&mut p, "card");
     p.pointer_down(at.0, at.1, 0.).unwrap();
-    assert!(p.brush.presses(native));
+    assert_eq!(look(&p), [1.; 2]);
     p.pointer_up(at.0, at.1, 10.).unwrap();
     serve(&mut p, vec![hold(2, Value::Null)]);
-    assert!(!p.brush.presses(native));
+    assert_eq!(look(&p), [0.; 2]);
+}
+
+/// The window's deactivation ends a contact's press at once (LLP 1061 D7
+/// "Timing" item 5), and so does a page that presents nothing, but a held
+/// press stays held: the design tool that holds it takes the activation.
+#[test]
+fn a_held_press_outlasts_the_window_and_the_page_going() {
+    let mut p = boot();
+    let held = target(&p, "card", "active");
+    assert_eq!(serve(&mut p, vec![hold(1, held)])[0]["state"], "active");
+    p.clock(100.);
+    let card = ground(&mut p, "card");
+    assert_eq!(pixel(&mut p, card), BLUE);
+    let at = ground(&mut p, "native");
+    p.pointer_down(at.0, at.1, 100.).unwrap();
+    let native = p.host().kernel().node(view(&p, "native")).unwrap().key;
+    assert!(p.host().pressed(native));
+    p.set_window_active(false);
+    assert!(!p.host().pressed(native));
+    assert!(
+        !p.host.cancel_presses(),
+        "the only press was already landed"
+    );
+    p.timer_visibility(true);
+    assert!(
+        serve(&mut p, Vec::new()).is_empty(),
+        "the hold is not let go"
+    );
+    assert!(p.held().is_some());
+    assert_eq!(pixel(&mut p, card), BLUE);
+    // Held again while the page presents nothing, it shows at once.
+    serve(&mut p, vec![hold(2, Value::Null)]);
+    let held = target(&p, "card", "active");
+    assert_eq!(serve(&mut p, vec![hold(3, held)])[0]["state"], "active");
+    assert!(serve(&mut p, Vec::new()).is_empty());
+    assert!(p.held().is_some());
+    assert_eq!(pixel(&mut p, card), BLUE);
+    p.timer_visibility(false);
+    p.set_window_active(true);
+    assert!(serve(&mut p, Vec::new()).is_empty());
+    assert_eq!(pixel(&mut p, card), BLUE);
 }
 
 /// A same-plan generation on a display that acknowledges pictures: a held

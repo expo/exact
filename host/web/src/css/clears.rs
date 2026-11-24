@@ -22,7 +22,7 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         }
         ViewTimelineName => out.push_str("view-timeline-name:unset;--exact-view-timeline:unset;"),
         // `scale` remains the feedback product; an unset own factor is one.
-        Scale if press => out.push_str("--exact-scale:1;"),
+        Scale if press => out.push_str("--exact-scale:1;--exact-scale-y:1;"),
         AccentColor => out.push_str("accent-color:unset;--exact-accent:unset;"),
         // A clear is unsaid, as `auto` is (selection.rs): no declaration, so the
         // page's sheet decides.

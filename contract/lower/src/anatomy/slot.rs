@@ -155,7 +155,13 @@ pub fn denied(row: &str, value: &str) -> Option<String> {
                 false => unread(),
             }
         }
-        "opacity" | "scale" => match number(v) {
+        "scale" => match exact_motion::property::scale(v) {
+            Some(s) if s.x == 0.0 || s.y == 0.0 => Some(format!("`{row}: {v}` makes it vanish")),
+            Some(_) => None,
+            None if keyword() => None,
+            None => unread(),
+        },
+        "opacity" => match number(v) {
             Some(n) if n <= 0.0 => Some(format!("`{row}: {v}` makes it vanish")),
             Some(_) => None,
             None if keyword() => None,

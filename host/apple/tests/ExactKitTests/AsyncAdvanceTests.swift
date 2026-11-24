@@ -70,7 +70,7 @@ final class AsyncAdvanceTests: XCTestCase {
 
     private func logs(_ session: ExactSession) -> String { session.agent(#"{"op":"logs"}"#) }
 
-    /// A task's timer is Foundation's (#1144): once its first row is due, its
+    /// A task's timer is Foundation's: once its first row is due, its
     /// firing, delivered as the run loop delivers it (`deliverNativeTimer`):
     /// posted to the owner. The row it fired.
     @discardableResult private func deliverTask(_ session: ExactSession, beforeDelivery: () -> Void = {}) throws -> NativeTimerWake {

@@ -599,7 +599,7 @@ public final class Agent {
         return ["back": went.way, "delivery": "platform", "refused": went.refused]
     }
 
-    /// A field's value as a reply shows it (#134): a password's, when not
+    /// A field's value as a reply shows it: a password's, when not
     /// empty, is a fixed mark whatever its length — the runner's
     /// `agent::MASKED`, which its tree already shows.
     static func shownValue(_ value: String, of v: NodeView) -> String {

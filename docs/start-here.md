@@ -252,6 +252,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |app.json keys, `assets/`, the `modules` folder|`app-json`|
 |labels in Arabic, Hebrew, Persian or Urdu, laid out right to left; a second language|`rtl`|
 |an action Siri, Shortcuts or a browser's agent calls (a `tool` line and its face)|`tools`|
+|a button outside the app: Control Center, the Lock Screen, a Quick Settings tile; recording from one|`system-controls`|
 |a phone manifest: orientation, appearance, HTTP, a public setting|`phone-manifest`|
 |a section of the long guides, whole, by its heading|`bun exact.mjs docs <heading words>`|
 

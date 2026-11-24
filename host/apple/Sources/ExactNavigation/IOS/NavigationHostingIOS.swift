@@ -229,9 +229,7 @@ extension NavigationHost: NavigationHosting {
             let items = (route.navigationItem.leftBarButtonItems ?? []) + (route.navigationItem.rightBarButtonItems ?? [])
             guard let item = items.first(where: { ($0.target as? BarPress)?.id == node.id })
                     ?? items.first(where: { $0.target == nil && testId != nil && $0.accessibilityIdentifier == testId }) else { continue }
-            // Nested in a split's list column, the detail's top shows its items in that column's bar (LLP 1127 §1, item 2)
-            let bar = split.flatMap { $0.nested && controller === $0.detail ? $0.list.navigationBar : nil } ?? controller.navigationBar
-            return (bar, item, route.navigationItem)
+            return (shownBar(of: controller), item, route.navigationItem)
         }
         // A dialog's sheet bar (DialogBarIOS.swift).
         for dialog in shownDialogBars {

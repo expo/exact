@@ -367,7 +367,7 @@ impl PaintedField {
         autoscroll: Option<(f32, f32)>,
     ) -> Option<(f32, f32)> {
         let mut point = tiny_skia::Point::from_xy(point.0, point.1);
-        self.transform.invert()?.map_point(&mut point);
+        space::inverse_affine(self.transform)?.map_point(&mut point);
         if autoscroll.is_some() {
             let (x, y, w, h) = self.content;
             point.x = point.x.clamp(x, x + w);
@@ -422,7 +422,7 @@ impl PaintedBox {
         area(self.rect)
             && self
                 .affine
-                .is_none_or(|(ts, rect)| area(rect) && ts.invert().is_some())
+                .is_none_or(|(ts, rect)| area(rect) && space::inverse_affine(ts).is_some())
             && self.projective.is_none_or(|(_, rect, ..)| area(rect))
     }
 

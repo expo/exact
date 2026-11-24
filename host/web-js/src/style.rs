@@ -1260,10 +1260,9 @@ pub fn style_row(id: u16, written: bool) -> Result<(String, String), String> {
     if row == StyleId::TranslateVelocity {
         return Ok(("--exact-translate-velocity".into(), String::new()));
     }
-    // `translate` is one declaration of the author's two lengths (css.rs
-    // `lowered`): written as the author wrote them.
-    if row == StyleId::Translate {
-        return Ok(("translate".into(), String::new()));
+    // Both pairs are one CSS declaration, written as the author wrote them.
+    if matches!(row, StyleId::Translate | StyleId::Scale) {
+        return Ok((css_property(row), String::new()));
     }
     // `line-height` is CSS's own (kernel `LineHeight::css`): a number is a
     // multiple of the font size, unitless; a length is written with its unit;
@@ -1474,7 +1473,7 @@ pub(super) fn transition_map(entries: &str, press: bool, shift: bool) -> String 
         .filter_map(|(yes, name)| yes.then_some(name))
         .collect();
     format!(
-        r#"v=>{{if(v==null)return v;const p=({entries})(v);let o=[...p];for(const n of {}){{const bases=n==='scale'?['--exact-scale']:['--exact-translate-x','--exact-translate-y','--exact-translate-z'],m=p.filter(t=>new RegExp('^('+n+'|all)(\\s|$)').test(t)).pop();o=o.map(t=>t.replace(new RegExp('^'+n+'(?=\\s)'),bases[0]));if(m)o.push(n+' 0s',...bases.map(base=>m.replace(new RegExp('^('+n+'|all)'),base)));}}return o.join(',')||'none'}}"#,
+        r#"v=>{{if(v==null)return v;const p=({entries})(v);let o=[...p];for(const n of {}){{const bases=n==='scale'?['--exact-scale','--exact-scale-y']:['--exact-translate-x','--exact-translate-y','--exact-translate-z'],m=p.filter(t=>new RegExp('^('+n+'|all)(\\s|$)').test(t)).pop();o=o.map(t=>t.replace(new RegExp('^'+n+'(?=\\s)'),bases[0]));if(m)o.push(n+' 0s',...bases.map(base=>m.replace(new RegExp('^('+n+'|all)'),base)));}}return o.join(',')||'none'}}"#,
         serde_json::to_string(&names).unwrap()
     )
 }

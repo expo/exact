@@ -63,7 +63,7 @@ final class TextSpecs {
 /// extent. Made on the first write that is not a default (`NodeView.aside`).
 final class NodeAside {
     var translatePx = CGPoint.zero, translatePercent = CGPoint.zero
-    var scale: CGFloat = 1
+    var scale = CGPoint(x: 1, y: 1)
     var rotate: CGFloat = 0
     var rotationAxis: [Double] = [0, 0, 0]
     var content = CGSize.zero
@@ -177,7 +177,6 @@ final class NodeExtras {
     var symbolRefusal: String?
     var listSymbol = false
     var listRow = false
-    var scrollCornered = false
     var focusRing: CAShapeLayer?
     var scrollEventQueued: Bool = false
     /// The last `scroll` event's values (`sendScrollEvent`).
@@ -240,9 +239,9 @@ final class NodeExtras {
     var reachGiven = false
     /// The bottom inset a keyboard toolbar gives its scroll view (`KeyboardToolbarIOS.swift`).
     var keyboardInset: CGFloat = 0
-    /// A control bar over a scroller's content (LLP 1131 D3, D4): the scroller's paint rank, which it is placed
-    /// above, and UIKit's edge effect.
-    var bandOver: Int64?
+    /// A control bar over a scroller's content (LLP 1131 D3, D4): its sibling that holds the scroller, which
+    /// it is placed above, and UIKit's edge effect.
+    weak var bandOver: NodeView?
     var navigationPaint = NavigationPaintRole.sibling
     var edgeInteraction: AnyObject?
     var scrollWritten: String?
@@ -293,7 +292,7 @@ extension NodeView {
     /// `translate`: its lengths, and its percentages of the box (chess diary #4).
     var translatePx: CGPoint { get { aside?.translatePx ?? .zero } set { if newValue != .zero || aside != nil { asideMade.translatePx = newValue } } }
     var translatePercent: CGPoint { get { aside?.translatePercent ?? .zero } set { if newValue != .zero || aside != nil { asideMade.translatePercent = newValue } } }
-    package var scale: CGFloat { get { aside?.scale ?? 1 } set { if newValue != 1 || aside != nil { asideMade.scale = newValue } } }
+    package var scale: CGPoint { get { aside?.scale ?? CGPoint(x: 1, y: 1) } set { if newValue != CGPoint(x: 1, y: 1) || aside != nil { asideMade.scale = newValue } } }
     var rotationAxis: [Double] { get { aside?.rotationAxis ?? [0, 0, 0] } set { if newValue != [0, 0, 0] || aside != nil { asideMade.rotationAxis = newValue } } }
     package var rotate: CGFloat { get { aside?.rotate ?? 0 } set { if newValue != 0 || aside != nil { asideMade.rotate = newValue } } }
     /// A scroll container's content extent (the `content` op), before the
@@ -475,8 +474,6 @@ extension NodeView {
             accessibilityTraits.insert(newValue ? .button : .link); accessibilityTraits.remove(newValue ? .link : .button)
         }
     }
-    /// Whether its scroll view holds a default surface's corner (`syncDefaultSurfaceScroll`).
-    var scrollCornered: Bool { get { extras?.scrollCornered ?? false } set { if newValue || extras != nil { more.scrollCornered = newValue } } }
     var focusRing: CAShapeLayer? { get { extras?.focusRing } set { if newValue != nil || extras != nil { more.focusRing = newValue } } }
     var scrollEventQueued: Bool { get { extras?.scrollEventQueued ?? false } set { if newValue || extras != nil { more.scrollEventQueued = newValue } } }
     var lastScrollEvent: [Double] { get { extras?.lastScrollEvent ?? [] } set { if !newValue.isEmpty || extras != nil { more.lastScrollEvent = newValue } } }
@@ -574,7 +571,7 @@ extension NodeView {
         sv.contentInsetAdjustmentBehavior != .never ? sv.adjustedContentInset.left : extras?.nativeScrollContentInsets.left ?? 0
     }
     package var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
-    var bandOver: Int64? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
+    var bandOver: NodeView? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
     /// Whether a touch at `point` can reach this box's children. Overflow
     /// that is not visible clips them at the padding edge (CSS Overflow 3

@@ -6,6 +6,16 @@
 //! initial `transform-style: flat`.
 use super::*;
 
+/// tiny-skia's axis-aligned inverse accepts a zero scale. Hit geometry
+/// needs an actual inverse, including when a collapsed box is rotated.
+pub(crate) fn inverse_affine(ts: Transform) -> Option<Transform> {
+    let det = f64::from(ts.sx) * f64::from(ts.sy) - f64::from(ts.kx) * f64::from(ts.ky);
+    if det == 0. || !det.is_finite() {
+        return None;
+    }
+    ts.invert().filter(Transform::is_finite)
+}
+
 /// A 4×4 matrix, row-major, acting on column vectors.
 type M4 = [[f32; 4]; 4];
 
@@ -26,10 +36,10 @@ fn translate(x: f32, y: f32, z: f32) -> M4 {
         [0., 0., 0., 1.],
     ]
 }
-fn scale(s: f32) -> M4 {
+fn scale(x: f32, y: f32) -> M4 {
     [
-        [s, 0., 0., 0.],
-        [0., s, 0., 0.],
+        [x, 0., 0., 0.],
+        [0., y, 0., 0.],
         [0., 0., 1., 0.],
         [0., 0., 0., 1.],
     ]
@@ -103,14 +113,15 @@ pub(super) fn reach(
                 cx + cw / 2.0 + tx + q.layout[0],
                 cy + ch / 2.0 + ty + q.layout[1],
             );
-            let k = (q.scale * q.press).abs().max(1.0);
+            let kx = (q.scale.0 * q.press).abs().max(1.0);
+            let ky = (q.scale.1 * q.press).abs().max(1.0);
             let turned =
                 q.rotate % 360.0 != 0.0 || q.rotate_axis.is_3d() || child.style.translate_z != 0.0;
             let (hw, hh) = if turned {
-                let d = k * cw.hypot(ch);
+                let d = (kx * cw).hypot(ky * ch);
                 (d, d)
             } else {
-                (k * cw / 2.0, k * ch / 2.0)
+                (kx * cw / 2.0, ky * ch / 2.0)
             };
             let sh = shadow_reach(&child);
             out.0 = out.0.max(x - (mx - hw - sh.0));
@@ -184,7 +195,7 @@ fn spatial_matrix(
     let (tx, ty) = p.translate_at(w, h);
     let mut m = translate(cx + dx + tx, cy + dy + ty, s.translate_z);
     m = mul(&m, &rotate(axis, p.rotate));
-    m = mul(&m, &scale(p.scale * p.press));
+    m = mul(&m, &scale(p.scale.0 * p.press, p.scale.1 * p.press));
     m = mul(&m, &translate(-cx, -cy, 0.0));
     // Its parent's `perspective`, about the parent's `perspective-origin`.
     if let Some((parent, frame)) = parent {
@@ -309,7 +320,7 @@ impl Painter {
         }
         let (x, y, w, h) = paint_rect(node.frame, offset);
         if w <= 0.0 || h <= 0.0 {
-            self.boxless_audio(walk, node);
+            self.unpainted(walk, node);
             return true;
         }
         let parent = self.split_parent(walk.scene.kernel, node);
@@ -342,7 +353,7 @@ impl Painter {
         let facing = m[2][2] * if m[3][3] < 0.0 { -1.0 } else { 1.0 };
         let turned = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * m[3][3] < 0.0 || facing < 0.0;
         if turned && s.backface_visibility == exact_kernel::BackfaceVisibility::Hidden {
-            self.boxless_audio(walk, node);
+            self.unpainted(walk, node);
             return true;
         }
         if let Some(inv) = self.native_plane(walk, node.id, own, island, clamped) {
@@ -387,7 +398,7 @@ impl Painter {
         }
         let device = crate::placement::compose(plane, ts, 0.0, 0.0);
         let Some(inv) = crate::placement::inverse(device) else {
-            self.boxless_audio(walk, node);
+            self.unpainted(walk, node);
             return true;
         };
         let mut painter = Painter::new(
@@ -662,4 +673,214 @@ pub(super) fn sticky_scroll(
     };
     let (x, y) = grid::scroll_offset(scroll, grid);
     (x as f32, y as f32)
+}
+
+pub(crate) fn content_size_with(
+    node: &NodeRef<'_>,
+    kernel: &Kernel,
+    presented: &dyn Fn(ViewId) -> Presented,
+    scaled_presented: &std::collections::BTreeSet<ViewId>,
+) -> (f32, f32) {
+    fn overflow(
+        node: &NodeRef<'_>,
+        kernel: &Kernel,
+        presented: &dyn Fn(ViewId) -> Presented,
+    ) -> Option<(Rect4, bool)> {
+        let mut p = presented(node.id);
+        p.press = 1.;
+        if p.scale.0 == 0. || p.scale.1 == 0. {
+            return None;
+        }
+        let f = node.frame;
+        let border = (f.x, f.y, f.width, f.height);
+        let axes = effective_overflow(node);
+        let mut bounds = border;
+        let mut scaled_below = false;
+        for id in node.children() {
+            let Some(child) = kernel.node_unblocked(id) else {
+                continue;
+            };
+            scaled_below |= presented(id).scale != (1., 1.);
+            let Some((c, scaled)) = overflow(&child, kernel, presented) else {
+                continue;
+            };
+            scaled_below |= scaled;
+            let left = if axes.0 == Overflow::Visible {
+                bounds.0.min(c.0)
+            } else {
+                bounds.0
+            };
+            let top = if axes.1 == Overflow::Visible {
+                bounds.1.min(c.1)
+            } else {
+                bounds.1
+            };
+            let right = if axes.0 == Overflow::Visible {
+                (bounds.0 + bounds.2).max(c.0 + c.2)
+            } else {
+                bounds.0 + bounds.2
+            };
+            let bottom = if axes.1 == Overflow::Visible {
+                (bounds.1 + bounds.3).max(c.1 + c.3)
+            } else {
+                bounds.1 + bounds.3
+            };
+            bounds = (left, top, right - left, bottom - top);
+        }
+        // Keep layout overflow on branches whose descendants were not rescaled.
+        if !scaled_below {
+            bounds.2 = bounds.2.max(node.content.0);
+            bounds.3 = bounds.3.max(node.content.1);
+        }
+        let map = space::mapping(kernel, node, &p);
+        let after = space::mapped_bounds(&map, bounds).unwrap_or(border);
+        // CSS Transforms 1 section 3: keep the border box before and after
+        // its transform. Descendants pass through their ancestor's transform.
+        let left = border.0.min(after.0);
+        let top = border.1.min(after.1);
+        let right = (border.0 + border.2).max(after.0 + after.2);
+        let bottom = (border.1 + border.3).max(after.1 + after.3);
+        Some((
+            (left, top, right - left, bottom - top),
+            scaled_below || p.scale != (1., 1.),
+        ))
+    }
+    // Check the sparse scale sets through parent links. Unrelated swipe
+    // indicators must not make every scroller search its whole subtree.
+    let transformed = kernel.has_scaled_descendant(node.key)
+        || scaled_presented.iter().any(|&id| {
+            let mut parent = kernel.node(id).and_then(|n| n.parent);
+            while let Some(id) = parent {
+                let Some(ancestor) = kernel.node(id) else {
+                    break;
+                };
+                if ancestor.key == node.key {
+                    return true;
+                }
+                parent = ancestor.parent;
+            }
+            false
+        });
+    if !transformed {
+        let (_, _, pr, pb) = kernel.layout_padding(node.key).unwrap_or_default();
+        let mut size = (
+            node.frame.width.max(node.content.0),
+            node.frame.height.max(node.content.1),
+        );
+        for id in node.children() {
+            if let Some(c) = kernel.node_unblocked(id) {
+                size.0 = size.0.max(c.frame.x - node.frame.x + c.frame.width + pr);
+                size.1 = size.1.max(c.frame.y - node.frame.y + c.frame.height + pb);
+            }
+        }
+        return size;
+    }
+    let (_, _, pr, pb) = kernel.layout_padding(node.key).unwrap_or_default();
+    let mut size = (node.frame.width, node.frame.height);
+    for id in node.children() {
+        if let Some(child) = kernel.node_unblocked(id) {
+            let Some((r, _)) = overflow(&child, kernel, presented) else {
+                continue;
+            };
+            size.0 = size.0.max(r.0 + r.2 - node.frame.x + pr);
+            size.1 = size.1.max(r.1 + r.3 - node.frame.y + pb);
+        }
+    }
+    size
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{presenter::PainterChoice, Presenter};
+    use std::{cell::Cell, path::PathBuf, time::Instant};
+
+    #[test]
+    fn unrelated_swipe_scales_do_not_walk_scroll_content() {
+        let source = r#"component App
+  state n = 0
+  action noop
+    n = n + 1
+  view
+    column
+      list testId="port" width=120 height=120
+        for row in range(1000) key=row
+          view width=160 height=20 translate="50px 70px"
+            view width=100 height=20
+      list testId="other" width=120 height=120
+        for row in range(1000) key=row
+          view width=100 height=20 swiperight=noop
+            view swipeIndicator=true width=10 height=10 scale=0.5
+"#;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (400., 500.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let kernel = p.host().kernel();
+        let node = kernel
+            .node_by_key(kernel.find_by_test_id("port")[0])
+            .unwrap();
+        assert!(kernel.has_scale());
+        assert!(!kernel.has_scaled_descendant(node.key));
+        // Main uses layout overflow and immediate children, ignoring translate.
+        let expected = (160., 20_000.);
+        let reads = Cell::new(0);
+        let presented = |id| {
+            reads.set(reads.get() + 1);
+            p.host().presented(id)
+        };
+        let start = Instant::now();
+        for _ in 0..1000 {
+            assert_eq!(
+                content_size_with(&node, kernel, &presented, p.host().scaled_presented()),
+                expected
+            );
+        }
+        eprintln!("1000-row content_size, 1000 reads: {:?}", start.elapsed());
+        assert_eq!(
+            reads.get(),
+            0,
+            "the transform path must not read presentation"
+        );
+
+        // Held scales use a separate sparse set and obey the same boundary.
+        let other = kernel
+            .node_by_key(kernel.find_by_test_id("other")[0])
+            .unwrap()
+            .id;
+        let port = node.id;
+        for id in [other, port] {
+            let held = p
+                .host_mut()
+                .hold_begin(id, exact_motion::Property::Scale, 0.)
+                .unwrap()
+                .unwrap();
+            p.host_mut()
+                .hold_update(held.token, exact_motion::Value::new(2., 0.5), 0.)
+                .unwrap();
+            // The hold must reach the presented-scale set, or this section tests nothing.
+            assert!(p.host().scaled_presented().contains(&id));
+            let kernel = p.host().kernel();
+            let node = kernel.node(port).unwrap();
+            assert_eq!(
+                content_size_with(
+                    &node,
+                    kernel,
+                    &|_| panic!("an unrelated or own scale must not enter the transform path"),
+                    p.host().scaled_presented(),
+                ),
+                expected
+            );
+            p.host_mut()
+                .hold_end(held.token, exact_motion::HoldEnd::Cancel, 0.)
+                .unwrap();
+        }
+    }
 }

@@ -2,6 +2,7 @@ package exact.mediacapture
 
 import android.Manifest
 import android.content.Context
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ExtensionInvokeTest.Host
 import org.json.JSONObject
@@ -44,7 +45,7 @@ class PermissionResumeTest {
 
     private fun read(name: String): JSONObject {
         var answer: JSONObject? = null
-        module.later(name, JSONObject()) { answer = it }
+        module.later(name, JSONObject(), null, Cause("app")) { answer = it }
         return requireNotNull(answer)
     }
 

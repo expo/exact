@@ -95,7 +95,7 @@ pub(super) fn import(commands: &[String]) -> String {
             .collect::<Vec<_>>()
             .join(","),
         if commands.iter().any(|c| c == "haptic") {
-            "import{watchPage as $watchPage}from\"./facts.js\";"
+            "import{watchOutput as $watchOutput}from\"./output.js\";"
         } else {
             ""
         }
@@ -109,7 +109,7 @@ pub(super) fn install(slot: &str, commands: &[String]) -> String {
     format!(
         "{}{slot}({{{}}});",
         if commands.iter().any(|c| c == "haptic") {
-            "$watchPage(true);"
+            "$watchOutput();"
         } else {
             ""
         },

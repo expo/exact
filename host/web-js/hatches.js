@@ -261,7 +261,7 @@ function perfSite(site) {
 // task, so a hatch that keeps asking cannot starve the page. An act is in
 // flight (`clock settle` waits for it) from its asking until it has run.
 const Acts = [], INPUTS = new Set(["text", "search", "url", "tel", "password", "email", "number"]);
-const A = { bytes: 0, refused: 0, drains: 0, scheduled: false, tasks: false, port: null, composing: null };
+const A = { bytes: 0, refused: 0, drains: 0, scheduled: false, tasks: false, port: null, composing: null, watching: false };
 const refuse = (what, why) => { A.refused++; say(`${what}: ${why}`); };
 function ask(h, what, kind, text) {
   if (!h.isLive) return;
@@ -309,10 +309,14 @@ function run({ h, what, kind, text }) {
   e.dispatchEvent(new InputEvent("input", { inputType: "insertReplacementText", bubbles: true }));
   say(`${what}: input (${e.type === "password" ? "protected" : `${[...value].length} chars`}, delivery: hatch)`);
 }
-if (typeof document !== "undefined" && document.addEventListener) {
+// The field composing, which `input` refuses: watched from the entry's start by a page with a page module, the only
+// code a hatch's `input` is given to (build.mjs), so a composition begun before the first render is seen.
+export const watchComposing = () => {
+  if (A.watching || typeof document === "undefined" || !document.addEventListener) return;
+  A.watching = true;
   document.addEventListener("compositionstart", ev => { A.composing = ev.target; }, true);
   document.addEventListener("compositionend", () => { A.composing = null; }, true);
-}
+};
 
 // The frame clock (@ref LLP 1075.003.000.001 §2.4): logical time, for what
 // keeps step with the app. `exact.hatches.frames(frame => …)` is a ticket:

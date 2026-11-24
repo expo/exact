@@ -16,21 +16,27 @@ final class TransformDragHold {
     let translate: UInt64
     let scale: UInt64
     let origin: TransformDragPosition
+    let timeline: InputTimeline
     private(set) var ended = false
     private var finishing = false
     private var pin: UInt64?
-    /// The newest displayed pair [x, y, scale] and its time. Velocity is the
-    /// engine's (LLP 1057.001 §3), measured over every value sent.
+    /// The newest displayed pair [x, y, scale] and its input time. Velocity is
+    /// the engine's (LLP 1057.001 §3), measured over every value sent at its
+    /// input time.
     private(set) var current: [Double]
+    /// The pair the newest sample sent: where the input last was.
+    private var sent: [Double]
     private var time: Double
     private var queued = false
     private var pendingMove: ([Double], Double)?
-    private var pendingEnd: ([Double], Double, Bool)?
+    private var pendingEnd: ([Double]?, Double, Bool)?
 
     /// `travel` (window points) is how far the contact has moved since it
-    /// touched down, which the hold begins already holding.
-    init?(_ handle: NodeView, time: Double, travel: CGPoint = .zero) {
-        guard time.isFinite, let session = handle.presenter?.session, !session.isApplyingPresentation,
+    /// touched down at `down` (its timestamp): the hold begins there and then
+    /// and steps to the finger at `time`, its first sample. Without `down` it
+    /// begins already holding the travel.
+    init?(_ handle: NodeView, time: Double, travel: CGPoint = .zero, down: Double? = nil) {
+        guard time.isFinite, (down ?? time) <= time, let session = handle.presenter?.session, !session.isApplyingPresentation,
               let binding = session.presenter.transformBindings[handle.id],
               let targetID = binding.target, let targetKey = binding.targetKey, let clipKey = binding.clipKey,
               let target = session.presenter.views[targetID], SwipeInput.allows(handle), SwipeInput.allows(target),
@@ -40,16 +46,18 @@ final class TransformDragHold {
         self.session = session; self.handle = handle; self.target = target; self.binding = binding
         window = target.window
         generation = session.generation; sequence = geometry.sequence
+        let now = session.now()
+        timeline = InputTimeline(input: down ?? time, clock: now)
         let packet = TransformDragPacket(op: 11, runtime: binding.runtime, handleKey: binding.handleKey,
             targetKey: targetKey, clipKey: clipKey, sequence: geometry.sequence,
-            values: start + [0, 0, 0], now: session.now())
+            values: (down == nil ? start : presentation.values) + [0, 0, 0], now: now)
         guard let reply = session.runtime.transformMotion(packet) else { return nil }
         guard reply.accepted, reply.runtime == binding.runtime, reply.sequence == geometry.sequence,
               let translate = reply.translate, let scale = reply.scale, let origin = reply.value else {
             session.apply(reply.batch); return nil
         }
         self.translate = translate; self.scale = scale; self.origin = origin
-        current = origin.values; self.time = time
+        current = origin.values; sent = origin.values; self.time = down ?? time
         let previous = session.transformInputHold
         // Publish BOTH originals before any batch can invalidate/reenter us.
         session.transformInputHold = self
@@ -57,6 +65,7 @@ final class TransformDragHold {
         previous?.cancel()
         guard live && eligible else { cancel(); return nil }
         pin = session.presenter.collections.holdPointer(handle.id)
+        if down != nil, !move(to: start, time: time) { cancel(); return nil }
     }
     var incarnationLive: Bool {
         guard let session else { return false }
@@ -77,11 +86,11 @@ final class TransformDragHold {
     func retire(runtime: UInt64, token: UInt64) {
         if runtime == binding.runtime && (token == translate || token == scale) { cancel() }
     }
-    private func packet(_ op: UInt32, values: [Double]) -> TransformDragPacket? {
+    private func packet(_ op: UInt32, values: [Double], time: Double) -> TransformDragPacket? {
         guard let session, let target = binding.targetKey, let clip = binding.clipKey else { return nil }
         return TransformDragPacket(op: op, runtime: binding.runtime, handleKey: binding.handleKey,
             targetKey: target, clipKey: clip, sequence: sequence, translateToken: translate,
-            scaleToken: scale, values: values, now: session.now())
+            scaleToken: scale, values: values, now: session.now(), at: timeline.at(time))
     }
     private func schedule() {
         guard !queued else { return }
@@ -91,8 +100,8 @@ final class TransformDragHold {
             if session?.isApplyingPresentation == true { schedule(); return }
             let end = pendingEnd, move = pendingMove
             pendingEnd = nil; pendingMove = nil
+            if let move, end?.2 != true { _ = self.move(to: move.0, time: move.1) }
             if let end { finish(to: end.0, time: end.1, cancel: end.2) }
-            else if let move { _ = self.move(to: move.0, time: move.1) }
         }
     }
     /// A pan by `dx, dy` from the pair's origin.
@@ -106,28 +115,32 @@ final class TransformDragHold {
               TransformDragPosition(values) != nil, let session else { return false }
         if session.isApplyingPresentation || queued { pendingMove = (values, time); schedule(); return true }
         guard live && eligible else { if !finishing { cancel() }; return false }
-        guard let packet = packet(12, values: values + [0, 0, 0]),
+        guard let packet = packet(12, values: values + [0, 0, 0], time: time),
               let reply = session.runtime.transformMotion(packet) else { return false }
         session.apply(reply.batch)
         guard reply.accepted, reply.batch.error == nil, live, eligible,
               let displayed = target?.transformDragModel() else { return false }
-        current = displayed.values; self.time = time
+        current = displayed.values; sent = values; self.time = time
         return true
     }
     func finish(dx: Double, dy: Double, time: Double, cancel: Bool) {
-        finish(to: origin.moved(dx: dx, dy: dy) ?? current, time: time, cancel: cancel)
+        finish(to: origin.moved(dx: dx, dy: dy), time: time, cancel: cancel)
     }
-    /// The one release while both tokens are live (LLP 1002 D4's photo pair).
-    func finish(to values: [Double], time: Double, cancel: Bool) {
+    /// The one release while both tokens are live (LLP 1002 D4's photo pair),
+    /// at `values`, or nil where the input last was.
+    func finish(to values: [Double]?, time: Double, cancel: Bool) {
         guard !ended, !finishing, pendingEnd == nil else { return }
         if session?.isApplyingPresentation == true || queued {
             pendingEnd = (values, time, cancel); schedule(); return
         }
         finishing = true
-        let updated = !cancel && move(to: values, time: time)
+        // A lift where the fingers already were, soon after, is no sample.
+        let values = values ?? sent
+        let lifted = Gesture.liftSamples(moved: values != sent, dt: time - self.time)
+        let updated = !cancel && (lifted ? move(to: values, time: time) : live && eligible)
         guard let session else { ended = true; return }
         var released = false, velocity = [0.0, 0.0, 0.0]
-        if updated, live, eligible, let packet = packet(13, values: current + [0, 0, 0]),
+        if updated, live, eligible, let packet = packet(13, values: current + [0, 0, 0], time: self.time),
            let reply = session.runtime.transformMotion(packet) {
             session.apply(reply.batch)
             released = reply.accepted && reply.committed
@@ -146,7 +159,7 @@ final class TransformDragHold {
             session.presenter.collections.releaseInteractionLater(ifCurrent: pin)
         }
     }
-    func cancel() { finish(to: current, time: time, cancel: true) }
+    func cancel() { finish(to: nil, time: time, cancel: true) }
 }
 
 extension TransformDragHold {
@@ -165,7 +178,7 @@ extension TransformDragHold {
             guard let values = origin.focused(from: focal, to: focal, factor: factor)?.values,
                   hold.move(to: values, time: start + Double(step) / 60) else { hold.cancel(); return "the pinch was cancelled" }
         }
-        hold.finish(to: hold.current, time: start + 9 / 60, cancel: false)
+        hold.finish(to: nil, time: start + 9 / 60, cancel: false)
         return nil
     }
 }

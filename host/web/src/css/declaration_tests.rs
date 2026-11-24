@@ -430,7 +430,7 @@ fn a_press_scale_keeps_the_authored_scale_and_transitions() {
     }
     assert_eq!(
         css(&[(StyleId::PressScale, n(0.97))], &[]),
-        "scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;--exact-press:0.97;"
+        "scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1)) calc(var(--exact-scale-y,1) * var(--exact-press-factor,1))!important;--exact-press:0.97;"
     );
     assert_eq!(
         css(
@@ -441,7 +441,7 @@ fn a_press_scale_keeps_the_authored_scale_and_transitions() {
             ],
             &[]
         ),
-        "--exact-scale:1.5;transition:all 0.2s ease 0s,scale 0s,--exact-scale 0.2s ease 0s;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;--exact-press:0.994;--exact-press-timing:{\"scale\":[200.0,0.0,\"ease\"]};"
+        "--exact-scale:1.5;--exact-scale-y:1.5;transition:all 0.2s ease 0s,scale 0s,--exact-scale 0.2s ease 0s,--exact-scale-y 0.2s ease 0s;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1)) calc(var(--exact-scale-y,1) * var(--exact-press-factor,1))!important;--exact-press:0.994;--exact-press-timing:{\"scale\":[200.0,0.0,\"ease\"]};"
     );
     assert_eq!(css(&[(StyleId::PressScale, n(1.0))], &[]), "");
     assert_eq!(
@@ -518,7 +518,11 @@ fn only_a_pressable_node_animates_the_scale_custom_property() {
         keyframes_css(grow, false)
     );
     assert_eq!(keyframes_name(grow, true), "grow-exact-press");
-    assert!(keyframes_css(grow, true).contains("scale:1.6;--exact-scale:1.6;"));
+    assert!(keyframes_css(grow, true).contains("scale:1.6;--exact-scale:1.6;--exact-scale-y:1.6;"));
+    assert_eq!(
+        press_keyframes_css("0%{scale:1 0.5;}100%{scale:2 0;}"),
+        "0%{scale:1 0.5;--exact-scale:1;--exact-scale-y:0.5;}100%{scale:2 0;--exact-scale:2;--exact-scale-y:0;}"
+    );
     // A pressable node's animation that leaves `scale` alone keeps its rule.
     assert_eq!(keyframes_name(fade, true), "fade");
     assert_eq!(animations_css(&list, false), list.css());

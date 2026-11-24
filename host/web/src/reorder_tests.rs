@@ -286,7 +286,7 @@ fn unrelated_pending_scale_lowered_once_on_reorder_preview() {
         .unwrap()
         .id;
     let s = h
-        .begin_hold(view, Property::Scale, Value::scalar(2.), 110.)
+        .begin_hold(view, Property::Scale, Value::new(2., 2.), 110.)
         .unwrap()
         .unwrap()
         .0;

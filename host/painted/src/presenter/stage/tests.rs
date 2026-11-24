@@ -92,7 +92,7 @@ component App
 "##;
 
 /// A Pixel's window in points: a 52 status bar and a 24 gesture bar.
-const WINDOW: Window = Window {
+pub(in crate::presenter) const WINDOW: Window = Window {
     size: (412.0, 916.0),
     bars: [52.0, 0.0, 24.0, 0.0],
     cutout: [0.0; 4],

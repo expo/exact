@@ -33,6 +33,7 @@ import com.google.android.gms.wallet.WalletConstants
 import com.google.android.gms.wallet.button.ButtonConstants
 import com.google.android.gms.wallet.button.ButtonOptions
 import com.google.android.gms.wallet.button.PayButton
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -73,10 +74,12 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
     }
     private var sheet: Sheet? = null
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "paymentRequestStatus" -> status(args, reply)
-            "showPaymentRequest" -> show(args, reply)
+            "showPaymentRequest" -> show(args, cause, reply)
             else -> reply(JSONObject().put("error", "NotSupportedError"))
         }
     }
@@ -140,8 +143,8 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
         return JSONObject().put("shippingOptions", options).put("defaultSelectedOptionId", selected ?: options.getJSONObject(0).getString("id"))
     }
 
-    private fun show(args: JSONObject, reply: (JSONObject) -> Unit) {
-        if (context.origin != "app") return reply(JSONObject().put("error", "NotAllowedError").put("message", "person-required"))
+    private fun show(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
+        if (!cause.app) return reply(JSONObject().put("error", "NotAllowedError").put("message", "person-required"))
         if (sheet != null) return reply(JSONObject().put("error", "AbortError").put("message", "a payment sheet is up"))
         val data = googleData(args) ?: return reply(JSONObject().put("error", "NotSupportedError"))
         val details = args.optJSONObject("details") ?: JSONObject()
@@ -168,7 +171,7 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
         request.put("callbackIntents", intents)
         val ours = PaymentDataRequest.fromJson(request.toString())
         val made = paymentDataRequest?.invoke(ours) ?: ours
-        val s = Sheet(context.request ?: 0, details.optString("id").ifEmpty { java.util.UUID.randomUUID().toString() }, args, reply)
+        val s = Sheet(cause.request ?: 0, details.optString("id").ifEmpty { java.util.UUID.randomUUID().toString() }, args, reply)
         sheet = s
         current = this
         context.log("payments: ${s.id}: shown, $GOOGLE")

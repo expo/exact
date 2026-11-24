@@ -144,6 +144,39 @@ function contentClip(sf) {
   };
 }
 
+// A box that clips its children clips them to the shown box: it stops clipping
+// while its size moves, keeping the layout clipping gave it. A box that
+// `hidden` makes a scroll container keeps that container's automatic minimum
+// size of 0 as a flex or grid item (CSS Flexbox §4.5, CSS Grid §6.6) and, as
+// a block, its own formatting context, held by `display: flow-root`, which
+// Firefox does not animate (there it keeps clipping at its laid-out box). A
+// box keeps clipping too where clipping places more than that: a scroller or
+// a box scrolled, which would lose its offset and its scrollbar's room; an
+// inline-level box, whose baseline is its bottom edge only while it clips
+// (CSS 2 §10.8.1); and one holding a sticky box, which sticks to the nearest
+// scroll container (`sticky`, read when the move starts). What it holds is
+// read from its own style with the hold off, again after each batch, so a
+// restyle mid-move is its own.
+function unclip(hold, el, sticky) {
+  hold.effect.setKeyframes([]);
+  const cs = getComputedStyle(el), axes = [cs.overflowX, cs.overflowY];
+  if (sticky || cs.display.startsWith('inline') || axes.some(v => v === 'auto' || v === 'scroll') || el.scrollTop || el.scrollLeft) return;
+  const held = { overflow: 'visible' };
+  if (axes.includes('hidden')) {
+    if (cs.minWidth === 'auto') held.minWidth = '0px';
+    if (cs.minHeight === 'auto') held.minHeight = '0px';
+    if (cs.display === 'block') {
+      // Alone, `flow-root` leaves a clipping block's layout as it is.
+      held.display = 'flow-root';
+      hold.effect.setKeyframes([{ display: 'flow-root' }, { display: 'flow-root' }]);
+      const animates = getComputedStyle(el).display === 'flow-root';
+      hold.effect.setKeyframes([]);
+      if (!animates) return;
+    }
+  }
+  hold.effect.setKeyframes([held, held]);
+}
+
 // The linear part (rotation, scale, skew) of a matrix.
 const linear = m => new DOMMatrix([m.a, m.b, m.c, m.d, 0, 0]);
 
@@ -371,8 +404,12 @@ function createPresence(root) {
         sf.shape = el.animate([{ clipPath: content }, { clipPath: content }], timing);
         parts.push(sf.shape);
       }
-      // A box that clips its children clips them to the shown box.
-      if (sf.clips) parts.push(el.animate([{ overflow: 'visible' }, { overflow: 'visible' }], timing));
+      if (sf.clips) {
+        sf.sticky = [...el.querySelectorAll('*')].some(d => getComputedStyle(d).position === 'sticky');
+        sf.unclip = el.animate([], timing);
+        unclip(sf.unclip, el, sf.sticky);
+        parts.push(sf.unclip);
+      }
       surfaces.add(el);
     }
     const f = { animation, parts, surface: sf, d, v, config };
@@ -502,6 +539,13 @@ function createPresence(root) {
         if (!el) continue;
         if (el.style.getPropertyValue(LAYOUT)) tracked.add(el);
         else { tracked.delete(el); stop(el); }
+      }
+      // A move whose box is gone (a restyle to `display: none`) ends with it.
+      for (const el of [...surfaces]) {
+        const sf = flips.get(el)?.surface;
+        sf?.unclip?.effect.setKeyframes([]);
+        if (!size(getComputedStyle(el))) stop(el);
+        else if (sf?.unclip) unclip(sf.unclip, el, sf.sticky);
       }
       const place = measure(), moves = [];
       for (const [el, [was, [d, v]]] of first) {

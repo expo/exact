@@ -694,8 +694,8 @@ pub struct Picture {
     pub opacity: f64,
     /// Points, x then y.
     pub translate: (f64, f64),
-    /// Uniform; one is the natural size.
-    pub scale: f64,
+    /// Factors, x then y.
+    pub scale: (f64, f64),
     /// Degrees clockwise.
     pub rotate: f64,
 }
@@ -719,7 +719,7 @@ impl Animations {
                 translate.x + translate.z / 100.0 * size.0,
                 translate.y + translate.w / 100.0 * size.1,
             ),
-            scale: value(Property::Scale).x,
+            scale: (value(Property::Scale).x, value(Property::Scale).y),
             rotate: value(Property::Rotate).x,
         }
     }

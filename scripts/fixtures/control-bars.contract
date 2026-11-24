@@ -4,8 +4,19 @@
 // the cards (no bar); `painted`: a switcher row the author painted (no bar);
 // `large`: a large title over the switcher (no band); `filled`: a transcript
 // in a box over a composer its author filled (no bar; the top still under the
-// bar, bake-off r28's chat). The buttons that pick
-// a shape are placed absolutely, out of flow, so they are nobody's bar.
+// bar, bake-off r28's chat); `nested`: a column holding a row of buttons and
+// the list, between two rows of buttons (bars lifted over the column, and the
+// inner row over the list); `preview`: a row of buttons over a pressable
+// column holding a list, over another list (a control holding a scroller is
+// no bar), and its variants: `preview-scrolls`, the pressable column
+// scrolling itself; `preview-wrapped`, the column in a box with a button and a
+// spacer drawn as a layer; `preview-hidden`, the column holding a label and a
+// hidden list (a bar); `sheet-opener`: a row of a button, a spacer drawn as a
+// layer and a dialog holding a list, over a list (the row stays a bar while
+// the dialog is up in its sheet); `tabs-scroll`: a switcher written
+// `overflow-x="auto"`, and `truncating`: a button whose label truncates (bars:
+// neither scroll view scrolls anything). The buttons that pick a shape are
+// placed absolutely, out of flow, so they are nobody's bar.
 // `thread` is pushed: the chat recipe's virtualized transcript over a composer,
 // shown when its messages arrive while the push runs, as a fetched thread's are.
 routes nav
@@ -61,6 +72,16 @@ component ControlBars
                   text "All"
                 button role="tab" aria-selected=(filter == "mine") press=show("mine") testId="filter-mine" flex=1
                   text "Mine"
+            if shape == "tabs-scroll"
+              row role="tablist" aria-label="Filter" testId="filter" margin="8px 16px" overflow-x="auto"
+                button role="tab" aria-selected=(filter == "all") press=show("all") flex=1
+                  text "All"
+                button role="tab" aria-selected=(filter == "mine") press=show("mine") flex=1
+                  text "Mine"
+            if shape == "truncating"
+              row testId="filter" margin="8px 16px"
+                button press=show("all") flex=1 min-width=0
+                  text "All" testId="filter-label" white-space="nowrap" overflow-x="hidden" text-overflow="ellipsis"
             if shape == "painted"
               row testId="filter" margin="8px 16px" background-color="-exact-secondary-grouped-background"
                 button press=show("all") testId="filter-all" flex=1
@@ -72,6 +93,64 @@ component ControlBars
                     text `Message ${i}` padding=16
               row testId="filled-composer" padding="6px 12px" background-color="-exact-background"
                 textarea value=draft input=edit rows=1 placeholder="Message" aria-label="Message" flex=1 min-width=0
+            else if shape == "nested"
+              row testId="nested-bar" gap=8 margin="8px 16px"
+                button press=show("all") testId="nested-all"
+                  text "All"
+                button press=show("mine") testId="nested-mine"
+                  text "Mine"
+              column testId="nested-wrap" flex=1 min-height=0
+                row testId="nested-inner" gap=8 margin="8px 16px"
+                  button press=show("mine") testId="nested-inner-mine"
+                    text "Mine"
+                scroll testId="nested-list" flex=1 min-height=0
+                  for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30] key=i
+                    text `Card ${i}` padding=16
+              row testId="nested-foot" gap=8 margin="8px 16px"
+                button press=show("all") testId="nested-foot-all"
+                  text "All"
+            else if shape == "preview" or shape == "preview-scrolls" or shape == "preview-wrapped" or shape == "preview-hidden"
+              row testId="preview-bar" gap=8 margin="8px 16px" position="relative"
+                button press=show("all") testId="preview-all"
+                  text "All"
+              if shape == "preview"
+                column role="button" press=show("mine") aria-label="Preview" testId="preview" flex=1 min-height=0 position="relative"
+                  scroll testId="preview-list" flex=1 min-height=0 position="relative" z-index=1
+                    for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] key=i
+                      text `Preview ${i}` padding=16
+              else if shape == "preview-scrolls"
+                column role="button" press=show("mine") aria-label="Preview" testId="preview" flex=1 min-height=0 position="relative" overflow-y="scroll"
+                  for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] key=i
+                    text `Preview ${i}` padding=16
+              else if shape == "preview-wrapped"
+                column testId="preview-wrap" flex=1 min-height=0 position="relative"
+                  column role="button" press=show("mine") aria-label="Preview" testId="preview" flex=1 min-height=0 position="relative"
+                    scroll testId="preview-list" flex=1 min-height=0 position="relative" z-index=1
+                      for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] key=i
+                        text `Preview ${i}` padding=16
+                  button press=show("more") testId="preview-expand"
+                    text "Expand"
+                  column height=4 box-shadow="0 1px 2px rgba(0, 0, 0, 0.2)"
+              else
+                column role="button" press=show("mine") aria-label="Preview" testId="preview" position="relative"
+                  text "Preview"
+                  scroll testId="preview-list" height=100 display="none"
+                    text "Hidden"
+              scroll testId="lower-list" flex=1 min-height=0
+                for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] key=i
+                  text `Card ${i}` padding=16
+            else if shape == "sheet-opener"
+              row testId="opener-bar" gap=8 margin="8px 16px" position="relative"
+                button commandfor="opener-sheet" command="show-modal" testId="opener-open"
+                  text "Open"
+                column width=8 height=8 box-shadow="0 1px 2px rgba(0, 0, 0, 0.2)"
+                dialog id="opener-sheet" closedby="any" testId="opener-sheet"
+                  scroll testId="sheet-list" height=200
+                    for i in [1, 2, 3, 4, 5, 6, 7, 8] key=i
+                      text `Row ${i}` padding=16
+              scroll testId="lower-list" flex=1 min-height=0
+                for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] key=i
+                  text `Card ${i}` padding=16
             else
               scroll testId="list" flex=1 min-height=0
                 text "list top" testId="list-top" padding=16
@@ -87,6 +166,8 @@ component ControlBars
                 text "board"
               button press=pick("chat") testId="pick-chat"
                 text "chat"
+              button press=pick("sheet-opener") testId="pick-sheet-opener"
+                text "sheet"
               button press=pick("caption") testId="pick-caption"
                 text "caption"
               button press=pick("painted") testId="pick-painted"
@@ -95,5 +176,19 @@ component ControlBars
                 text "large"
               button press=pick("filled") testId="pick-filled"
                 text "filled"
+              button press=pick("nested") testId="pick-nested"
+                text "nested"
+              button press=pick("preview") testId="pick-preview"
+                text "preview"
+              button press=pick("preview-scrolls") testId="pick-preview-scrolls"
+                text "scrolls"
+              button press=pick("preview-wrapped") testId="pick-preview-wrapped"
+                text "wrapped"
+              button press=pick("preview-hidden") testId="pick-preview-hidden"
+                text "hidden"
+              button press=pick("tabs-scroll") testId="pick-tabs-scroll"
+                text "tabs"
+              button press=pick("truncating") testId="pick-truncating"
+                text "truncating"
               button press=open testId="pick-thread"
                 text "thread"

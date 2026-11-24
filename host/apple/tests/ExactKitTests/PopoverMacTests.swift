@@ -727,7 +727,7 @@ final class PopoverMacTests: XCTestCase {
 
     /// A double click and a free move in an open popover reach its authored
     /// ancestors' `dblclick` and `pointermove`, as on the web, and never a
-    /// page node only under it (#281).
+    /// page node only under it.
     func testADoubleClickAndAFreeMoveInAPopoverReachItsAuthoredAncestors() throws {
         let p = fixture(), root = try XCTUnwrap(p.views[1]), pop = try XCTUnwrap(p.views[3]), under = try XCTUnwrap(p.views[6])
         p.press(2)

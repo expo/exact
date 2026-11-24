@@ -3,11 +3,12 @@ import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 // message answers when its mapper's promise settles, a later message's mapper call never overtakes an earlier one's,
 // a rejection answers as a throw does, and the stream's end waits behind a call still pending.
 import { afterAll, beforeAll, test, expect } from 'bun:test';
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { localImports } from './glue.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 let dir, open;
@@ -16,7 +17,7 @@ beforeAll(async () => {
   // of the URL's query is one message, delivered at once, and the body then ends with a 200. With `together`, the
   // messages arrived together: each but the last says `more` (http-body.js).
   dir = mkdtempSync(resolve(tmpdir(), 'exact-ts-async-mapper-'));
-  for (const name of ['ts-stream.js', 'ts-fetch.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) cpSync(resolve(root, 'host/web-js', name), resolve(dir, name));
+  for (const name of ['ts-stream.js', 'ts-fetch.js', 'ts-body-from.js', 'shape.js', 'uploads.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
   for (const name of ['grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js', 'storage-environment.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(root, 'host/web', name)));
   writeFileSync(resolve(dir, 'http-body.js'), `export async function streamed(req, grantSet, message) {
   const q = new URL(req.url).searchParams, all = [...q.getAll('e'), ...Array(Number(q.get('n') ?? 0)).fill('x')];

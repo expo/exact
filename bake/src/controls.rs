@@ -11,9 +11,14 @@
 //! device has qualified (`control-process`), and a recording control the
 //! locked-iPhone qualification (`control-recording-unqualified`). A
 //! development build with `EXACT_QUALIFY_CONTROLS=1` offers both for that
-//! qualification, each marked `qualifying` (LLP 1126.004 §6d). The Mac,
-//! the watch and Android have no control generator yet, and tvOS,
-//! visionOS, Linux and Windows have no controls (`control-host`).
+//! qualification, each marked `qualifying` (LLP 1126.004 §6d).
+//!
+//! Android offers each control as a Quick Settings tile (D5): a URL opens
+//! the app there, a tool runs where it is pressed, and a tool whose reach
+//! starts or restarts a capture opens the app and is pressed from it in
+//! front (`foreground`), since a tile grants no microphone. The Mac and the
+//! watch have no control generator yet, and tvOS, visionOS, Linux and
+//! Windows have no controls (`control-host`).
 
 use crate::compat::{compatibility_digest, Compat};
 use contract::{ControlAction, Manifest};
@@ -24,6 +29,9 @@ const FIRST_IOS: &str = "18.0";
 /// iOS's first release whose intents declare `supportedModes`, where D3
 /// qualifies a plain intent's placement.
 const PLAIN_IOS: &str = "26.0";
+/// The first Android release Exact runs on, whose `TileService` has every
+/// call a tile makes.
+const FIRST_ANDROID: &str = "10";
 
 /// Derive each control's placement on `platform` and `target` into the
 /// compatibility inputs. A recording control on iOS without a Live
@@ -75,6 +83,8 @@ pub(crate) fn place(
         && !["tvos", "watchos", "xros", "visionos"]
             .iter()
             .any(|t| target.contains(t));
+    // An Android library bakes as the Linux host it runs under the reader.
+    let android = target.contains("android");
     let packages = |kind: &str| extensions.is_none_or(|kinds| kinds.split(',').any(|k| k == kind));
     let packaged = packages("controls");
     let declared: Vec<String> = manifest
@@ -127,6 +137,7 @@ pub(crate) fn place(
             conformances.push("AudioRecordingIntent");
         }
         let placement = match () {
+            _ if android => tile(control, &effects, unsupported),
             _ if !iphone => omitted("control-host", "this host offers no controls in this build"),
             _ if !packaged => omitted("control-metadata", "this build packages no control extension: the portable Apple builder cannot extract a control's App Intents metadata, or `--extensions` left `controls` out"),
             _ => match &control.action {
@@ -144,6 +155,12 @@ pub(crate) fn place(
                 ControlAction::Tool(_) => omitted("control-process", "its tool starts no Live Activity, and running such an intent in the app's process is not yet qualified on a device"),
             },
         };
+        if android
+            && placement["offered"][0]["intent"] == "foreground"
+            && !grants(&ceiling, "device.microphone")
+        {
+            return Err(format!("grant-needs: control `{}` captures from the microphone in the app it opens, which needs a `device.microphone <purposeKey>` grant line (LLP 1126.004 D3)", control.kind));
+        }
         out.push(json!({
             "control": control.json(),
             "digest": plan.str(planned.digest),
@@ -162,6 +179,36 @@ pub(crate) fn place(
     compat.inputs["controls"] = json!(out);
     compat.id = compatibility_digest(&compat.inputs);
     Ok(())
+}
+
+/// A control's Quick Settings tile on Android (D5).
+fn tile(control: &contract::Control, effects: &Value, unsupported: bool) -> Value {
+    let offered =
+        |intent: &str| json!({ "offered": [{ "from": FIRST_ANDROID, "intent": intent }] });
+    // A press starts the same two captures on every host (D4): a camera, a
+    // screen or speech recognition known to be in reach is omitted, and one
+    // that is only possible is refused at its call.
+    let captures = ["audio", "speech", "camera", "display"]
+        .iter()
+        .any(|k| effects[k].as_str().is_some_and(|a| a != "none"))
+        || effects["recorder"] == true
+        || effects["restart"] == true;
+    match &control.action {
+        ControlAction::Url(_) => offered("open"),
+        ControlAction::Tool(_) if unsupported => omitted(
+            "control-capture",
+            "its tool starts a camera, screen or speech capture, which a control may not",
+        ),
+        ControlAction::Tool(_) if captures => offered("foreground"),
+        ControlAction::Tool(_) => offered("tool"),
+    }
+}
+
+/// Whether the grant ceiling has a line for `name`.
+fn grants(ceiling: &str, name: &str) -> bool {
+    ceiling
+        .lines()
+        .any(|l| l.split_whitespace().next() == Some(name))
 }
 
 fn omitted(reason: &str, why: &str) -> Value {
@@ -192,10 +239,7 @@ fn prerequisites(
     if !starts {
         return Err(format!("control-recording-activity: control `{kind}` records, and its tool starts no Live Activity that app.json's `live_activities` declares; iOS stops a recording whose intent starts none, so start one before the recording (LLP 1126.004 D3)"));
     }
-    let background = ceiling
-        .lines()
-        .any(|l| l.split_whitespace().next() == Some("device.microphone-background"));
-    if !background {
+    if !grants(ceiling, "device.microphone-background") {
         return Err(format!("grant-needs: control `{kind}` records while the app is not in front, which needs a `device.microphone-background <purposeKey>` grant line beside `device.microphone` (LLP 1126.004 D3, LLP 1133.033 D3)"));
     }
     Ok(())

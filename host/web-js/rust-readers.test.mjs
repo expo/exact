@@ -46,6 +46,7 @@ test('a store reader shows its declared placeholder until its Rust source is rea
             ['kept', 'rust', [], 'kept answer'], ['invalid', 'rust', [], 42],
           ], readers: [0, 1], open: [0] });
           document.head.append(checkpoint);
+          await import('/host/web-js/page-checkpoint.js'); // a rendered page's entry links its reader (build.mjs)
           const values = {}, read = () => Object.fromEntries(Object.entries(values).map(([k, v]) => [k, {
             value: v(), pending: v.p(), reader: v.r.store,
           }]));

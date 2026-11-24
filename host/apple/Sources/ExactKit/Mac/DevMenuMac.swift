@@ -243,7 +243,7 @@ public enum DevMenu {
             item.submenu = submenu
             item.identifier = removable[id]
         }
-        // Speech, as Apple's HIG and every AppKit text app have it (#141):
+        // Speech, as Apple's HIG and every AppKit text app have it:
         // the responder chain's own actions, a field's `NSTextView` reading
         // its selection or its text, the session's view the selected text.
         let speech = NSMenu(title: "Speech")

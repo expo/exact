@@ -2737,7 +2737,9 @@ flick moves one card; short of the first `always` position past where it was
 released; and for proximity only within a third of the snapport. iOS applies it
 to UIKit's projected rest when a drag ends; macOS eases there when a trackpad
 lifts (from where its momentum would carry the scroll) or once a mouse wheel
-stops; Android aims its fling there; a Linux or Windows wheel moves one position
+stops, on a scroller that has its `scroll-snap-type` when it first shows (one
+that gains it later, or a reused list row that lacked it, glides as AppKit
+flings it); Android aims its fling there; a Linux or Windows wheel moves one position
 a notch, finer ticks adding up to a notch first. On iOS, areas whose snap
 positions (alignment and `scroll-margin` applied) are each multiple of the
 scrollport, every one `scroll-snap-stop="always"` with nothing insetting the
@@ -5352,9 +5354,10 @@ and forward buttons go Back and Forward at their release, as a browser's do,
 unless a `pointerup` handler calls `preventDefault()`. `wheel` hands a `WheelEvent` (deltas,
 modifiers; a trackpad pinch is a Control-held wheel) and `preventDefault()` keeps
 the scroll from happening; `drop` hands a `DragEvent` whose `files` are `doc:`
-handles of any type, a folder's included, and takes a file drag over a field
-inside its node; `dragenter` and `dragleave` bracket the drag for a drop
-overlay; a `paste`'s `ClipboardEvent` carries `files` too. See
+handles of any type, a folder's included, with the drag's `text` and `url`,
+and takes a file drag over a field inside its node; an app can show a drop
+overlay at `dragenter`, which the `drop` action clears when the drop lands
+and `dragleave` clears otherwise; a `paste`'s `ClipboardEvent` carries `files` too. See
 [Pointer](contract-grammar.md#pointer) and [Clipboard](contract-grammar.md#clipboard).
 
 Use `keycapture=shortcut` on a container when its shortcut must run before
@@ -5671,11 +5674,20 @@ other style kept: its in-flow content, plus its padding and border, within its
 `min-height` and `max-height`, and the height opposing `top` and `bottom` insets
 give an absolutely positioned box. So a navigation root whose children are all
 absolutely positioned, with no padding, border or `min-height` of its own,
-measures 0 however tall it is laid out. Read a laid-out
+measures 0 however tall it is laid out. Motion in flight does not count on
+any host: `measure` reads a `height` transition at its end and a
+`-exact-layout-transition` at the laid-out box, and the motion plays on, so a box
+mounted under a parent that is still growing reads its settled size in its first
+`resize`. Read a laid-out
 size, the screen's included, with `frame`, and size a sheet as a share of the
 screen with `navigationDetent="45%"`. Before the first layout both answer
 `unavailable` with zeros, as on the web until the page's geometry code loads after
 first paint; natively a mount task's `after(1, …)` runs after that layout.
+`measure` is also `unavailable` for a box with no single size (an inline run, or
+one under `display: none`); on the web while a `keyframes` animation of a font's
+weight, stretch or variation settings plays in the box or above it, with no
+event when it ends; and, natively, while the tree has a change not yet laid
+out or a Mac entry has content regions registered.
 Neither is a computed style binding to run every render.
 `elementFromPoint(x, y)` names the front-most of the same boxes at a viewport
 point by its nearest `id` (`option<string>`), through the same transforms. For a
@@ -6141,10 +6153,10 @@ tick/feed/encode durations, and on every host: `quality`, the resolved rung
 (`low`, `mid`, `high`) once a binding resolved it; `maxFps`, the frame cap in
 force, `none` when the canvas draws at the display's rate; and `idle`, true
 while the canvas asks for no frames until something changes (a world at rest
-or paused; `none` under the agent's virtual clock). `thermalState` is
-`nominal`, `fair`, `serious` or `critical` as of the canvas's last drawn frame
-where the host reads the device's (Apple); `none` elsewhere and for a window
-in which no frame was drawn. Memory, in bytes:
+or paused; `none` under the agent's virtual clock). On Apple and Android,
+`thermalState` is the last drawn live frame's `nominal`, `fair`, `serious` or
+`critical` (Android moderate is `serious`). It is `none` without a reading in
+the snapshot window, and always `none` on the web, Linux and Windows. Memory, in bytes:
 `processMemoryBytes` is the process's footprint (`phys_footprint` on Apple, the
 resident set on Linux and Android), `none` on the web and Windows;
 `gameHeapBytes` is the GPU module's linear memory on the web, the simulation's
@@ -7269,7 +7281,7 @@ that restates a constant is weaker evidence than the user's actual sequence.
 | Refused or misleading form | Accepted direction |
 | --- | --- |
 | `action save writes item` | Delete the clause; effects come from the body |
-| `transform` on a box, inline or through `class`, beyond `translate`, `rotate` and `scale` in that order (`lower-attr-tag`) | A box `transform` that is those functions, each at most once, in CSS's individual-property order (translate, then rotate, then scale) lowers to the rows it equals: `transform="translate(0px, 25px) scale(0.8)"` is `translate="0px 25px" scale=0.8`; `none` is no row. The rest (`matrix`, skews, `scale(x, y)` with two factors, 3D functions, a function repeated or out of order, a bound string) is deferred (LLP 1055.000 D5): write the rows. A `transform` beside a `translate`, `rotate` or `scale` row on the same element is refused; keep one. SVG elements keep the whole property. |
+| `transform` on a box, inline or through `class`, beyond `translate`, `rotate` and `scale` in that order (`lower-attr-tag`) | A box `transform` that is those functions, each at most once, in CSS's individual-property order (translate, then rotate, then scale) lowers to the rows it equals: `transform="translate(0px, 25px) scale(0.8)"` is `translate="0px 25px" scale=0.8`; `scale(x, y)` sets x and y separately, `scaleX(x)` sets `scale="x 1"`, and `scaleY(y)` sets `scale="1 y"`; `none` is no row. The rest (`matrix`, skews, 3D scale, 3D functions, a function repeated or out of order, a bound string) is deferred (LLP 1055.000 D5): write the rows. A `transform` beside a `translate`, `rotate` or `scale` row on the same element is refused; keep one. SVG elements keep the whole property. |
 | Component `contract` assertions | Authored `test` blocks exercised by the driver |
 | `provide theme = value` around view children | Component `provide` section, wrapper component if needed |
 | `items[0]` | `first(items)` or `items.at(0)`, an option to `match` |
@@ -7686,15 +7698,19 @@ under `:disabled`, and `:disabled` is your own disabled look (no default dim).
 `:active` is the host's own press of the innermost node with a `press` or a link's
 `href` (`link href=`, `button href=`, as CSS's `a:active`): it takes
 `background-color`, `color`, `opacity`, `translate` and `-exact-press-scale`, which become the
-node's pressed paint (LLP 1061 D7). On the web each pressed property follows
-the node's `transition`. With `transition="none"`, or when the transition
-doesn't cover a property, the change lands at once. With no authored transition,
-custom nodes ease over 120 ms, including under Reduce Motion. Other hosts
-continue to use their press timing until they adopt per-property timing.
-Authored pressed paint replaces the host's unsaid press on custom nodes. Native controls keep
-their native state beneath each authored override. Its `opacity` is the opacity
-it shows pressed, not a share. Its `translate` is an offset added to the node’s
-own translation: `translate="4px 4px"` moves a button onto an offset shadow
+node's pressed paint (LLP 1061 D7). Its `opacity` is the opacity it shows
+pressed, not a share. On a custom node they replace the host's default press
+and move under Reduce Motion too. On the web, Linux, Windows and Android each
+property takes its timing from the node's `transition`: a property it does not
+cover lands at once, so `transition="none"` lands all five at once. Without a
+`transition`, each moves as the platform times a property change: GTK's button
+timing on Linux, WinUI's on Windows, Compose's default spring on Android, and
+120 ms on the web, which has no platform press timing. On Apple they ease on
+the press curve. Native buttons keep their own feedback and its timing beneath
+each authored override. On Linux, Windows and Android their authored colours
+land at once, as do their authored opacity, scale and translate unless their
+`transition` covers them. The `translate` of `:active`
+is an offset added to the node’s own translation: `translate="4px 4px"` moves a button onto an offset shadow
 plate. It takes x and optional y, in pixel lengths or percentages of the
 current border box by default. A third value is refused: a press is
 a 2D offset; use transitions for 3D motion. Layout stays unchanged. On the web the hit area moves with the paint, as CSS

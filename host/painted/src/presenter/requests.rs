@@ -140,6 +140,9 @@ pub struct Pick {
     /// Its `accent-color`, where it or an ancestor sets one: the picker's
     /// colours are made from it, as the author's word over the device's.
     pub accent: Option<[u8; 4]>,
+    /// The control's scheme, where it or an ancestor sets one or the app
+    /// chose one by `setScheme` (LLP 1034 §8); `None` follows the device's.
+    pub dark: Option<bool>,
 }
 
 impl Request {
@@ -407,6 +410,8 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
                 pick.accent
                     .map_or(0, |[r, g, b, _]| i32::from_be_bytes([0xff, r, g, b])),
             );
+            // 0 for the device's scheme, 1 light, 2 dark.
+            out.push(pick.dark.map_or(0, |dark| 1 + i32::from(dark)));
         }
     }
     out[at + 2] = (out.len() - at - 3) as i32;
@@ -1175,7 +1180,8 @@ impl<D: DataSource> Presenter<D> {
             min: text(PropId::Min),
             max: text(PropId::Max),
             step: text(PropId::Step),
-            accent: crate::paint::control::accent(&node, self.brush.dark),
+            accent: crate::paint::control::accent(&node, self.dark_at(id)),
+            dark: self.scheme_of(id).or(self.scheme.0),
         };
         // Under the agent the picker is held for it, on every host (LLP
         // 1069.007 D4): `type @date 2026-10-23`, `tap @date clear` or

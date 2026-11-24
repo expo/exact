@@ -21,7 +21,7 @@ private final class StubNotificationResponse: UNNotificationResponse {
     override var actionIdentifier: String { Self.actionValue }
 }
 
-/// A launch URL an app cannot hear is journaled, as a running one is (#104).
+/// A launch URL an app cannot hear is journaled, as a running one is.
 final class LaunchURLMacTests: XCTestCase {
     private let handlers = [["protocol": "exacttest", "url": "/open?u=%s"]]
 

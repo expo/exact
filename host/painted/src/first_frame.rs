@@ -42,10 +42,14 @@ impl<D: DataSource> Host<D> {
     /// The next sampled visual change, in the host's milliseconds. A change
     /// due now needs display callbacks; a later change needs only a timer.
     pub fn motion_due_ms(&self) -> Option<f64> {
-        if self.press_settle().is_some() {
+        if self.press_releases_next_frame() {
             Some(self.now_ms)
         } else {
             self.motion_next_ms()
+                .into_iter()
+                .chain(self.press_due())
+                .chain(self.press_deadline())
+                .reduce(f64::min)
         }
     }
 

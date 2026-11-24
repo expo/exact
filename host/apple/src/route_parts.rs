@@ -9,7 +9,7 @@ const RATE: f64 = 60.0;
 impl<D: DataSource> Host<D> {
     /// The `::view-transition-new` (`exit` false) or `::view-transition-old`
     /// part route `view` declares, posed for a box `size` points large: JSON
-    /// `{"seconds": s, "poses": [[opacity, x, y, scale, degrees], …]}` at
+    /// `{"seconds": s, "poses": [[opacity, x, y, scaleX, scaleY, degrees], …]}` at
     /// even steps from its start to its end, the translation in points and
     /// each pose about the box's centre, with no pose for `none`. `null` where the route declares no part or may play
     /// none (D2: a sheet, or a route that zooms from its `navigationSource`):
@@ -41,7 +41,10 @@ impl<D: DataSource> Host<D> {
                 let p = animations.picture(seconds * i as f64 / steps as f64, size);
                 let comma = if i == 0 { "" } else { "," };
                 let (x, y) = p.translate;
-                let pose = format!("[{},{x},{y},{},{}]", p.opacity, p.scale, p.rotate);
+                let pose = format!(
+                    "[{},{x},{y},{},{},{}]",
+                    p.opacity, p.scale.0, p.scale.1, p.rotate
+                );
                 out.push_str(comma);
                 out.push_str(&pose);
             }

@@ -104,16 +104,17 @@ private object MaterialPickers : Pickers {
                 answer(chosen)
             }
         }
-        view.setContent { Theme(activity, picker.accent) { Picker(picker, first, close) } }
+        view.setContent { Theme(activity, picker.accent, picker.dark) { Picker(picker, first, close) } }
         activity.addContentView(view, FrameLayout.LayoutParams(1, 1))
         return { close(null) }
     }
 }
 
 @Composable
-private fun Theme(activity: Activity, accent: Int?, content: @Composable () -> Unit) {
+private fun Theme(activity: Activity, accent: Int?, scheme: Boolean?, content: @Composable () -> Unit) {
     // The activity keeps running across night mode (`configChanges`); the composition local is what recomposes then.
-    val dark = LocalConfiguration.current.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    val device = LocalConfiguration.current.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    val dark = scheme ?: device
     MaterialTheme(colorScheme = pickerColorScheme(activity, dark, accent), content = content)
 }
 

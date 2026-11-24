@@ -38,12 +38,11 @@ impl<D: DataSource> Presenter<D> {
         handle: NodeKey,
         target: NodeKey,
         now_ms: f64,
+        at_ms: f64,
     ) -> Result<Option<Hold>, String> {
         let Some(primary) = self.host.height_drag_begin(handle, target, now_ms)? else {
             return Ok(None);
         };
-        let mut velocity = VelocityTracker::new();
-        velocity.push(now_ms / 1000., primary.value);
         let view = self
             .host
             .kernel()
@@ -52,17 +51,22 @@ impl<D: DataSource> Presenter<D> {
             .id;
         self.set_collection_interaction(Some(view));
         self.dirty = true;
-        Ok(Some(Hold {
+        let mut held = Hold {
             primary,
-            velocity,
+            velocity: VelocityTracker::new(),
             kind: HeldKind::Height { handle, target },
-        }))
+            sampled: None,
+            lifting: false,
+        };
+        held.sample(at_ms, Value::ZERO, primary.value);
+        Ok(Some(held))
     }
     pub(super) fn move_height_drag(
         &mut self,
         held: &mut Hold,
         delta: f64,
         now_ms: f64,
+        at_ms: f64,
     ) -> Result<bool, String> {
         let HeldKind::Height { target, .. } = held.kind else {
             unreachable!()
@@ -75,15 +79,18 @@ impl<D: DataSource> Presenter<D> {
             return Ok(false);
         };
         // Record the actual constrained presentation, not finger displacement.
-        held.velocity
-            .push(now_ms / 1000., Value::scalar(node.frame.height as f64));
+        held.sample(
+            at_ms,
+            Value::scalar(delta),
+            Value::scalar(node.frame.height as f64),
+        );
         Ok(true)
     }
     pub(super) fn finish_height_drag(&mut self, held: &Hold, now_ms: f64) -> Result<bool, String> {
         let HeldKind::Height { handle, target } = held.kind else {
             unreachable!()
         };
-        let velocity = held.velocity.estimate(now_ms / 1000.);
+        let velocity = held.release_velocity();
         let height = self
             .host
             .kernel()

@@ -29,6 +29,8 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
     private var stopped = false
     private var engine = false
     private var field = false
+    /** Whether the hosted view under the finger could scroll the way the finger went past the slop; null before. */
+    private var scrollsAlong: Boolean? = null
     val fieldKeeps get() = field && view.fields?.keeps == true
     private val slop = ViewConfiguration.get(view.context).scaledTouchSlop
     /** When the contact that is down becomes a long press (uptime ms; 0: none armed). */
@@ -169,7 +171,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
         if (down) {
             module.clear(); dropCandidate(); hold(null); releaseInterception()
             downX = e.x; downY = e.y; downTime = e.downTime; tool = e.getToolType(0)
-            engine = false; field = false
+            engine = false; field = false; scrollsAlong = null
             view.fingers.began(e)
             val caughtFling = scrolling.touch(e)
             field = !caughtFling && view.fields?.touch(e) == true
@@ -223,13 +225,13 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
         if (module.active && engine) {
             val dx = abs(e.x - downX); val dy = abs(e.y - downY)
             if (e.actionMasked == MotionEvent.ACTION_MOVE && (dx > slop || dy > slop)) {
-                if (claimed(dx, dy, view.natives?.keeps == true, e.y - downY)) {
+                if (claimed(dx, dy, kept(e), e.y - downY)) {
                     module.clear(); releaseInterception()
                 } else endEngine()
             } else if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) endEngine()
         }
         if (module.active && e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) scrolling.yieldToHosted()
-        if (scrolling.touch(e, module.active && view.natives?.keeps == true)) { hold(null); return true }
+        if (scrolling.touch(e, module.active && kept(e))) { hold(null); return true }
         if (field && view.fields?.touch(e) == true) { hold(null); return true }
         if (module.owned) {
             if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) endEngine()
@@ -244,6 +246,17 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
         if (engine) view.fingers.forward(e, action)
         if (action == 1 || action == 3) engine = false
         return true
+    }
+
+    /** Whether the hosted view that has the contact keeps its drag from a scroller around it: it asked its parent not to
+     * intercept, or it can scroll the way the finger went past the slop, as a `ViewPager` leaves a child the drag that
+     * child can scroll (`canScroll`). The second is judged once, at the slop, so a frame scrolled to its edge during
+     * the drag keeps it, as a browser latches a scroll to one scroller. */
+    private fun kept(e: MotionEvent): Boolean {
+        if (view.natives?.keeps == true) return true
+        val dx = e.x - downX; val dy = e.y - downY
+        if (scrollsAlong == null && (abs(dx) > slop || abs(dy) > slop)) scrollsAlong = module.scrolls(dx, dy)
+        return scrollsAlong == true
     }
 
     /** Whether a drag past the slop, longer along [dx] or [dy], is Exact's and not the hosted view's. A gesture's claim

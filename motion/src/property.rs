@@ -5,7 +5,7 @@
 //! v1 animates the four CSS properties a compositor applies without relayout:
 //! the individual transform properties `translate`, `scale`, `rotate`, and
 //! `opacity`. Names, units, identity values, and interpolation are CSS's:
-//! `translate` is two lengths in points, `scale` one number, `rotate` an angle
+//! `translate` is two lengths in points, `scale` two factors, `rotate` an angle
 //! in degrees with an optional axis, and `opacity` a number. Rotation
 //! keyframes interpolate through [`crate::rotation`]; the others interpolate
 //! componentwise (CSS Transitions §4, "animation type: by computed value"). The
@@ -51,7 +51,7 @@
 pub enum Property {
     /// `translate: <x> <y>`, in points.
     Translate = 0,
-    /// `scale: <n>`, uniform; one is the natural size.
+    /// `scale: <x> <y>`; one on each axis is the natural size.
     Scale = 1,
     /// `rotate`: degrees in x, its optional axis in y/z/w.
     Rotate = 2,
@@ -300,11 +300,12 @@ impl Property {
     /// How many components the value carries: four for `translate` (its x
     /// and y lengths, then its x and y percentages of the box, which CSS
     /// interpolates componentwise as a `calc()`), three for `box-shadow`'s
-    /// geometry and for a variation axis, four for rotation, colour and
+    /// geometry and for a variation axis, two for scale, four for rotation, colour and
     /// `layout`'s box, else one.
     pub fn components(self) -> usize {
         match self {
             Property::Translate | Property::Rotate => 4,
+            Property::Scale => 2,
             Property::BoxShadow | Property::FontVariationSettings => 3,
             Property::Layout => 4,
             p if p.is_color() => 4,
@@ -318,7 +319,8 @@ impl Property {
     pub fn identity(self) -> Option<Value> {
         match self {
             Property::Translate => Some(Value::ZERO),
-            Property::Scale | Property::Opacity => Some(Value::scalar(1.0)),
+            Property::Scale => Some(Value::new(1.0, 1.0)),
+            Property::Opacity => Some(Value::scalar(1.0)),
             Property::Rotate
             | Property::StrokeDashoffset
             | Property::R
@@ -538,4 +540,22 @@ impl core::ops::Add for Value {
     fn add(self, other: Value) -> Value {
         self.zip(other, |a, b| a + b)
     }
+}
+
+/// CSS scale factors, x then y. One factor applies to both axes.
+pub fn scale(text: &str) -> Option<Value> {
+    if text.trim().eq_ignore_ascii_case("none") {
+        return Some(Value::new(1.0, 1.0));
+    }
+    let factor = |text: &str| {
+        let (n, divisor) = text.strip_suffix('%').map_or((text, 1.0), |n| (n, 100.0));
+        exact_num::parse_f64(n)
+            .ok()
+            .map(|n| n / divisor)
+            .filter(|n| n.is_finite())
+    };
+    let mut parts = text.split_ascii_whitespace();
+    let x = factor(parts.next()?)?;
+    let y = parts.next().map_or(Some(x), factor)?;
+    parts.next().is_none().then_some(Value::new(x, y))
 }

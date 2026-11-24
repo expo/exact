@@ -510,7 +510,7 @@ pub fn tree<D: DataSource>(runner: &Runner<D>) -> String {
     tree::all(runner, false)
 }
 
-/// What agent output shows for a non-empty password field's value (#134):
+/// What agent output shows for a non-empty password field's value:
 /// a fixed mark, whatever its length, as no reply, log or transcript should
 /// carry a secret. The app's own state still holds the value.
 pub const MASKED: &str = "•••";
@@ -595,8 +595,9 @@ pub(super) fn token_fields(
 /// instance path to it (D6), and the kernel's frames: `frame` relative to
 /// the parent (a block's root in its own block), `absolute` in the root's
 /// space or the viewport when the host places its block (as `frame()`
-/// reports it), `content` when it scrolls, and a scroller's D13 and D14 terms
-/// (`scrollTerms`).
+/// reports it), `content` when it scrolls, a scroller's D13 and D14 terms
+/// (`scrollTerms`), another box's reach where it reaches (`reach`), and an `edge-effect` bar's
+/// registration (`barEdgeEffect`).
 /// Observations of the runner's memory, tagged with the generation, epoch and
 /// incarnation; a host adds the spaces and what it mounted. An id that is
 /// not a live node in this incarnation is refused by name.
@@ -790,6 +791,18 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
             t.container.map(|c| c.to_string()).join(",")
         );
     }
+    // A non-scrolling box's reach (LLP 1123 D13) where it reaches on some edge, each top right
+    // bottom left
+    if let Some(r) = kernel
+        .box_reach(node.key)
+        .filter(|r| r.iter().any(|&x| x != 0.0))
+    {
+        let _ = write!(
+            s,
+            ",\"reach\":[{}]",
+            r.map(|x| num(x as f64).to_string()).join(",")
+        );
+    }
     // A box's extension (LLP 1123 D13): how far its picture is mirrored past its border box, each
     // top right bottom left
     if let Some(e) = kernel.extension(node.key) {
@@ -797,6 +810,16 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
             s,
             ",\"extension\":[{}]",
             e.map(|x| num(x as f64).to_string()).join(",")
+        );
+    }
+    // An `edge-effect` bar's registration (LLP 1123 D12)
+    if let Some(b) = kernel.bar_edge_effect(node.key) {
+        let scroller = b.scroller.and_then(|k| kernel.node_by_key(k)).map(|n| n.id);
+        let _ = write!(
+            s,
+            ",\"barEdgeEffect\":{{\"edge\":\"{}\",\"scroller\":{}}}",
+            b.edge.name(),
+            scroller.map_or("null".into(), |id| id.to_string())
         );
     }
     // LLP 1056 §5: a 2D canvas's last list, readable (bounded: 200 lines,

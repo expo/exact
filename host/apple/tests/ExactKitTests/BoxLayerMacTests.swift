@@ -424,5 +424,226 @@ final class BoxLayerMacTests: XCTestCase {
         XCTAssertEqual(n.boxGradient?.cornerRadius ?? 0, 12, accuracy: 0.001)
         XCTAssertEqual(n.boxGradient?.frame, n.bounds)
     }
+
+    /// A scroller's children are its scroll view's document's, so its radius reaches them as the scroll view's
+    /// corner (expo/exact#1442), following the style and the box's size. Under a border the clip is the padding
+    /// edge's: a mask on the scroll view's layer, which stays its node's own subview at the border box, with its
+    /// scroll position as it was and its scrollers inside the edge. Corners that differ, or that only some have,
+    /// leave the scroll view square, and so does a box whose own layer clips.
+    func testAScrollersRadiusClipsItsContent() throws {
+        _ = NSApplication.shared
+        let p = Presenter()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 200, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = p.viewport
+        defer { window.close() }
+        func look(_ rows: [String: Any], x: String = "auto") -> [String: Any] {
+            ["op": "style", "id": 2, "style": rows.merging(["overflow_x": x, "overflow_y": "auto", "background_color": [0, 0, 255, 255]]) { a, _ in a }]
+        }
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"], ["op": "create", "id": 2, "kind": "view"],
+            ["op": "create", "id": 3, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            look(["border_radius": 24.0]),
+            ["op": "children", "id": 2, "ids": [3]], ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 200, "h": 200], ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 120, "h": 120],
+            ["op": "frame", "id": 3, "x": 0, "y": 0, "w": 120, "h": 300], ["op": "content", "id": 2, "w": 120, "h": 300],
+        ]))
+        let node = try XCTUnwrap(p.views[2]), scroll = try XCTUnwrap(node.scroll)
+        /// What a capture of the scroller painted at a point: "none", the red child, the blue ground under it, or the
+        /// half green border over that ground. The child covers the whole box, so it shows wherever nothing clips it.
+        func ink(_ x: Int, _ y: Int) throws -> String {
+            let c = try XCTUnwrap(try XCTUnwrap(Capture.picture(of: node, scale: 1)).colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            guard c.alphaComponent > 0.5 else { return "none" }
+            return c.redComponent > 0.3 ? "child" : c.greenComponent > 0.45 ? "border" : "ground"
+        }
+        XCTAssertFalse(node.clipsToBounds, "a box that scrolls both axes leaves the clip to its scroll view")
+        XCTAssertEqual(scroll.layer?.cornerRadius, 24)
+        XCTAssertEqual(scroll.layer?.masksToBounds, true)
+        XCTAssertNil(scroll.layer?.mask, "with no border the scroll view's bounds are the padding edge")
+        XCTAssertEqual(try ink(60, 60), "child", "the child fills the scroller")
+        XCTAssertEqual(try ink(3, 3), "none", "and stops at the curve")
+
+        // An 8 point border: the padding edge's corner has radius 16 round the box's centre, (24, 24). (10, 10) is
+        // 19.8 from it, inside the box's curve and outside the padding edge's; (14, 14) is 14.1 from it, inside both.
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 8.0, "border_color_top": [0, 255, 0, 128]])]))
+        for offset: CGFloat in [0, 40] {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            XCTAssertEqual(scroll.contentView.bounds.origin.y, offset)
+            XCTAssertEqual(try ink(60, 60), "child")
+            XCTAssertEqual(try ink(14, 14), "child", "the child reaches the padding edge's curve, scrolled by \(offset)")
+            XCTAssertEqual(try ink(10, 10), "border", "and stops there, so a translucent border shows the ground in its corner, scrolled by \(offset)")
+            XCTAssertEqual(try ink(60, 4), "border", "and along its side, scrolled by \(offset)")
+            XCTAssertEqual(try ink(3, 3), "none")
+        }
+        scroll.contentView.scroll(to: .zero)
+        let edge = try XCTUnwrap(scroll.layer?.mask), padding = NSRect(x: 8, y: 8, width: 104, height: 104)
+        XCTAssertTrue(scroll.superview === node, "the scroll view is still its node's own subview")
+        XCTAssertEqual(scroll.frame, node.bounds, "at the border box")
+        XCTAssertEqual(scroll.layer?.cornerRadius, 0, "no radius of a layer the size of the border box is the padding edge")
+        let child = try XCTUnwrap(p.views[3])
+        XCTAssertTrue(node.hitTest(NSPoint(x: 60, y: 60)) === child, "the child takes a point inside the padding edge")
+        XCTAssertTrue(node.hitTest(NSPoint(x: 14, y: 14)) === child)
+        XCTAssertTrue(node.hitTest(NSPoint(x: 4, y: 60)) === scroll, "the edge cuts the child away under the border: the point, and its wheel, are the scroll view's")
+        XCTAssertTrue(node.hitTest(NSPoint(x: 10, y: 10)) === scroll, "and in the corner the edge rounds")
+        // The scrollers, which the mask would cut where they lie over the border, keep inside it.
+        for style in [NSScroller.Style.overlay, .legacy] {
+            scroll.scrollerStyle = style
+            scroll.tile()
+            let bar = try XCTUnwrap(scroll.verticalScroller)
+            XCTAssertFalse(bar.isHidden, "\(style.rawValue)")
+            XCTAssertTrue(padding.contains(node.convert(bar.bounds, from: bar)), "\(style.rawValue): \(node.convert(bar.bounds, from: bar))")
+            XCTAssertTrue(scroll.layer?.mask === edge, "\(style.rawValue): tiling leaves the mask")
+        }
+        scroll.scrollerStyle = .overlay
+        node.layoutResize = CGSize(width: 0, height: 20); node.applyTransform(); node.applySurface()
+        XCTAssertFalse(scroll.layer?.mask === edge, "a layout transition's surface masks the scroll view at its own size")
+        let surfaceMask = try XCTUnwrap(scroll.layer?.mask)
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 2.0, "border_width_top": 12.0, "border_width_right": 6.0])]))
+        XCTAssertTrue(NSEdgeInsetsEqual(scroll.clipInsets, NSEdgeInsets(top: 12, left: 2, bottom: 2, right: 6)), "new widths while the surface owns the mask")
+        XCTAssertTrue(NSEdgeInsetsEqual(scroll.scrollerInsets, scroll.clipInsets))
+        XCTAssertTrue(scroll.layer?.mask === surfaceMask)
+        p.apply(wireBatch([look(["border_radius": 24.0])]))
+        XCTAssertTrue(NSEdgeInsetsEqual(scroll.clipInsets, NSEdgeInsetsZero), "the border removed while the surface owns the mask")
+        XCTAssertTrue(NSEdgeInsetsEqual(scroll.scrollerInsets, NSEdgeInsetsZero))
+        XCTAssertTrue(scroll.layer?.mask === surfaceMask)
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 8.0, "border_color_top": [0, 255, 0, 128]])]))
+        XCTAssertTrue(NSEdgeInsetsEqual(scroll.scrollerInsets, NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)))
+        node.layoutResize = .zero; node.applyTransform(); node.applySurface()
+        XCTAssertTrue(scroll.layer?.mask === edge, "and the padding edge is back when it ends")
+        XCTAssertEqual(try ink(10, 10), "border")
+
+        // Borders of two widths make the padding edge's corner an ellipse, 8 by 20 round (24, 24).
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 4.0, "border_width_left": 16.0, "border_color_top": [0, 0, 0, 0]])]))
+        XCTAssertEqual(try ink(18, 6), "ground", "outside the ellipse, inside the padding box and the box's curve")
+        XCTAssertEqual(try ink(22, 12), "child", "inside it")
+        XCTAssertEqual(scroll.scrollerInsets.left, 16)
+        XCTAssertEqual(scroll.scrollerInsets.right, 4)
+        // The top and bottom borders differ: the edge is the node's, top down, as the scroll view's layer is.
+        p.apply(wireBatch([look(["border_radius": 24.0, "border_width": 2.0, "border_width_top": 20.0, "border_color_top": [0, 0, 0, 0]])]))
+        XCTAssertEqual(try ink(60, 12), "ground", "under the top border")
+        XCTAssertEqual(try ink(60, 24), "child")
+        XCTAssertEqual(try ink(60, 108), "child", "to the bottom border, which is thin")
+        XCTAssertEqual(try ink(60, 119), "ground")
+        // A border wider than the radius leaves the padding edge square.
+        p.apply(wireBatch([look(["border_radius": 6.0, "border_width": 8.0, "border_color_top": [0, 0, 0, 0]])]))
+        XCTAssertEqual(try ink(9, 9), "child")
+        XCTAssertEqual(try ink(6, 6), "ground")
+
+        p.apply(wireBatch([look(["border_radius": 8.0, "corner_shape": ["apple", "apple", "apple", "apple"]])]))
+        XCTAssertNil(scroll.layer?.mask, "the border gone, the layer's radius again")
+        XCTAssertTrue(node.hitTest(NSPoint(x: 4, y: 60)) === child, "and the child's again where the border was")
+        XCTAssertTrue(scroll.superview === node)
+        XCTAssertEqual(scroll.frame, node.bounds)
+        XCTAssertEqual(scroll.scrollerInsets.right, 0)
+        XCTAssertEqual(scroll.layer?.cornerRadius, 8, "a new radius")
+        XCTAssertEqual(scroll.layer?.cornerCurve, .continuous)
+        p.apply(wireBatch([look(["border_radius": 24.0]), ["op": "frame", "id": 2, "x": 0, "y": 0, "w": 30, "h": 120]]))
+        XCTAssertEqual(scroll.layer?.cornerRadius, 15, "reduced with the box")
+        XCTAssertEqual(scroll.layer?.cornerCurve, .circular)
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 0, "w": 120, "h": 120]]))
+        XCTAssertEqual(scroll.layer?.cornerRadius, 24)
+
+        p.apply(wireBatch([look(["border_radius_top_left": 24.0, "border_radius_top_right": 24.0])]))
+        XCTAssertEqual(scroll.layer?.cornerRadius, 0, "a capture's render has no corner mask")
+        p.apply(wireBatch([look(["border_radius_top_left": 18.0, "border_radius_top_right": 4.0])]))
+        XCTAssertEqual(scroll.layer?.cornerRadius, 0, "corners that differ need a path")
+        p.apply(wireBatch([look(["border_radius": 24.0], x: "hidden")]))
+        XCTAssertTrue(node.clipsToBounds, "one axis hidden: the box's own layer clips")
+        XCTAssertEqual(node.layer?.cornerRadius, 24)
+        XCTAssertEqual(try XCTUnwrap(node.scroll).layer?.cornerRadius, 0, "and its scroll view needs no corner")
+    }
+
+    /// A scroller clipped at its padding edge is driven as one that is not (expo/exact#1442): its scroll view finds
+    /// its node by `superview`, for a trackpad drag's `scrolldragstart` and `scrolldragend`, the snap at its lift,
+    /// the snap after a wheel's notch, and the wheel that takes a smooth scroll over. A rounded bordered scroller
+    /// and a square bordered one, which has no clip of its own, take the same events to the same ends.
+    func testAScrollerClippedAtItsPaddingEdgeKeepsItsDragItsSnapAndItsWheel() throws {
+        guard !ExactEnv.agentFreezes else { throw XCTSkip("platform timing") }
+        _ = NSApplication.shared
+        let saved = ChainingScrollView.appliesAtOnce, savedLatch = ChainingScrollView.latch
+        ChainingScrollView.appliesAtOnce = true // the handler applies each event itself, synchronously
+        defer { ChainingScrollView.appliesAtOnce = saved; ChainingScrollView.latch = savedLatch }
+        let p = Presenter()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = p.viewport
+        defer { window.close() }
+        var said: [String] = []
+        p.onScrollDrag = { id, end in said.append(end.map { "\(id) end \($0.velocity.y)" } ?? "\(id) start") }
+        func look(_ id: Int, _ rows: [String: Any]) -> [String: Any] {
+            ["op": "style", "id": id, "style": rows.merging(["overflow_x": "auto", "overflow_y": "auto", "border_width": 8.0,
+                                                               "border_color_top": [0, 255, 0, 128]]) { a, _ in a }]
+        }
+        // Two scrollers of eight cards 100 points high, 2 rounded and 3 square, each 120 points square.
+        var ops: [[String: Any]] = [["op": "create", "id": 1, "kind": "view"]]
+        for (id, x) in [(2, 0.0), (3, 150.0)] {
+            ops.append(["op": "create", "id": id, "kind": "view"])
+            for i in 0..<8 {
+                ops.append(["op": "create", "id": id * 10 + i, "kind": "view", "style": ["scroll_snap_align": "start"]])
+                ops.append(["op": "frame", "id": id * 10 + i, "x": 8.0, "y": 8.0 + Double(i) * 100, "w": 104.0, "h": 100.0])
+            }
+            ops += [["op": "children", "id": id, "ids": (0..<8).map { id * 10 + $0 }],
+                    ["op": "frame", "id": id, "x": x, "y": 0.0, "w": 120.0, "h": 120.0], ["op": "content", "id": id, "w": 120.0, "h": 816.0]]
+        }
+        ops += [look(2, ["border_radius": 24.0, "scroll_snap_type": "y mandatory"]), look(3, ["scroll_snap_type": "y mandatory"]),
+                ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]], ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 200.0]]
+        p.apply(wireBatch(ops))
+        p.viewport.layoutSubtreeIfNeeded()
+        /// CGScrollPhase: 1 began, 2 changed, 4 ended; none is a mouse wheel's notch. A negative delta moves the
+        /// content up, so the offset grows.
+        func wheel(_ sv: ChainingScrollView, _ dy: Int32, phase: Int64, ms: Double) throws {
+            let cg = try XCTUnwrap(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: 0, wheel3: 0))
+            cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            if phase != 0 { cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase) }
+            cg.timestamp = CGEventTimestamp(ms * 1_000_000)
+            sv.scrollWheel(with: try XCTUnwrap(NSEvent(cgEvent: cg)))
+        }
+        func spin(until done: () -> Bool) {
+            let end = Date().addingTimeInterval(3)
+            while !done(), Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        }
+        /// What one scroller did with a drag, a notch and a wheel over a smooth scroll.
+        struct Drive: Equatable { var dragged: CGFloat, lifted: CGFloat, notched: CGFloat, said: [String], taken: Bool, wheels: Int }
+        func drive(_ id: UInt32) throws -> Drive {
+            let node = try XCTUnwrap(p.views[id]), sv = try XCTUnwrap(node.scroll), clip = sv.contentView
+            XCTAssertTrue(sv.superview === node, "\(id): its node's own subview")
+            node.handlers = ["scrolldragstart", "scrolldragend"]
+            said = []
+            let wheels = p.personScrolls
+            // Four moves of 10 points 10 ms apart, lifted 10 ms on: a point a millisecond, which projects past four cards.
+            try wheel(sv, 0, phase: 1, ms: 1000)
+            for i in 1...4 { try wheel(sv, -10, phase: 2, ms: 1000 + Double(i) * 10) }
+            let dragged = clip.bounds.minY
+            try wheel(sv, 0, phase: 4, ms: 1050)
+            XCTAssertTrue(sv.snapSettling, "\(id): the lift eases to a snap position")
+            spin { !sv.snapSettling }
+            let lifted = clip.bounds.minY
+            // A notch moves a mandatory snap one position its way, at once under the agent's wheel.
+            try wheel(sv, -30, phase: 0, ms: 2000)
+            let notched = clip.bounds.minY
+            // A smooth `scrollTop` owns the scroller until it lands, or until the person's wheel takes it.
+            p.apply(wireBatch([look(Int(id), ["border_radius": id == 2 ? 24.0 : 0.0, "scroll_behavior": "smooth"])]))
+            p.apply(wireBatch([["op": "props", "id": Int(id), "set": ["scrollTop": "0"]]]))
+            XCTAssertNotNil(node.scrollEnd?.elementAnimation, "\(id): the write owns the scroller")
+            try wheel(sv, -30, phase: 0, ms: 3000)
+            return Drive(dragged: dragged, lifted: lifted, notched: notched, said: said.map { String($0.dropFirst("\(id) ".count)) },
+                         taken: node.scrollEnd?.elementAnimation == nil, wheels: p.personScrolls - wheels)
+        }
+        XCTAssertNotNil(p.views[2]?.scroll?.layer?.mask, "the rounded one is masked at its padding edge")
+        XCTAssertNil(p.views[3]?.scroll?.layer?.mask, "the square one is not")
+        let rounded = try drive(2), square = try drive(3)
+        XCTAssertEqual(rounded.dragged, 40, "the fingers moved it")
+        XCTAssertEqual(rounded.said.first, "start", "the drag's first move said it began")
+        XCTAssertEqual(rounded.said.count, 2, "\(rounded.said)")
+        XCTAssertEqual(Double(rounded.said.last?.dropFirst("end ".count) ?? "") ?? 0, 1, accuracy: 1e-6, "and its lift its velocity, a point a millisecond")
+        // A point a millisecond carries it 499 points on from 40: the lift rests on the card nearest 539.
+        XCTAssertEqual(rounded.lifted, 539, accuracy: 50, "the lift snapped to the card its momentum projects to")
+        XCTAssertNotEqual(rounded.lifted, rounded.dragged)
+        XCTAssertEqual(rounded.notched - rounded.lifted, 100, accuracy: 0.01, "and a notch to the next card")
+        XCTAssertTrue(rounded.taken, "a wheel takes the scroller from a smooth scroll")
+        XCTAssertEqual(rounded.wheels, 8, "and each wheel event counts as the person's")
+        XCTAssertEqual(rounded, square, "as a scroller with no clip of its own does")
+    }
 }
 #endif

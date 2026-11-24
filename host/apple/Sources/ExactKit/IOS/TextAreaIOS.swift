@@ -148,7 +148,7 @@ final class TextField: UITextField {
             selections.nativeEdit(owner, replacement: "", marked: markedTextRange != nil) { super.deleteBackward() }
         } else { super.deleteBackward() }
     }
-    // DOM's clipboard events, before the field's own (#125, Clipboard.swift).
+    // DOM's clipboard events, before the field's own (Clipboard.swift).
     override func copy(_ sender: Any?) { NodeView.fieldEdit(owner, #selector(NodeView.copy(_:))) { super.copy(sender) } }
     override func cut(_ sender: Any?) { NodeView.fieldEdit(owner, #selector(NodeView.cut(_:))) { super.cut(sender) } }
     override func paste(_ sender: Any?) {
@@ -399,7 +399,7 @@ package final class TextArea: UITextView {
         UIPasteboard.general.string = plain
         #endif
     }
-    // DOM's clipboard events, before the editor's own (#125, Clipboard.swift).
+    // DOM's clipboard events, before the editor's own (Clipboard.swift).
     package override func copy(_ sender: Any?) {
         NodeView.fieldEdit(owner, #selector(NodeView.copy(_:))) {
             guard let markup else { super.copy(sender); return }
@@ -519,7 +519,7 @@ extension NodeView {
     }
     /// No correction (`autocorrect="off"`, or an email, URL or password
     /// input) keeps the text as typed, as HTML asks: no smart quotes or
-    /// dashes either (#111). Otherwise the keyboard's.
+    /// dashes either. Otherwise the keyboard's.
     var inputSmartQuotes: UITextSmartQuotesType { inputCorrection == .no ? .no : .default }
     var inputSmartDashes: UITextSmartDashesType { inputCorrection == .no ? .no : .default }
 

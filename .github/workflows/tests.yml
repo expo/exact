@@ -33,12 +33,26 @@ jobs:
           df -h /
 
       - name: System packages
-        # The Linux host's DRM/KMS, input and font dependencies.
+        # The Linux host's DRM/KMS, input and font dependencies. Fetching the lists,
+        # and then the packages, takes under 20 s each from a healthy mirror. The
+        # runner's first mirror is dropped for the next when either takes 40 s.
+        timeout-minutes: 5
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config clang libudev-dev libinput-dev libdrm-dev libgbm-dev \
+          packages=(
+            pkg-config clang libudev-dev libinput-dev libdrm-dev libgbm-dev
             libxkbcommon-dev libfontconfig1-dev libfreetype-dev libwayland-dev
+          )
+          fetch() {
+            local apt=(sudo timeout -k 5 "$1" apt-get -o Acquire::http::Timeout=5 -o Acquire::https::Timeout=5)
+            "${apt[@]}" update &&
+              "${apt[@]}" install -y --no-install-recommends --download-only "${packages[@]}"
+          }
+          if ! fetch 40; then
+            echo "::warning::The runner's first Ubuntu mirror was slow or failed; using the next ones."
+            sudo sed -i 1d /etc/apt/apt-mirrors.txt
+            fetch 80
+          fi
+          sudo apt-get install -y --no-install-recommends --no-download "${packages[@]}"
 
       - name: Rust (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install

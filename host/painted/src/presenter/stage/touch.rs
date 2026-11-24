@@ -165,6 +165,7 @@ impl Preview {
             dx: way * p * (width / 20.0 - 8.0).max(0.0),
             dy: 0.0,
             scale: 1.0 - 0.1 * p,
+            scale_axes: (1.0, 1.0),
             rotate: 0.0,
             origin: (width / 2.0, height / 2.0),
             opacity: 1.0,

@@ -1,0 +1,72 @@
+package dev.exact.canvas
+
+import android.content.Context
+import android.view.View
+import org.json.JSONObject
+import org.junit.Assert.*
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import java.io.File
+
+/**
+ * A module view is made whatever its box, as iOS and the web make theirs (expo/exact#1467): an app's headless holder
+ * (a player, a scanner that draws elsewhere) has an empty one, and one in a subtree that paints nothing is held.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], manifest = Config.NONE)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class NativesEmptyBoxTest {
+    private val calls = ArrayList<String>()
+    private val holder = object : NativeModule {
+        override fun create(context: Context, props: JSONObject): View = View(context).also { calls += "create" }
+        override fun update(view: View, props: JSONObject) { calls += "update ${props.optString("cue")}" }
+    }
+
+    private fun natives() = Natives(RuntimeEnvironment.getApplication(), { File(".") }, mapOf("x-holder" to holder))
+    private fun element(cue: Int) =
+        JSONObject().put("module", "x-holder").put("props", JSONObject().put("cue", cue).toString()).toString()
+
+    /** The parent's own layout pass, which lays a child out by its layout params. */
+    private fun layout(natives: Natives) {
+        natives.measure(View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY))
+        natives.layout(0, 0, 100, 100)
+    }
+
+    @Test fun anEmptyBoxMakesItsViewAndGrowsAndEmptiesWithIt() {
+        val natives = natives()
+        natives.ensure(1, 2, 0, 0, element(0), 0)
+        assertEquals(listOf("create", "update 0"), calls)
+        val view = natives.getChildAt(0)
+        layout(natives)
+        assertEquals(0 to 0, view.width to view.height)
+        natives.ensure(1, 2, 0, 0, element(1), 0)
+        assertEquals("update 1", calls.last())
+        natives.ensure(1, 2, 40, 30, element(1), 0)
+        assertEquals(40 to 30, view.width to view.height)
+        natives.ensure(1, 2, 0, 0, element(1), 0)
+        layout(natives)
+        assertEquals(0 to 0, view.width to view.height)
+        assertSame("the same view throughout", view, natives.getChildAt(0))
+        assertEquals(1, calls.count { it == "create" })
+    }
+
+    @Test fun aHeldModuleIsMadeAndUpdatedAndShownAtItsBoxAgain() {
+        val natives = natives()
+        natives.ensure(1, 2, 0, 0, element(0), 0, hidden = true)
+        assertEquals(listOf("create", "update 0"), calls)
+        val view = natives.getChildAt(0)
+        assertEquals("out of touch and accessibility", View.INVISIBLE, view.visibility)
+        natives.ensure(1, 2, 0, 0, element(2), 0, hidden = true)
+        assertEquals("update 2", calls.last())
+        natives.ensure(1, 2, 40, 30, element(2), 0)
+        assertEquals(View.VISIBLE, view.visibility)
+        assertEquals(40 to 30, view.width to view.height)
+        natives.ensure(1, 2, 0, 0, element(2), 0, hidden = true)
+        assertEquals("kept at its size, hidden", 40 to View.INVISIBLE, view.width to view.visibility)
+        assertEquals(1, calls.count { it == "create" })
+    }
+}

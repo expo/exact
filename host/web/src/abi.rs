@@ -534,9 +534,9 @@ impl<D: DataSource> Bridge<D> {
     /// 7 = submit, 8 = load, 9 = message (the payload — a change's text, a
     /// key's chord with its code, repeat and isComposing (`KeyboardEvent::parse`), or a
     /// guest message — is the input buffer's first `len` bytes, UTF-8).
-    /// Kind 43 is `keyup`; 44 is `keycapture`, with the keydown payload (#140).
+    /// Kind 43 is `keyup`; 44 is `keycapture`, with the keydown payload.
     /// Kind 45 is `intersect`, `0|1,ratio` (LLP 1005).
-    /// Kinds 46/47 are `focusin`/`focusout`, with target and relatedTarget (#283).
+    /// Kinds 46/47 are `focusin`/`focusout`, with target and relatedTarget.
     /// Kind 14 is navigate: one UTF-8 location at the navigation root (LLP 1038 D8).
     /// Kind 20 is pan (`dx,dy`); 28 panrelease (`vx,vy`, px/s; LLP 1057 §10.6).
     /// Kind 23 is a text field's `input`; 24 and 25 a checkbox's `change`
@@ -867,7 +867,7 @@ impl<D: DataSource> Bridge<D> {
                 decoded.map_err(|_| "malformed motion input".to_string())?;
             if op == 11 {
                 // The thresholds exact2 defines itself (LLP 1057.001 §3).
-                let [knee, resistance, edge, slop] = exact_motion::gesture::CONSTANTS;
+                let [knee, resistance, edge, slop, ..] = exact_motion::gesture::CONSTANTS;
                 return Ok(format!(
                     "{{\"knee\":{knee},\"resistance\":{resistance},\"edge\":{edge},\"slop\":{slop}}}"
                 ));

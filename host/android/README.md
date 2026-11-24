@@ -127,8 +127,8 @@ The build:
    `gpu.modules` beside it under its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
    (`gpu/shaders/*.wgsl`, as a Linux bake packs them) to `app/build/<app>/rust/assets/app/shaders/`, where the host
    registers them from before a canvas is made;
-4. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
-   `app.json` is resolved), with `-PappIcon` and `-PappBanner` naming the icon and banner it wrote, with
+4. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (for a game also
+   `-PappManifest=<its .shells/app.json>`, the manifest its shells resolved), with `-PappIcon` and `-PappBanner` naming the icon and banner it wrote, with
    `-PgpuModules=<file>,<file>…` naming the GPU modules: the APK then extracts its libraries and leaves
    the modules unstripped, since the host opens each by path and checks its digest; with `-Pcompose=1` when the plan's
    uses name `dates` (a date or time control), which links Compose Material 3 for its pickers; and with the Kotlin
@@ -852,7 +852,10 @@ ends that watch for the rest of the contact; the moves that come while the reade
 `parent.requestDisallowInterceptTouchEvent(true)` before the crossing move, as in any
 [Android ViewGroup](https://developer.android.com/develop/ui/views/touch-and-input/gestures/viewgroup).
 The request lasts until up or cancel, or until the child passes `false`. The maps package requests this on down
-to reserve its pan. A drag on an axis the enclosing page cannot scroll stays with the hosted view; a second
+to reserve its pan. An `iframe`'s WebView never asks, so the reader asks it instead, once a contact, as a
+`ViewPager` asks a child: a drag its page can scroll the way the finger went past the slop stays the frame's
+(`canScrollVertically`, `canScrollHorizontally`), and one at the page's edge is the scroller's around it
+(LLP 1020.002 §11). A drag on an axis the enclosing page cannot scroll stays with the hosted view; a second
 pointer before interception gives it the pinch and the rest of that sequence. A down stops a running fling and
 reaches the hosted view.
 Declining the down leaves the scroller's drag and velocity tracking intact, including when the down stopped a fling.

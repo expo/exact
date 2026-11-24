@@ -629,8 +629,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** A turn at vsync [t]: the frame's [deadline] and its vsyncs' [period] where Choreographer gives them ([Turns]),
      * else 0. Told to exact2 with when it ran and the publication it made, if any, whose ingest finishes its work. */
-    private fun turned(t: Long, deadline: Long, period: Long) {
-        val arrival = System.nanoTime()
+    private fun turned(t: Long, deadline: Long, period: Long, arrival: Long) {
         // The display's frame: the shortest gap between consecutive vsyncs seen.
         if (vsync > 0 && t - vsync > 2_000_000) frameNanos = minOf(frameNanos, t - vsync)
         vsync = t
@@ -640,7 +639,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         // after: asked for after the frame, a Note 9 frame that ended 2.8 ms before the vsync lost it.
         if (running && Native.animating()) { turnPosted = true; choreographer?.let { turns.post(it) } }
         val before = timerReports.publication
-        Native.displayFrame(); produce(vsync = true)
+        HostFacts.turned(t, arrival, period); produce(vsync = true)
         if (!timing) return
         val published = if (timerReports.publication != before) timerReports.publication else 0L
         try {
@@ -691,7 +690,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
             }
         }
         val animating = Native.animating()
-        // Frame tasks need a display callback even if every paint overruns.
+        // Contract frame tasks and live GPU frames both need their display callback after an overrun.
         if (animating && late && !turnPosted && !Native.animating(vsyncOnly = true)) {
             late = false
             handler.removeCallbacks(again); handler.post(again)
@@ -832,6 +831,9 @@ internal object Exact {
     fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long) =
         field { Native.frameLoaded(id, slot, generation, session) }
 
+    fun frameFocused(id: Int, slot: Int, generation: Int, session: Long, focused: Boolean) =
+        field { Native.frameFocused(id, slot, generation, session, focused) }
+
     fun frameEvent(id: Int, slot: Int, generation: Int, session: Long, event: String, record: String) =
         field { Native.frameEvent(id, slot, generation, session, event, record) }
 
@@ -905,6 +907,17 @@ internal object Exact {
         val o = owner
         if (o != null) { o.input(); o.call { Native.activate(extension, event, args, action) } } else Native.activate(extension, event, args, action)
     }
+    /** A control's press ([Controls]), as an input, on exact2's thread: its call's id, or null for one refused
+     * outright. */
+    fun press(kind: String, digest: String, foreground: Boolean, cold: Boolean, hidden: Boolean): Long? {
+        val o = owner ?: return null
+        o.input()
+        val reply = o.sync { Native.press(kind, digest, foreground, cold, hidden) }
+        return runCatching { JSONObject(reply) }.getOrNull()?.takeIf { it.has("call") }?.getLong("call")
+    }
+    fun cancelPress(id: Long) { owner?.call { Native.cancelPress(id) } }
+    /** Whether press [id] still runs: asked on exact2's thread and waited for. */
+    fun pressLive(id: Long): Boolean = owner?.sync(publish = false) { Native.pressLive(id) } ?: false
     /** A line for the session's journal, on exact2's thread, in order with what the extensions tell ([changed]). */
     fun journal(line: String) { val o = owner; if (o != null) o.hand(OwnerReplies.Handed.Journal(line)) else Native.journal(line) }
     /** A turn on exact2's thread, which asks for a display frame while a canvas input's samples wait. */

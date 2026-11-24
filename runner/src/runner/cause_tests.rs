@@ -1,6 +1,6 @@
 //! LLP 1133.023 D7a: what the host observes of the page and a drag handle's
-//! release are the app's, and a world's message under a tool's mark keeps
-//! D4a's command rules.
+//! release are the app's, and a world's message under a tool's mark and a
+//! remote Play keep D4a's command rules.
 
 use crate::request::Request;
 use crate::{Answer, CallOrigin, DataError, DataSource, Event, Outcome, Runner, Store, Value};
@@ -96,20 +96,24 @@ fn a_drag_handles_release_is_the_persons() {
 
 #[test]
 fn a_worlds_message_under_a_tools_mark_keeps_the_calls_command_rules() {
-    let (mut r, frame) = boot();
-    r.dispatch(frame, Event::Message("\u{1}origin:tool\u{1}hi".into()))
-        .unwrap();
-    let lines: Vec<String> = r.journal().map(str::to_owned).collect();
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.contains("focus: skipped in a tool call")),
-        "{lines:?}"
-    );
-    // The app's own message runs it.
-    r.dispatch(frame, Event::Message("hi".into())).unwrap();
-    let skipped = r.journal().filter(|l| l.contains("focus: skipped")).count();
-    assert_eq!(skipped, 1);
+    // In an app with no tool too: the filter is the core's, not the tool seam's.
+    let toolless = FRAME.replace("  tool ping writes \"Ping.\" = loaded\n", "");
+    for source in [FRAME, &toolless] {
+        let (mut r, frame) = boot_with(source, "deck");
+        r.dispatch(frame, Event::Message("\u{1}origin:tool\u{1}hi".into()))
+            .unwrap();
+        let lines: Vec<String> = r.journal().map(str::to_owned).collect();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("focus: skipped in a tool call")),
+            "{lines:?}"
+        );
+        // The app's own message runs it.
+        r.dispatch(frame, Event::Message("hi".into())).unwrap();
+        let skipped = r.journal().filter(|l| l.contains("focus: skipped")).count();
+        assert_eq!(skipped, 1);
+    }
 }
 
 /// expo/exact#1424: a `keepRunning` window the person shows again by
@@ -247,4 +251,90 @@ fn what_a_hidden_page_arms_or_loads_is_no_ones() {
     for s in sent {
         assert_eq!(s.request.reach.origin, CallOrigin::Device);
     }
+}
+
+/// A remote Play or Pause is the person's act on one declared control
+/// outside the app's UI: an `action`, as a control's press is, whose
+/// command rules hold. The element's own `play` while the page shows stays
+/// the app's, and a report that carries anything else runs nothing.
+#[test]
+fn a_remote_play_or_pause_is_an_action() {
+    const PLAYER: &str = "component App\n  mutation m as shape number\n  action moved\n    send m = save(1)\n    focus()\n  view\n    audio \"https://example.com/a.mp3\" play=moved pause=moved testId=\"v\"\n";
+    let (mut r, audio) = boot_with(PLAYER, "v");
+    r.take_requests();
+    r.take_commands();
+    let wire = |w: &str| Event::media_payload(w).unwrap_or_else(|| panic!("{w:?} refused"));
+    let focused = |r: &mut Runner<Later>| r.take_commands().iter().any(|c| c.name == "focus");
+    for remote in ["play\nremote", "pause\nremote"] {
+        r.dispatch(audio, wire(remote)).unwrap();
+        assert_eq!(
+            r.take_requests()[0].request.reach.origin,
+            CallOrigin::Action,
+            "{remote:?}"
+        );
+        assert!(!focused(&mut r), "{remote:?}: a call's work does not focus");
+    }
+    let skipped = |r: &Runner<Later>| {
+        r.journal()
+            .filter(|l| l.contains("focus: skipped in a tool call"))
+            .count()
+    };
+    assert_eq!(skipped(&r), 2, "{:?}", r.journal().collect::<Vec<_>>());
+    r.dispatch(audio, wire("play\n")).unwrap();
+    assert_eq!(r.take_requests()[0].request.reach.origin, CallOrigin::App);
+    assert!(focused(&mut r));
+    assert!(Event::media_payload("play\nremote ").is_none());
+    let odd = Event::Media(exact_plan::EventKind::Pause, "remote ".into());
+    assert!(r.dispatch(audio, odd).is_err());
+    assert!(r.take_requests().is_empty());
+    let last = r.journal().last().unwrap_or_default().to_owned();
+    assert!(
+        last.contains("pause") && last.contains("InvalidEvent"),
+        "{last}"
+    );
+}
+
+/// A call's work never changes the app's language or mode: D4a's filter
+/// refuses `setLocale` and `setMode`, and neither applies before the filter
+/// runs, in an app with no tool too. The app's own `play` applies both.
+#[test]
+fn a_calls_work_sets_no_locale_or_mode() {
+    const PLAYER: &str = "component App\n  action started\n    setLocale(\"fr\")\n    setMode(\"dark-style\", \"dim\")\n  view\n    column\n      text t(\"title\")\n      audio \"https://example.com/a.mp3\" play=started testId=\"v\"\n";
+    const MODES: &str = "forma t\n\naxes\n  dark-style = black | dim  under scheme=dark\n\ntheme\n  ink = #111111\n";
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact2-call-locale-{}", std::process::id())),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("strings")).unwrap();
+    std::fs::write(dir.join("strings/en.json"), r#"{"title": "Title"}"#).unwrap();
+    std::fs::write(dir.join("strings/fr.json"), r#"{"title": "Titre"}"#).unwrap();
+    std::fs::write(dir.join("app.forma"), MODES).unwrap();
+    std::fs::write(dir.join("app.contract"), PLAYER).unwrap();
+    let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
+    let mut r = Runner::boot(
+        plan,
+        Later,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let key = r.kernel().find_by_test_id("v")[0];
+    let audio = r.kernel().node_by_key(key).unwrap().id;
+    let (locale, modes) = (r.resolved_locale().to_owned(), r.modes());
+    let play = |how: &str| Event::Media(exact_plan::EventKind::Play, how.into());
+    r.dispatch(audio, play("remote")).unwrap();
+    assert_eq!(
+        (r.resolved_locale(), r.modes()),
+        (&locale[..], modes.clone())
+    );
+    let refused = |r: &Runner<Later>| {
+        (r.journal())
+            .filter(|l| l.contains(": refused: in a tool call"))
+            .count()
+    };
+    assert_eq!(refused(&r), 2, "{:?}", r.journal().collect::<Vec<_>>());
+    r.dispatch(audio, play("")).unwrap();
+    assert_eq!(r.resolved_locale(), "fr");
+    assert_ne!(r.modes(), modes);
 }

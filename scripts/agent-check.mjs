@@ -1,9 +1,10 @@
 // `check` (LLP 1116.003 D8): what is wrong with the presented screen, in text, so a builder need not read a
-// screenshot back to find it — text clipped against its box, controls overlapping or covered by a bar, the keyboard
-// or a sheet, targets under the platform's minimum, horizontal overflow, text below a contrast floor, and a card
-// whose fill is what lies behind it. The host observes (host/web-js/check.js, AgentCheckIOS.swift: its presented
-// boxes, ink, fills, clips and hit tests, and the fill painted under each text, LLP 1116.006 D5); where no fill is
-// known, the background a text stands on is read from a capture's pixels; this file only judges. `check dark` (or `light`) runs it under that `prefers-color-scheme`, `check both` under each.
+// screenshot back to find it — text clipped against its box or squeezed to no width, a scroller squeezed to less than
+// a row, controls overlapping or covered by a bar, the keyboard or a sheet, targets under the platform's minimum,
+// horizontal overflow, text below a contrast floor, and a card whose fill is what lies behind it. The host observes
+// (host/web-js/check.js, AgentCheckIOS.swift: its presented boxes, ink, fills, clips and hit tests, and the fill painted
+// under each text, LLP 1116.006 D5); where no fill is known, the background a text stands on is read from a capture's
+// pixels; this file only judges. `check dark` (or `light`) runs it under that `prefers-color-scheme`, `check both` under each.
 import { MalformedOperation } from './agent-keys.mjs';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -13,6 +14,11 @@ import { encodePng, readSrgbPng, shrink } from './png.mjs';
 
 const SHOWN = 12;
 const OFFSCREEN = 'a column taller than the screen runs past it: let it scroll (`overflow-y: auto`), or give it `flex: 1` and `min-height: 0` under a header instead of `height: 100%`';
+/** The remedy for a scroller squeezed along its axis, by that axis: keep the text's size, give the scroller the room. */
+const SQUEEZED_SCROLL = {
+  y: 'let what sits above it scroll with it (inside the scroll, or in the list\'s first section), or give it a `min-height` in rem',
+  x: 'let what sits beside it give way (`flex-shrink`, or `flex-wrap="wrap"` on the row), or give it a `min-width` in rem',
+};
 const COLORS = JSON.parse(readFileSync(fileURLToPath(new URL('../kernel/tables/schema.json', import.meta.url)), 'utf8')).colors ?? [];
 /** A platform colour's row name by every name a host may report (kernel/tables/schema.json `colors`, LLP 1115.000 D3.2). */
 const ROLES = new Map();
@@ -95,7 +101,11 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   const add = (kind, it, detail, hint) => found.push({ kind, id: it.id ?? null, ...(it.of != null ? { of: it.of } : {}), name: it.name, text: it.text, box: [r0(it.x), r0(it.y), r0(it.w), r0(it.h)], detail, ...(hint ? { hint } : {}) });
   const unit = host === 'web' ? 'px' : 'pt';
   for (const it of items) {
-    // Text squeezed to no width (iOS reports it): nothing of it shows, and nothing else of it can be judged.
+    if (it.squeezed?.axis) {
+      const { axis, port, content } = it.squeezed;
+      add('squeezed', it, { axis, port, content, unit }, SQUEEZED_SCROLL[axis]);
+      continue;
+    }
     if (it.squeezed) { add('squeezed', it, {}, 'let it keep its words (drop `min-width: 0` or a fixed width beside it), or let the row wrap (`flex-wrap="wrap"`)'); continue; }
     // Covered: something else is over its middle at rest, and no scroller moves it clear.
     if (it.cover && !it.disabled) {
@@ -245,7 +255,7 @@ export function line(f, nodes) {
     contrast: () => `${d.got}:1 (${d.fg} on ${d.bg}${d.on == null ? '' : d.on === 'own' ? ', its own fill' : d.on === 'page' ? ', the page' : `, ${named(d.on, nodes)}'s fill`}), needs ${d.need}:1`,
     card: () => `its fill ${d.fill} is what lies behind it (${d.behind}): it does not show`,
     overlap: () => `overlaps ${named(d.with, nodes)} by ${d.by[0]}×${d.by[1]}`,
-    squeezed: () => 'its box is squeezed to no width, so none of its text shows',
+    squeezed: () => d.axis ? `its port is squeezed to ${d.port} ${d.unit} ${d.axis === 'y' ? 'tall' : 'wide'} of its ${d.content} ${d.unit} of content, so ${d.port > 0 ? `less than ${d.axis === 'y' ? 'a row' : 'an item'} of it shows` : 'none of it shows'}` : 'its box is squeezed to no width, so none of its text shows',
   }[f.kind]();
   return `  ${f.kind.padEnd(8)} ${who(f, nodes)} ${box}: ${what}${f.hint ? `; ${f.hint}` : ''}`;
 }

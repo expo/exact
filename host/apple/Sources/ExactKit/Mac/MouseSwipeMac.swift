@@ -57,14 +57,14 @@ final class MouseSwipe {
             if abs(dy) > Gesture.slop && abs(dy) >= abs(dx) { self.candidate = nil; return false }
             let (right, left) = SwipeRecognition.directions(candidate.handlers)
             guard abs(dx) > Gesture.slop, SwipeRecognition.accepts(x: Double(dx), y: Double(dy), presentedX: Double(candidate.translate.x), right: right, left: left) else { return false }
-            guard let started = SwipeHold(candidate) else { self.candidate = nil; return false }
+            guard let started = SwipeHold(candidate, time: event.timestamp) else { self.candidate = nil; return false }
             hold = started; origin = point
             presenter.selection.clear()
             // A drag must not also dispatch the click armed before recognition.
             for node in presenter.views.values where node.pressed { node.pressed = false }
         }
         guard let hold else { return false }
-        if !hold.move(Double(point.x - origin.x)) { cancel() }
+        if !hold.move(Double(point.x - origin.x), time: event.timestamp) { cancel() }
         return true
     }
     func up(_ event: NSEvent) -> Bool {
@@ -72,7 +72,8 @@ final class MouseSwipe {
         guard let held = hold else { return false }
         hold = nil
         // A mouse measures no velocity: the engine's estimate releases it.
-        held.finish(displacement: Double(event.locationInWindow.x - origin.x), fingerVelocity: nil, cancel: false)
+        held.finish(displacement: Double(event.locationInWindow.x - origin.x), fingerVelocity: nil, cancel: false,
+                    time: event.timestamp)
         return true
     }
     func cancel() {

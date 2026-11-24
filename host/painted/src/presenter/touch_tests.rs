@@ -169,7 +169,7 @@ fn before_any_key_a_windows_focus_shows_no_ring() {
         assert_eq!(ring, winui, "after Control+S, winui={winui}");
     }
 
-    // A focus a reload restores, before any key, under a new id: a box
+    // A focus a reload keeps, before any key: a box
     // before it gained a child.
     let reloaded = |inner: &str| {
         format!(
@@ -185,30 +185,40 @@ fn before_any_key_a_windows_focus_shows_no_ring() {
     (p.brush.winui_focus, p.brush.pointer_modality) = (true, true);
     let native = id(&p, "native");
     assert!(p.set_focus(Some(native), 1.).is_none());
-    p.reload(&crate::test_plan(&reloaded("\n        text \"x\"")), ())
-        .unwrap();
+    assert_eq!(
+        p.reload(&crate::test_plan(&reloaded("\n        text \"x\"")), ())
+            .unwrap(),
+        ReloadResult::Applied(None)
+    );
     p.boxes();
     assert_eq!(
         p.focus,
         Some(id(&p, "native")),
         "the reload keeps the focus"
     );
-    assert_ne!(p.focus, Some(native), "under a new id");
+    assert_eq!(
+        p.focus,
+        Some(native),
+        "the button keeps its id: it matches by source place"
+    );
     assert_ne!(
         edge(&mut p, "native"),
         RING,
         "a restored focus, before a key"
     );
 
-    // After a key, a pressed control restored under a new id stays ringless.
+    // After a key, a pressed control a reload keeps stays ringless.
     for winui in [true, false] {
         let mut p = boot(&reloaded(""));
         (p.brush.winui_focus, p.brush.pointer_modality) = (winui, winui);
         p.key_down("ArrowDown", 1.);
         let (x, y) = middle(&p, "native");
         tap(&mut p, x, y, 2.);
-        p.reload(&crate::test_plan(&reloaded("\n        text \"x\"")), ())
-            .unwrap();
+        assert_eq!(
+            p.reload(&crate::test_plan(&reloaded("\n        text \"x\"")), ())
+                .unwrap(),
+            ReloadResult::Applied(None)
+        );
         p.boxes();
         assert_eq!(p.focus, Some(id(&p, "native")));
         assert_ne!(
@@ -1003,7 +1013,7 @@ fn an_unchanged_mouse_focus_carries_its_ring_by_the_platforms_script_focus_polic
 }
 
 #[test]
-fn reloading_an_unchanged_mouse_focus_uses_the_platforms_ring_policy_under_a_new_id() {
+fn reloading_an_unchanged_mouse_focus_uses_the_platforms_ring_policy() {
     let source = BUTTONS.replace(
         "      button \"Native\"",
         "      box\n      button \"Native\"",
@@ -1017,12 +1027,34 @@ fn reloading_an_unchanged_mouse_focus_uses_the_platforms_ring_policy_under_a_new
         tap(&mut p, x, y, 2.);
         let old = id(&p, "native");
         let changed = source.replace("      box\n", "      box\n        input\n");
-        p.reload(&crate::test_plan(&changed), ()).unwrap();
         assert_eq!(
-            p.host.kernel().node(old).unwrap().node_type,
-            NodeType::TextInput
+            p.reload(&crate::test_plan(&changed), ()).unwrap(),
+            ReloadResult::Applied(None)
         );
-        assert_eq!(p.focus, Some(id(&p, "native")));
+        // The button matches by source place, so the focus keeps its node.
+        assert_eq!(p.focus, Some(old));
+        assert_eq!(id(&p, "native"), old);
         assert_eq!(edge(&mut p, "native") == RING, !winui, "winui={winui}");
     }
+}
+
+#[test]
+fn a_mouse_focus_a_reload_restores_under_a_new_id_stays_ringless() {
+    // Without its handler the button no longer matches its old node, so the
+    // replacement makes it afresh, and the focus follows it by its place.
+    let mut p = boot(BUTTONS);
+    let (x, y) = middle(&p, "native");
+    tap(&mut p, x, y, 0.);
+    let old = id(&p, "native");
+    assert_eq!(p.focus, Some(old));
+    assert_ne!(edge(&mut p, "native"), RING, "a mouse focus");
+    let changed = BUTTONS.replacen(" press=press width=120", " width=120", 1);
+    assert_eq!(
+        p.reload(&crate::test_plan(&changed), ()).unwrap(),
+        ReloadResult::Applied(None)
+    );
+    let new = id(&p, "native");
+    assert_ne!(new, old, "a new node");
+    assert_eq!(p.focus, Some(new));
+    assert_ne!(edge(&mut p, "native"), RING, "the restored mouse focus");
 }

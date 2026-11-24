@@ -56,6 +56,8 @@ type Text = unsafe extern "C" fn(u32, *const u8, usize) -> u32;
 struct Abi {
     // gpu_unload joins workers and drops thread-local state before dlclose; no symbol outlives the library.
     library: Library,
+    #[cfg(target_os = "android")]
+    host_frame: Option<unsafe extern "C" fn(f64, f64, f64, u32)>,
     output_error: std::cell::RefCell<Option<String>>,
     rendered: bool,
     device_loaded: bool,
@@ -120,8 +122,13 @@ impl Abi {
     ) -> Result<Self, String> {
         verify_module(path, compat, artifact)?;
         // SAFETY: the app's own module, with the ABI checked before any call.
+        let library = unsafe { Library::new(path) }.map_err(|e| e.to_string())?;
         let mut abi = Self {
-            library: unsafe { Library::new(path) }.map_err(|e| e.to_string())?,
+            #[cfg(target_os = "android")]
+            host_frame: unsafe { library.get(b"gpu_host_frame") }
+                .ok()
+                .map(|symbol| *symbol),
+            library,
             output_error: Default::default(),
             shaders: Default::default(),
             rendered: std::env::var("EXACT_GPU_RENDER").as_deref() == Ok("1"),

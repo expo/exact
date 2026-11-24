@@ -286,6 +286,112 @@ final class SplitIOSTests: XCTestCase {
         }
     }
 
+    /// A detail requested while UIKit moves the columns is revealed when
+    /// the move settles, even though the split already recorded the request.
+    func testAStackShownDuringASplitMoveRevealsItsDetailOnSettlement() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let split = try split(session), navigation = session.presenter.navigationHost
+        showListOverDetail(split)
+        let root = try XCTUnwrap(navigation.container)
+        let list = try XCTUnwrap(split.shown.first)
+        session.presenter.onCovers = nil
+
+        _ = split.splitViewController(split.controller, topColumnForCollapsingToProposedTopColumn: .primary)
+        applyDetail(in: session.presenter, root: root, list: list)
+        XCTAssertTrue(split.moving)
+        XCTAssertEqual(navigation.selectedStack.count, 2)
+        XCTAssertFalse(split.show(navigation.selectedStack, animated: false))
+        XCTAssertTrue(split.detailRoutes.isEmpty)
+        XCTAssertEqual(split.controller.displayMode, .oneOverSecondary)
+
+        // UIKit finishes with the split still expanded, as on a cancelled collapse
+        split.splitViewControllerDidExpand(split.controller)
+        until("the held detail is installed and revealed") {
+            split.detailRoutes.last?.key == "requested-detail" && split.controller.displayMode == .secondaryOnly
+        }
+    }
+
+    /// Neither column can finish the projection while its setter refuses.
+    /// Both recover, and the newer numbered batch credits its row even when
+    /// a lower numbered sync is the last one requested in the same write.
+    func testRefusedSplitColumnWritesRetryAndKeepTheGreatestSequence() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let split = try split(session), navigation = session.presenter.navigationHost
+        showListOverDetail(split)
+        let root = try XCTUnwrap(navigation.container)
+        let list = try XCTUnwrap(split.shown.first)
+        let newerRow = try node(session, "row-a").id, olderRow = try node(session, "row-b").id
+        let obstruction = UIViewController()
+        let listDelegate = split.list.delegate, detailDelegate = split.detail.delegate
+        split.list.delegate = nil
+        split.detail.delegate = nil
+        defer { split.list.delegate = listDelegate; split.detail.delegate = detailDelegate }
+        split.list.setViewControllers([list, obstruction], animated: false)
+        XCTAssertTrue(split.list.topViewController === obstruction)
+        session.presenter.onCovers = nil
+        navigation.lastTransition = "completed"
+        var refuseList = true, refuseDetail = true
+        var listRefusals = 0, detailRefusals = 0
+        try withNavigationStackWrites(shouldRefuse: { nav, routes in
+            if nav === split.list, refuseList {
+                listRefusals += 1
+                return true
+            }
+            guard nav === split.detail, refuseDetail, (routes.last as? RouteController)?.key == "requested-detail" else { return false }
+            if detailRefusals == 0 {
+                XCTAssertTrue(navigation.syncing)
+                split.presses = [.init(row: newerRow, after: 69, through: 70), .init(row: olderRow, after: 19, through: 20)]
+                for sequence: UInt64 in [70, 20, 0] {
+                    var batch = wireBatch([])
+                    batch.sequence = sequence
+                    navigation.sync(batch)
+                }
+            }
+            detailRefusals += 1
+            return true
+        }) {
+            applyDetail(in: session.presenter, root: root, list: list)
+            XCTAssertGreaterThan(listRefusals, 0)
+            XCTAssertEqual(detailRefusals, 0, "a refused list write blocks the detail")
+            XCTAssertTrue(navigation.stackWritesOwed)
+            XCTAssertEqual(navigation.lastTransition, "completed")
+
+            refuseList = false
+            until("the list lands and UIKit refuses the detail") { detailRefusals > 0 }
+            XCTAssertTrue(split.list.topViewController === list)
+            XCTAssertTrue(split.detailRoutes.isEmpty)
+            XCTAssertEqual(split.controller.displayMode, .oneOverSecondary)
+            XCTAssertEqual(navigation.lastTransition, "completed")
+            XCTAssertTrue(navigation.stackWritesOwed)
+            XCTAssertEqual(split.presses.map(\.landed), [true, false])
+
+            refuseDetail = false
+            until("the detail lands and is revealed") {
+                split.detailRoutes.last?.key == "requested-detail" && split.controller.displayMode == .secondaryOnly
+            }
+            XCTAssertEqual(navigation.lastTransition, "idle")
+            XCTAssertFalse(navigation.stackWritesOwed)
+        }
+    }
+
+    private func showListOverDetail(_ split: SplitIOS) {
+        split.controller.preferredSplitBehavior = .overlay
+        split.controller.preferredDisplayMode = .oneOverSecondary
+        until("the expanded list overlays the empty detail") {
+            !split.controller.isCollapsed && split.controller.displayMode == .oneOverSecondary && !split.inTransition
+        }
+        XCTAssertTrue(split.detailRoutes.isEmpty)
+    }
+
+    private func applyDetail(in presenter: Presenter, root: NodeView, list: RouteController) {
+        let detail: UInt32 = 900_001
+        presenter.apply(wireBatch([
+            ["op": "create", "id": detail, "kind": "column", "props": ["navigationKey": "requested-detail"]],
+            ["op": "children", "id": root.id, "ids": [list.node.id, detail]],
+            ["op": "props", "id": root.id, "set": ["navigationKey": "requested-detail"]]
+        ]))
+    }
+
     /// LLP 1127 D7: N1's routes count as pushed, its first included: a base
     /// with no header keeps UIKit's bar, a column whose `navigation` hatch
     /// turned its bar off has none, and neither does one whose top says

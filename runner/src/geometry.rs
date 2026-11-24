@@ -671,13 +671,13 @@ fn own_transform(s: &exact_kernel::StyleProps, at: Frame) -> Affine {
         ))
         .x
     };
-    let k = f64::from(s.scale);
+    let (sx, sy) = (f64::from(s.scale.x), f64::from(s.scale.y));
     let (sin, cos) = turn.to_radians().sin_cos();
     let (tx, ty) = (
         f64::from(s.translate.x) + f64::from(s.translate_percent.x) / 100.0 * w,
         f64::from(s.translate.y) + f64::from(s.translate_percent.y) / 100.0 * h,
     );
-    let (a, b, c, d) = (cos * k, sin * k, -sin * k, cos * k);
+    let (a, b, c, d) = (cos * sx, sin * sx, -sin * sy, cos * sy);
     [
         a,
         b,

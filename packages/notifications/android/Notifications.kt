@@ -39,6 +39,7 @@ import android.content.Intent
 import android.graphics.drawable.Icon
 import android.os.Build
 import dev.exact.canvas.Channels
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -134,9 +135,11 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
         Later.rearm(app)
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
-            "showNotification" -> show(args, reply)
+            "showNotification" -> show(args, cause, reply)
             "closeNotification" -> {
                 args.optString("tag").takeIf { it.isNotEmpty() }?.let {
                     manager.cancel(it, ID)
@@ -145,7 +148,7 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
                 reply(JSONObject())
             }
             "notificationStatus" -> status().also { said = it.toString(); reply(it) }
-            "requestNotificationPermission" -> ask { reply(status().also(::announce)) }
+            "requestNotificationPermission" -> ask(cause) { reply(status().also(::announce)) }
             else -> reply(refused("NotSupportedError", "$name is not on Android"))
         }
     }
@@ -155,7 +158,7 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
         if (said != null) announce(status())
     }
 
-    private fun show(args: JSONObject, reply: (JSONObject) -> Unit) {
+    private fun show(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         val words = args.optJSONObject("android") ?: JSONObject()
         val channel = if (words.isNull("channelId")) Channels.DEFAULT else words.optString("channelId")
         if (Channels.declared(app)?.none { it.id == channel } != false) return reply(refused("TypeError", "android.channelId \"$channel\" is not a channel host.android.notificationChannels declares"))
@@ -163,7 +166,7 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
         if (category != null && category !in CATEGORIES) return reply(refused("TypeError", "android.category \"$category\" is not one of the platform's categories"))
         val number = if (words.isNull("number")) null else words.optDouble("number")
         if (number != null && (number < 0 || number != Math.floor(number) || number > Int.MAX_VALUE)) return reply(refused("TypeError", "android.number is a non-negative integer"))
-        ask {
+        ask(cause) {
             val status = status().also(::announce)
             if (status.getString("state") != "granted") return@ask reply(refused("NotAllowedError", "notifications are off for this app"))
             val record = record(args, channel, category, number, actions(args))
@@ -215,9 +218,9 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** The runtime permission's dialog while it is `prompt` (Android 13 and later), then [done]; at once otherwise. */
-    private fun ask(done: () -> Unit) {
+    private fun ask(cause: Cause, done: () -> Unit) {
         if (Build.VERSION.SDK_INT >= 33 && context.permission(Manifest.permission.POST_NOTIFICATIONS).state == "prompt") {
-            context.askPermission(Manifest.permission.POST_NOTIFICATIONS, done)
+            context.askPermission(cause, Manifest.permission.POST_NOTIFICATIONS, done)
         } else done()
     }
 

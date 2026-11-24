@@ -405,7 +405,7 @@ final class ContextMenuMacTests: XCTestCase {
     /// highlighted, where a right release half a second after the press
     /// chooses it. The release is measured with real input: NSMenu's tracking
     /// reads no event posted to the app. A request from the keyboard still
-    /// puts the menu's top left at the middle of the node (#235).
+    /// puts the menu's top left at the middle of the node.
     func testAPointersMenuIsPlacedAsAppKitPlacesAContextMenu() throws {
         try XCTSkipIf(ExactEnv.agentMode, "the agent presents painted popovers")
         let p = presenter(), window = try XCTUnwrap(windows.last), source = try XCTUnwrap(p.views[1])
@@ -952,7 +952,7 @@ final class ContextMenuMacTests: XCTestCase {
     /// native button whose `contextmenu` or `contextPopover` answers, it runs
     /// that as a right-click does and presses nothing. On selectable text
     /// with no authored handler it selects the word and opens the text menu
-    /// (#454), and a plain click still presses.
+    /// and a plain click still presses.
     func testAControlClickIsTheContextClickWhereOneAnswers() throws {
         try XCTSkipIf(ExactEnv.agentMode, "the agent opens no native menu")
         let p = presenter(inSession: true), window = try XCTUnwrap(windows.last)
@@ -1000,7 +1000,7 @@ final class ContextMenuMacTests: XCTestCase {
         XCTAssertEqual(try controlClick(23), ["contextmenu 22"], "a drawn button's")
         XCTAssertEqual(try controlClick(24), ["menu Pin"], "a box's contextPopover")
         XCTAssertEqual(try controlClick(25), ["menu Pin"], "a native button's contextPopover")
-        XCTAssertEqual(try controlClick(26, at: NSPoint(x: 6, y: 15)), ["menu Look Up “Alpha”"], "plain text: the word's text menu (#454)")
+        XCTAssertEqual(try controlClick(26, at: NSPoint(x: 6, y: 15)), ["menu Look Up “Alpha”"], "plain text: the word's text menu")
         XCTAssertEqual(p.selection.selectedText(), "Alpha")
         heard = []
         click(window, at: try XCTUnwrap(p.views[21]).convert(NSPoint(x: 50, y: 15), to: nil))
@@ -1177,7 +1177,7 @@ final class ContextMenuMacTests: XCTestCase {
         click(window, at: alpha.convert(word, to: nil), flags: .control)
         let deadline = Date(timeIntervalSinceNow: 5)
         while heard.isEmpty && Date() < deadline { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02)) }
-        XCTAssertEqual(heard, ["menu Look Up “Alpha”"], "plain words: the word's text menu (#454)")
+        XCTAssertEqual(heard, ["menu Look Up “Alpha”"], "plain words: the word's text menu")
         // Show menu on the runs' elements: each one's own, its contextPopover
         // too; "the team" has none and its paragraph's answers.
         let elements = try XCTUnwrap(p.views[8]?.accessibilityChildren() as? [NSAccessibilityElement])
@@ -1368,7 +1368,7 @@ final class ContextMenuMacTests: XCTestCase {
         }
     }
 
-    /// LLP 1021 §5, "Submenus" (#141): a source (1) naming popover `row-menu`
+    /// LLP 1021 §5, "Submenus": a source (1) naming popover `row-menu`
     /// (2): Pinned (4, checked), Copy (7, opening `copy-menu`), an `hr` (6),
     /// Delete (5). `copy-menu` (8): Copy path (10), Copy link (11), an `hr`
     /// (12), Absolute paths (13, checked). `inside` authors `copy-menu` as a

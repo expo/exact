@@ -881,6 +881,7 @@ mod measurement {
                     for frame in 0..70 {
                         let angle = 30. + (frame % 30) as f32 * 20. / 30.;
                         let scene = Scene {
+                            scaled_presented: &Default::default(),
                             kernel,
                             roots: &kernel.roots(),
                             hidden: &|_| false,

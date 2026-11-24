@@ -7,7 +7,7 @@ import UIKit
 
 /// The agent's `layout` reports each scroller's range beside its offset (LLP 1012 `rx`/`ry`): how far the offset
 /// travels on each axis between the ends the wheel routes by, whether or not a wheel or a drag may move it that way.
-/// The Duo smoke reads it to check that UIKit gives a route's scroller no sideways range (#704), which a list that
+/// The Duo smoke reads it to check that UIKit gives a route's scroller no sideways range, which a list that
 /// hides `overflow-x` would not show through the wheel.
 final class AgentScrollRangeIOSTests: XCTestCase {
     private var window: UIWindow?

@@ -1047,6 +1047,7 @@ mod tests {
             roots: &kernel.roots(),
             hidden: &|_| false,
             presented: &|_| Presented::IDENTITY,
+            scaled_presented: &Default::default(),
             paths: &|_| None,
             filters: &|_| None,
             scroll: &BTreeMap::new(),
@@ -1126,11 +1127,12 @@ mod tests {
         );
         with_route(&source, |painter, scene, id, key| {
             let presented = |node| Presented {
-                scale: if node == id { 1.5 } else { 1. },
+                scale: if node == id { (1.5, 1.5) } else { (1., 1.) },
                 ..Presented::IDENTITY
             };
             let scene = Scene {
                 presented: &presented,
+                scaled_presented: &Default::default(),
                 ..scene
             };
             painter.stage = Stage {

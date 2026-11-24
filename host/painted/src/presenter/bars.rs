@@ -59,12 +59,14 @@ struct Shown<P> {
 /// it changed, a bar that says the same is the same.
 #[derive(Debug, Clone, PartialEq)]
 struct Seen {
-    dark: bool,
+    /// The top bar's scheme and the bottom bar's: each its node's.
+    dark: (bool, bool),
     font_scale: f32,
     window: (f32, f32),
     edges: [f32; 4],
-    /// The colours a bar is drawn in, which a new palette changes.
-    colors: [[u8; 4]; 8],
+    /// The colours a bar is drawn in, light and dark, which a new palette
+    /// changes.
+    colors: [[[u8; 4]; 8]; 2],
 }
 
 /// A bar's picture and its frame in the window.
@@ -318,7 +320,7 @@ impl<D: DataSource> Presenter<D> {
     /// What the bars say now, from the host's projection: the top bar of
     /// the route that shows, less whether it has scrolled, and the
     /// navigation bar.
-    fn read_bars(&self, dark: bool) -> (Option<Top>, Option<Bottom>) {
+    fn read_bars(&self) -> (Option<Top>, Option<Bottom>) {
         let kernel = self.host.kernel();
         let bars = self.host.bars();
         let route = self.bar_route();
@@ -330,7 +332,7 @@ impl<D: DataSource> Presenter<D> {
                 let buttons = |ids: &[ViewId]| -> Vec<Button> {
                     (ids.iter())
                         .filter(|id| r.shape.items.contains(id))
-                        .filter_map(|id| self.bar_button(*id, dark))
+                        .filter_map(|id| self.bar_button(*id, self.dark_at(*id)))
                         .collect()
                 };
                 Top {
@@ -390,7 +392,15 @@ impl<D: DataSource> Presenter<D> {
         }
         let _roles = self.host.runner().bind_roles(); // The bars' look resolves them.
         let (window, safe, _) = self.bar_window();
-        let (dark, font_scale) = (self.dark(), self.bar_font_scale());
+        let font_scale = self.bar_font_scale();
+        // Each bar is in the scheme of the node it shows (LLP 1034 §8).
+        let bars = self.host.bars();
+        let route = self.bar_route();
+        let header = (bars.routes.iter()).find(|r| Some(r.route) == route);
+        let dark = (
+            header.map_or(self.dark(), |r| self.dark_at(r.shape.header)),
+            (bars.tabs.as_ref()).map_or(self.dark(), |t| self.dark_at(t.tablist)),
+        );
         let epoch = self.host.kernel().epoch();
         if self.bars.read.map(|read| read.0) != Some(epoch) {
             // Only a route with a top bar has a scroller the bar follows.
@@ -402,22 +412,24 @@ impl<D: DataSource> Presenter<D> {
         }
         use super::palette::{material, Material};
         use super::top::look::Role;
-        let [a, b, c, d] = [
-            Role::Surface,
-            Role::SurfaceContainer,
-            Role::OnSurface,
-            Role::Primary,
-        ]
-        .map(|role| role.color(dark));
-        // And those the navigation bar reads by Material's names.
-        let [e, f, g, h] = [
-            Material::OnSurfaceVariant,
-            Material::SecondaryContainer,
-            Material::Secondary,
-            Material::OnSecondaryContainer,
-        ]
-        .map(|role| material(role, dark).unwrap_or_default());
-        let colors = [a, b, c, d, e, f, g, h];
+        let colors = [false, true].map(|dark| {
+            let [a, b, c, d] = [
+                Role::Surface,
+                Role::SurfaceContainer,
+                Role::OnSurface,
+                Role::Primary,
+            ]
+            .map(|role| role.color(dark));
+            // And those the navigation bar reads by Material's names.
+            let [e, f, g, h] = [
+                Material::OnSurfaceVariant,
+                Material::SecondaryContainer,
+                Material::Secondary,
+                Material::OnSecondaryContainer,
+            ]
+            .map(|role| material(role, dark).unwrap_or_default());
+            [a, b, c, d, e, f, g, h]
+        });
         let seen = Seen {
             dark,
             font_scale,
@@ -432,12 +444,12 @@ impl<D: DataSource> Presenter<D> {
         if same && self.bars.read == Some(read) {
             return;
         }
-        let (top, bottom) = self.read_bars(dark);
+        let (top, bottom) = self.read_bars();
         let top = top.map(|top| Top {
             scrolled: read.1,
             ..top
         });
-        let inputs = |edge: f32| Inputs {
+        let inputs = |edge: f32, dark: bool| Inputs {
             dark,
             font_scale,
             width: window.0,
@@ -448,7 +460,7 @@ impl<D: DataSource> Presenter<D> {
         let mut changed = false;
         if !same || self.bars.top.as_ref().map(|s| &s.plan) != top.as_ref() {
             self.bars.top = top.map(|plan| {
-                let layout = Layout::top(&mut text.borrow_mut(), &plan, &inputs(safe[0]));
+                let layout = Layout::top(&mut text.borrow_mut(), &plan, &inputs(safe[0], dark.0));
                 let frame = [0.0, 0.0, layout.size.0, layout.size.1];
                 Shown {
                     plan,
@@ -460,7 +472,8 @@ impl<D: DataSource> Presenter<D> {
         }
         if !same || self.bars.bottom.as_ref().map(|s| &s.plan) != bottom.as_ref() {
             self.bars.bottom = bottom.map(|plan| {
-                let layout = Layout::bottom(&mut text.borrow_mut(), &plan, &inputs(safe[2]));
+                let layout =
+                    Layout::bottom(&mut text.borrow_mut(), &plan, &inputs(safe[2], dark.1));
                 let frame = [0.0, window.1 - layout.size.1, layout.size.0, layout.size.1];
                 Shown {
                     plan,

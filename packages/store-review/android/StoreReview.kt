@@ -5,6 +5,7 @@
 package exact.storereview
 
 import com.google.android.play.core.review.ReviewManagerFactory
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -12,17 +13,19 @@ import org.json.JSONObject
 class StoreReviewModule(context: ExtensionContext) : ExactExtension(context) {
     private val manager by lazy { ReviewManagerFactory.create(context.application) }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "storeReviewStatus" -> reply(JSONObject().put("available", true))
-            "requestReview" -> request(reply)
+            "requestReview" -> request(cause, reply)
             else -> reply(JSONObject().put("error", "NotSupportedError"))
         }
     }
 
-    private fun request(reply: (JSONObject) -> Unit) {
+    private fun request(cause: Cause, reply: (JSONObject) -> Unit) {
         if (context.agent) {
-            context.log("requestReview: requested (${context.origin})")
+            context.log("requestReview: requested (${cause.origin})")
             return reply(JSONObject())
         }
         val activity = context.activity ?: return reply(JSONObject()).also { context.log("requestReview: not requested, no activity in front") }
@@ -32,7 +35,7 @@ class StoreReviewModule(context: ExtensionContext) : ExactExtension(context) {
                 return@addOnCompleteListener reply(JSONObject())
             }
             manager.launchReviewFlow(activity, asked.result).addOnCompleteListener {
-                context.log("requestReview: requested (${context.origin})")
+                context.log("requestReview: requested (${cause.origin})")
                 reply(JSONObject())
             }
         }

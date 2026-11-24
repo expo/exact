@@ -26,7 +26,7 @@ public final class ExactView: NSView {
     /// Edit ▸ Cut, Copy and Paste with nothing focused, after the window in its responder chain.
     private lazy var rootEdits: RootEdits = { let edits = RootEdits(); edits.presenter = session.presenter; return edits }()
     /// Edit ▸ Speech over the selected text, as a browser speaks a page's
-    /// selection (#141); a field's `NSTextView` answers first while it has
+    /// selection; a field's `NSTextView` answers first while it has
     /// the focus. Spoken Content's voice and rate, as AppKit's own.
     @objc public func startSpeaking(_ sender: Any?) {
         let text = session.presenter.selection.selectedText()
@@ -337,7 +337,7 @@ public final class ExactView: NSView {
         session.natives.scopesChanged()
         if window == nil { session.presenter.menus.reset(); session.presenter.dialogs.reset() }
         session.tellPreferences()
-        session.tellPage() // `hasFocus` is this window's (#114)
+        session.tellPage() // `hasFocus` is this window's
         session.rasters?.setPaused(window == nil)
         session.canvases.refreshLifecycle()
         if session.presenter.toolbar.window !== window { session.presenter.toolbar.detach() }
@@ -369,7 +369,7 @@ public final class ExactView: NSView {
                 if event.type == .otherMouseUp, event.window === self.window,
                    self.bounds.contains(self.convert(event.locationInWindow, from: nil)) { self.session.presenter.historyButton(event) }
                 // A modifier pressed is a keydown on the web (`"Shift"`), and
-                // released a keyup (#140); to AppKit a flags change, which
+                // released a keyup; to AppKit a flags change, which
                 // goes on to it either way.
                 if event.type == .flagsChanged {
                     if self.ownsShortcutFocus(in: event.window) { _ = self.session.presenter.keyDown(event); self.session.presenter.keyUp(event) }

@@ -58,7 +58,9 @@ object Native {
     @JvmStatic external fun acquired(running: Boolean)
     @JvmStatic external fun timerObservation(scrolling: Boolean, sampling: Boolean, applying: Boolean, idle: Boolean): Boolean
     @JvmStatic external fun timerHeld(): Int
-    @JvmStatic external fun displayFrame()
+    /** A display tick: Choreographer's frame time, when its callback began (`System.nanoTime`), the display's fastest
+     * period in nanoseconds, thermal code, and this tick's scheduled period ([HostFacts.turned]). */
+    @JvmStatic external fun displayFrame(vsync: Long, arrival: Long, fastest: Long, thermal: Int, period: Long)
     /** `perf frames` (LLP 1079.000 §6.2), all on exact2's thread and in `System.nanoTime`: a Choreographer turn at
      * [vsync], its frame's [deadline] and its vsyncs' [period] (0 where Choreographer gave none), when it ran from
      * [arrival] to [finished], and the publication it made (0: none), whose ingest finishes its work. */
@@ -156,6 +158,8 @@ object Native {
     /** A module event, checked against the session and allocation carried by its painted view. */
     @JvmStatic external fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String)
     @JvmStatic external fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long)
+    /** An iframe's view took the window's focus (a field in its page did) or lost it; checked as [frameLoaded] is. */
+    @JvmStatic external fun frameFocused(id: Int, slot: Int, generation: Int, session: Long, focused: Boolean)
     /** An iframe's `FrameNavigation` record (LLP 1020.002 D2): [event] by its name, [record] its JSON; checked as
      * [frameLoaded] is. */
     @JvmStatic external fun frameEvent(id: Int, slot: Int, generation: Int, session: Long, event: String, record: String)
@@ -304,6 +308,14 @@ object Native {
      * raised with a person's origin (LLP 1133.004 D6); for a notification's action, only while the plan declares
      * [action], the action's record. On the host's thread. */
     @JvmStatic external fun activate(extension: String, event: String, args: String, action: String?)
+    /** A person's press of control [kind], installed with [digest] ([Controls], LLP 1126.004 D2): `{"call": id}`, or
+     * `{"error"}` for one the runner refuses outright. With [foreground] it is pressed from the app in front, which a
+     * tile opened for it. On the host's thread. */
+    @JvmStatic external fun press(kind: String, digest: String, foreground: Boolean, cold: Boolean, hidden: Boolean): String
+    /** Press [id] ends now: superseded, its app left the front, or the phone locked. On the host's thread. */
+    @JvmStatic external fun cancelPress(id: Long)
+    /** Whether press [id] still runs uncancelled within its bound. On the host's thread. */
+    @JvmStatic external fun pressLive(id: Long): Boolean
     /** A line for the session's journal. On the host's thread. */
     @JvmStatic external fun journal(line: String)
     /** The extensions the APK carries, one a line ([Extensions]); under the agent, told so unless the drive names them

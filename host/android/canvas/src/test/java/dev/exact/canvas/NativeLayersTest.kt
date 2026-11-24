@@ -8,6 +8,8 @@ import android.graphics.HardwareRenderer
 import android.graphics.RenderNode
 import android.view.View
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.IntBuffer
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -24,7 +26,7 @@ import org.robolectric.annotation.GraphicsMode
 class NativeLayersTest {
     private fun f(n: Float) = n.toRawBits()
     private val identity = intArrayOf(1, f(1f), 0, 0, f(1f), 0, 0)
-    private val header = intArrayOf(f(1f), 0, 0, f(1f), 0, 0, 0, 0, 0, 0, f(1f), 0, f(1f), 0, 0, -1)
+    private val header = intArrayOf(f(1f), 0, 0, f(1f), 0, 0, 0, 0, 0, 0, f(1f), 0, f(1f), 0, 0, f(1f), -1)
 
     private fun native(color: String): IntArray {
         val bytes = """{"module":"test-view","props":"{\"color\":\"$color\"}"}""".toByteArray()
@@ -64,6 +66,13 @@ class NativeLayersTest {
             copy.recycle(); bitmap.recycle()
             return color
         }
+    }
+
+    @Test fun drawsTheLayerFromTheRustRecorder() {
+        val bytes = javaClass.getResourceAsStream("/red-layer.ops")!!.use { it.readBytes() }
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
+        val ops = IntArray(buffer.remaining()).also { buffer.get(it) }
+        assertEquals(Color.RED, Fixture().pixel(ops))
     }
 
     private val ref = intArrayOf(29, 7)

@@ -1,6 +1,6 @@
 // A launch URL (`openURL` before boot) the app cannot hear is said once,
 // as a URL arriving while it runs is (`navigate refused: …`): an app with
-// no navigation root otherwise drops it without a word (#104).
+// no navigation root otherwise drops it without a word.
 //
 // @ref LLP 1038 D8
 import Foundation

@@ -149,8 +149,8 @@ fn a_haptic_links_the_page_freeze_watcher() {
     .unwrap();
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
     assert!(
-        js.contains("import{watchPage as $watchPage}from\"./facts.js\";")
-            && js.contains("$watchPage(true);"),
+        js.contains("import{watchOutput as $watchOutput}from\"./output.js\";")
+            && js.contains("$watchOutput();"),
         "{js}"
     );
 }

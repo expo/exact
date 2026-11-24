@@ -21,14 +21,16 @@ extension NodeView {
         let box = convert(clip.frame.origin, from: clip.superview)
         var result = proposed, snapped = false
         for vertical in [false, true] where vertical ? kind.y : kind.x {
-            // The snapport is the clip less its insets and `scroll-padding`
+            // The snapport is the padding box less the clip's insets and `scroll-padding`
             // (§4.1); positions are where its start is, an origin plus `shift`.
             let size = vertical ? clip.bounds.height : clip.bounds.width
             let inset = clip.contentInsets
             let padding = { (side: String) in self.style["scroll_padding_\(side)"]?.length(basis: size) ?? 0 }
+            let border = { (side: String) in self.number("border_width_\(side)", self.number("border_width")) }
+            let (first, last) = vertical ? ("top", "bottom") : ("left", "right")
             let lead = vertical ? inset.top : inset.left, trail = vertical ? inset.bottom : inset.right
-            let shift = lead + padding(vertical ? "top" : "left")
-            let port = max(1, size - lead - trail - padding(vertical ? "top" : "left") - padding(vertical ? "bottom" : "right"))
+            let shift = lead + border(first) + padding(first)
+            let port = max(1, size - lead - trail - border(first) - border(last) - padding(first) - padding(last))
             let low = (vertical ? document.frame.minY : document.frame.minX) - lead
             let high = (vertical ? document.frame.maxY : document.frame.maxX) + trail - size
             let range = (low + shift)...(max(low, high) + shift)

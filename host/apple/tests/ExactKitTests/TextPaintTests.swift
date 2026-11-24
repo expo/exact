@@ -286,7 +286,7 @@ final class TextPaintTests: XCTestCase {
         XCTAssertEqual(pixel(1, top + 1)[3], 0, "no background under the plain run")
     }
 
-    /// An inline box's `border-radius` (issue #725), sliced as CSS's
+    /// An inline box's `border-radius`, sliced as CSS's
     /// `box-decoration-break: slice` slices it: its start corners on its
     /// first fragment, its end corners on its last, each box its own.
     func testAnInlineBoxsRadiusRoundsOnlyItsOwnEnds() throws {

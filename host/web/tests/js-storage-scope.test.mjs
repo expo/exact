@@ -16,7 +16,7 @@ import { runtimeSource, standIns } from './stand-ins.mjs';
 import { fileURLToPath } from 'node:url';
 
 const web = fileURLToPath(new URL('../', import.meta.url));
-const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'persist.js'];
+const REAL = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'held.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'budget.js', 'shape.js', 'persist.js', 'store.js'];
 const root = mkdtempSync(resolve(tmpdir(), 'exact-js-storage-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 /** The runtime as a build lays it out for the app at `appDir`, or as written (a release) when it is null. */
@@ -56,6 +56,7 @@ test('persisted state and the durable store are the app\'s own on a shared origi
   for (const [name, dir] of [['one', one], ['two', two], ['release', null]]) {
     const at = runtime(name, dir);
     const rt = await import(resolve(at, 'rt.js')), persist = await import(resolve(at, 'persist.js'));
+    await import(resolve(at, 'store.js'));
     apps.push({ rt, persist, prefix: dir ? `@${appDigest(dir)}/` : '' });
   }
   const [a, b, release] = apps;
@@ -109,7 +110,8 @@ test("a window restores its own slot even when shared storage holds a value of t
 // (storage-environment.js `retrySecretWrite`), and only while that value is still there; one that could not read it is
 // said and dropped, since a retry could overwrite another realm's later write.
 test('committed store writes retry without new writes, coalesce by name, and exclude rollback', async () => {
-  const rt = await import(resolve(runtime('retry', null), 'rt.js'));
+  const at = runtime('retry', null), rt = await import(resolve(at, 'rt.js'));
+  await import(resolve(at, 'store.js'));
   const storage = globalThis.localStorage, document = globalThis.document, navigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   globalThis.document = { querySelector: () => null, getElementById: () => ({}) };
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { locks: { request: async (_name, work) => work() } } });

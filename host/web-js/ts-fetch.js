@@ -1,6 +1,6 @@
 // App-module bindings, injected by the bundler, never installed as page-wide
 // globals. Host modules keep the browser's functions at every load time.
-import { socketProtocols, FetchError, fetchWith, inOverlay, overlaying, ownWithout, redirectOf, signalDeadline } from './admission.js';
+import { socketProtocols, FetchError, fetchTarget, fetchWith, inOverlay, overlaying, ownWithout, redirectOf, signalDeadline } from './admission.js';
 import { tsGrantSet } from './admission-data.js';
 // A stream or an upload takes the redirect mode as `fetch` is called, as Hermes
 // does: a bad one rejects before a file is read or a stream registered.
@@ -18,7 +18,10 @@ export const STREAM_REFUSAL = null;
 // hooks the page's entry sets on `answering`, build.mjs).
 export function fetch(input, options) {
   const call = currentContext();
-  return owned(fetchInCall(input, options)).then(responseFor, error => {
+  return fetchReply(fetchInCall(input, options), call);
+}
+export function fetchReply(promise, call = currentContext()) {
+  return owned(promise).then(responseFor, error => {
     if (globalThis.__exactRender && error?.renderDeferred) return answering.refuseFetch(error.message, call, error.unavailable);
     throw error;
   });
@@ -36,6 +39,7 @@ export function responseFor(response) {
   return response;
 }
 function fetchInCall(input, options) {
+  try { input = fetchTarget(input, options); } catch (error) { return Promise.reject(error); }
   if (globalThis.__exactRender && !globalThis.__exactProduction) {
     const call = currentContext();
     if (call && call !== backgroundCall && !call.mutation) {

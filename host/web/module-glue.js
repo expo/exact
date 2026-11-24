@@ -149,6 +149,7 @@ export async function prepare(payload, admitted, id = nextId++) {
     const original = win.console[level].bind(win.console);
     win.console[level] = (...args) => { journal.push(`console: ${args.map(a => typeof a === 'string' ? a : String(a)).join(' ')}`); original(...args); };
   }
+  win.__exact_fetch_base = () => document.baseURI;
   win.__exact_browser_secrets = true;
   win.__exact_host = (op, name, value) => {
     if (op === 13) { journal.push(String(name)); return '1'; }
@@ -513,7 +514,7 @@ async function prepareWorker(payload, admitted, id, before, meta, helpers) {
   worker.onerror = event => { event.preventDefault(); fail(`module worker failed: ${event.message}`); };
   worker.onmessageerror = () => fail('module worker message failed');
   const ready = new Promise((resolve, reject) => waiting.set(0, { resolve, reject }));
-  worker.postMessage({ op: 'init', token: 0, binary: helpers, prelude: before, script: decoder.decode(payload.script), admitted,
+  worker.postMessage({ op: 'init', token: 0, base: document.baseURI, binary: helpers, prelude: before, script: decoder.decode(payload.script), admitted,
     storage: storageKey(admitted.appId), pageDigest: !!globalThis.exact.moduleDigest, seed: agentSeed() });
   let overlayAtLoad;
   try { overlayAtLoad = (await ready).hasOverlay; } catch (error) { worker.terminate(); throw error; }
@@ -530,7 +531,7 @@ async function prepareWorker(payload, admitted, id, before, meta, helpers) {
       turns.set(token, {id, request, run: () => new Promise((resolve, reject) => {
         if (disposed) return reject(new Error('module environment disposed'));
         waiting.set(token, { resolve, reject });
-        worker.postMessage({ op: 'turn', token, request });
+        worker.postMessage({ op: 'turn', token, request, base: document.baseURI });
       })});
       return {continuation: token};
     },

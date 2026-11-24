@@ -4,6 +4,7 @@ import android.media.MediaActionSound
 import android.os.Build
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Native
 import dev.exact.canvas.TrackConsumer
@@ -88,7 +89,7 @@ class ShutterSoundTest {
         val context = ExtensionContext(RuntimeEnvironment.getApplication(), "camera")
         var leases = 0
         val owner = object : TrackOwner {
-            override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, origin: String): () -> Unit {
+            override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, cause: Cause): () -> Unit {
                 leases++
                 return { leases-- }
             }
@@ -100,7 +101,7 @@ class ShutterSoundTest {
         val args = JSONObject().put("track", "video")
         shutterSound?.let { args.put("android", JSONObject().put("shutterSound", it)) }
         var answer: JSONObject? = null
-        CameraModule(context).later("takePhoto", args) { answer = it }
+        CameraModule(context).later("takePhoto", args, null, Cause("app")) { answer = it }
         assertEquals(1, Capture.shots)
         assertEquals("UnknownError", answer?.optString("error"))
         assertEquals(0, leases)

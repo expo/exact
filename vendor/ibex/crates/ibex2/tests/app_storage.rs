@@ -136,3 +136,34 @@ fn symlink_roots_are_refused_by_writable_and_snapshot_storage() {
     );
     assert!(!project.0.join("cache/new").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn missing_snapshot_roots_and_files_report_enoent_without_creating_directories() {
+    let project = Project::new("snapshot-missing");
+    let errno = format!("(os error {})", libc::ENOENT);
+    for existing in [false, true] {
+        if existing {
+            directories(&project);
+        }
+        let dirs = AppDirectories::snapshot(
+            project.0.join("data"),
+            project.0.join("cache"),
+            project.0.join("tmp"),
+        )
+        .unwrap();
+        let host = Host::new().with_app_directories(dirs).endow(
+            GrantSet::parse("fs.read app:/data\nfs.read app:/cache\nfs.read app:/tmp").unwrap(),
+        );
+        for name in ["data", "cache", "tmp"] {
+            let error = host
+                .fs
+                .read_file(&format!("app:/{name}/missing"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.ends_with(&errno), "{error}");
+            assert_eq!(project.0.join(name).exists(), existing);
+            assert!(!project.0.join(name).join("missing").exists());
+        }
+    }
+}

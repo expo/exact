@@ -365,6 +365,7 @@ package final class Presenter {
     /// A restart: every view goes.
     func reset() {
         resetting = true; defer { resetting = false }
+        if let v = viewport as? Viewport { v.authoredBars = [:]; v.edgeBars.values.forEach { $0.value.map(ControlBars.detach) }; v.edgeBars = [:] }
         listRowDependencies = nil
         resetFragments()
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
@@ -1094,6 +1095,7 @@ package final class Presenter {
                 views[id]?.applyColumns(op.payload)
             case .table: tableGrid.apply(id, op.payload)
             case .destroy:
+                (viewport as? Viewport)?.authoredBars[id] = nil
                 listRowDependencies?.rows.removeValue(forKey: id)
                 listRowDependencies?.rowOwners.removeValue(forKey: id)
                 views[id]?.holdGone()
@@ -1133,7 +1135,7 @@ package final class Presenter {
                 switch op.property {
                 case "translate": v.translatePx = CGPoint(x: x, y: CGFloat(op.y)); v.translatePercent = CGPoint(x: CGFloat(op.w), y: CGFloat(op.h)); v.applyTransform()
                 case "layout": v.layoutOffset = CGPoint(x: x, y: CGFloat(op.y)); v.layoutResize = CGSize(width: CGFloat(op.w), height: CGFloat(op.h)); v.applyTransform(); v.applySurface()
-                case "scale": v.scale = x; v.applyTransform()
+                case "scale": v.scale = CGPoint(x: x, y: CGFloat(op.y)); v.applyTransform()
                 case "rotate": v.rotate = x; v.rotationAxis = [op.y, op.w, op.h]; v.applyTransform()
                 case "opacity": v.presentOpacity(x)
                 case "flight": flightHost.present(id, x)
@@ -1323,12 +1325,12 @@ package final class Presenter {
         let contained = NodeView.keepingGhosts(want.filter { !heldByArrangement($0) && !navigation.ownsContainment(of: $0, under: parent) && !menus.lifted($0) && !flightHost.isFlying($0) && navigation.lifted?.holds($0, under: parent) != true }, in: container)
         // Keep paragraph coverage below authored children when UIKit owns its view
         let text = parent.specs?.rasterView
-        let offset = text?.superview === container ? 1 : 0
-        if offset != 0, let text, container.subviews.first !== text {
+        if let text, text.superview === container, container.subviews.first !== text {
             container.sendSubviewToBack(text)
             parent.insertBoxSublayer(text.layer)
         }
         current = container.subviews
+        let offset = current.firstIndex(where: { $0 === text }).map { $0 + 1 } ?? 0
         for (rank, child) in contained.enumerated() {
             let i = rank + offset
             if i < current.count && current[i] === child { continue }

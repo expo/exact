@@ -361,7 +361,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// A bundled page's origin: loopback HTTP, a secure context (as the web
     /// dev loop's `http://127.0.0.1` page is) that WebKit holds to no
     /// mixed-content blocking. Under an `https:` origin WebKit refuses every
-    /// `http:` sub-resource, loopback included, which Chrome loads (#135).
+    /// `http:` sub-resource, loopback included, which Chrome loads.
     static let localOrigin = "http://exact.localhost"
     static let template: WKWebViewConfiguration = {
         let template = WKWebViewConfiguration()
@@ -403,8 +403,8 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         #if EXACT_DEVELOPMENT
         // Safari's platform inspector sees only this guest, not Exact's
         // native tree. Unasked, only a development arm makes a frame
-        // inspectable (#101); any arm does when the app calls
-        // `openDevTools` (LLP 1020.002 D11, which supersedes #101 there).
+        // inspectable; any arm does when the app calls
+        // `openDevTools` (LLP 1020.002 D11).
         web.isInspectable = true
         #endif
         #if os(macOS)
@@ -888,7 +888,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     /// A non-HTML local file (plain text, a PDF, an image) is the web view's
     /// own document under its content type, as Chrome shows such
     /// a frame by the type its server sent: WebKit's PDF view for a PDF, not
-    /// its bytes as HTML text (#115, @ref LLP 1020 §10).
+    /// its bytes as HTML text (@ref LLP 1020 §10).
     func serveFile(_ bytes: Data, type: String) {
         let url = URL(string: "\(WebArm.localOrigin)/frame/\(id)/index.html")!
         wrapperURL = url
@@ -1108,6 +1108,7 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard !invalidated, webView === built else { return }
+        automation?.terminated()
         if let browser {
             emit(kind: 2)
             return browser.crashed()

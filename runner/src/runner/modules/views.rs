@@ -9,9 +9,9 @@
 //!
 //! - `{"extension", "view", "tag", "displayed": bool, "origin"}` for a view
 //!   declared `"displayed": true`;
-//! - `{"extension", "view", "tag", "bound": prop, "origin"}` for each binding
-//!   prop whose value changed; the value itself reaches the view as its props
-//!   do.
+//! - `{"extension", "view", "tag", "bound": prop, "value", "origin"}` for
+//!   each binding prop whose value changed; the value reaches the view as its
+//!   props do too, and an implementation pairs the two by it.
 //!
 //! `view` is the node's id, which the host also gives the view's factory, so
 //! an implementation keys its views' state by it. A view that leaves the tree
@@ -125,21 +125,27 @@ impl<D: DataSource> Runner<D> {
                 viewed.shown_by = was.shown_by;
                 viewed.bound = std::mem::take(&mut was.bound);
             }
+            let first_report = said.len();
+            for prop in plan.str(row.binds).split_whitespace() {
+                if props[prop].is_null() {
+                    if viewed.bound.remove(prop).is_none() {
+                        continue;
+                    }
+                } else {
+                    let value = props[prop].to_string();
+                    if viewed.bound.get(prop).is_some_and(|(v, _)| *v == value) {
+                        continue;
+                    }
+                    viewed.bound.insert(prop.to_owned(), (value, cause));
+                }
+                said.push(json!({ "extension": viewed.extension, "view": id.to_string(), "tag": tag, "bound": prop, "value": props[prop], "origin": origin.word() }));
+            }
             if row.displayed && viewed.shown != shown {
                 viewed.shown = shown;
                 viewed.shown_by = cause;
-                said.push(json!({ "extension": viewed.extension, "view": id.to_string(), "tag": tag, "displayed": shown, "origin": origin.word() }));
-            }
-            for prop in plan.str(row.binds).split_whitespace() {
-                let value = match &props[prop] {
-                    Json::Null => continue,
-                    v => v.to_string(),
-                };
-                if viewed.bound.get(prop).is_some_and(|(v, _)| *v == value) {
-                    continue;
-                }
-                viewed.bound.insert(prop.to_owned(), (value, cause));
-                said.push(json!({ "extension": viewed.extension, "view": id.to_string(), "tag": tag, "bound": prop, "origin": origin.word() }));
+                // Hide before rebinding. On reveal the new bindings must already be in place.
+                let at = if shown { said.len() } else { first_report };
+                said.insert(at, json!({ "extension": viewed.extension, "view": id.to_string(), "tag": tag, "displayed": shown, "origin": origin.word() }));
             }
             now.insert(id, viewed);
         }
@@ -165,8 +171,9 @@ impl<D: DataSource> Runner<D> {
             if v.shown {
                 said.push(json!({ "extension": v.extension, "view": id.to_string(), "tag": v.tag, "displayed": true, "origin": v.shown_by.origin().word() }));
             }
-            for (prop, (_, by)) in &v.bound {
-                said.push(json!({ "extension": v.extension, "view": id.to_string(), "tag": v.tag, "bound": prop, "origin": by.origin().word() }));
+            for (prop, (value, by)) in &v.bound {
+                let value: Json = serde_json::from_str(value).unwrap_or_default();
+                said.push(json!({ "extension": v.extension, "view": id.to_string(), "tag": v.tag, "bound": prop, "value": value, "origin": by.origin().word() }));
             }
         }
         for body in said {

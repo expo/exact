@@ -38,6 +38,7 @@ import androidx.core.telecom.CallAttributesCompat
 import androidx.core.telecom.CallControlResult
 import androidx.core.telecom.CallControlScope
 import androidx.core.telecom.CallsManager
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ForegroundClaim
@@ -91,9 +92,11 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
         if (!context.agent) live = WeakReference(this)
     }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
-            "exact:listed" -> { if (!context.agent) follow(args.optJSONArray("entries") ?: JSONArray()); reply(JSONObject()) }
+            "exact:listed" -> { if (!context.agent) follow(args.optJSONArray("entries") ?: JSONArray(), cause); reply(JSONObject()) }
             "callsStatus", "callsStatusSync" -> reply(JSONObject().put("available", true).put("systemUI", !context.agent))
             // The list's names are the runner's (`declared/handed.rs`), never sent here.
             else -> reply(JSONObject().put("error", "NotSupportedError"))
@@ -118,7 +121,7 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** The runner's list now: each change of an entry since the last becomes Telecom's (module doc). */
-    private fun follow(entries: JSONArray) {
+    private fun follow(entries: JSONArray, cause: Cause) {
         val seen = HashSet<String>()
         for (i in 0 until entries.length()) {
             val e = entries.optJSONObject(i) ?: continue
@@ -127,7 +130,7 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
             seen += id
             val call = calls[id]
             if (call == null) {
-                if (state != "ended") add(id, e)
+                if (state != "ended") add(id, e, cause)
                 continue
             }
             val before = call.entry.optString("state")
@@ -174,13 +177,13 @@ class CallsModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** Add [e] to Telecom inside the `Call` service: the service is claimed first, and the call lives in its block. */
-    private fun add(id: String, e: JSONObject) {
+    private fun add(id: String, e: JSONObject, cause: Cause) {
         val call = Live(e)
         calls[id] = call
         val incoming = e.optString("direction") == "incoming"
         val mic = context.application.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         val types = if (mic && context.foregroundService.declared("call", "microphone")) setOf("phoneCall", "microphone") else setOf("phoneCall")
-        call.claim = context.foregroundService.claim("call", types, context.origin, permit = if (context.resumed) null else ForegroundPermit.NotificationAction,
+        call.claim = context.foregroundService.claim("call", types, cause.origin, permit = if (context.resumed) null else ForegroundPermit.NotificationAction,
             notification = { b -> style(b, id, call) }, lost = { why -> Log.i("exact", "calls: $id lost its service: $why"); choose(id, "failed") })
         if (call.claim == null) { calls.remove(id); choose(id, "failed"); return }
         val name = e.optString("displayName").ifEmpty { e.optString("handle") }

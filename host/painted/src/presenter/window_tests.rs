@@ -268,6 +268,41 @@ fn the_field_being_edited_stays_above_the_keyboard() {
     );
 }
 
+#[test]
+fn a_frame_whose_page_has_the_keyboard_stays_above_it() {
+    let rows: String = (0..20)
+        .map(|i| format!("        box height=60 width=200 testId=\"r{i}\"\n"))
+        .collect();
+    for (session_matches, kept) in [(false, false), (true, true)] {
+        let mut p = boot(&format!(
+            "component App\n  view\n    main testId=\"root\" width=\"100%\" height=\"100%\" viewport-fit=\"cover\" display=\"flex\" flex-direction=\"column\"\n      scroll testId=\"port\" flex=1 width=\"100%\"\n        column\n{rows}        iframe testId=\"frame\" src=\"https://example.com/\" width=200 height=120\n"
+        ));
+        assert!(p.set_window(phone()).is_none());
+        let (id, key) = {
+            let k = p.host().kernel();
+            let node = k.node_by_key(k.find_by_test_id("frame")[0]).unwrap();
+            (node.id, node.key)
+        };
+        p.wheel_at(100., 400., 0., 10_000.);
+        let before = p.box_of(id).unwrap().rect;
+        assert!(before.1 + before.3 > 500.0, "{before:?}");
+        // A field in the frame's page took the platform's focus; exact2's own focus is nowhere.
+        let session = p.brush.native_session ^ u64::from(!session_matches);
+        p.reader_frame_focused(id, key, session, true);
+        let typing = Window {
+            keyboard: [0., 0., 300., 0.],
+            ..phone()
+        };
+        assert!(p.set_window(typing).is_none());
+        let after = p.box_of(id).unwrap().rect;
+        assert_eq!(
+            after.1 >= 0.0 && after.1 + after.3 <= 500.0,
+            kept,
+            "session_matches={session_matches}: {after:?}"
+        );
+    }
+}
+
 /// On a phone a picture is shown (frames are submitted and acknowledged),
 /// and the boxes a reveal goes by are the last picture's, painted before
 /// the keyboard rose: the field is kept in view once the page has been

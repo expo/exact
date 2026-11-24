@@ -35,6 +35,7 @@ import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.TrackConsumer
@@ -79,11 +80,13 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
 
     // ------------------------------------------------------------ the names
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         val id = args.optString("recognition")
         val r = recognitions[id]
         when (name) {
-            "startSpeechRecognition" -> start(args, reply)
+            "startSpeechRecognition" -> start(args, cause, reply)
             "stopSpeechRecognition" -> when {
                 id.isEmpty() -> reply(noInfo())
                 r == null -> reply(error("NotFoundError"))
@@ -197,7 +200,7 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
 
     // ------------------------------------------------------------ starting
 
-    private fun start(args: JSONObject, reply: (JSONObject) -> Unit) {
+    private fun start(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         val given = listOfNotNull(
             "track".takeIf { args.optString("track").isNotEmpty() },
             "microphone".takeIf { args.optBoolean("microphone", false) },
@@ -205,6 +208,9 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
         )
         if (given.size != 1) return reply(error("TypeError"))
         val input = given[0]
+        // The microphone opens for the app's own call alone (LLP 1133.012 D12 item 5), as admission says: a call of any
+        // other cause, or none, fails closed here too.
+        if (input == "microphone" && !cause.app) return reply(error("NotAllowedError"))
         val s = status(args)
         val local = local(args)
         // `processLocally` where the recognizer cannot keep audio on the device (D9) opens nothing.
@@ -216,8 +222,8 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
             if (!context.agent) {
                 when (s.getString("state")) {
                     "denied" -> return reply(error("NotAllowedError"))
-                    "prompt" -> return context.askPermission(Manifest.permission.RECORD_AUDIO) {
-                        if (context.permission(Manifest.permission.RECORD_AUDIO).state == "granted") start(args, reply) else reply(error("NotAllowedError"))
+                    "prompt" -> return context.askPermission(cause, Manifest.permission.RECORD_AUDIO) {
+                        if (context.permission(Manifest.permission.RECORD_AUDIO).state == "granted") start(args, cause, reply) else reply(error("NotAllowedError"))
                     }
                 }
             }
@@ -241,7 +247,7 @@ class SpeechRecognitionModule(context: ExtensionContext) : ExactExtension(contex
         if (refused) { r.finish("service-not-allowed"); return reply(r.info()) }
         if (input == "track") {
             try {
-                r.subscription = context.tracks.subscribe(args.getString("track"), r, true, "app")
+                r.subscription = context.tracks.subscribe(args.getString("track"), r, true, cause)
             } catch (e: TrackError) {
                 recognitions.remove(r.id)
                 return reply(error(e.code))

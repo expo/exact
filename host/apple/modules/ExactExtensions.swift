@@ -270,7 +270,7 @@ enum ExactExtensions {
         if let view = request["view"] as? String {
             let origin = request["origin"] as? String ?? "app"
             if let shown = request["displayed"] as? Bool { a.displayed(view, shown, origin: origin) }
-            if let prop = request["bound"] as? String { a.bound(view, prop, origin: origin) }
+            if let prop = request["bound"] as? String, !(request["value"] is NSNull) { a.bound(view, prop, origin: origin) }
             reply.send([:])
         } else if let surface = request["surface"] as? String, let shown = request["displayed"] as? Bool {
             a.displayed(surface: surface, shown, origin: request["origin"] as? String ?? "app")

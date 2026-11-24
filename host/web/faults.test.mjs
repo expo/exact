@@ -2,7 +2,7 @@
 // consult it — the wasm host's `request`, the JS target's `fetchWith`, and
 // `fetchEarly`, which starts no GET a fault will fail.
 import { afterEach, expect, test } from 'bun:test';
-import { cpSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,6 +11,7 @@ import { checkpointFaults, drivenCheckpoint, faultSpecOf, faultMatches, faultOp,
 import { request } from './http-body.js';
 import { fetchWith } from '../web-js/admission.js';
 import { rt } from '../web-js/rt-link.js';
+import { runtimeSource } from './tests/stand-ins.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const target = resolve(process.env.CARGO_TARGET_DIR || resolve(ROOT, 'target'), `debug/exact-web-js${process.platform === 'win32' ? '.exe' : ''}`);
@@ -287,7 +288,7 @@ test('app-facing fetch refuses a fixture download before writing its destination
     const set = normalized('net.fetch https://api.test\nfs.write app:/tmp');
     writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
     for (const name of ['grant-admission.js', 'faults.js', 'address-space.js', 'navigation.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
-    for (const name of ['rt-link.js', 'ts-fetch.js', 'ts-body-from.js']) cpSync(resolve(ROOT, 'host/web-js', name), resolve(dir, name));
+    for (const name of ['rt-link.js', 'ts-fetch.js', 'ts-body-from.js']) writeFileSync(resolve(dir, name), runtimeSource(name));
     writeFileSync(resolve(dir, 'admission-data.js'), `export const tsGrantSet = ${JSON.stringify(set)};`);
     writeFileSync(resolve(dir, 'storage-fs.js'), `export let writes = 0; export const bodyTarget = async () => ({ put() { writes++; return 7; }, close() {} });`);
     const { fetch } = await import(resolve(dir, 'ts-fetch.js'));

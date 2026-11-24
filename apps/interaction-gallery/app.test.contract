@@ -46,6 +46,22 @@ test "a drag short of the threshold springs the card back"
   clock +150
   expect text "deck-face" == "Card 1"
 
+// A flick is judged by its release velocity, the finger's whatever the
+// driver's clock does while it is down (LLP 1057.001 §3): 80 points in 40 ms
+// throws the card at about 2000 points a second though it travels under 120,
+// and 60 points down the sheet's header in 40 ms carries it past the read
+// stop's midpoint to peek, where its height alone would stay at read.
+test "a flick throws the card though it travels under the threshold"
+  tap "deck-handle" drag 80 0 over 40
+  clock +150
+  expect text "deck-face" == "Card 2"
+
+test "a short flick down the sheet's header carries it to peek"
+  tap "mode-sheet"
+  expect state sheetPx == 360
+  tap "sheet-handle" drag 0 60 over 40
+  expect state sheetPx == 180
+
 test "Deal again deals, and a throw it follows deals no second card"
   tap "deck-deal"
   expect text "deck-face" == "Card 2"

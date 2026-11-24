@@ -32,6 +32,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
 import android.util.Size
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
@@ -74,15 +75,17 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
     private fun say(line: String) = context.log("photos: $line")
     private fun error(code: String, message: String? = null) = JSONObject().put("error", code).apply { if (message != null) put("message", message) }
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         if (context.agent) return agent(name, args, reply)
         when (name) {
             "photoLibraryStatus" -> reply(status())
-            "photoAssets" -> readable(context.origin, reply) { work.execute { reply(assets(args)) } }
-            "photoChanges" -> readable(context.origin, reply) { reply(changes(args)) }
-            "copyPhotoAsset" -> copy(args, reply)
+            "photoAssets" -> readable(cause, reply) { work.execute { reply(assets(args)) } }
+            "photoChanges" -> readable(cause, reply) { reply(changes(args)) }
+            "copyPhotoAsset" -> copy(args, cause, reply)
             "addToPhotoLibrary" -> work.execute { reply(add(args)) }
-            "managePhotoSelection" -> manage(reply)
+            "managePhotoSelection" -> manage(cause, reply)
             else -> reply(error("NotSupportedError"))
         }
     }
@@ -161,23 +164,23 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** [then] once the app may read: asked in one request while `prompt`, by the app's own code or a person only (D7);
      * refused while `denied` or undeclared. */
-    private fun readable(origin: String, reply: (JSONObject) -> Unit, then: () -> Unit) {
+    private fun readable(cause: Cause, reply: (JSONObject) -> Unit, then: () -> Unit) {
         val state = status()
         when {
             reads.isEmpty() -> reply(error("NotAllowedError", "the manifest declares no read permission"))
             state.getString("state") == "granted" -> then()
             state.getString("state") == "denied" -> reply(error("NotAllowedError"))
-            origin != "app" -> reply(error("NotAllowedError", "person-required"))
-            else -> ask { if (status().getString("state") == "granted") then() else reply(error("NotAllowedError")) }
+            !cause.app -> reply(error("NotAllowedError", "person-required"))
+            else -> ask(cause) { if (status().getString("state") == "granted") then() else reply(error("NotAllowedError")) }
         }
     }
 
     /** The platform's dialog for the read permissions and the location one, then [done]. */
-    private fun ask(done: () -> Unit) {
+    private fun ask(cause: Cause, done: () -> Unit) {
         val location = listOf(Manifest.permission.ACCESS_MEDIA_LOCATION).filter { it in declared }
         val asked = (reads + location).toTypedArray()
         val first = reads.first()
-        context.requestPermissions(asked) { answered ->
+        context.requestPermissions(cause, asked) { answered ->
             // A refusal with no rationale owed after it is permanent: the history `permission` reads, as
             // `askPermission` keeps it for one permission.
             val activity = context.activity
@@ -192,9 +195,9 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
     /** API 34's selection dialog: the read request again, while access is limited (D6). Answers the status. The dialog
      * can answer with the activity still resumed, and a limited library changed within itself reads the same status,
      * so the pictures of photos it took out are withdrawn here, not at a resume. */
-    private fun manage(reply: (JSONObject) -> Unit) {
+    private fun manage(cause: Cause, reply: (JSONObject) -> Unit) {
         if (Build.VERSION.SDK_INT < 34 || status().getString("access") != "limited") return reply(status())
-        context.requestPermissions(reads.toTypedArray()) {
+        context.requestPermissions(cause, reads.toTypedArray()) {
             context.changed("photos.photoLibraryStatus")
             context.changed("photos.photoAssets")
             context.changed("photos.photoChanges")
@@ -372,16 +375,14 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
 
     // Copies and adds
 
-    private fun copy(args: JSONObject, reply: (JSONObject) -> Unit) {
+    private fun copy(args: JSONObject, cause: Cause, reply: (JSONObject) -> Unit) {
         val uri = Uri.parse(args.optString("asset"))
-        // The origin of this call: another request may be in the context by the time the read is asked.
-        val origin = context.origin
         // Opened as the app's own when it is (D6); else a read of the library, asked while `prompt`.
         work.execute {
             if (opens(uri)) return@execute reply(copied(uri, args))
             main.post {
                 if (reads.isEmpty()) return@post reply(error("NotFoundError"))
-                readable(origin, reply) { work.execute { reply(if (opens(uri)) copied(uri, args) else error("NotFoundError")) } }
+                readable(cause, reply) { work.execute { reply(if (opens(uri)) copied(uri, args) else error("NotFoundError")) } }
             }
         }
     }

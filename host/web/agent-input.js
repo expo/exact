@@ -106,7 +106,7 @@ export function guestType(frame, request) {
   target.dispatchEvent(new guest.Event("change", { bubbles: true, composed: true }));
   return { typed: request.id, guest: true, value: guestValue(target) };
 }
-// What a guest field holds, as the reply shows it: a password's is a fixed mark, whatever its length (#134).
+// What a guest field holds, as the reply shows it: a password's is a fixed mark, whatever its length.
 const guestValue = (target) => "value" in target ? (target.type === "password" && target.value ? "•••" : target.value) : target.textContent;
 
 // The agent's `reveal` (ledger F7, shop F11): before a tap or a type, a

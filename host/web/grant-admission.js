@@ -324,8 +324,17 @@ const grantPort = (url) => Number(url.port || {
   "wss:": 443,
   "ftp:": 21
 }[url.protocol]);
+// A packaged file is host I/O. A redirect still qualifies only inside the same site's assets directory.
+export function bundledAsset(path, initial, target) {
+  if (target !== undefined) {
+    const prefix = initial.slice(0, -path.length);
+    if (!initial.endsWith(path) || !target.startsWith(prefix + '/assets/')) return false;
+    path = target.slice(prefix.length);
+  }
+  return typeof path === 'string' && /^\/assets\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+\.[A-Za-z0-9]+$/.test(path);
+}
 // The line that admits a request to `value`, or null: `state.streams` names it.
-export function admittingGrant(set, value, operation = "fetch") {
+export function admittingGrant(set, value, operation = "fetch", render = globalThis.__exactRender) {
   if (grantError(set)) {
     return null;
   }
@@ -337,9 +346,16 @@ export function admittingGrant(set, value, operation = "fetch") {
   }
   const kind = operation === "websocket" ? "websocket" : "fetch";
   const scheme = target.protocol.slice(0, -1).toLowerCase(), host = target.hostname.toLowerCase(), port = grantPort(target);
-  return set.entries.find(([, , grant]) => grant?.[0] === kind + "-local-network" && schemeGrants[kind + "-scheme"].includes(scheme) && isLocalNetwork(host, grant[1] === "development") || grant && grant[1] === scheme && (grant[0] === kind + "-scheme" || grant[3] === port && (grant[0] === kind && grant[2] === host || grant[0] === kind + "-subdomains" && host.length > grant[2].length + 1 && host.endsWith("." + grant[2]))))?.[1] ?? null;
+  // A render holds only the HTTP origins and subdomains named by the source (LLP 1016 D6).
+  return set.entries.find(([, , grant]) => {
+    if (!grant) return false;
+    if (render && grant[0] !== 'fetch' && grant[0] !== 'fetch-subdomains') return false;
+    if (grant[0] === kind + "-local-network") return schemeGrants[kind + "-scheme"].includes(scheme) && isLocalNetwork(host, grant[1] === "development");
+    return grant[1] === scheme && (grant[0] === kind + "-scheme" || grant[3] === port &&
+      (grant[0] === kind && grant[2] === host || grant[0] === kind + "-subdomains" && host.endsWith("." + grant[2]) && host.length > grant[2].length + 1));
+  })?.[1] ?? null;
 }
-export const admitsNetwork = (set, value, operation) => admittingGrant(set, value, operation) !== null;
+export const admitsNetwork = (set, value, operation, render) => admittingGrant(set, value, operation, render) !== null;
 export function admitsSecret(set, name) {
   return !String(name).startsWith("exact.kept.") && !grantError(set) && set.entries.some(([, , grant]) => grant?.[0] === "secret-keep" && grant[1] === String(name));
 }

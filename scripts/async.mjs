@@ -130,7 +130,7 @@ export function laneSelection(changed, { root = WT, full = false, repo, graphs =
   const hits = suites(repo).flatMap(suite => select(graph(step(suite)), changed, [suite]));
   const chosen = hits.map(hit => hit.suite), ids = new Set(chosen.map(s => s.id));
   const ios = hits.find(hit => hit.suite.id === 'xctest:ios'), build = resolve(root, 'host/apple/build.mjs');
-  // Run alone the iOS classes a commit's test files reach, unless its build.mjs predates `--only` (#1371)
+  // Run alone the iOS classes a commit's test files reach, unless its build.mjs predates `--only`
   const iosOnly = ios?.only && existsSync(build) && readFileSync(build, 'utf8').includes("'--only'") ? ios.only : null;
   const cargo = manifest => chosen.filter(s => s.kind === 'cargo' && s.manifest === manifest).map(s => s.name);
   return {

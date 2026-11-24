@@ -1151,6 +1151,73 @@ final class AgentCheckIOSTests: XCTestCase {
         }
     }
 
+    func testAScrollerSqueezedAlongItsAxisIsObservedWithItsPortAndContent() throws {
+        func scroller(_ id: Int, _ style: [String: Any], handlers: [String] = []) -> [String: Any] { ["op": "create", "id": id, "kind": "scroll", "handlers": handlers, "style": style] }
+        let vertical: [String: Any] = ["overflow_y": "auto"]
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view"],
+            scroller(10, vertical), ["op": "create", "id": 11, "kind": "view"],
+            scroller(20, vertical, handlers: ["scroll"]), ["op": "create", "id": 21, "kind": "view"],
+            scroller(30, ["overflow_x": "auto", "overflow_y": "hidden", "written": ["overflow_x", "overflow_y"]]), ["op": "create", "id": 31, "kind": "view"],
+            scroller(40, ["overflow_y": "auto", "written": ["height"]]), ["op": "create", "id": 41, "kind": "view"],
+            scroller(50, ["overflow_x": "auto", "overflow_y": "auto", "written": ["overflow_x"]]), ["op": "create", "id": 51, "kind": "view"],
+            scroller(60, vertical),
+            ["op": "create", "id": 70, "kind": "view", "style": ["display": "none"]], scroller(71, vertical), ["op": "create", "id": 72, "kind": "view"],
+            ["op": "create", "id": 80, "kind": "view", "style": ["overflow_x": "hidden", "overflow_y": "hidden"]], scroller(81, vertical), ["op": "create", "id": 82, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [10, 20, 30, 40, 50, 60, 70, 80]],
+            ["op": "children", "id": 10, "ids": [11]], ["op": "children", "id": 20, "ids": [21]], ["op": "children", "id": 30, "ids": [31]],
+            ["op": "children", "id": 40, "ids": [41]], ["op": "children", "id": 50, "ids": [51]], ["op": "children", "id": 70, "ids": [71]],
+            ["op": "children", "id": 71, "ids": [72]], ["op": "children", "id": 80, "ids": [81]], ["op": "children", "id": 81, "ids": [82]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0],
+            ["op": "frame", "id": 10, "x": 0.0, "y": 100.0, "w": 400.0, "h": 0.0], ["op": "frame", "id": 11, "x": 0.0, "y": 0.0, "w": 400.0, "h": 1000.0],
+            ["op": "content", "id": 10, "w": 400.0, "h": 1000.0],
+            ["op": "frame", "id": 20, "x": 0.0, "y": 200.0, "w": 400.0, "h": 3.33], ["op": "frame", "id": 21, "x": 0.0, "y": 0.0, "w": 400.0, "h": 1000.0],
+            ["op": "content", "id": 20, "w": 400.0, "h": 1000.0],
+            ["op": "frame", "id": 30, "x": 370.0, "y": 300.0, "w": 30.0, "h": 40.0], ["op": "frame", "id": 31, "x": 0.0, "y": 0.0, "w": 800.0, "h": 40.0],
+            ["op": "content", "id": 30, "w": 800.0, "h": 40.0],
+            ["op": "frame", "id": 40, "x": 0.0, "y": 400.0, "w": 400.0, "h": 20.0], ["op": "frame", "id": 41, "x": 0.0, "y": 0.0, "w": 400.0, "h": 1000.0],
+            ["op": "content", "id": 40, "w": 400.0, "h": 1000.0],
+            ["op": "frame", "id": 50, "x": 0.0, "y": 450.0, "w": 400.0, "h": 36.0], ["op": "frame", "id": 51, "x": 0.0, "y": 0.0, "w": 800.0, "h": 38.0],
+            ["op": "content", "id": 50, "w": 800.0, "h": 38.0],
+            ["op": "frame", "id": 60, "x": 0.0, "y": 500.0, "w": 400.0, "h": 0.0],
+            ["op": "frame", "id": 70, "x": 0.0, "y": 550.0, "w": 400.0, "h": 100.0], ["op": "frame", "id": 71, "x": 0.0, "y": 100.0, "w": 400.0, "h": 0.0],
+            ["op": "frame", "id": 72, "x": 0.0, "y": 0.0, "w": 400.0, "h": 1000.0], ["op": "content", "id": 71, "w": 400.0, "h": 1000.0],
+            ["op": "frame", "id": 80, "x": 0.0, "y": 650.0, "w": 400.0, "h": 100.0], ["op": "frame", "id": 81, "x": 400.0, "y": 100.0, "w": 400.0, "h": 0.0],
+            ["op": "frame", "id": 82, "x": 0.0, "y": 0.0, "w": 400.0, "h": 1000.0], ["op": "content", "id": 81, "w": 400.0, "h": 1000.0],
+        ])
+        let reply = agent.check([:])
+        XCTAssertNil(reply["error"], "\(reply)")
+        let items = try XCTUnwrap(reply["items"] as? [[String: Any]])
+        func squeezed(_ id: Int) -> [String: Any]? { items.first { $0["id"] as? Int == id && $0["squeezed"] is [String: Any] }?["squeezed"] as? [String: Any] }
+        XCTAssertNotNil(session?.presenter.views[20]?.scrollView, "#20 is one it has")
+        for (id, axis, port, content) in [(10, "y", 0.0, 1000.0), (20, "y", 3.33, 1000.0), (30, "x", 30.0, 800.0)] {
+            let s = try XCTUnwrap(squeezed(id), "#\(id) in \(items)")
+            XCTAssertEqual(s["axis"] as? String, axis, "#\(id)")
+            XCTAssertEqual(s["port"] as? Double ?? -1, port, accuracy: 0.01, "#\(id)")
+            XCTAssertEqual(s["content"] as? Double ?? -1, content, accuracy: 0.01, "#\(id)")
+        }
+        for id in [40, 50, 60, 71, 81] { XCTAssertNil(squeezed(id), "#\(id) is not squeezed: \(items)") }
+    }
+
+    func testAWindowedListWithNoMountedRowsNeedsALaidOutPort() throws {
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "list", "style": ["overflow_y": "scroll"]],
+            ["op": "roots", "ids": [1]],
+            ["op": "collections", "items": [["view": 1, "revision": 1, "scrollSequence": 0,
+                "count": 1000, "totalExtent": 73031, "rows": []]]],
+        ])
+        func findings() throws -> [[String: Any]] {
+            try XCTUnwrap(agent.check([:])["items"] as? [[String: Any]]).compactMap { $0["squeezed"] as? [String: Any] }
+        }
+        XCTAssertTrue(try findings().isEmpty)
+        session?.presenter.apply(wireBatch([["op": "frame", "id": 1, "x": 18, "y": 700, "w": 366, "h": 0]]))
+        let found = try XCTUnwrap(findings().first)
+        XCTAssertEqual(found["axis"] as? String, "y")
+        XCTAssertEqual(found["port"] as? Double, 0)
+        XCTAssertEqual(found["content"] as? Double, 73031)
+    }
+
     /// LLP 1116.009 D5 (round 11: book-club, expense-tracker, the grouped-form recipe's Quantity row, the dashboard
     /// pattern's add sheet): a native field's box is its kernel box and no taller, and a text under it in the same
     /// grouped row is not covered. A touch the row leaves to no control goes to the row's one field (the cell is the

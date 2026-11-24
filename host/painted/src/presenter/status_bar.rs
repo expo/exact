@@ -158,7 +158,7 @@ impl<D: DataSource> Presenter<D> {
             let (resolved, light) = match style(id) {
                 Some("light-content") => ("light-content", true),
                 Some("dark-content") => ("dark-content", false),
-                _ => match self.status_bar_scheme(id) {
+                _ => match self.scheme_of(id) {
                     Some(true) => ("light-content", true),
                     Some(false) => ("dark-content", false),
                     None => ("default", self.dark()),
@@ -180,20 +180,6 @@ impl<D: DataSource> Presenter<D> {
             choice.hidden_source = Some(id);
         }
         choice
-    }
-
-    // The painter carries each node's presented scheme through `normal`.
-    // Walk logical parents so a route's lifted header keeps that appearance too.
-    fn status_bar_scheme(&self, id: ViewId) -> Option<bool> {
-        let kernel = self.host.kernel();
-        let mut at = Some(id);
-        while let Some(id) = at {
-            if let Some(dark) = self.host.presented(id).dark {
-                return Some(dark);
-            }
-            at = kernel.node(id)?.parent;
-        }
-        None
     }
 
     fn status_bar_shows(&self, id: ViewId) -> bool {

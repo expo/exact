@@ -142,6 +142,48 @@ fn contrast_changes_live_and_restores_both_schemes_without_replacing_literal_col
     }
     badges_keep_their_labels_in_contrast_themes(palette);
     selected_field_text_follows_the_highlight_pair(palette);
+    a_pressed_segment_takes_none_of_the_highlight_pair(palette);
+}
+
+/// A segment's chosen member is the selected item, and a press on another
+/// gives it none of the highlight pair, as the web's sheet has it.
+fn a_pressed_segment_takes_none_of_the_highlight_pair(palette: ContrastPalette) {
+    let plan = contract::compile(
+        r##"component App
+  state unit = "km"
+  action pick(u: string)
+    unit = u
+  view
+    column width=300 height=100 padding=20
+      row role="radiogroup" aria-label="Units"
+        for u in ["km", "mi"] key=u
+          button role="radio" aria-checked=(unit == u) press=pick(u) testId=`u-${u}`
+            text u
+"##,
+    )
+    .unwrap();
+    let (mut p, error) = Presenter::boot_with(
+        &plan.encode(),
+        (),
+        (300., 100.),
+        1.,
+        Default::default(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.set_contrast_palette(Some(palette));
+    let unpressed = p.frame().data().to_vec();
+    let key = p.host().kernel().find_by_test_id("u-mi")[0];
+    let mi = p.host().kernel().node_by_key(key).unwrap().id;
+    let r = p.rect_of(mi).unwrap();
+    p.pointer_down(r.0 + 4., r.1 + r.3 / 2., 0.).unwrap();
+    p.clock(500.);
+    assert!(
+        p.frame().data() == unpressed,
+        "a pressed segment keeps its pair"
+    );
+    p.set_contrast_palette(None);
 }
 
 fn badges_keep_their_labels_in_contrast_themes(mut palette: ContrastPalette) {

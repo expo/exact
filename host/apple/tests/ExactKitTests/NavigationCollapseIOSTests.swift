@@ -115,7 +115,11 @@ final class NavigationCollapseIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else { throw missing("scene", "route resizing needs UIKit containment") }
         let session = try booted("EXACT_FIXTURE_PLAN", label: "owner-resize")
         let view = try XCTUnwrap(session.view), p = session.presenter
-        for width: CGFloat in [380, 402, 360, 402] {
+        // Keep the view clear of the window's side safe area (the iPhone Duo's), where its inset would change with its width
+        let window = try XCTUnwrap(window), full = window.bounds.inset(by: window.safeAreaInsets).width
+        view.frame.size.width = full
+        view.layoutIfNeeded()
+        for width in [full - 22, full, full - 42, full] {
             waitFor("the previous layout is idle") { !session.ownerInFlight && !Agent(session: session).nativeInFlight() }
             waitForMainQueue("the previous reports")
             let batches = session.appliedBatches, syncs = p.navigationHost.syncCalls

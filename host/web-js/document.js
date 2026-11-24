@@ -192,8 +192,12 @@ export function markDocument() {
 // it builds every one, and none waits for the page's life.
 const Waiting = new Map();
 let Every = false;
+/** What a commit runs for the panels: set by the first `tp`, so a plan with no tab panel links none of it. */
+export const Tabs = { open: null, prepare: null };
 /** Panel `e` waits; `build` makes its contents, in the scope in force here, when it is first selected. */
 export function tp(e, build) {
+  Tabs.open = openTabs;
+  Tabs.prepare = prepareTabs;
   if ((Every ||= !!globalThis.__exactRender || adopting())) return scope(() => build(e), owner());
   Waiting.set(e, { build, up: owner(), prepared: null });
   onEnd(() => Waiting.delete(e));
@@ -201,7 +205,7 @@ export function tp(e, build) {
 /** Whether `e` is a panel whose tab has never been selected: the agent's `unopened`. */
 export const unopened = e => Waiting.has(e);
 /** Build each waiting panel its root now selects, and any no root's tablist names. */
-export function openTabs() {
+function openTabs() {
   for (let open = toOpen(); open.length; open = toOpen()) for (const e of open) {
     const waiting = Waiting.get(e); Waiting.delete(e);
     if (waiting.prepared) e.append(...waiting.prepared.shell.childNodes);
@@ -209,7 +213,7 @@ export function openTabs() {
   }
 }
 /** Validate a newly selected panel's tasks before publishing the selection. */
-export function prepareTabs() {
+function prepareTabs() {
   if (!PrepareTasks) return;
   for (let open = toOpen(true); open.length; open = toOpen(true)) for (const e of open) {
     const waiting = Waiting.get(e), shell = e.cloneNode(false);

@@ -3,6 +3,7 @@ package exact.passkeys
 import android.app.Activity
 import androidx.credentials.CreatePublicKeyCredentialRequest
 import dev.exact.canvas.Exact
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.ExtensionInvokeTest.Host
 import dev.exact.canvas.Extensions
@@ -49,7 +50,7 @@ class CeremonyStartTest {
         Extensions.front = { Exact.reader?.get() }
     }
 
-    private fun create() = module.later("create", JSONObject().put("publicKey", options)) { answers += it }
+    private fun create() = module.later("create", JSONObject().put("publicKey", options), null, Cause("app")) { answers += it }
     private val messages get() = answers.map { it.optString("message") }
 
     @Test fun aCeremonyWhileTheActivityShowsPausedStartsAtOnce() {

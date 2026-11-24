@@ -174,6 +174,7 @@ where
             // such child
             if self.taffy.nodes[child.into()].style.display == Display::None {
                 self.taffy.bar_depths.remove(child.into());
+                self.taffy.bar_slots.remove(child.into());
                 continue;
             }
             let edge = edge as usize;
@@ -358,6 +359,13 @@ where
             layout.margin = bar.margin;
             self.set_unrounded_layout(bar.node, &layout);
             self.taffy.bar_depths.insert(bar.node.into(), bar.depth);
+            // A slot that moves or resizes is a changed layout to the caller, though the bar's own
+            // layout may be the same (a fixed-width bar at its start as its parent widens)
+            let key = bar.node.into();
+            if self.taffy.bar_slots.insert(key, slot) != Some(slot) && !self.taffy.changed_layout_indices.contains_key(key) {
+                self.taffy.changed_layout_indices.insert(key, self.taffy.changed_layouts.len());
+                self.taffy.changed_layouts.push(bar.node);
+            }
             *side(&mut before, bar.edge) += bar.depth;
             let origin = match rtl {
                 true => Point { x: size.width - (location.x + out.size.width) - border.right, y: location.y - border.top },

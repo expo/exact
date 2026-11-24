@@ -88,16 +88,16 @@ extension NavigationHost {
         return true
     }
 
-    /// Where UIKit and the router disagree while Exact owes UIKit nothing
+    /// Where UIKit and the router disagree while nothing is in flight
     /// (LLP 1075.003 §3.5): a tab's stack, below any sheet, that UIKit holds
     /// with other routes than the router's, or a tab UIKit shows that the
     /// router is not on (More's list may show while the router keeps its
     /// tab). A stack UIKit is moving is skipped, as is a tab not built. Nil
-    /// when they agree, or while a transition, a sync or a tap is under way.
+    /// when they agree, during a transition, sync or tap, or while a stack
+    /// write has a retry scheduled.
     var restDifference: String? {
         guard container != nil, primaryOwner != nil, !syncing, !changing, !pendingSync, !resyncOwed, tapping == nil,
-              !presenter.modalHost.inTransition, split?.inTransition != true else { return nil }
-        let keys = { (routes: [UIViewController]) in "[" + routes.map { ($0 as? RouteController)?.key ?? "?" }.joined(separator: ", ") + "]" }
+              !stackWriteRetry, !presenter.modalHost.inTransition, split?.inTransition != true else { return nil }
         for (index, routes) in routerStacks.enumerated() where !routes.isEmpty {
             let wanted = base(routes)
             guard let holder = tabPanels.isEmpty ? primaryNavigation : routesStack(index),
@@ -105,7 +105,7 @@ extension NavigationHost {
             // A split shows its columns' routes as one stack (`SplitIOS.shown`)
             let held = tabPanels.isEmpty ? split?.shown ?? holder.stackRoutes : holder.stackRoutes
             if !held.elementsEqual(wanted, by: ===) {
-                return (tabPanels.isEmpty ? "the stack" : "tab \(index)") + " holds \(keys(held)) in UIKit and \(keys(wanted)) in the router"
+                return (tabPanels.isEmpty ? "the stack" : "tab \(index)") + Self.routerStackDifference(held: held, wanted: wanted)
             }
         }
         // Each sheet's stack, against the selected stack's presentations
@@ -114,7 +114,7 @@ extension NavigationHost {
         for (index, nav) in presentedNavigations.enumerated() where parts.indices.contains(index + 1) && nav.transitionCoordinator == nil {
             let wanted = Array(chosen[parts[index + 1]])
             if !routesInFlight(wanted), !nav.stackRoutes.elementsEqual(wanted, by: ===) {
-                return "sheet \(index + 1) holds \(keys(nav.stackRoutes)) in UIKit and \(keys(wanted)) in the router"
+                return "sheet \(index + 1)" + Self.routerStackDifference(held: nav.stackRoutes, wanted: wanted)
             }
         }
         if let tabs = tabController, let selected = tabs.selectedViewController, selected !== more,
@@ -122,6 +122,14 @@ extension NavigationHost {
             return "UIKit shows tab \(shown) and the router is on tab \(routerTab)"
         }
         return nil
+    }
+
+    private static func routerStackDifference(held: [UIViewController], wanted: [UIViewController]) -> String {
+        " holds \(stackKeys(held)) in UIKit and \(stackKeys(wanted)) in the router"
+    }
+
+    private static func stackKeys(_ routes: [UIViewController]) -> String {
+        "[" + routes.map { ($0 as? RouteController)?.key ?? "?" }.joined(separator: ", ") + "]"
     }
 
     /// Once a batch is projected, follow what it did to routes UIKit popped.
@@ -157,8 +165,7 @@ extension NavigationHost {
     func prepare(_ batch: Batch) {
         checkOwned()
         presenter.elements.checkOwned()
-        // Fold every batch's child lists, whether or not a sync projects it: a sync asked for during a sync returns
-        // without projecting its batch
+        // Update known child lists before UIKit can react to the batch
         foldChildren(batch)
         #if os(iOS)
         hearSplit(batch)
@@ -185,19 +192,79 @@ extension NavigationHost {
         retiringRoots.contains { node === $0 || node.isDescendant(of: $0) }
     }
 
-    /// Run the sync a transition held, now that it has ended, or else the edge passes that an app's selection owes.
+    /// Run the sync a transition or refused stack write held.
     func runHeldSync() {
-        guard pendingSync || tabsHeld else { return settleScrollEdges() }
-        pendingSync = false
+        // Leave each hold for its own release while a projection is running
+        guard !syncing else { return }
+        guard pendingSync || tabsHeld || stackWritesOwed else {
+            settleScrollEdges()
+            return
+        }
+        projectionHeld = false
         tabsHeld = false
         resync()
     }
 
+    /// Returns true when UIKit holds the requested controllers. A new
+    /// refusal schedules a retry even when UIKit supplies no coordinator.
+    @discardableResult
+    func writeStack(_ routes: [UIViewController], in nav: UINavigationController, animated: Bool, visible: Bool = false) -> Bool {
+        nav.setViewControllers(routes, animated: animated)
+        let held = nav.viewControllers
+        let id = ObjectIdentifier(nav)
+        if held.elementsEqual(routes, by: ===) {
+            stackWriteRefusals.removeValue(forKey: id)
+            exhaustedStackWrites.removeValue(forKey: id)
+            return true
+        }
+        let exhausted = exhaustedStackWrites[id]?.matches(held: held, wanted: routes) == true
+        let label = stacks[id]?.label ?? String(describing: id)
+        let difference = "stack \(label) holds \(Self.stackKeys(held)) in UIKit and was asked for \(Self.stackKeys(routes))"
+        stackWriteRefusals[id] = StackWriteRefusal(held: held, wanted: routes, visible: visible, difference: difference, exhausted: exhausted)
+        if !stackWriteRetry, !exhausted {
+            stackWriteRetry = true
+            retryStackWrite(remaining: Self.stackWriteRetryLimit)
+        }
+        return false
+    }
+
+    private static let stackWriteRetryLimit = 60
+
+    private var stackWriteCanRetry: Bool {
+        stackWriteRefusals.values.contains { !$0.exhausted }
+    }
+
+    /// Probe until the projection takes or the series' retry budget runs out;
+    /// a write declined while a series runs shares what is left of it. Keep
+    /// the debt on exhaustion so the next batch can make another attempt.
+    private func retryStackWrite(remaining: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60) { [weak self] in
+            guard let self else { return }
+            if !syncing, !presenter.applying, stackWriteCanRetry { resync() }
+            if !stackWriteCanRetry {
+                stackWriteRetry = false
+            } else if remaining > 1 {
+                retryStackWrite(remaining: remaining - 1)
+            } else {
+                let refusals = stackWriteRefusals.filter { !$0.value.exhausted }
+                for (id, refusal) in refusals {
+                    stackWriteRefusals[id]?.exhausted = true
+                    exhaustedStackWrites[id] = refusal
+                }
+                stackWriteRetry = false
+                for difference in refusals.values.map(\.difference).sorted() {
+                    reportOnce("navigation: stack write still owed after \(Self.stackWriteRetryLimit) retry turns. \(difference). The next batch will retry.")
+                }
+                presenter.menus.resumeAfterRouteDismissal()
+            }
+        }
+    }
+
     /// Runs what `transition` held when it ends, on the turn after its completion: the held sync (`runHeldSync`: a
-    /// stack's write, `tabsHeld`, or a sync a route's sheet deferred, `pendingSync`) and the selected stack's tablist,
+    /// stack's write or a sync a route's sheet deferred) and the selected stack's tablist,
     /// which the bar could not follow while it ran, at the root (`tablistRoot`) or at a pushed route on top
     /// (`tablistOwed`). The stack's own push or pop also runs the held sync from `willShow`'s completion, `didShow` and
-    /// `completeTransition`; this release serves any transition the stack reports, such as a presentation over it. A
+    /// `completeTransition`; this release also serves coordinators for presentations and dismissals over the stack. A
     /// call that finds a transition whose run is pending asks nothing more and loses nothing: the run reads the router
     /// and the tree as they are then.
     func runHeld(after transition: UIViewControllerTransitionCoordinator) {

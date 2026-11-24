@@ -42,7 +42,7 @@ fn height_appends_wire_value_and_has_no_numeric_css_initial() {
     assert_eq!(HEIGHT.components(), 1);
     assert_eq!(HEIGHT.identity(), None);
     assert_eq!(Property::Translate.identity(), Some(Value::ZERO));
-    assert_eq!(Property::Scale.identity(), Some(Value::scalar(1.0)));
+    assert_eq!(Property::Scale.identity(), Some(Value::new(1.0, 1.0)));
     assert_eq!(Property::Rotate.identity(), Some(Value::ZERO));
     assert_eq!(Property::Opacity.identity(), Some(Value::scalar(1.0)));
     assert_eq!(Property::from_wire(Property::COUNT as u8), None);

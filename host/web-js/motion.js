@@ -41,7 +41,7 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
       if (kind === 2) { out.push({ op: 'animate', id, property: p, delay: 0, duration: 0, values: [] }); i += 3; continue; }
       const k = f[i + 6], values = [];
       // Four numbers per frame: translation lengths/percentages or rotation angle/axis.
-      for (let j = 0, at = i + 7; j < k; j++, at += 4) values.push(p === 'translate' ? (f[at + 2] || f[at + 3] ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : [f[at], f[at + 1]]) : p === 'rotate' ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : f[at]);
+      for (let j = 0, at = i + 7; j < k; j++, at += 4) values.push(p === 'translate' ? (f[at + 2] || f[at + 3] ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : [f[at], f[at + 1]]) : p === 'scale' ? [f[at], f[at + 1]] : p === 'rotate' ? [f[at], f[at + 1], f[at + 2], f[at + 3]] : f[at]);
       out.push(kind === 3 ? { op: 'animate', id, property: p, held: true, due: f[i + 3] * 1000, delay: f[i + 4] * 1000, duration: f[i + 5] * 1000, values } : { op: 'animate', id, property: p, at: f[i + 3] * 1000, delay: f[i + 4] * 1000, duration: f[i + 5] * 1000, values });
       i += 7 + 4 * k;
     }
@@ -61,13 +61,14 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
     let n = nodes.get(id);
     if (!n) nodes.set(id, n = {});
     const [x, y, px, py] = typeof tr === 'string' && w.m_translate(put(tr)) ? [0, 1, 2, 3].map(i => w.m_scratch(i)) : [0, 0, 0, 0];
+    const [sx, sy] = w.m_scale(put(String(scale ?? 1))) ? [w.m_scratch(0), w.m_scratch(1)] : [1, 1];
     if (n.transition !== transition) { n.transition = transition; if (!w.m_transitions(id, put(transition ?? '')) && transition) say(`motion: transition ${JSON.stringify(transition)} refused`); }
     const speed = typeof velocity === 'string' ? velocity.trim().split(/\s+/).map(v => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(v) ? Math.fround(Number(v)) : NaN) : [];
     const supplied = speed.length === 2 && speed.every(Number.isFinite);
     const cleared = velocity == null || typeof velocity === 'string' && (!velocity.trim() || velocity.trim().toLowerCase() === 'unset');
     if (!cleared && !supplied && n.velocity !== velocity) say(`motion: -exact-translate-velocity ${JSON.stringify(velocity)} refused`);
     n.velocity = velocity;
-    if (!w.m_observe(id, x, y, px, py, num(scale, 1), put(String(rotate ?? 0)), num(opacity, 1), supplied ? 1 : 0, supplied ? speed[0] : 0, supplied ? speed[1] : 0, now() / 1000)) say(`motion: targets for #${id} refused`);
+    if (!w.m_observe(id, x, y, px, py, sx, sy, put(String(rotate ?? 0)), num(opacity, 1), supplied ? 1 : 0, supplied ? speed[0] : 0, supplied ? speed[1] : 0, now() / 1000)) say(`motion: targets for #${id} refused`);
   };
   const ops = list => ({ ops: list, timers: false });
   const applyBatch = batch => {

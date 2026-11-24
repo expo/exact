@@ -19,7 +19,7 @@ class LayersTest {
     /** An op 30 body: a matrix, pivot, base and dash word (-1), then the drawing. */
     private val layerWords = intArrayOf(
         1f.toRawBits(), 0, 0, 0, 1f.toRawBits(), 0, 0, 0,
-        1f.toRawBits(), 0, 0, 0, 1f.toRawBits(), 0, 0, -1,
+        1f.toRawBits(), 0, 0, 0, 1f.toRawBits(), 0, 0, 1f.toRawBits(), -1,
     ) + background
 
     @Test fun colorTransitionsReachTheBackgroundAndTextInsideAPathClip() {
@@ -109,6 +109,22 @@ class LayersTest {
         }
     }
 
+    @Test fun scaleTracksKeepBothAxesIncludingAFlipAndCollapse() {
+        val layers = Layers({ _, _, _, _, _, _ -> })
+        layers.set(7, IntBuffer.wrap(layerWords), 0, layerWords.size)
+        fun track(code: Int, from: Float, to: Float) = intArrayOf(
+            code, 0, 0, 0, 0, 1f.toRawBits(), 1f.toRawBits(), 0, 3, 0, 2,
+            0, from.toRawBits(), 0, 1f.toRawBits(), to.toRawBits(), 0)
+        val words = track(3, 1f, -1f) + track(17, 0.5f, 0f)
+        layers.tracks(7, IntBuffer.wrap(words), 0, words.size)
+        layers.sample(500_000_000L)
+        assertEquals(0f, layers.node(7).scaleX, 0f)
+        assertEquals(0.25f, layers.node(7).scaleY, 0f)
+        layers.sample(1_000_000_000L)
+        assertEquals(-1f, layers.node(7).scaleX, 0f)
+        assertEquals(0f, layers.node(7).scaleY, 0f)
+    }
+
     @Test fun aLayerThatLostItsDrawingIsRecordedAgainAsItIsDrawn() {
         var recorded = 0
         val layers = Layers({ node, _, _, _, _, _ -> recorded++; node.beginRecording(); node.endRecording() })
@@ -159,8 +175,8 @@ class LayersTest {
             if (id == 1) assertFalse(layers.drawn(2)!!.hasDisplayList())
         })
         val outer = layers.node(1); inner = layers.node(2)
-        // Path units per dash offset unit (word 14), and the word its phase is written to (word 15).
-        val dashed = layerWords.copyOf().also { it[14] = 1f.toRawBits(); it[15] = 2 }
+        // Path units per dash offset unit (word 14), and the word its phase is written to (word 16).
+        val dashed = layerWords.copyOf().also { it[14] = 1f.toRawBits(); it[16] = 2 }
         layers.set(1, IntBuffer.wrap(dashed), 0, dashed.size)
         layers.set(2, IntBuffer.wrap(layerWords), 0, layerWords.size)
         outer.beginRecording(); outer.endRecording()

@@ -304,7 +304,7 @@ fn a_handlers_module_call_carries_the_tool_origin() {
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(made.len(), 2, "{made:?}");
-    assert_eq!(made[0].get("origin"), None, "the person's create");
+    assert_eq!(made[0]["origin"], "app", "the person's create");
     assert_eq!(made[1]["origin"], "tool", "the handler's");
     assert!(
         answer["text"].as_str().unwrap().contains("person-required"),

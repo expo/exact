@@ -375,14 +375,17 @@ the canvas's previous drawn frame (0 after a rest), the display period
 (`gpu_period`), the host's callback (`gpu_host_frame(raw_ms, callback_ms,
 fastest_period_ms, thermal)`: its own timestamp and when it began to run, on the
 frame clock, and the display's fastest period) and a `ThermalState` (0 unknown,
-1 nominal, 2 fair, 3 serious, 4 critical). Apple reports `ProcessInfo.thermalState`;
-the web, Android, Linux and Windows report unknown.
+1 nominal, 2 fair, 3 serious, 4 critical). Apple reports `ProcessInfo.thermalState`
+and Android reports `PowerManager`'s thermal status. For canvas performance,
+`NONE` is nominal, `LIGHT` fair, `MODERATE` and `SEVERE` serious, and `CRITICAL`
+through `SHUTDOWN` critical. The device package reports moderate throttling as
+`fair` in `powerState()` (LLP 1133.031 D3). The web, Linux and Windows report unknown.
 
 | host | rests | caps | timing |
 |---|---|---|---|
 | web | yes | `gpu_due` in the `requestAnimationFrame` loop | callback times; thermal unknown |
 | iOS, tvOS, macOS | yes | capped `CADisplayLink` range and `gpu_due` per canvas | callback times, fastest period, thermal state |
-| Android | yes | `gpu_due` per canvas; the cap asked of the platform: `Surface.setFrameRate` with `DEFAULT` compatibility for a canvas with a window of its own (Android 11 and later), `View.setRequestedFrameRate` for one drawn from its buffers in the reader's window (Android 15 and later) | `gpu_period`: Choreographer's vsync spacing (Android 13 and later), else the display's refresh |
+| Android | yes | `gpu_due` per canvas; the cap asked of the platform: `Surface.setFrameRate` with `DEFAULT` compatibility for a canvas with a window of its own (Android 11 and later), `View.setRequestedFrameRate` for one drawn from its buffers in the reader's window (Android 15 and later) | `gpu_period`: Choreographer's vsync spacing (Android 13 and later), else the display's refresh; callback times (Choreographer's frame time and when its callback began), the fastest mode's period at the current resolution, thermal state |
 | Linux (display) | no: a rendered canvas repaints every display frame | no | `gpu_period`: the DRM mode's pixel clock over its total pixels |
 | Linux headless, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
 

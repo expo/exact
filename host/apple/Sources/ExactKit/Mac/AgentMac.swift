@@ -518,7 +518,7 @@ extension Agent {
     /// other operation answers while the button is down. Mouse cancellation
     /// releases the platform contact and clears the driver ownership. The
     /// `down`'s `modifiers` are held in every event of the contact, and a
-    /// `move` or `up` that names others holds those from it on (#107).
+    /// `move` or `up` that names others holds those from it on.
     func contact(_ phase: String, _ req: [String: Any]) -> [String: Any] {
         guard let win = phase == "down" ? view(req)?.window : contactWindow else {
             return ["error": phase == "down" ? "no view \(req["id"] ?? "?") on screen" : "no contact is down"]
@@ -804,7 +804,9 @@ extension Agent {
                 var r: [String: Any] = ["tapped": Int(v.id), "at": at, "pid": Int(getpid()), "window": win.windowNumber,
                                         "point": [p.x, win.frame.height - p.y], "screen": [screen.x, (NSScreen.screens.first?.frame.height ?? 0) - screen.y],
                                         "mark": ChainingScrollView.driverMark, "delivered": ChainingScrollView.driverWheels]
-                if let owner, let id = owner.pointerOwner?.id { r["scroller"] = Int(id); r["offset"] = [owner.contentView.bounds.origin.x, owner.contentView.bounds.origin.y] }
+                // The page is no node: it is named `page`.
+                let scroller: Any? = owner is PageScrollView ? "page" : (owner as? ChainingScrollView)?.pointerOwner.map { Int($0.id) }
+                if let owner, owner.window === win, let scroller { r["scroller"] = scroller; r["offset"] = [owner.contentView.bounds.origin.x, owner.contentView.bounds.origin.y] }
                 return r
             }
             guard Agent.privateEvents else { return Agent.developmentOnly("tap wheel") }
@@ -907,7 +909,7 @@ extension Agent {
             NSApp.postEvent(up, atStart: true)
             presenter.menus.pointer(down)
             // Through the application, as a hand's click comes: its local
-            // monitors see it, then the window (#107).
+            // monitors see it, then the window.
             ExactAgentWindow.sendPointerEvent(down)
             // The queue's wrapper identifies the release, but its window location
             // is re-derived from the window server's and lands elsewhere by the
@@ -1076,11 +1078,11 @@ extension Agent {
             guard let down = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: t, windowNumber: win.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: repeats, keyCode: code),
                   let up = NSEvent.keyEvent(with: .keyUp, location: .zero, modifierFlags: upModifiers, timestamp: t, windowNumber: win.windowNumber, context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
             else { return ["error": "no key event"] }
-            // The release's `keyup` handlers at the focus then (#140), as the
+            // The release's `keyup` handlers at the focus then, as the
             // monitor's route hears a keyboard's (`Presenter.keyUp`).
             // A chord's modifiers are their own keys around it (Charlie, 2026-10-07;
             // KeyCodes.modifierPresses): down in order, up in reverse after the
-            // key's, each up without its own flag (#140), as a keyboard's.
+            // key's, each up without its own flag, as a keyboard's.
             let flagsOf = { (held: String) in NSEvent.ModifierFlags([.shift, .control, .option, .command].enumerated().compactMap { i, f in held.contains(["Shift+", "Control+", "Alt+", "Meta+"][i]) ? f : nil }) }
             let presses = KeyCodes.modifierPresses(chord)
             let modifierKeys: [(down: NSEvent, up: NSEvent)] = presses.enumerated().compactMap { i, m in

@@ -4,6 +4,27 @@ import XCTest
 @testable import ExactKit
 
 final class RouteOverflowMacTests: XCTestCase {
+    func testScaledRouteKeepsItsOriginalBorderAndExtendsEachAxis() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let p = Presenter()
+        p.viewport.frame = CGRect(x: 0, y: 0, width: 120, height: 120)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 100, "h": 100],
+            ["op": "content", "id": 1, "w": 100, "h": 100],
+            ["op": "present", "id": 1, "property": "scale", "x": 3, "y": 0.5]
+        ]))
+        let route = try XCTUnwrap(p.views[1])
+        let reach = route.documentOverflow(in: p.root)
+        XCTAssertEqual(reach.minX, -100, accuracy: 0.01)
+        XCTAssertEqual(reach.maxX, 200, accuracy: 0.01)
+        XCTAssertEqual(reach.minY, 0, accuracy: 0.01)
+        XCTAssertEqual(reach.maxY, 100, accuracy: 0.01)
+    }
+
     func testWindowOverflowAfterFirstPixelAndAfterAResize() throws {
         _ = NSApplication.shared
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_ROUTE_OVERFLOW_PLAN"])

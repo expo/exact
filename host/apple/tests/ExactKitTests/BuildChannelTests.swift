@@ -113,7 +113,7 @@ final class BuildChannelTests: XCTestCase {
     /// baked compat), which this channel, the frame sampler, hatch
     /// diagnostics and the module override follow, is the build's own trust,
     /// `embedded.trust`: an updater-free (L=0) production bake records none
-    /// in its cohort and is still production (#948), and a cohort's trust
+    /// in its cohort and is still production, and a cohort's trust
     /// alone does not make a build production.
     func testProductionBakeIsTheBuildsTrustEvenWithNoUpdater() throws {
         func compat(_ json: String) throws -> [String: Any] {

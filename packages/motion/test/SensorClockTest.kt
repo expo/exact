@@ -5,6 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorManager
 import android.os.SystemClock
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Native
 import org.json.JSONObject
@@ -74,8 +75,8 @@ class SensorClockTest {
             assertEquals(0, sample.dropped)
         }
         Host.clock = 1005.0
-        module.displayed("ball", false, "app")
-        module.displayed("ball", true, "app")
+        module.displayed("ball", false, Cause("app"))
+        module.displayed("ball", true, Cause("app"))
         sample(1506.0)
         assertEquals(30, Host.samples.last().dropped)
         Host.clock = 1600.0

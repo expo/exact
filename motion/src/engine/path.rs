@@ -107,7 +107,7 @@ pub(super) struct Track<T> {
     pub(super) target: Arc<T>,
     /// The value the running transition starts from.
     pub(super) from: Arc<T>,
-    /// CSS §3.2: the value a reversal is measured against.
+    /// The value a reversal is measured against (CSS Transitions 1 §3.1).
     reversing_adjusted_start: Arc<T>,
 }
 
@@ -234,13 +234,7 @@ impl Engine {
             .filter(|r| matches!(r.curve, Curve::Easing { .. }))
             .filter(|_| *value == *track.reversing_adjusted_start);
         let (adjusted, factor) = match reverses {
-            // CSS §3.2, the reversing case.
-            Some(r) => (
-                track.target.clone(),
-                (r.easing_progress(now) * r.reversing_shortening + (1.0 - r.reversing_shortening))
-                    .abs()
-                    .clamp(0.0, 1.0),
-            ),
+            Some(r) => (track.target.clone(), r.reversing_factor(now)),
             None => (current.clone(), 1.0),
         };
         let mut curve = Running::start(

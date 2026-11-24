@@ -298,6 +298,17 @@ impl<D: DataSource> Presenter<D> {
         self.brush.dark
     }
 
+    /// The scheme `id` paints in, as the painter carries it, so a surface
+    /// lifted out of its ancestors keeps theirs ([`crate::paint::scheme_of`]).
+    pub(super) fn scheme_of(&self, id: ViewId) -> Option<bool> {
+        crate::paint::scheme_of(self.host.kernel(), &|id| self.host.presented(id), id)
+    }
+
+    /// Whether `id` paints dark: its scheme, else the session's.
+    pub(super) fn dark_at(&self, id: ViewId) -> bool {
+        self.scheme_of(id).unwrap_or(self.dark())
+    }
+
     /// A request for MIDI on the display's clock: this host has none (LLP
     /// 1125 D6). Under the agent's clock the runner answered it already.
     pub(super) fn midi_unavailable(&mut self) {
@@ -615,3 +626,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "scheme_tests.rs"]
+mod scheme_tests;

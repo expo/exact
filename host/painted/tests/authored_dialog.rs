@@ -600,3 +600,38 @@ fn popover_keeps_the_fitting_option_until_its_size_changes_or_it_reopens() {
 
 #[path = "position_area_region/presenter.rs"]
 mod position_area_region;
+
+/// A dialog is painted out of its ancestors and keeps their scheme (LLP
+/// 1034 §8): its `light-dark()` background, its scrim and what it holds
+/// (expo/exact#1469).
+#[test]
+fn a_dialog_is_painted_in_its_ancestors_scheme() {
+    const SOURCE: &str = r##"component App
+  action ask
+    showModal("confirm")
+  view
+    column width="100%" height="100%" {root}
+      button "Ask" testId="ask" press=ask width=120 height=32
+      dialog id="confirm" role="alertdialog" aria-label="Delete this?" background-color="light-dark(#ffffff, #202020)" width=200 height=100
+        text "It cannot be undone."
+        button commandfor="confirm" command="close"
+          text "OK"
+"##;
+    for (root, device, ink) in [
+        (r#"color-scheme="dark""#, false, [0x20; 3]),
+        (r#"color-scheme="light""#, true, [0xff; 3]),
+        ("", true, [0x20; 3]),
+        ("", false, [0xff; 3]),
+    ] {
+        let mut p = boot(&SOURCE.replace("{root}", root));
+        p.set_system_scheme(device);
+        tap(&mut p, "ask");
+        // Centred in the 480 × 400 page: its lower right, clear of its text.
+        let c = p.frame().pixel(240 + 90, 200 + 40).unwrap();
+        assert_eq!(
+            [c.red(), c.green(), c.blue()],
+            ink,
+            "{root} device dark {device}"
+        );
+    }
+}

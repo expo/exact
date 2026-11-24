@@ -248,7 +248,7 @@ final class ClipMacTests: XCTestCase {
     }
 
     /// A backdrop is read inside its box and mirrored past it, as Chrome
-    /// reads it (#129): the chain mirrors the frame, follows it and its
+    /// reads it: the chain mirrors the frame, follows it and its
     /// scale, and a turned box reads past its edges.
     func testABackdropMirrorsItsBoxAndFollowsItsFrame() throws {
         let n = node("view", ["backdrop_filter": [["blur": 4]]])
@@ -260,7 +260,7 @@ final class ClipMacTests: XCTestCase {
         n.setFrameOrigin(NSPoint(x: 15, y: 25))
         XCTAssertEqual(n.backdropDrawn?.box, NSRect(x: 15, y: 25, width: 60, height: 30))
         // A scale (a press's too) shrinks the box about its transform origin.
-        n.scale = 0.5
+        n.scale = CGPoint(x: 0.5, y: 0.5)
         n.applyTransform()
         XCTAssertEqual(n.backdropDrawn?.box, NSRect(x: 30, y: 32.5, width: 30, height: 15))
         // A turned box reads past its edges; turned back, it mirrors again.
@@ -270,7 +270,7 @@ final class ClipMacTests: XCTestCase {
         XCTAssertEqual(n.backdropDrawn?.operations, [.blur(4)])
         XCTAssertNil(n.backdropDrawn?.box)
         n.rotate = 0
-        n.scale = 1
+        n.scale = CGPoint(x: 1, y: 1)
         n.applyTransform()
         XCTAssertEqual(n.layer?.backgroundFilters?.count, 6)
         XCTAssertEqual(n.backdropDrawn?.box, NSRect(x: 15, y: 25, width: 60, height: 30))

@@ -110,6 +110,13 @@ pub trait CoreStyle {
     fn is_compressible_replaced(&self) -> bool {
         false
     }
+    /// EXACT PATCH 82: is it a form control (a text field or a native
+    /// control)? Its natural size is a preferred size, never scrollable
+    /// overflow past its box (CSS Overflow 3 §2.1).
+    #[inline(always)]
+    fn is_form_control(&self) -> bool {
+        false
+    }
     /// EXACT PATCH 21: whether this node carries the table-item sizing marker,
     /// which Exact also uses for HTML form-control shrink-to-fit sizing.
     #[inline(always)]
@@ -642,6 +649,9 @@ pub struct Style<S: CheapCloneStr = DefaultCheapStr> {
     /// Is it a replaced element like an image or form field?
     /// <https://drafts.csswg.org/css-sizing-3/#min-content-zero>
     pub item_is_replaced: bool,
+    /// EXACT PATCH 82: is it a form control (a text field or a native
+    /// control)? Only its scrollable overflow reads this.
+    pub item_is_form_control: bool,
     /// Should size styles apply to the content box or the border box of the node
     pub box_sizing: BoxSizing,
     /// Sets the direction of text, table and grid columns, and horizontal overflow.
@@ -777,6 +787,7 @@ impl<S: CheapCloneStr> Style<S> {
         display: Display::DEFAULT,
         item_is_table: false,
         item_is_replaced: false,
+        item_is_form_control: false,
         box_sizing: BoxSizing::BorderBox,
         direction: Direction::Ltr,
         overflow: Point { x: Overflow::Visible, y: Overflow::Visible },
@@ -857,6 +868,10 @@ impl<S: CheapCloneStr> CoreStyle for Style<S> {
     #[inline(always)]
     fn is_compressible_replaced(&self) -> bool {
         self.item_is_replaced
+    }
+    #[inline(always)]
+    fn is_form_control(&self) -> bool {
+        self.item_is_form_control
     }
     #[inline(always)]
     fn is_table_item(&self) -> bool {
@@ -947,6 +962,10 @@ impl<T: CoreStyle> CoreStyle for &'_ T {
     #[inline(always)]
     fn is_compressible_replaced(&self) -> bool {
         (*self).is_compressible_replaced()
+    }
+    #[inline(always)]
+    fn is_form_control(&self) -> bool {
+        (*self).is_form_control()
     }
     #[inline(always)]
     fn is_table_item(&self) -> bool {

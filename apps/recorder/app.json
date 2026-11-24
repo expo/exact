@@ -15,7 +15,12 @@
       "component": "RecordingActivity",
       "state": "RecordingState",
       "preview": {
+        "label": "Recording",
         "startedAt": 1787915700000
+      },
+      "android": {
+        "title": "label",
+        "when": "startedAt"
       }
     }
   ],

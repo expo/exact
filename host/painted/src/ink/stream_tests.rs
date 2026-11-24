@@ -3,7 +3,9 @@
 //!
 //! `EXACT_INK_RECORD=1 cargo test -p exact-painted --lib ink::stream_tests` writes each
 //! stream, the CPU painter's image and Ink's of every frame, and their SHA-256s to
-//! `host/ink/tests/streams`, which `exact-ink` replays with no adapter.
+//! `host/ink/tests/streams`, which `exact-ink` replays with no adapter. With
+//! `EXACT_INK_RECORD_LARGE=<directory>` it writes the scenes too large to commit
+//! there, and lists them in `host/ink/tests/streams.large`.
 use super::*;
 use crate::raster::Raster;
 use exact_ink::device::{Submission, TextureDesc, TextureUpload};
@@ -16,6 +18,8 @@ use std::rc::Rc;
 #[path = "../../../ink/tests/stream/mod.rs"]
 mod stream;
 use stream::Record;
+
+mod screens;
 
 type Native = exact_ink::device::Selected;
 type Buffer = <Native as Device>::Buffer;
@@ -192,7 +196,18 @@ impl Device for Recorder {
         self.native.retire_texture(texture)?;
         // The device may give its id to a later texture.
         let name = self.names.remove(&texture).expect("a live texture");
-        self.record(Record::Retire(name));
+        // The adapter retires the pictures a frame left unused in a hash map's order,
+        // which no two runs share. Retirements of textures with no call between them
+        // are recorded in name order; any order of them draws the same.
+        let mut records = self.records.borrow_mut();
+        let made = |name: TextureId| {
+            let made = |r: &Record| matches!(r, Record::CreateTexture { id, .. } if *id == name);
+            records.iter().any(made)
+        };
+        let later = |r: &&Record| matches!(r, Record::Retire(n) if n.0 > name.0 && made(*n));
+        let later = records.iter().rev().take_while(later).count();
+        let at = records.len() - if made(name) { later } else { 0 };
+        records.insert(at, Record::Retire(name));
         Ok(())
     }
     fn trim(&mut self) -> Result<()> {
@@ -383,29 +398,10 @@ fn list(ink: Ink, frame: &mut dyn FnMut(Pixmap, Pixmap)) {
       column
 {rows}"
     ));
-    let boot = || {
-        let (p, error) = crate::Presenter::boot_with_fixture_fonts(
-            &plan,
-            (),
-            (240., 200.),
-            1.,
-            std::path::PathBuf::new(),
-            crate::presenter::PainterChoice::Cpu,
-        )
-        .unwrap();
-        assert!(error.is_none(), "{error:?}");
-        p
-    };
-    let (mut cpu, mut painted) = (boot(), boot());
-    painted.reader_replaced(Box::new(ink));
+    let mut app = screens::Pair::<()>::boot(&plan, (240., 200.), "", ink);
     for offset in [0., 37.5, 130.] {
-        for p in [&mut cpu, &mut painted] {
-            let kernel = p.host().kernel();
-            let port = kernel.find_by_test_id("port")[0];
-            let port = kernel.node_by_key(port).unwrap().id;
-            p.scroll_to(port, (0., offset));
-        }
-        frame((*cpu.frame()).clone(), (*painted.frame()).clone());
+        app.scroll(Some("port"), offset);
+        app.frame(frame);
     }
 }
 
@@ -433,9 +429,79 @@ fn record(scene: Scene) -> Option<(stream::Stream, Vec<[Pixmap; 2]>)> {
     Some((stream, images))
 }
 
+/// Each file's SHA-256 and name, a line each, with its size where `sizes`.
+fn sums(files: &BTreeMap<String, Vec<u8>>, sizes: bool) -> String {
+    let line = |(name, bytes): (&String, &Vec<u8>)| {
+        let hex: String = sha256(bytes).iter().map(|b| format!("{b:02x}")).collect();
+        let size = if sizes {
+            format!("  {}", bytes.len())
+        } else {
+            String::new()
+        };
+        format!("{hex}  {name}{size}\n")
+    };
+    files.iter().map(line).collect()
+}
+
+fn write(directory: &str, files: &BTreeMap<String, Vec<u8>>) {
+    std::fs::create_dir_all(directory).unwrap();
+    for (name, bytes) in files {
+        std::fs::write(format!("{directory}/{name}"), bytes).unwrap();
+    }
+}
+
+const STREAMS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../ink/tests/streams");
+
+/// The head of `host/ink/tests/streams.large`, which lists the scenes kept outside
+/// the repository: a stream holds each frame's instances whole, and the heavy list's
+/// its decoded pictures.
+const LARGE: &str = "# Recorded device streams too large to commit: each file's SHA-256, name and bytes.
+# `tests/replay.rs` replays them from the directory EXACT_INK_STREAMS names. To record
+# them again, at the commit that last changed this file:
+#   bench/heavy-list/prepare.sh && EXACT_INK_RECORD_LARGE=<directory> cargo test -p exact-painted --lib ink::stream_tests
+# The bytes are the recording device's, which each stream names, and the heavy list's
+# pictures are Pillow 11.3.0's (bench/heavy-list/data.sha256).
+";
+
+/// Record `scenes` and give their files by name: each stream, and two images of each
+/// of its frames. `wrong` gains each scene whose stream alone draws other pixels.
+fn files(
+    scenes: &[(&'static str, Scene)],
+    wrong: &mut Vec<&'static str>,
+) -> Option<BTreeMap<String, Vec<u8>>> {
+    let mut files = BTreeMap::new();
+    for &(name, scene) in scenes {
+        let (stream, images) = record(scene)?;
+        // Replayed from the file's bytes, on a device that has drawn nothing.
+        let bytes = stream.encode();
+        let stream = stream::Stream::decode(&bytes);
+        let mut device = open().unwrap();
+        let replayed = stream::replay(&mut device, &stream.records).unwrap();
+        let replayed = replayed.iter().map(|pixels| sha256(pixels));
+        if !stream.readbacks().eq(replayed) {
+            wrong.push(name);
+        }
+        let mut pictures = 0;
+        for (at, [cpu, ink]) in images.iter().enumerate() {
+            let (cpu, ink) = (cpu.encode_png().unwrap(), ink.encode_png().unwrap());
+            pictures += cpu.len() + ink.len();
+            files.insert(format!("{name}.{at}.png"), cpu);
+            files.insert(format!("{name}.{at}.ink.png"), ink);
+        }
+        println!(
+            "{name}: {} records, {} frames, {} bytes, and {pictures} of images",
+            stream.records.len(),
+            images.len(),
+            bytes.len()
+        );
+        files.insert(format!("{name}.stream"), bytes);
+    }
+    Some(files)
+}
+
 #[test]
 fn the_recorded_device_calls_redraw_each_scene() {
-    let scenes: [(&str, Scene); 7] = [
+    let scenes: [(&str, Scene); 9] = [
         ("geometry", |mut ink, frame| {
             tests::geometry(&mut Raster::new(), &mut ink, frame)
         }),
@@ -449,47 +515,33 @@ fn the_recorded_device_calls_redraw_each_scene() {
         ("layers", layers),
         ("backdrop", backdrop),
         ("list", list),
+        ("stations", screens::stations),
+        ("sheet", screens::sheet),
     ];
-    let (mut files, mut wrong) = (BTreeMap::new(), Vec::new());
-    for (name, scene) in scenes {
-        let Some((stream, images)) = record(scene) else {
-            return;
-        };
-        // Replayed from the file's bytes, on a device that has drawn nothing.
-        let bytes = stream.encode();
-        let stream = stream::Stream::decode(&bytes);
-        let mut device = open().unwrap();
-        let replayed = stream::replay(&mut device, &stream.records).unwrap();
-        let replayed = replayed.iter().map(|pixels| sha256(pixels));
-        if !stream.readbacks().eq(replayed) {
-            wrong.push(name);
-        }
-        for (at, [cpu, ink]) in images.iter().enumerate() {
-            files.insert(format!("{name}.{at}.png"), cpu.encode_png().unwrap());
-            files.insert(format!("{name}.{at}.ink.png"), ink.encode_png().unwrap());
-        }
-        println!(
-            "{name}: {} records, {} frames, {} bytes",
-            stream.records.len(),
-            images.len(),
-            bytes.len()
-        );
-        files.insert(format!("{name}.stream"), bytes);
+    let mut wrong = Vec::new();
+    let Some(committed) = files(&scenes, &mut wrong) else {
+        return;
+    };
+    // Too large to commit. The heavy list's data is not committed either, so it is
+    // drawn only to be recorded: `bench/heavy-list/prepare.sh` makes the data.
+    let mut scenes: Vec<(&str, Scene)> = vec![("caltrain", screens::caltrain)];
+    let outside = std::env::var("EXACT_INK_RECORD_LARGE").ok();
+    if outside.is_some() {
+        scenes.push(("heavy", screens::heavy));
     }
+    let large = files(&scenes, &mut wrong).unwrap();
     assert!(
         wrong.is_empty(),
         "the calls alone draw other pixels: {wrong:?}"
     );
     if std::env::var_os("EXACT_INK_RECORD").is_some() {
-        let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/../ink/tests/streams");
-        let _ = std::fs::remove_dir_all(directory);
-        std::fs::create_dir_all(directory).unwrap();
-        let mut manifest = String::new();
-        for (name, bytes) in &files {
-            std::fs::write(format!("{directory}/{name}"), bytes).unwrap();
-            let hex: String = sha256(bytes).iter().map(|b| format!("{b:02x}")).collect();
-            manifest += &format!("{hex}  {name}\n");
-        }
-        std::fs::write(format!("{directory}/SHA256SUMS"), manifest).unwrap();
+        let _ = std::fs::remove_dir_all(STREAMS);
+        write(STREAMS, &committed);
+        std::fs::write(format!("{STREAMS}/SHA256SUMS"), sums(&committed, false)).unwrap();
+    }
+    if let Some(outside) = outside {
+        write(&outside, &large);
+        let listed = LARGE.to_owned() + &sums(&large, true);
+        std::fs::write(format!("{STREAMS}.large"), listed).unwrap();
     }
 }

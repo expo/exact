@@ -9,11 +9,18 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { pollUntil } from './agent-launch.mjs';
-import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, androidPermissionPrompt, readerReply, reverseRoot } from './agent-android.mjs';
+import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, androidPermissionPrompt, gradleApp, readerReply, reverseRoot } from './agent-android.mjs';
 
 const focusCommand = "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'";
 const screenFixtures = resolve(import.meta.dir, 'fixtures/android-screen');
 const screenDump = (state, kind) => readFileSync(resolve(screenFixtures, `${state}.${kind}.txt`), 'utf8');
+
+// expo/exact#1465: Gradle compiled a game's `modules/android` only from `.shells/modules/android`.
+test("the shell's Gradle build finds a game's own modules in its directory and its manifest in its shells", () => {
+  const dir = resolve('/games/dicey'), app = { name: 'dicey', dir, workspace: resolve(dir, '.shells'), manifest: { game: {} } };
+  expect(gradleApp(app)).toEqual(['-Papp=dicey', `-PappDir=${dir}`, `-PappManifest=${resolve(dir, '.shells/app.json')}`]);
+  expect(gradleApp({ ...app, manifest: {} })).toEqual(['-Papp=dicey', `-PappDir=${dir}`]);
+});
 
 test('Android names JDK-8335662 only for affected AArch64 JDK versions', async () => {
   const { androidJdkRisk } = await import('./agent-android.mjs');

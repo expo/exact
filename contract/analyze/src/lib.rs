@@ -390,7 +390,7 @@ pub const HANDLERS: [&str; 87] = [
     "key",
     "keycapture",
     // DOM's `keyup`: the key's release, a modifier's included, bubbling as
-    // `key` (keydown) does, with the same name and `KeyboardEvent` (#140).
+    // `key` (keydown) does, with the same name and `KeyboardEvent`.
     "keyup",
     "submit",
     "load",

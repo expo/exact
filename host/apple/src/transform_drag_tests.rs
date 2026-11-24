@@ -1,5 +1,5 @@
 //! Actual Apple boundary: generation-safe pair admission and receipt order.
-//! Fixtures mirror the frozen120-byte Web protocol; no Swift/DOM emulation.
+//! Fixtures are the 128-byte v3 packet; no Swift/DOM emulation.
 use super::Host;
 use crate::abi::{Bridge, Hooks};
 use exact_kernel::MonospaceMeasurer;
@@ -47,8 +47,9 @@ const SOURCE: &str = r#"component App
       text `${released}/${measured}/${bw}` testId="result"
 "#;
 
-// v2 LE: version/op, runtime/handle/target/clip/geometry/T/S u64,
-// six scalar f64 payload slots and one clock-ms. Nothing crosses as a JS Number.
+// v3 LE: version/op, runtime/handle/target/clip/geometry/T/S u64,
+// six scalar f64 payload slots, clock-ms and sample-ms. Nothing crosses as a
+// JS Number. A fixture samples on the clock unless it says otherwise.
 #[derive(Clone, Copy)]
 struct Packet {
     op: u32,
@@ -56,20 +57,25 @@ struct Packet {
     tokens: [u64; 2],
     values: [f64; 6],
     now: f64,
+    at: Option<f64>,
 }
 impl Packet {
     fn bytes(self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(120);
-        for word in [2u32, self.op] {
+        let mut bytes = Vec::with_capacity(128);
+        for word in [3u32, self.op] {
             bytes.extend(word.to_le_bytes());
         }
         for word in self.identity.into_iter().chain(self.tokens) {
             bytes.extend(word.to_le_bytes());
         }
-        for value in self.values.into_iter().chain([self.now]) {
+        for value in self
+            .values
+            .into_iter()
+            .chain([self.now, self.at.unwrap_or(self.now)])
+        {
             bytes.extend(value.to_le_bytes());
         }
-        assert_eq!(bytes.len(), 120);
+        assert_eq!(bytes.len(), 128);
         bytes
     }
     fn send(self, host: &mut Host<NoData>) -> String {
@@ -150,6 +156,7 @@ fn boot_plan(plan: &[u8]) -> (Host<NoData>, Packet, String) {
         tokens: [0; 2],
         values: [320.25, 200.5, 320.25, 200.5, 0.0, 0.0],
         now: 0.0,
+        at: None,
     };
     (host, packet, batch)
 }
@@ -189,8 +196,10 @@ fn held() -> (Host<NoData>, Packet) {
     (host, p)
 }
 fn current(host: &Host<NoData>, node: u64) -> [MotionValue; 2] {
-    [Property::Translate, Property::Scale]
-        .map(|property| host.engine().value(node, property).unwrap())
+    let values = [Property::Translate, Property::Scale]
+        .map(|property| host.engine().value(node, property).unwrap());
+    assert_eq!(values[1].x, values[1].y, "a pinch keeps both axes uniform");
+    values
 }
 fn count(host: &Host<NoData>, slot: &str) -> f64 {
     let Some(Value::Number(value)) = host.runner().slot(slot) else {
@@ -246,7 +255,7 @@ fn geometry_keeps_running_transforms_when_the_transition_is_unset() {
         host.tick(ends.unwrap() * 1000.);
         assert_eq!(
             current(&host, node),
-            [MotionValue::new(100., 0.), MotionValue::scalar(2.)]
+            [MotionValue::new(100., 0.), MotionValue::new(2., 2.)]
         );
         assert!(host.engine().quiescent());
     }
@@ -419,7 +428,7 @@ fn geometry_retarget_and_new_none_declaration_arrive_while_held_before_cancellat
     accepted(&p.send(&mut host));
     assert_eq!(
         current(&host, p.identity[2]),
-        [MotionValue::new(99.0, 0.0), MotionValue::scalar(2.0)]
+        [MotionValue::new(99.0, 0.0), MotionValue::new(2.0, 2.0)]
     );
     assert_eq!(host.engine().now(), 0.2);
     assert!(tokens.into_iter().all(|token| !host.has_hold(token)));
@@ -438,15 +447,8 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
     let (mut host, mut p) = held();
     let before = current(&host, p.identity[2]);
     press(&mut host, "zoom", 105.0);
-    assert_eq!(
-        host.runner()
-            .kernel()
-            .node(id(&host, "photo"))
-            .unwrap()
-            .style
-            .scale,
-        2.0
-    );
+    let photo = host.runner().kernel().node(id(&host, "photo")).unwrap();
+    assert_eq!(photo.style.scale, exact_kernel::Vec2 { x: 2.0, y: 2.0 });
     assert_eq!(current(&host, p.identity[2]), before);
     p.op = 13;
     p.values = [23.75, -8.25, 1.375, 30.0, -10.0, 0.0];
@@ -477,7 +479,10 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
     assert!(p.tokens.into_iter().all(|token| host.has_hold(token)));
     assert_eq!(
         current(&host, p.identity[2]),
-        [MotionValue::new(23.75, -8.25), MotionValue::scalar(1.375)]
+        [
+            MotionValue::new(23.75, -8.25),
+            MotionValue::new(1.375, 1.375)
+        ]
     );
     assert!(p.send(&mut host).contains("\"accepted\":false"));
     for (token, velocity) in p
@@ -495,7 +500,7 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
             .spring_descriptor(p.identity[2], Property::Scale)
             .unwrap()
             .target,
-        MotionValue::scalar(2.0)
+        MotionValue::new(2.0, 2.0)
     );
 }
 
@@ -505,14 +510,14 @@ fn replacing_one_property_cleans_old_survivor_without_cancelling_successor() {
     let target = id(&host, "photo");
     let batch = host.hold_begin(target, Property::Scale, 110.0);
     let replacement = quoted(&batch, "token");
-    host.hold_update(replacement, MotionValue::scalar(1.8), 110.0);
+    host.hold_update(replacement, MotionValue::new(1.8, 1.8), 110.0);
     p.now = 1e9;
     p.values = [f64::NAN; 6];
     assert!(p.send(&mut host).contains("\"accepted\":false"));
     assert!(host.has_hold(replacement));
     assert!(!host.has_hold(p.tokens[0]));
     assert_eq!(host.engine().now(), 0.11);
-    assert_eq!(current(&host, p.identity[2])[1], MotionValue::scalar(1.8));
+    assert_eq!(current(&host, p.identity[2])[1], MotionValue::new(1.8, 1.8));
     assert_eq!(count(&host, "released"), 0.0);
 }
 
@@ -552,6 +557,7 @@ fn new_mapping_sequence_cancels_hold_even_with_unchanged_dimensions() {
         tokens: [0; 2],
         values: [320.25, 200.5, 320.25, 200.5, 0.0, 0.0],
         now: 110.0,
+        at: None,
     };
     accepted(&geometry.send(&mut host));
     assert!(p.tokens.into_iter().all(|token| !host.has_hold(token)));
@@ -664,12 +670,13 @@ fn apple_bridge_preserves_high_sequence_and_exact_packet_length() {
         tokens: [0; 2],
         values: [320.25, 200.5, 320.25, 200.5, 0.0, 0.0],
         now: 0.0,
+        at: None,
     };
     let bytes = p.bytes();
     bridge.input_write(&bytes);
     let n = bridge.transform_motion(bytes.len());
     accepted(std::str::from_utf8(bridge.output_bytes(n as usize)).unwrap());
-    for len in [0, 48, 119, 121] {
+    for len in [0, 48, 127, 129] {
         bridge.input_write(&bytes);
         let n = bridge.transform_motion(len);
         let out = std::str::from_utf8(bridge.output_bytes(n as usize)).unwrap();
@@ -681,7 +688,7 @@ fn apple_bridge_preserves_high_sequence_and_exact_packet_length() {
         ..p
     };
     bridge.input_write(&begin.bytes());
-    let n = bridge.transform_motion(120);
+    let n = bridge.transform_motion(128);
     let out = std::str::from_utf8(bridge.output_bytes(n as usize)).unwrap();
     accepted(out);
     assert_eq!(quoted(out, "geometrySequence"), 9007199254740993);
@@ -733,6 +740,7 @@ fn bridge_activity_reply(geometry: bool) {
         tokens: [0; 2],
         values: [320.25, 200.5, 320.25, 200.5, 0.0, 0.0],
         now: 0.0,
+        at: None,
     };
     let send = |bridge: &mut Bridge<NoData>, p: Packet| -> serde_json::Value {
         let n = bridge.input_write(&p.bytes());
@@ -919,7 +927,7 @@ fn rejected_packets_keep_unrelated_motion_and_timer_status() {
     host.hold_update(opacity, MotionValue::scalar(0.3), 0.);
     host.hold_end(opacity, HoldEnd::Cancel, 0.);
     let before = format!("{:?}", host.engine());
-    for bytes in [vec![], vec![0; 119], vec![0; 121], vec![0; 120]] {
+    for bytes in [vec![], vec![0; 127], vec![0; 129], vec![0; 128]] {
         let reply = host.transform_motion(&bytes).finish();
         assert!(reply.contains("\"motion\":true"), "{reply}");
         assert!(reply.contains("\"timers\":true"), "{reply}");

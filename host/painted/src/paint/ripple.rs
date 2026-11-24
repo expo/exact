@@ -489,7 +489,7 @@ impl Painter {
         let (x, y, w, h) = shape.rect;
         let middle = (x + w / 2.0, y + h / 2.0);
         let bound = wave(shape.rect, middle, 1.0).radius;
-        let base = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0];
+        let base = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0];
         // The clip stays outside the layer, so it does not scale with it.
         self.backend.push_clip(shape, ts);
         let layer = crate::host::lower::ripple_layer(node.key);

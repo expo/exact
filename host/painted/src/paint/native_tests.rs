@@ -5,8 +5,9 @@ use crate::text::{Paragraph, RunPaint, TextEngine};
 use std::cell::RefCell;
 use tiny_skia::Pixmap;
 
-/// A backend that keeps the shape each platform element is shown in.
-struct Natives(Rc<RefCell<Vec<Shape>>>);
+/// A backend that keeps the shape each platform element is shown in, and
+/// the elements held, shown nowhere.
+struct Natives(Rc<RefCell<Vec<Shape>>>, Rc<RefCell<Vec<ViewId>>>);
 
 impl Backend for Natives {
     crate::paints_nothing!();
@@ -29,6 +30,9 @@ impl Backend for Natives {
     }
     fn native(&mut self, _: ViewId, _: NativeKind, shape: &Shape, _: Transform, _: &str, _: bool) {
         self.0.borrow_mut().push(*shape);
+    }
+    fn held(&mut self, id: ViewId, _: NativeKind, _: &str) {
+        self.1.borrow_mut().push(id);
     }
     fn text(
         &mut self,
@@ -76,6 +80,7 @@ fn a_bordered_video_is_clipped_on_its_content_edge() {
         roots: &kernel.roots(),
         hidden: &|_| false,
         presented: &|_| Presented::IDENTITY,
+        scaled_presented: &Default::default(),
         paths: &|_| None,
         filters: &|_| None,
         scroll: &BTreeMap::new(),
@@ -90,7 +95,11 @@ fn a_bordered_video_is_clipped_on_its_content_edge() {
         menu: None,
     };
     let shown = Rc::new(RefCell::new(Vec::new()));
-    let mut painter = Painter::new(p.text().clone(), 1.0, Box::new(Natives(shown.clone())));
+    let mut painter = Painter::new(
+        p.text().clone(),
+        1.0,
+        Box::new(Natives(shown.clone(), Rc::default())),
+    );
     painter.paint(&scene, (100.0, 100.0)).unwrap();
     let shown = shown.borrow();
     assert_eq!(shown.len(), 1, "{shown:?}");
@@ -129,6 +138,7 @@ fn a_radius_reads_its_routes_inset() {
         roots: &kernel.roots(),
         hidden: &|_| false,
         presented: &|_| Presented::IDENTITY,
+        scaled_presented: &Default::default(),
         paths: &|_| None,
         filters: &|_| None,
         scroll: &BTreeMap::new(),
@@ -143,9 +153,70 @@ fn a_radius_reads_its_routes_inset() {
         menu: None,
     };
     let shown = Rc::new(RefCell::new(Vec::new()));
-    let mut painter = Painter::new(p.text().clone(), 1.0, Box::new(Natives(shown.clone())));
+    let mut painter = Painter::new(
+        p.text().clone(),
+        1.0,
+        Box::new(Natives(shown.clone(), Rc::default())),
+    );
     painter.paint(&scene, (100.0, 100.0)).unwrap();
     let shown = shown.borrow();
     assert_eq!(shown.len(), 1, "{shown:?}");
     assert_eq!(shown[0].radii, [(12.0, 12.0); 4]);
+}
+
+/// A module view is made whatever its box, as iOS makes its view at a zero
+/// frame and the web its element (expo/exact#1467): one with an empty box is
+/// shown in it, and one hidden or in a subtree that paints nothing is held.
+#[test]
+fn a_module_view_is_named_whatever_its_box() {
+    let source = concat!(
+        "component App\n  view\n    column\n",
+        "      x-holder width=0 height=0\n      x-holder width=40 height=0\n",
+        "      column display=\"none\"\n        x-holder width=40 height=40 testId=\"none\"\n",
+        "      x-holder width=40 height=40 visibility=\"hidden\" testId=\"hidden\"\n",
+    );
+    let plan = contract::compile(source).unwrap();
+    let (p, error) = Presenter::boot_with(
+        &plan.encode(),
+        (),
+        (100.0, 100.0),
+        1.0,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let kernel = p.host().kernel();
+    let scene = Scene {
+        kernel,
+        roots: &kernel.roots(),
+        hidden: &|_| false,
+        presented: &|_| Presented::IDENTITY,
+        scaled_presented: &Default::default(),
+        paths: &|_| None,
+        filters: &|_| None,
+        scroll: &BTreeMap::new(),
+        page: (0.0, 0.0),
+        images: &BTreeMap::new(),
+        focus: None,
+        selection: None,
+        caret_upstream: false,
+        pointer: None,
+        controls: &BTreeMap::new(),
+        chosen: &BTreeMap::new(),
+        menu: None,
+    };
+    let (shown, held) = (Rc::new(RefCell::new(Vec::new())), Rc::default());
+    let natives = Natives(shown.clone(), Rc::clone(&held));
+    let mut painter = Painter::new(p.text().clone(), 1.0, Box::new(natives));
+    painter.paint(&scene, (100.0, 100.0)).unwrap();
+    let rects: Vec<_> = shown.borrow().iter().map(|s| s.rect).collect();
+    assert_eq!(rects, [(0.0, 0.0, 0.0, 0.0), (0.0, 0.0, 40.0, 0.0)]);
+    let id = |name| {
+        kernel
+            .node_by_key(kernel.find_by_test_id(name)[0])
+            .unwrap()
+            .id
+    };
+    assert_eq!(*held.borrow(), [id("none"), id("hidden")]);
 }

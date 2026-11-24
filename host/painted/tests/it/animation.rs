@@ -34,7 +34,7 @@ fn an_animation_plays_under_the_clock_and_stops_with_its_row() {
     let (mark, added) = (view(&h, "mark"), view(&h, "added"));
     assert!(h.motion(), "an endless animation keeps frames coming");
     close(h.presented(mark).opacity, 0.4);
-    close(h.presented(mark).scale, 0.9);
+    close(h.presented(mark).scale.0, 0.9);
     close(h.presented(added).translate.1, 8.0);
     h.tick(400.);
     close(h.presented(mark).opacity, 0.7);

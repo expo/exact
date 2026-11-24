@@ -43,7 +43,7 @@ extension NodeView {
         }
     }
     func updateMaterial() {
-        defer { syncGlassSlot(); syncGlassGroup(); settleVibrancy(); syncDefaultSurfaceScroll() }
+        defer { syncGlassSlot(); syncGlassGroup(); settleVibrancy(); syncScrollCorner() }
         let kind = materialRequest
         let supported = kind != nil
         let interactive = Materials.glass(kind) && glassInteracts

@@ -308,3 +308,118 @@ fn delayed_lights_keep_independent_timing_through_patches_and_clears() {
     k.motion_sync(&receipt).apply(&mut engine).unwrap();
     assert_eq!(sample(&engine, b), 0.25, "rejoins the live clock");
 }
+
+#[test]
+fn per_axis_scale_rows_and_keyframes_round_trip() {
+    use exact_kernel::{StyleCodec, Vec2};
+    use exact_motion::{Property, Value};
+    assert_eq!(StyleId::Scale.codec(), StyleCodec::Vec2);
+    assert_eq!(StyleProps::default().scale, Vec2 { x: 1., y: 1. });
+    for (text, pair) in [
+        ("1 0.5", (1., 0.5)),
+        ("2", (2., 2.)),
+        ("100% -50%", (1., -0.5)),
+        ("0 1", (0., 1.)),
+        ("none", (1., 1.)),
+    ] {
+        let mut style = StyleProps::default();
+        style
+            .set_dynamic(StyleId::Scale, &StyleValue::Text(text.into()))
+            .unwrap();
+        assert_eq!(
+            style.scale,
+            Vec2 {
+                x: pair.0,
+                y: pair.1
+            }
+        );
+        let ops = [Op::SetStyle {
+            id: 1,
+            patch: Box::new(style),
+        }];
+        let bytes = wire::encode(0, 1, &ops);
+        assert_eq!(wire::frame::decode(&bytes).unwrap().ops, ops);
+    }
+    for text in ["1 2 3", "1px", "NaN", "1 inf", "1e40"] {
+        assert!(
+            StyleProps::default()
+                .set_dynamic(StyleId::Scale, &StyleValue::Text(text.into()))
+                .is_err(),
+            "{text}"
+        );
+    }
+    let mut row = Animations::parse("flip 1s linear both").unwrap();
+    let frames = Keyframes::parse("from{scale:1 0.5}to{scale:-2 0}").unwrap();
+    row.resolve(|_| Some(&frames));
+    let decoded = through_the_wire(&row);
+    assert_eq!(decoded, row);
+    assert_eq!(
+        decoded.0[0].keyframes.0[1].values,
+        vec![(Property::Scale, Value::new(-2., 0.))]
+    );
+}
+
+#[test]
+fn scale_presence_follows_row_changes_removal_and_reset() {
+    let mut k = Kernel::with_monospace();
+    k.apply(
+        0,
+        1,
+        &[
+            Op::CreateView {
+                id: 1,
+                node_type: NodeType::View,
+            },
+            Op::CreateView {
+                id: 2,
+                node_type: NodeType::View,
+            },
+            Op::SetChildren {
+                id: 1,
+                children: vec![2],
+            },
+            Op::AttachRoot { id: 1 },
+        ],
+    )
+    .unwrap();
+    let root = k.node(1).unwrap().key;
+    assert!(!k.has_scale());
+    for (batch, value, scaled) in [(2, "1 0.5", true), (3, "none", false), (4, "2", true)] {
+        let mut patch = StyleProps::default();
+        patch
+            .set_dynamic(StyleId::Scale, &StyleValue::Text(value.into()))
+            .unwrap();
+        k.apply(
+            0,
+            batch,
+            &[Op::SetStyle {
+                id: 2,
+                patch: Box::new(patch),
+            }],
+        )
+        .unwrap();
+        assert_eq!(k.has_scale(), scaled);
+        assert_eq!(k.has_scaled_descendant(root), scaled);
+        assert!(!k.has_scaled_descendant(k.node(2).unwrap().key));
+    }
+    k.apply(0, 5, &[Op::DestroyView { id: 2 }]).unwrap();
+    assert!(!k.has_scale());
+    assert!(!k.has_scaled_descendant(root));
+    let mut patch = StyleProps::default();
+    patch
+        .set_dynamic(StyleId::Scale, &StyleValue::Text("2".into()))
+        .unwrap();
+    k.apply(
+        0,
+        6,
+        &[Op::SetStyle {
+            id: 1,
+            patch: Box::new(patch),
+        }],
+    )
+    .unwrap();
+    assert!(k.has_scale());
+    assert!(!k.has_scaled_descendant(root));
+    k.reset();
+    assert!(!k.has_scale());
+}

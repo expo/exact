@@ -341,9 +341,10 @@ pub trait Backend {
         _direct: bool,
     ) {
     }
-    /// A video alive and shown nowhere, in a hidden `portal` mover (LLP
-    /// 1013.002 D5): a reader that hosts players keeps its player.
-    fn held_video(&mut self, _id: ViewId, _props: &str) {}
+    /// An element alive and shown nowhere: a video in a hidden `portal`
+    /// mover (LLP 1013.002 D5), whose player a reader that hosts players
+    /// keeps, or a module view that paints nothing (`Painter::unpainted`).
+    fn held(&mut self, _id: ViewId, _kind: NativeKind, _props: &str) {}
     /// An audio player whose element has no visible controls to place.
     fn boxless_audio(&mut self, id: ViewId, props: &str) {
         self.native(
@@ -513,7 +514,7 @@ pub trait Backend {
         _ts: Transform,
         _pivot: (f32, f32),
         _reference: (f32, f32),
-        _base: [f32; 7],
+        _base: [f32; 8],
     ) -> bool {
         false
     }

@@ -1,11 +1,12 @@
 import { expect, test } from 'bun:test';
-import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chromium, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { need } from '../../scripts/coverage.mjs';
 import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
+import { runtimeSource } from '../web/tests/stand-ins.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
 const chromeTest = need('chrome', chromium().unavailable, { test });
@@ -15,8 +16,8 @@ const chromeTest = need('chrome', chromium().unavailable, { test });
 // keeps its ticket (host/web/tests/js-runtime.test.mjs, "a stream answer settles per message").
 test('an open stream hides none of the page loading that holds time-to-interactive, and a let-go request adds none', async () => {
   const directory = mkdtempSync(resolve(tmpdir(), 'exact-marks-'));
-  cpSync(resolve(ROOT, 'host/web-js/marks.js'), resolve(directory, 'marks.js'));
-  cpSync(resolve(ROOT, 'host/web-js/held.js'), resolve(directory, 'held.js'));
+  writeFileSync(resolve(directory, 'marks.js'), runtimeSource('marks.js'));
+  writeFileSync(resolve(directory, 'held.js'), runtimeSource('held.js'));
   writeFileSync(resolve(directory, 'rt.js'), `export const inflight = { n: 0 }, Resources = [], Mutations = [], clock = { timers: [] }, After = [], Hosts = {}, Routes = [];
 export const routeAt = () => 0, busy = () => [];\nexport let Adopted = false;\n`);
   try {
@@ -78,6 +79,7 @@ chromeTest('a launch presents the served document\'s first paint only when its b
         cp.type = 'application/vnd.exact.checkpoint';
         cp.textContent = JSON.stringify({ location, answers: [] });
         document.head.append(cp);
+        await import('/host/web-js/page-checkpoint.js'); // a rendered page's entry links its reader (build.mjs)
         const rt = await import('/host/web-js/rt.js'), marks = (await import('/host/web-js/marks.js')).install([]);
         rt.mount(root => rt.h(root, tag, 0, null, 'rendered'));
         marks.mounted();

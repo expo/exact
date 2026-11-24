@@ -161,7 +161,7 @@ internal class Requests(private val activity: ExactActivity) {
         val (min, c) = string(w, b)
         val (max, d) = string(w, c)
         val (step, e) = string(w, d)
-        val picker = ExactPicker(kind, value, min, max, step, w[e].takeIf { it != 0 })
+        val picker = ExactPicker(kind, value, min, max, step, w[e].takeIf { it != 0 }, if (w[e + 1] == 0) null else w[e + 1] == 2)
         activity.hatches()?.picker(node, picker)
         picking[id] = {}
         val answer = { chosen: String? -> if (picking.remove(id) != null) Exact.answer(id, chosen) }

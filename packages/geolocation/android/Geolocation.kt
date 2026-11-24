@@ -26,6 +26,7 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Handler
 import android.os.Looper
+import dev.exact.canvas.Cause
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONObject
@@ -59,12 +60,14 @@ class GeolocationModule(context: ExtensionContext) : ExactExtension(context) {
     private val watchers = mutableListOf<(JSONObject) -> Unit>()
     private var said: String? = null
 
-    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
+    override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) = later(name, args, null, Cause.none, reply)
+
+    override fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) {
         when (name) {
             "geolocationStatus" -> reply(status())
-            "getCurrentPosition" -> allowed(reply) { oneShot(args, reply) }
-            "watchPosition" -> allowed(reply) { watch(args, reply) }
-            "requestPreciseLocation" -> precise(reply)
+            "getCurrentPosition" -> allowed(cause, reply) { oneShot(args, reply) }
+            "watchPosition" -> allowed(cause, reply) { watch(args, reply) }
+            "requestPreciseLocation" -> precise(cause, reply)
             else -> reply(error("NotSupportedError"))
         }
     }
@@ -113,19 +116,19 @@ class GeolocationModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** [then], once the platform allows it: asked in one request while `prompt` (D9); refused while `denied`. */
-    private fun allowed(reply: (JSONObject) -> Unit, then: () -> Unit) {
+    private fun allowed(cause: Cause, reply: (JSONObject) -> Unit, then: () -> Unit) {
         val state = status().getString("state")
         when {
             asked.isEmpty() -> reply(error("NotSupportedError"))
             state == "granted" -> then()
             state == "denied" -> reply(error("PERMISSION_DENIED"))
-            else -> ask { if (status().getString("state") == "granted") then() else reply(error("PERMISSION_DENIED")) }
+            else -> ask(cause) { if (status().getString("state") == "granted") then() else reply(error("PERMISSION_DENIED")) }
         }
     }
 
     /** The platform's dialog for [asked], then [done]. A rejection with no rationale owed afterwards is permanent. */
-    private fun ask(done: () -> Unit) {
-        context.requestPermissions(asked) { answered ->
+    private fun ask(cause: Cause, done: () -> Unit) {
+        context.requestPermissions(cause, asked) { answered ->
             val activity = context.activity
             val rejected = !has(FINE) && !has(COARSE)
             if (asked.all { it in answered } && rejected && activity != null && asked.none { activity.shouldShowRequestPermissionRationale(it) }) {
@@ -137,9 +140,9 @@ class GeolocationModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     // D10: the fine and coarse pair again, under the precise line only; the answer is the status.
-    private fun precise(reply: (JSONObject) -> Unit) {
+    private fun precise(cause: Cause, reply: (JSONObject) -> Unit) {
         if (FINE !in asked || has(FINE) || !has(COARSE)) return reply(status())
-        context.requestPermissions(asked) {
+        context.requestPermissions(cause, asked) {
             context.changed("geolocation.geolocationStatus")
             reply(status())
         }

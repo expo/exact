@@ -20,6 +20,14 @@ import {binaryInputFile, cohortReceipt} from './deploy-heads.mjs';
 import {binarySourceInputs, buildInputCollector, directoryInputNames, swiftTargetInputs, watchOutput} from './cargo-dep-info.mjs';
 import {appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory} from '../host/apple/assets.mjs';
 import {notificationServiceInputChanges, notificationServiceSourceRoot} from './notification-service.mjs';
+import {need} from './coverage.mjs';
+// The tools these tests run as built (docs/testing.md: a test runs a built binary and builds none), in Cargo's target
+// directory, the lane's own if it set one: the reason a test that needs one is skipped here, or null.
+const built = (...tools) => {
+  const debug = resolve(import.meta.dir, '..', process.env.CARGO_TARGET_DIR || 'target', 'debug');
+  const absent = tools.filter(tool => !fs.existsSync(resolve(debug, `${tool}${EXE}`)));
+  return absent.length ? `${absent.join(' and ')} not built: cargo build ${absent.map(tool => `-p ${tool}`).join(' ')}` : null;
+};
 
 // The publisher's functions with boundary doubles, for an app at a fresh
 // root whose cohort's binary has prelude runtime 4 and whose baked module
@@ -349,12 +357,11 @@ test('refused stream candidates preserve the evidence diagnostic', () => {
 // runtime 10, as its transaction's options may ask to check foreign keys and an
 // older prelude would drop them (bake/src/compat.rs). Here they are data, a
 // migration parsed from JSON, and a cohort on runtime 9 is refused.
-test('push refuses a SQLite module whose transaction options are data to a cohort on runtime 9', async () => {
+need('fixture', built('exact-js-bake'))('push refuses a SQLite module whose transaction options are data to a cohort on runtime 9', async () => {
   const ROOT=fileURLToPath(new URL('..',import.meta.url));
   // The bake the lane built (docs/testing.md: a test runs a built binary, it
   // builds none), in Cargo's target directory, the lane's own if it set one.
   const bake=resolve(ROOT,process.env.CARGO_TARGET_DIR||'target',`debug/exact-js-bake${EXE}`);
-  if(!fs.existsSync(bake))throw new Error('build the bake first: cargo build -p exact-js-bake');
   const grants='sqlite.open app:/data/a.db';
   const {root,calls,pusher}=harness(classifyArtifacts,undefined,{bake,cohortRuntime:9,grants});
   try {
@@ -462,12 +469,10 @@ test.each([
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }, 60000);
 
-// Real signatures, origin, classification and locked publication; only the compilers are boundary doubles.
-test.each([false, true])('bundle candidates publish to signed iOS cohorts and leave unchanged heads alone (real compilers: %s)', async real => {
+const bundleCandidates = async real => {
   const target = resolve(import.meta.dir, '..', process.env.CARGO_TARGET_DIR || 'target', 'debug');
   const bake = real ? resolve(target, `exact-js-bake${EXE}`) : null;
   const graphTool = real ? resolve(target, `exact-bake${EXE}`) : null;
-  if (real && (!fs.existsSync(bake) || !fs.existsSync(graphTool))) throw Error('build the bakes first: cargo build -p exact-js-bake -p exact-bake');
   const { root, app, cohort, streams, streamCandidates } = harness(classifyArtifacts, 4, { bake, graphTool });
   try {
     fs.writeFileSync(resolve(root, 'app.ts'), '');
@@ -550,12 +555,14 @@ test.each([false, true])('bundle candidates publish to signed iOS cohorts and le
     expect(await origin.get(receiptPath)).toEqual(receiptBytes);
     expect(await admitHead(origin, await origin.head(stream), app, stream)).toMatchObject({ usable: true, authenticated: true, cohort });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
+};
+// Real signatures, origin, classification and locked publication; only the compilers are boundary doubles.
+test.each([false])('bundle candidates publish to signed iOS cohorts and leave unchanged heads alone (real compilers: %s)', bundleCandidates);
+need('fixture', built('exact-js-bake', 'exact-bake')).each([true])('bundle candidates publish to signed iOS cohorts and leave unchanged heads alone (real compilers: %s)', bundleCandidates);
 
-test('a first push builds and publishes a plan with 137 native sources', async () => {
+need('fixture', built('contract', 'exact-bake'))('a first push builds and publishes a plan with 137 native sources', async () => {
   const target = resolve(import.meta.dir, '..', process.env.CARGO_TARGET_DIR || 'target', 'debug');
   const compiler = resolve(target, `contract${EXE}`), graphTool = resolve(target, `exact-bake${EXE}`);
-  if (!fs.existsSync(compiler) || !fs.existsSync(graphTool)) throw Error('build the tools first: cargo build -p contract -p exact-bake');
   const compile = (app, file, env) => {
     const baked = realSpawnSync(compiler, ['build', resolve(app.dir, 'app.contract'), '-o', file], { env, encoding: 'utf8' });
     expect(baked.status, baked.stderr).toBe(0);
@@ -836,7 +843,7 @@ test.each(['native', 'tiered'])('an unchanged macOS %s candidate reuses its auth
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test.each(['minimumOS', 'grantPurposes', 'localizations', 'orientation', 'shortcuts', null])('a snapshot candidate derives current inputs without an Apple build (changed: %s)', async changed => {
+need('fixture', built('exact-js-bake', 'exact-bake')).each(['minimumOS', 'grantPurposes', 'localizations', 'orientation', 'shortcuts', null])('a snapshot candidate derives current inputs without an Apple build (changed: %s)', async changed => {
   const target = resolve(import.meta.dir, '..', process.env.CARGO_TARGET_DIR || 'target', 'debug');
   const bake = resolve(target, `exact-js-bake${EXE}`), graphTool = resolve(target, `exact-bake${EXE}`);
   const { root, app, cohort, streamCandidates } = harness(classifyArtifacts, 4, { bake, graphTool });

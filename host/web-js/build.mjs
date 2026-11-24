@@ -1,4 +1,4 @@
-import { grantWords, trimGrant, knownFolderPath } from '../web/grant-admission.js';
+import { bundledAsset, grantWords, trimGrant, knownFolderPath } from '../web/grant-admission.js';
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, webImplementations } from '../../js/bake/src/typescript.mjs';
 import { packageConfig } from '../../js/bake/src/package-config.mjs';
 import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from '../web/crawl.mjs';
@@ -617,11 +617,15 @@ const auth = tsGrantSet.entries.some(([, source]) => ['auth.session', 'auth.appl
 // plan sends nothing, whose app.ts exports no tools, overlay or draw, beside no Rust module, page module or sign-in,
 // and with pages made at build to start from. A page with no checkpoint (a shell) loads it before its first render.
 const exportedNames = captured?.facts.exported ?? [];
+// A plan with no route rendered at build, per request or cached, nor a not-found one, is only served its shell (serve.rs).
+const { planRouteTable } = await import('../web/serve.mjs'), planRoutes = planRouteTable(readFileSync(opt('--plan') ? resolve(opt('--plan')) : resolve(gen, 'app.plan'))), documents = planRoutes.some(r => r.notfound || r.render !== 'client');
 const seamLazy = production && ts && !existsSync(resolve(gen, 'sends.flag')) && !rust && !pageModules && !auth
   && !['tools', 'overlay', 'draw'].some(name => exportedNames.includes(name)) && !args.includes('--inline') && opt('--render') !== 'none'
   && JSON.parse(readFileSync(resolve(gen, 'pages.json'), 'utf8')).length > 0;
 writeFileSync(resolve(gen, 'main.js'), [
-  ...(ts && !seamLazy ? ["import './held-hooks.js';"] : []),
+  ...(documents ? ["import './page-checkpoint.js';"] : []), ...(ts && !seamLazy ? ["import './held-hooks.js';"] : []),
+  ...(ts || rustLinked ? ["import './store.js';"] : []), // the store's persistence, for the only code that uses it
+  ...(!ts && rustLinked ? ["import { canvasCommitted } from './rt.js'; import { rt as Link } from './rt-link.js'; Link.canvasCommitted = canvasCommitted;"] : []), // a Rust request's canvas capture (admission.js; ts-link.js for app.ts)
   "import app, { sources, wait } from './app.js';",
   ...(devReload ? ["import { prepareDev } from './checkpoint.js';", "const finishDev = prepareDev();"] : []),
   ...(files ? ["import './files.js';"] : []),
@@ -632,8 +636,8 @@ writeFileSync(resolve(gen, 'main.js'), [
   // A prompt's Return, a grouped alert's message box and a menu row's popover (host/web): glue a plan with a dialog, an
   // alert, a menu or a popover needs on the page; until LLP 1047.002 commands.js carried them for every page.
   ...(dialogs ? ["import './prompt-glue.js'; import './alert-message.js'; import './menu-rows.js'; globalThis.exact?.menuRows?.();"] : []),
-  // Popovers placed as they open (navigation.js `placePopovers`): the plan's, and any a page module draws in the root.
-  ...(dialogs || pageModules ? ["import { placePopovers } from './navigation.js'; placePopovers();"] : []),
+  // Dialogs' and popovers' openings ordered, and popovers placed (navigation.js); a hatch's field composing (hatches.js).
+  ...(dialogs || pageModules ? ["import { placePopovers, stampOpenings } from './navigation.js'; stampOpenings(); placePopovers();"] : launchWeb.length || Object.keys(moduleFlag.extensions).length ? ["import { stampOpenings } from './navigation.js'; stampOpenings();"] : []), ...(pageModules ? ["import { watchComposing } from './hatches.js'; watchComposing();"] : []),
   // What this entry names from the runtime is what the bundle keeps (LLP 1047.002 D4). A production page names what
   // its own lines below use and what production glue reads from `globalThis.exact` (`journal`, `clock`: arrange.js;
   // `views`: media-glue.js; `viewId`: navigation.js; `After`: motion.js); the agent adapter, inspect and the dev
@@ -703,13 +707,13 @@ writeFileSync(resolve(gen, 'main.js'), [
   // below) replaces it before the first render, and a failed load leaves it. One task swaps them, so Chrome never
   // draws fallback text for optional faces both declare. High priority keeps the nonmatching sheet from loading
   // last; setting the loaded sheet's media list, not the link's, keeps WebKit from fetching a no-store sheet again.
-  "const page = typeof document === 'object' && document.querySelector('style[data-exact-page]');",
+  ...(documents ? ["const page = typeof document === 'object' && document.querySelector('style[data-exact-page]');",
   "const sheet = page && new Promise(r => { const l = Object.assign(document.createElement('link'), { rel: 'stylesheet', media: 'not all', fetchPriority: 'high', href: './__EXACT_SHEET__' }); l.onload = () => { l.sheet.media.mediaText = 'all'; page.remove(); r(); }; l.onerror = r; page.before(l); });",
   // A waiting page's answers past 1 KB are named, not held (LLP 1048.007 D10): the capture script fetched them as it
   // imported this; the first render waits for them. Ones no longer kept are none: an empty checkpoint at the page's
   // own location, since a page made per request is served where it was made.
   "const named = typeof document === 'object' && document.querySelector('script[type=\"application/vnd.exact.checkpoint\"][data-src]');",
-  "const answers = named && (globalThis.exact?.answers ?? fetch(named.dataset.src).then(r => r.ok ? r.text() : null, () => null)).then(t => { named.textContent = t ?? JSON.stringify({ location: location.pathname, time: 0, answers: [] }); });",
+  "const answers = named && (globalThis.exact?.answers ?? fetch(named.dataset.src).then(r => r.ok ? r.text() : null, () => null)).then(t => { named.textContent = t ?? JSON.stringify({ location: location.pathname, time: 0, answers: [] }); });"] : ['const sheet = null, answers = null;']),
   // Under the driver a TypeScript source draws the launch seed's stream (LLP 1069.005 D2b), from its first answer:
   // the first render waits for the stream's module, which no other page loads before it needs storage.
   ...(ts && !production ? ["const seeded = agentMode() && !globalThis.__exactRender && import('./storage-environment.js').then(env => { const seed = env.agentSeed(); if (seed !== null) answering.entropy = Object.assign(env.agentStream(seed, 'typescript'), { seed }); });"] : ['const seeded = null;']),
@@ -744,13 +748,11 @@ writeFileSync(resolve(gen, 'main.js'), [
   // `prepareChunks`, below, writes their names here as Rolldown renders the entry.
   `for (const name of __EXACT_DEFERRED_CHUNKS__) document.head.append(Object.assign(document.createElement('link'), { rel: 'modulepreload', fetchPriority: 'low', href: new URL(name, ${args.includes('--inline') ? 'document.baseURI' : 'import.meta.url'}).href }));`,
 ].join('\n'));
-for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'fetches.js', 'modules.js', 'declared-values.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) cpSync(resolve(here, f), resolve(gen, f));
+for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'output.js', 'store.js', 'fetches.js', 'modules.js', 'declared-values.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) cpSync(resolve(here, f), resolve(gen, f));
 for (const file of ['modules.js', 'symbols.js']) writeFileSync(resolve(gen, file), localImports(readFileSync(resolve(here, file), 'utf8')));
-const mountSource = readFileSync(resolve(here, 'mount.js'), 'utf8');
-const checkpointFaultImport = "import { checkpointFaults } from '../web/faults.js';";
-if (!mountSource.includes(checkpointFaultImport)) throw new Error('mount.js no longer imports checkpointFaults');
-writeFileSync(resolve(gen, 'mount.js'), localImports(production
-  ? mountSource.replace(checkpointFaultImport, 'const checkpointFaults = () => [];') : mountSource));
+const checkpointSource = readFileSync(resolve(here, 'page-checkpoint.js'), 'utf8'), checkpointFaultImport = "import { checkpointFaults } from '../web/faults.js';";
+if (!checkpointSource.includes(checkpointFaultImport)) throw new Error('page-checkpoint.js no longer imports checkpointFaults');
+writeFileSync(resolve(gen, 'page-checkpoint.js'), localImports(production ? checkpointSource.replace(checkpointFaultImport, 'const checkpointFaults = () => [];') : checkpointSource));
 // Code other than the compiled plan and Exact's own that writes inside #exact-root, where the page has any: it may
 // write any element, so the page keeps all that the plan alone would leave out.
 const otherWriter = pageModules ? 'its page module (modules/web/index.js), which hatches go through,'
@@ -795,7 +797,7 @@ const streams = !!captured?.facts.streams;
 const fetchRefused = production && ts && !netGranted && !streams;
 const emptyGrantAdmission = () => {
   const answers = {
-    trimGrant: trimGrant.toString(), grantWords: grantWords.toString(), knownFolderPath: knownFolderPath.toString(),
+    bundledAsset: bundledAsset.toString(), trimGrant: trimGrant.toString(), grantWords: grantWords.toString(), knownFolderPath: knownFolderPath.toString(),
     createGrantSet: '() => EMPTY', scopedGrantSet: '() => EMPTY', unionGrantSets: '() => EMPTY',
     grantError: '() => null', rawGrantText: "() => ''", hasGrant: '() => false',
     admittingGrant: '() => null', admitsNetwork: '() => false', admitsSecret: '() => false', coversPath: '() => false',
@@ -867,8 +869,8 @@ writeFileSync(resolve(gen, 'admission.js'), localImports(stubbed));
 // never linked. The realm it binds (the clock, the timers, the refused globals) stays with the module.
 if (fetchRefused) writeFileSync(resolve(gen, 'ts-fetch-refused.js'), [
   '// Generated: `fetch` for sources with no network grant (LLP 1047.002 D3): the app\'s own assets, else the refusal by name.',
-  "import { fetchWith } from './admission.js'; import { ordinary, owned, responseFor, STREAM_REFUSAL } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
-  'export const fetch = (input, init) => init?.exactStream !== undefined ? owned(Promise.reject(new TypeError(STREAM_REFUSAL))) : ordinary(() => fetchWith(tsGrantSet, input, init)).then(responseFor);', ''].join('\n'));
+  "import { fetchWith } from './admission.js'; import { ordinary, owned, fetchReply, STREAM_REFUSAL } from './ts-fetch.js'; import { tsGrantSet } from './admission-data.js';",
+  'export const fetch = (input, init) => init?.exactStream !== undefined ? owned(Promise.reject(new TypeError(STREAM_REFUSAL))) : fetchReply(ordinary(() => fetchWith(tsGrantSet, input, init)));', ''].join('\n'));
 const tsFetch = readFileSync(resolve(here, 'ts-fetch.js'), 'utf8');
 if (!tsFetch.includes(refusalLine)) throw new Error(`host/web-js/ts-fetch.js: build.mjs replaces a line it no longer has: ${refusalLine}`);
 writeFileSync(resolve(gen, 'ts-fetch.js'), streams ? tsFetch : tsFetch.replace(refusalLine, `export const STREAM_REFUSAL = ${JSON.stringify(STREAM_REFUSAL)};`));
@@ -877,7 +879,7 @@ for (const f of ['ts-link.js', 'ts-load.js']) cpSync(resolve(here, f), resolve(g
 cpSync(resolve(here, 'ts-stream.js'), resolve(gen, 'ts-stream.js'));
 cpSync(resolve(here, 'ts-sqlite.js'), resolve(gen, 'ts-sqlite.js'));
 cpSync(resolve(here, 'auth.js'), resolve(gen, 'auth.js'));
-cpSync(resolve(here, 'files.js'), resolve(gen, 'files.js'));
+writeFileSync(resolve(gen, 'files.js'), localImports(readFileSync(resolve(here, 'files.js'), 'utf8')));
 cpSync(resolve(here, 'url.js'), resolve(gen, 'url.js'));
 cpSync(resolve(here, 'sounds.js'), resolve(gen, 'sounds.js'));
 cpSync(resolve(here, 'wakelock.js'), resolve(gen, 'wakelock.js'));
@@ -888,7 +890,7 @@ cpSync(resolve(here, 'clockin.js'), resolve(gen, 'clockin.js'));
 cpSync(resolve(here, 'midi.js'), resolve(gen, 'midi.js'));
 // The server bundle a JavaScript render runs (render.mjs), one script per VM context.
 let renderOrigin;
-try { renderOrigin = new URL(manifest.app?.origin).origin; } catch { /* No configured origin. */ }
+try { const u = new URL(manifest.app?.origin); if (['http:', 'https:'].includes(u.protocol)) renderOrigin = u.origin; } catch { /* No configured origin. */ }
 writeFileSync(resolve(gen, 'main-server.js'), [
   ...(ts ? ["import './held-hooks.js';"] : []),
   `import app${rustLinked || declared ? `, { ${[rustLinked && 'sources', declared && 'prepareSources'].filter(Boolean).join(', ')} }` : ''} from './app.js';`,
@@ -904,7 +906,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   "import { answers } from './checkpoint.js';",
   "import { markBars, routeTitle } from './navigation.js';",
   "import { markRoutes, markDocument } from './document.js';",
-  ...(ts ? ["import './ts-link.js';", "import { install as ts } from './ts-data.js';", "import { unfinishedIO } from './ts-fetch.js';"] : []),
+  ...(ts ? ["import './ts-link.js';", "import { unfinishedIO } from './ts-fetch.js';"] : []),
   ...(rustLinked ? ["import { install } from './rust-data.js';"] : []),
   ...rustAdmissionImports,
   // `exactTime` is a fact of the reader's device, which a render has not got: it answers as the runner does before a
@@ -919,7 +921,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   `globalThis.__exactRenderOrigin = ${JSON.stringify(renderOrigin)};`,
   'let t0, route, planResources;',
   'const prepare = async () => {',
-  ...(ts ? [`  ts(data, ${JSON.stringify(rustSources)});`] : []),
+  ...(ts ? [`  (await import('./ts-data.js')).install(data, ${JSON.stringify(rustSources)});`] : []),
   ...rustAdmission,
   ...(rustLinked ? ['  await install(data, sources, async p => __files(p));'] : []),
   ...(declared ? ['  prepareSources();'] : []),
@@ -1121,8 +1123,7 @@ function writeLazyModules(planned) {
       continue;
     }
     const to = resolve(out, contentFiles[name] ?? name);
-    mkdirSync(dirname(to), { recursive: true });
-    writeFileSync(to, bytes);
+    mkdirSync(dirname(to), { recursive: true }); writeFileSync(to, bytes);
   }
 }
 
@@ -1220,8 +1221,8 @@ const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _
   if (!chunk.isEntry) return null;
   const eager = eagerChunks(chunk.fileName, name => meta.chunks[name]?.imports);
   const deferred = Object.keys(meta.chunks).filter(name => !eager.includes(name)).sort();
-  const edits = new RolldownMagicString(code);
-  for (const [place, value] of [['__EXACT_DEFERRED_CHUNKS__', JSON.stringify(deferred)], ['__EXACT_SHEET__', cutSheet(Object.values(meta.chunks))]]) {
+  const edits = new RolldownMagicString(code), sheetName = cutSheet(Object.values(meta.chunks)); // cut either way; named only by a rendered page's entry
+  for (const [place, value] of [['__EXACT_DEFERRED_CHUNKS__', JSON.stringify(deferred)], ...(documents ? [['__EXACT_SHEET__', sheetName]] : [])]) {
     const at = code.indexOf(place);
     if (at < 0 || code.indexOf(place, at + place.length) >= 0) throw new Error(`host/web-js/build.mjs: the entry has no one place for ${place}`);
     edits.overwrite(at, at + place.length, value);
@@ -1442,8 +1443,7 @@ const pages = JSON.parse(readFileSync(resolve(gen, 'pages.json'), 'utf8'));
 // over (a render server's, too). And the route table a host serves by
 // (LLP 1153 D3: host/web/serve.mjs `buildTreeFile` applies it).
 cpSync(resolve(out, 'index.html'), resolve(out, 'shell.html'));
-const { planRouteTable } = await import('../web/serve.mjs');
-const routes = planRouteTable(readFileSync(resolve(out, 'app.plan'))).map(({ name, pattern, render, notfound }) => ({ name, pattern, render, notfound }));
+const routes = planRoutes.map(({ name, pattern, render, notfound }) => ({ name, pattern, render, notfound }));
 // And the files named by their content, which a host may keep for good (LLP 1153.004 D4, D6).
 writeFileSync(resolve(out, 'routes.json'), JSON.stringify({ ...(siteBase === '/' ? {} : { base: siteBase }), routes, files: contentFiles }, null, 2) + '\n');
 // Compile known reader text even when the development build emits only a shell.

@@ -160,6 +160,15 @@ class NativesFrameTest {
         Compat.startScripts.clear()
     }
 
+    @Test fun aFrameTakesTheContactsTheEngineNamesItFor() {
+        val natives = natives()
+        natives.ensure(1, 1, 0, 0, props(), 10)
+        val web = natives.getChildAt(0) as WebView
+        assertSame(web, natives.taker(1, 0, 0, 0L))
+        assertNull("another allocation's", natives.taker(1, 0, 1, 0L))
+        natives.destroyAll()
+    }
+
     @Test fun documentStartReportsLoadsBeforeFinishAndKeepsRecoveryAndCleanupSilent() {
         Features.navigationListener = false
         Features.webMessages = true

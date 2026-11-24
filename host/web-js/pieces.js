@@ -90,7 +90,6 @@ export function gs(e, name, values) {
 let Canvas2d = null;
 const CanvasMounts = new Set();
 export const canvasCommitted = (surface, active = () => true, encoding = {}) => committedCanvas(surface, active, Finishes, () => Canvas2d, CanvasMounts, encoding);
-Link.canvasCommitted = canvasCommitted;
 export function c2(e, name, values, types, names) {
   const c = { e, name, types, names, mounted: clock.now, args: null };
   CanvasMounts.add(c);

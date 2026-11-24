@@ -1290,7 +1290,8 @@ function load() {
   if (Loading || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
   runtime.collectionScrollPending = () => Controller?.scrollPending() ?? false;
   inflight.n++;
-  Loading = new Promise(r => requestAnimationFrame(() => r())).then(() => Promise.all([import("./collection-glue.js"), import("./list-selection.js"), import("./list-text.js")])).then(([{ collectionController }, , { listText }]) => {
+  Loading = new Promise(r => requestAnimationFrame(() => r())).then(() => Promise.all([import("./collection-glue.js"), import("./list-selection.js"), import("./list-text.js")])).then(([{ collectionController }, , { listText, useRuntime }]) => {
+    useRuntime({ scope, end, untracked });
     Controller = collectionController({ root: document.getElementById("exact-root"), views: Views, report, agent: clock.agent, settled() {} });
     Selection = globalThis.exact.installListSelection({ root: document.getElementById("exact-root"), lists: SelectionLists,
       index: (el, key) => SelectionLists.get(el)?.index.pos.get(key) ?? 0xffffffff,

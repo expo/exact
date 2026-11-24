@@ -65,7 +65,7 @@ extension NavigationTabsIOSTests {
             // Press the button through the runtime: it is under the sheet
             session.apply(session.runtime.press(try node(session, "detail").id, now: session.now()))
             XCTAssertEqual(nav.viewControllers.count, 1, "the push waits for the transition")
-            XCTAssertTrue(session.presenter.navigationHost.tabsHeld, "which holds the stack's write")
+            XCTAssertTrue(session.presenter.navigationHost.pendingSync, "which holds the visible stack's write")
         }, read: { nav.viewControllers.count })
         until("Detail is pushed after the transition") { nav.viewControllers.count == 2 }
     }

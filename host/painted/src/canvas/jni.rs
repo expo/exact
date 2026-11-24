@@ -879,9 +879,9 @@ macro_rules! canvas_jni {
 
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_displayFrame(
-                _env: *mut JNIEnv, _class: jclass,
+                _env: *mut JNIEnv, _class: jclass, vsync: jlong, arrival: jlong, fastest: jlong, thermal: jint, period: jlong,
             ) {
-                with(|h| h.display_frame());
+                with(|h| h.display_frame(vsync, arrival, fastest, thermal.max(0) as u32, period));
                 // A scrub frame's trace waits for the frame this reader draws.
                 $crate::presenter::preferences::scrub_frames_said();
             }

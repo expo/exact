@@ -646,9 +646,7 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn press_starts_audio(&self, row: &ModulesRow, args: &Json, cause: Cause) -> bool {
         let audio_only = match (self.plan.str(row.package), self.plan.str(row.declared)) {
             ("@exact/media-capture", "getUserMedia") => {
-                (args["audio"] == true || args["audioConstraints"].is_object())
-                    && args["video"] != true
-                    && args["videoConstraints"].is_null()
+                (args["audio"] == true || args["audioConstraints"].is_object()) && !asks_video(args)
             }
             ("@exact/recording", "startMediaRecorder") => true,
             _ => false,
@@ -677,6 +675,12 @@ impl<D: DataSource> Runner<D> {
         }
         answer
     }
+}
+
+/// Whether `getUserMedia`'s `args` ask for video: `video` as `true` or as
+/// a constraints object, or `videoConstraints`.
+fn asks_video(args: &Json) -> bool {
+    !matches!(args["video"], Json::Null | Json::Bool(false)) || !args["videoConstraints"].is_null()
 }
 
 fn admit_field(

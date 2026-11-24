@@ -7,7 +7,7 @@ import XCTest
 
 /// A press on a `button` leaves the reader's text selection as it is, as
 /// Chrome does, so the button's action reads it; a click on selectable text,
-/// into a field, on another pressable or on the ground still clears it (#132).
+/// into a field, on another pressable or on the ground still clears it.
 final class TextSelectionMacTests: XCTestCase {
     private var window: NSWindow!
     var session: ExactSession?

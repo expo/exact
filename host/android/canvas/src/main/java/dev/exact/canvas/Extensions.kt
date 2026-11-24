@@ -22,6 +22,14 @@ abstract class ExactExtension(val context: ExtensionContext) {
      */
     open fun later(name: String, args: JSONObject, preferred: Any?, reply: (JSONObject) -> Unit) = later(name, args, reply)
 
+    /**
+     * [later] under the call's [cause] (LLP 1133.023 D7a). An implementation whose answer depends on who called, or
+     * that registers work acting for the call later (a track's subscription, a permission's answer, a prompt),
+     * overrides this one and hands [cause] to that work.
+     */
+    open fun later(name: String, args: JSONObject, preferred: Any?, cause: Cause, reply: (JSONObject) -> Unit) =
+        later(name, args, preferred, reply)
+
     /** The last reader of live source [name] is gone: stop what it started (LLP 1133.002 D5). */
     open fun release(name: String) {}
 
@@ -43,7 +51,7 @@ abstract class ExactExtension(val context: ExtensionContext) {
     /** Handles a reply carried that the runner dropped, never the app's (LLP 1133.009 D10 item 10). */
     open fun dispose(ids: List<String>) {}
 
-    /** The send numbered [request] ([ExtensionContext.request]) was let go: what it started stops (LLP 1133.016 D15
+    /** The send numbered [request] ([Cause.request]) was let go: what it started stops (LLP 1133.016 D15
      * item 2). */
     open fun cancel(request: Int) {}
 
@@ -98,13 +106,16 @@ abstract class ExactExtension(val context: ExtensionContext) {
     open fun viewLifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {}
 
     /**
-     * View [id] of [session] was displayed or hidden, by the origin of the commit that did it (`app`, `tool` or
-     * `wake`; LLP 1133.008 D8 item 2).
+     * View [id] of [session] was displayed or hidden, by [cause], the commit that did it (LLP 1133.008 D8 item 2).
      */
-    open fun displayed(session: String, id: String, shown: Boolean, origin: String) {}
+    open fun displayed(session: String, id: String, shown: Boolean, cause: Cause) {}
 
-    /** Prop [prop] of view [id], which binds a device, changed, by the origin of the commit that changed it. */
-    open fun bound(session: String, id: String, prop: String, origin: String) {}
+    /** Prop [prop] of view [id], which binds a device, changed, by [cause], the commit that changed it. */
+    open fun bound(session: String, id: String, prop: String, cause: Cause) {}
+
+    /** [bound], with the value the commit set ([value], as JSON), by which an implementation pairs the report with the
+     * prop its view is given, which reaches it separately. */
+    open fun bound(session: String, id: String, prop: String, value: Any?, cause: Cause) = bound(session, id, prop, cause)
 
     /**
      * A text field whose `autocomplete` ends in `webauthn` was made ([present]) or went (LLP 1133.011 D10 item 4):
@@ -115,11 +126,11 @@ abstract class ExactExtension(val context: ExtensionContext) {
 
     /**
      * The canvases of [surface], which this extension's input feeds ([ExtensionSurfaces]), were displayed or hidden,
-     * by the origin of the commit that did it (LLP 1133.013 D6, D12 item 3). The lease: hidden, the input pauses;
-     * shown by an `app` commit, it resumes; shown by a `tool`'s or a `wake`'s, it stays paused. A start on a hidden
-     * canvas is told this before the start.
+     * by [cause], the commit that did it (LLP 1133.013 D6, D12 item 3). The lease: hidden, the input pauses; shown by
+     * the app's commit, it resumes; shown by any other's, it stays paused. A start on a hidden canvas is told this
+     * before the start.
      */
-    open fun displayed(surface: String, shown: Boolean, origin: String) {}
+    open fun displayed(surface: String, shown: Boolean, cause: Cause) {}
 
     /** The display's angle changed ([ExtensionContext.orientation]). */
     open fun orientation(angle: Int) {}
@@ -153,6 +164,61 @@ interface ExtensionRoster {
     val startAtLoad: List<String> get() = emptyList()
     /** Each extension's configuration as JSON, by extension ([ExtensionContext.config]). */
     val config: Map<String, String> get() = emptyMap()
+}
+
+/**
+ * Who made a call (LLP 1133.023 D7a), fixed when it arrives: [ExactExtension.later] is handed it, and what the call
+ * registers (a track's subscription, a permission's answer, a prompt) keeps it and acts under it however late it runs.
+ * Work no call made has [none], which no guarded capability admits; nothing reads as the app's by default.
+ */
+class Cause internal constructor(
+    /** `app`, `tool`, `wake`, `action` or `device` (LLP 1133.002 D12); `press`, a control's press the runner admitted
+     * to start an audio capture (LLP 1126.004 D4); `none`, no call's. */
+    val origin: String,
+    /** The calling source's grants; a retry keeps this ceiling. */
+    val authority: String = "",
+    /**
+     * Whether the call has a person's activation: the app made it within a few seconds of a press or a key the
+     * session heard, HTML's [transient activation](https://html.spec.whatwg.org/multipage/interaction.html#transient-activation).
+     * A timer's or an answer's code inside that window has it too, as on the web; a tool's or a wake's call never
+     * does. It says nothing of whether an activity shows ([ExtensionContext.visible]).
+     */
+    val userActivation: Boolean = false,
+    /** The control's press a `press` call is the capture of (LLP 1126.004 D4); null for any other. */
+    val press: Long? = null,
+    /** The number the runner gave the send, which a later [ExactExtension.cancel] names; null for a source (LLP
+     * 1133.016 D15 item 2). */
+    val request: Int? = null,
+) {
+    /** The person's act in the app, or its boot: what may ask, prompt or open a device in the foreground. */
+    val app: Boolean get() = origin == "app"
+
+    /** Whether [press] still runs, asked of the runner where a capture acquires the device: a call can wait on the
+     * main thread past the press's end. */
+    fun pressLive(): Boolean = press?.let { Exact.pressLive(it) } == true
+
+    override fun toString() = origin
+
+    /** The less privileged of this and [other], by [ORDER]: what two commits that both made something may do. */
+    fun lower(other: Cause): Cause = if (ORDER.indexOf(other.origin) < ORDER.indexOf(origin)) other else this
+
+    companion object {
+        /** Origins, least privileged first; an unknown one ranks as `none`. */
+        private val ORDER = listOf("none", "device", "wake", "tool", "action", "press", "app")
+
+        /** No call's: a callback the host makes on its own. */
+        @JvmField val none = Cause("none")
+
+        /** A request's cause, as the runner writes it (`modules/bound.rs`); one that names no origin is [none]. */
+        internal fun of(request: JSONObject): Cause {
+            val origin = request.optString("origin").ifEmpty { return none }
+            // Only an admitted capture call carries a press grant. A view hears the commit's ordinary origin.
+            if (origin == "press" && request.has("view")) return Cause("action")
+            return Cause(origin, request.optString("authority"), request.optBoolean("userActivation"),
+                if (request.has("press")) request.getLong("press") else null,
+                if (request.has("request")) request.getInt("request") else null)
+        }
+    }
 }
 
 /** What an extension may use of the host. */
@@ -199,30 +265,6 @@ class ExtensionContext internal constructor(
     val scratch: Boolean get() = Native.scratchStorage()
     private fun root(index: Int): java.io.File =
         java.io.File(try { Native.appRoot(index) } catch (e: UnsatisfiedLinkError) { null } ?: application.cacheDir.path)
-
-    /** Who made the call being answered now, `app`, `tool` or `wake`, read at [ExactExtension.later]'s entry: a
-     * capture's first lease is refused to a tool's read (LLP 1133.009 D6). */
-    var origin = "app"
-        internal set
-
-    /** The calling source's grants, captured before returning from later; retries retain this ceiling. */
-    var authority = ""
-        internal set
-
-    /**
-     * Whether the call being answered now has a person's activation, read at [ExactExtension.later]'s entry: the app
-     * made it within a few seconds of a press or a key the session heard, HTML's
-     * [transient activation](https://html.spec.whatwg.org/multipage/interaction.html#transient-activation). A timer's
-     * or an answer's code inside that window has it too, as on the web; a tool's or a wake's call never does. It says
-     * nothing of whether an activity shows now ([visible]).
-     */
-    var userActivation = false
-        internal set
-
-    /** The number the runner gave the send being answered now, which a later [ExactExtension.cancel] names; null for
-     * a source (LLP 1133.016 D15 item 2). */
-    var request: Int? = null
-        internal set
 
     /** The session's track table, which its implementations share (LLP 1133.009 D10 item 6). */
     val tracks: Tracks get() = Extensions.tracks
@@ -366,9 +408,11 @@ class ExtensionContext internal constructor(
      * thread: when the result comes, or when the activity resumes without it (a result lost to recreation, LLP 1133.002
      * D9). Overlapping requests queue in order; identical permission sets share a result. [done] receives only the
      * names the platform answered. An empty set means no result, so callers must not record a denial. With no
-     * activity in front and no request pending, nothing is asked and [done] runs at once.
+     * activity in front and no request pending, nothing is asked and [done] runs at once, as it does for a [cause]
+     * that is not the app's own: only the person's act in the app asks (LLP 1133.002 D12).
      */
-    fun requestPermissions(permissions: Array<String>, done: (Set<String>) -> Unit) = Extensions.ask(permissions, done)
+    fun requestPermissions(cause: Cause, permissions: Array<String>, done: (Set<String>) -> Unit) =
+        if (!cause.app) done(emptySet()) else Extensions.ask(permissions, done)
 
     /**
      * Runtime permission [name]'s state, from the one history every module reads (LLP 1133.008 D8 item 7): `granted`;
@@ -474,7 +518,7 @@ class ExtensionContext internal constructor(
     }
 
     /** [requestPermissions] for [name], keeping the history [permission] reads. */
-    fun askPermission(name: String, done: () -> Unit) = requestPermissions(arrayOf(name)) { answered ->
+    fun askPermission(cause: Cause, name: String, done: () -> Unit) = requestPermissions(cause, arrayOf(name)) { answered ->
         val a = activity
         if (name in answered && permission(name).state != "granted" && a != null && !a.shouldShowRequestPermissionRationale(name)) {
             application.getSharedPreferences("exact.permissions", Context.MODE_PRIVATE).edit().putBoolean(name, true).apply()
@@ -629,13 +673,13 @@ internal object Extensions {
             val released = request.optString("release")
             when {
                 request.has("view") -> {
-                    val (view, origin) = request.getString("view") to request.optString("origin", "app")
-                    if (request.has("displayed")) extension.displayed(extension.context.session, view, request.getBoolean("displayed"), origin)
-                    if (request.has("bound")) extension.bound(extension.context.session, view, request.getString("bound"), origin)
+                    val (view, cause) = request.getString("view") to Cause.of(request)
+                    if (request.has("displayed")) extension.displayed(extension.context.session, view, request.getBoolean("displayed"), cause)
+                    if (request.has("bound")) extension.bound(extension.context.session, view, request.getString("bound"), request.opt("value"), cause)
                     reply(JSONObject())
                 }
                 request.has("surface") && request.has("displayed") -> {
-                    extension.displayed(request.getString("surface"), request.getBoolean("displayed"), request.optString("origin", "app"))
+                    extension.displayed(request.getString("surface"), request.getBoolean("displayed"), Cause.of(request))
                     reply(JSONObject())
                 }
                 request.has("picture") -> {
@@ -655,11 +699,20 @@ internal object Extensions {
                     reply(JSONObject())
                 }
                 declared.isNotEmpty() -> {
-                    extension.context.origin = request.optString("origin").ifEmpty { "app" }
-                    extension.context.authority = request.optString("authority")
-                    extension.context.userActivation = request.optBoolean("userActivation")
-                    extension.context.request = if (request.has("request")) request.getInt("request") else null
-                    extension.later(declared, request.optJSONObject("args") ?: JSONObject(), request.opt("preferred"), reply)
+                    val cause = Cause.of(request)
+                    val call = { extension.later(declared, request.optJSONObject("args") ?: JSONObject(), request.opt("preferred"), cause, reply) }
+                    // A call that would ask and is no person's in-app act (LLP 1133.002 D12): refused while the
+                    // implementation's own status could lead to a dialog, as Apple's host refuses it. The status is
+                    // read under the call's cause.
+                    val admit = request.optJSONObject("admit")
+                    if (admit == null) call()
+                    else extension.later(admit.getString("status"), JSONObject(), null, cause) { status ->
+                        // A missing status, `prompt`, and Android's `denied` (which asks again until the person says
+                        // not to) may each lead to a dialog; any other lets the call run.
+                        val state = status.opt(admit.optString("field")) as? String
+                        if (!state.isNullOrEmpty() && state != "prompt" && state != "denied") call()
+                        else reply(JSONObject().put("error", admit.optString("denied").ifEmpty { "NotAllowedError" }).put("message", "person-required"))
+                    }
                 }
                 request.has("preferred") -> {
                     request.optJSONObject("permissions")?.let { extension.permissions(it) }
