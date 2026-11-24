@@ -733,7 +733,13 @@ final class FrameHealthIOSTests: XCTestCase {
         let overlay = FrameHealthOverlay(health: health)
         let window = hosted(overlay, in: scene, size: CGSize(width: 393, height: 852)), dot = CALayer()
         window.layer.addSublayer(dot)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        // Start once UIKit is at rest: it can update the scene 0.4 s after its last update for a sheet dismissed before
+        var last = CACurrentMediaTime()
+        let updates = UIUpdateLink(windowScene: scene)
+        updates.addAction { _, _ in last = CACurrentMediaTime() }
+        updates.isEnabled = true
+        waitFor("no update for 0.6 s") { CACurrentMediaTime() - last > 0.6 }
+        updates.isEnabled = false
         overlay.setVisible(true)
         // The card reads twice a second and sends its changes alone, which take no UI update
         RunLoop.main.run(until: Date().addingTimeInterval(3))
