@@ -92,6 +92,30 @@ extension NavigationBarIOSTests {
         }
     }
 
+    /// UIKit gives a tab's button its identifier only once an accessibility client asks, so one it makes after that (a
+    /// tab out of More, as the bar widens) has its name alone.
+    func testATouchAimsAtATabsButtonThatHasNoIdentifier() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit names its tab bar's buttons only for an assistive client") }
+        let session = try fixture("tab-aim", module: false)
+        let controller = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        guard let bar = controller.shownTabBar as? UITabBar, let title = bar.items?.first?.title else { throw XCTSkip("no UITabBar shows the tabs") }
+        let place = bar.convert(bar.bounds, to: nil)
+        var buttons: [UIControl] = [], pending: [UIView] = [controller.view]
+        while let view = pending.popLast() {
+            let middle = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+            if let button = view as? UIControl, button.accessibilityLabel == title, place.contains(middle) {
+                button.accessibilityIdentifier = nil
+                buttons.append(button)
+            } else if !(view is NodeView) {
+                pending += view.subviews
+            }
+        }
+        XCTAssertFalse(buttons.isEmpty)
+        let aim = Agent(session: session).tabItem(try node(session, "tab-home"))
+        guard case .success(let aimed)? = aim else { return XCTFail(String(describing: aim)) }
+        XCTAssertTrue(buttons.contains { $0 === aimed })
+    }
+
     /// A press that changes the bar of a route that shows sets its items with
     /// UIKit's animation, as a hand-built bar's
     /// `setRightBarButtonItems(_:animated: true)` does, whether the bar held

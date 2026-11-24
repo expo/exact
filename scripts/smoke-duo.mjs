@@ -327,7 +327,7 @@ async function suite({ open: openSession, check: record }, reset) {
    * its route starts at the viewport's top and ends at the keyboard's top while one shows, else at the viewport's bottom;
    * under the agent's chrome it ends at the viewport's bottom. iOS's layout lists only views in the window, so its sheet
    * is listed only while it shows. Under UIKit's bars the authored
-   * tablist has no box. Beside UIKit's tab bar along the bottom a tab's route ends below the bar's top by the home
+   * tablist's box is UIKit's tab bar's. Beside UIKit's tab bar along the bottom a tab's route ends below the bar's top by the home
    * indicator's inset (34 points on the whole panel), which the panes' padding takes; beside its rail, at the viewport's
    * bottom. Under the agent's own chrome (the web leg) the tablist is laid out below the routes, as the web does,
    * ending at the viewport's bottom, and they end at its top. */
@@ -343,9 +343,9 @@ async function suite({ open: openSession, check: record }, reset) {
       return end;
     }
     if (uikit) {
-      check(!laid, `${tag}: under UIKit's bars the authored tablist has no box: ${JSON.stringify(bar)}`);
       const f = await tabBarFrame(s);
       if (!check(f, `${tag}: UIKit's tab bar is visible`)) return l.viewport.h;
+      check(['x', 'y', 'w', 'h'].every((k) => near(bar?.[k], f[k])), `${tag}: the authored tablist's box is UIKit's tab bar's ${JSON.stringify(f)}: ${JSON.stringify(bar)}`);
       if (f.h > f.w) return l.viewport.h; // a rail at the side
       check(near(f.x, 0) && near(f.w, l.viewport.w) && near(f.y + f.h, l.viewport.h), `${tag}: UIKit's tab bar runs along the viewport's bottom: ${JSON.stringify(f)} in ${JSON.stringify(l.viewport)}`);
       return f.y + l.env['safe-area-inset-bottom'];
@@ -409,8 +409,8 @@ async function suite({ open: openSession, check: record }, reset) {
   /** At a fold, layout `l` has two segments, and no control of the screen shown lies on the band between them, the
    * hinge: a button, a field, a sheet's drag handle (`heightDragFor`). Scrolling content may cross it (Apple's
    * adaptive-layout talk, developer.apple.com/videos/play/tech-talks/111463), so a control inside a scroller is exempt.
-   * The authored tablist's tabs count: under UIKit's bars they have no box (UIKit's tab bar is a rail at the inner
-   * panel's right edge upright, a bar at its bottom turned), and under the agent's own chrome they keep to the trailing
+   * The authored tablist's tabs count: under UIKit's bars their boxes are its items' (UIKit's tab bar is a rail at the
+   * inner panel's right edge upright, a bar at its bottom turned), and under the agent's own chrome they keep to the trailing
    * segment on a book fold. */
   const offBand = async (s, l, tag) => {
     const segs = l.env['viewport-segments'];

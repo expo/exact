@@ -131,7 +131,7 @@ extension Agent {
     /// when none, or more than one, shows, or the item is outside the window.
     func tabItem(_ node: NodeView) -> Result<UIView, AimRefusal>? {
         #if os(iOS)
-        if let (bar, item) = presenter.segments.barItem(of: node) { return drawnItem(item, in: bar) }
+        if let (bar, item) = presenter.segments.barItem(of: node) { return drawnItem(item, among: Self.elements(under: [bar])) }
         let nav = presenter.navigation
         guard nav.tabBarShows, let tabs = nav.container.flatMap({ NavigationTabs.of($0, presenter) }),
               let index = tabs.tabs.firstIndex(where: { node === $0 || node.isDescendant(of: $0) }),
@@ -145,9 +145,13 @@ extension Agent {
         // iPad, at the top or in the sidebar; by its title only without one.
         let id = item.accessibilityIdentifier ?? "", title = item.title ?? ""
         guard !id.isEmpty || !title.isEmpty else { return .failure(AimRefusal(why: "its tab has neither a test id nor a title UIKit's tab bar shows; give it a testId")) }
-        let found = Self.elements(under: controller.view.subviews).filter { v in
-            let box = v.convert(v.bounds, to: nil)
-            return (id.isEmpty ? v.accessibilityLabel == title : v.accessibilityIdentifier == id) && v.window?.bounds.contains(CGPoint(x: box.midX, y: box.midY)) == true
+        let shown = Self.elements(under: controller.view.subviews).filter { $0.window?.bounds.contains(Self.middle($0)) == true }
+        let found = shown.filter { id.isEmpty ? $0.accessibilityLabel == title : $0.accessibilityIdentifier == id }
+        // A button without one yet is found by its name (`drawnItem`), and by
+        // place, as a vertical bar's buttons are not the bar's subviews.
+        if found.isEmpty, let bar = controller.shownTabBar {
+            let place = bar.convert(bar.bounds, to: nil)
+            return drawnItem(item, among: shown.filter { place.contains(Self.middle($0)) })
         }
         guard found.count == 1 else {
             return .failure(AimRefusal(why: found.isEmpty ? "UIKit's tab bar shows no item for its tab; `clock settle` first waits out a transition"
@@ -197,16 +201,19 @@ extension Agent {
         return found
     }
 
-    /// The control the tab bar a tablist is drawn as (LLP 1059) shows for
-    /// `item`. That bar centres its items in a pill narrower than its box, so
-    /// the hidden tab's box is not where its item is. By the item's
-    /// identifier, else by its name or title: iOS 27.1's tab button carries
-    /// its item's identifier only once an accessibility client has asked. The
-    /// bar draws each button twice for its glass, so copies at one box count
-    /// once: the copy a finger at its middle reaches.
-    private func drawnItem(_ item: UITabBarItem, in bar: UITabBar) -> Result<UIView, AimRefusal> {
+    private static func middle(_ v: UIView) -> CGPoint { v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil) }
+
+    /// The one of `elements` that a tab bar shows for `item`: UIKit's, or the
+    /// one a tablist is drawn as (LLP 1059), which centres its items in a pill
+    /// narrower than its box, so the hidden tab's box is not where its item
+    /// is. By the item's identifier, else by its name or title: iOS 27.1's
+    /// tab button carries its item's identifier only once an accessibility
+    /// client has asked, and one made since (a tab out of More, as the bar
+    /// widens) has none. The bar draws each button twice for its glass, so
+    /// copies at one box count once: the copy a finger at its middle reaches.
+    private func drawnItem(_ item: UITabBarItem, among elements: [UIView]) -> Result<UIView, AimRefusal> {
         let id = item.accessibilityIdentifier ?? "", names = [item.accessibilityLabel, item.title].compactMap { $0 }.filter { !$0.isEmpty }
-        let controls = Self.elements(under: [bar]).filter { $0 is UIControl }
+        let controls = elements.filter { $0 is UIControl }
         var found = id.isEmpty ? [] : controls.filter { $0.accessibilityIdentifier == id }
         let byName = found.isEmpty
         if byName { found = controls.filter { $0.accessibilityLabel.map(names.contains) == true } }
@@ -219,9 +226,9 @@ extension Agent {
             } else { shown.append((box, v)) }
         }
         guard shown.count == 1 else {
-            return .failure(AimRefusal(why: shown.isEmpty ? "the tab bar its tablist is drawn as shows no item for its tab; `clock settle` first waits out a transition"
-                : byName ? "the tab bar its tablist is drawn as shows \(shown.count) items named \"\(names.first ?? "")\"; give each tab its own name"
-                : "the tab bar its tablist is drawn as shows \(shown.count) items as \(id); give each tab its own testId"))
+            return .failure(AimRefusal(why: shown.isEmpty ? "its tab bar shows no item for its tab; `clock settle` first waits out a transition"
+                : byName ? "its tab bar shows \(shown.count) items named \"\(names.first ?? "")\"; give each tab its own name"
+                : "its tab bar shows \(shown.count) items as \(id); give each tab its own testId"))
         }
         let (box, control) = shown[0]
         guard control.window?.bounds.contains(CGPoint(x: box.midX, y: box.midY)) == true else {
