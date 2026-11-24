@@ -37,7 +37,10 @@ extension NavigationBarIOSTests {
     }
 
     func testAChangedItemSizeAppliesAfterTheHatchClearsItsFont() throws {
-        let session = try fixture("header-family-cleared-font", module: false, plan: "HEADER_FAMILY")
+        let session = try fixture("header-family-cleared-font", module: true, plan: "HEADER_FAMILY")
+        let natives = try XCTUnwrap(session.nativeViews)
+        until("the native route hatch is connected") { natives.hatchCalls != nil }
+        natives.hatchCalls?.route = { _, _, _, _, _, _, _ in }
         let presenter = session.presenter
         let nav = try XCTUnwrap(presenter.navigationHost.primaryNavigation)
         presenter.press(try node(session, "open").id)
@@ -74,6 +77,16 @@ extension NavigationBarIOSTests {
             XCTAssertEqual(font.pointSize, 22)
             XCTAssertEqual(font.familyName, "Georgia")
         }
+        natives.hatchCalls?.route = { _, event, pointer, _, _, _, _ in
+            guard event != RouteHatchEvent.ended.rawValue, let pointer else { return }
+            let controller = Unmanaged<UIViewController>.fromOpaque(pointer).takeUnretainedValue()
+            let save = controller.navigationItem.rightBarButtonItems?.first { $0.title == "Save" }
+            save?.setTitleTextAttributes([.font: UIFont(name: "Menlo", size: 23)!], for: .normal)
+        }
+        let header = try node(session, "header")
+        presenter.apply(wireBatch([["op": "style", "id": header.id, "style": ["written": []]]]))
+        prepare()
+        XCTAssertEqual(item.titleTextAttributes(for: .normal)?[.font] as? UIFont, native)
     }
 
     func testRemovingTheFamilyReturnsTheItemToItsRouteHatch() throws {
@@ -186,7 +199,10 @@ extension NavigationBarIOSTests {
     }
 
     func testHeaderFamilyPreservesTitleAndItemMetricsAcrossRouteUpdates() throws {
-        let session = try fixture("header-family-route-updates", module: false, plan: "HEADER_FAMILY")
+        let session = try fixture("header-family-route-updates", module: true, plan: "HEADER_FAMILY")
+        let natives = try XCTUnwrap(session.nativeViews)
+        until("the native route hatch is connected") { natives.hatchCalls != nil }
+        natives.hatchCalls?.route = { _, _, _, _, _, _, _ in }
         let host = session.presenter.navigationHost
         let nav = try XCTUnwrap(host.primaryNavigation)
         session.presenter.press(try node(session, "open").id)
@@ -238,10 +254,18 @@ extension NavigationBarIOSTests {
         prepare()
         XCTAssertEqual(try drawn("Notes").familyName, "Georgia")
 
+        natives.hatchCalls?.route = { _, event, pointer, _, _, _, _ in
+            guard event != RouteHatchEvent.ended.rawValue, let pointer else { return }
+            let controller = Unmanaged<UIViewController>.fromOpaque(pointer).takeUnretainedValue()
+            let item = controller.navigationItem
+            let appearance = (item.standardAppearance ?? UINavigationBarAppearance()).copy()
+            appearance.titleTextAttributes[.font] = UIFont(name: "Menlo", size: 23)
+            item.standardAppearance = appearance
+        }
         setFamily(false)
-        item.standardAppearance = hatch
         prepare()
         XCTAssertEqual(try drawn("Notes").familyName, "Menlo")
+        natives.hatchCalls?.route = { _, _, _, _, _, _, _ in }
         item.standardAppearance = nil
         let red = UINavigationBarAppearance()
         red.configureWithOpaqueBackground()
@@ -262,6 +286,17 @@ extension NavigationBarIOSTests {
         nav.navigationBar.standardAppearance = blue
         prepare()
         XCTAssertEqual(item.standardAppearance?.backgroundColor, .blue, "the item follows the bar's current background")
+        natives.hatchCalls?.route = { _, event, pointer, _, _, _, _ in
+            guard event != RouteHatchEvent.ended.rawValue, let pointer else { return }
+            let controller = Unmanaged<UIViewController>.fromOpaque(pointer).takeUnretainedValue()
+            guard let bar = controller.navigationController?.navigationBar else { return }
+            let appearance = bar.standardAppearance.copy()
+            appearance.buttonAppearance.normal.titleTextAttributes[.font] = UIFont.boldSystemFont(ofSize: 24)
+            bar.standardAppearance = appearance
+        }
+        setFamily(false)
+        prepare()
+        XCTAssertEqual(try drawn("Save"), barItem)
     }
 
     func testHeaderFamilyRemovalPreservesTheInheritedScrollEdgeTitleColor() throws {
