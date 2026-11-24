@@ -160,6 +160,7 @@ impl<D: DataSource> Presenter<D> {
                     &node,
                     limits.get(&id).copied(),
                     &|id| self.host.presented(id),
+                    self.host.has_scale(),
                 )
             });
             let (ox, oy) = bounds.axes;

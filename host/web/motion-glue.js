@@ -1182,7 +1182,7 @@ export function motionController({views,now,generation,request,applyBatch,inert,
         for(const companion of drag.holds.slice(1)) {
           const base=companion.base[0];
           const value=progress===caught?base:progress<caught?base*progress/caught:base+(1-base)*(progress-caught)/(1-caught);
-          track(companion,[value,0]);
+          track(companion,[value,companion.property==='scale'?value:0]);
         }
         e.preventDefault(); if(e.type==='pointermove') e.stopPropagation(); return true;
       };

@@ -74,6 +74,7 @@ impl<D: DataSource> Presenter<D> {
                     &node,
                     None,
                     &|id| self.host.presented(id),
+                    self.host.has_scale(),
                 )
                 .max
                 .1
@@ -225,6 +226,7 @@ impl<D: DataSource> Presenter<D> {
                     &node,
                     None,
                     &|id| self.host.presented(id),
+                    self.host.has_scale(),
                 );
                 (node.key, bounds.max.1)
             };

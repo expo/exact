@@ -448,7 +448,6 @@ impl Lowerer<'_> {
                         Property::from_author_name(n)
                             .is_some_and(|p| p.is_color() || p == Property::BoxShadow)
                     });
-
                     // A design token is the colour it stands for (LLP 1121 D3).
                     let value = match colour.then(|| crate::keyframes::tokens(&value, &self.theme))
                     {

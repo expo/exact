@@ -180,6 +180,7 @@ mod tests {
             roots: &kernel.roots(),
             hidden: &|_| false,
             presented: &|_| Presented::IDENTITY,
+            has_scale: false,
             paths: &|_| None,
             filters: &|_| None,
             scroll: &BTreeMap::new(),

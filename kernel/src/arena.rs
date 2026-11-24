@@ -46,6 +46,7 @@ pub struct NodeArena {
     pub(crate) layout_dirty: SlotSet,
     // Equal styles are one allocation (`shared_style`).
     styles: Vec<Rc<StyleProps>>,
+    pub(crate) scaled: SlotSet,
     shared: SharedStyles,
     props: Vec<PropList>,
     /// Live nodes per prop id and per node type: a host's scan for a few
@@ -188,6 +189,7 @@ impl Clone for NodeArena {
             child_indices: self.child_indices.clone(),
             layout_dirty: self.layout_dirty.clone(),
             styles: self.styles.clone(),
+            scaled: self.scaled.clone(),
             shared: self.shared.clone(),
             props: self.props.clone(),
             prop_counts: self.prop_counts.clone(),
@@ -297,6 +299,7 @@ impl NodeArena {
         self.button_bases.clear();
         self.looks.clear();
         self.fit_scales.clear();
+        self.scaled.clear();
         self.flow.clear();
         self.exclusion_slots.clear();
         self.reserving.clear();
@@ -984,6 +987,7 @@ impl NodeArena {
         self.button_bases.remove(&slot);
         self.looks.remove(&slot);
         self.fit_scales.remove(&slot);
+        self.scaled.remove(slot);
         self.sticky_slots.remove(slot);
         self.top_layer_slots.remove(slot);
         self.layout_dirty.remove(slot);

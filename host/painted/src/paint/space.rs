@@ -679,27 +679,32 @@ pub(crate) fn content_size_with(
     node: &NodeRef<'_>,
     kernel: &Kernel,
     presented: &dyn Fn(ViewId) -> Presented,
+    has_scale: bool,
 ) -> (f32, f32) {
     fn overflow(
         node: &NodeRef<'_>,
         kernel: &Kernel,
         presented: &dyn Fn(ViewId) -> Presented,
-    ) -> Option<Rect4> {
-        let p = presented(node.id);
-        if p.scale.0 * p.press == 0. || p.scale.1 * p.press == 0. {
+    ) -> Option<(Rect4, bool)> {
+        let mut p = presented(node.id);
+        p.press = 1.;
+        if p.scale.0 == 0. || p.scale.1 == 0. {
             return None;
         }
         let f = node.frame;
         let border = (f.x, f.y, f.width, f.height);
         let axes = effective_overflow(node);
         let mut bounds = border;
+        let mut scaled_below = false;
         for id in node.children() {
             let Some(child) = kernel.node_unblocked(id) else {
                 continue;
             };
-            let Some(c) = overflow(&child, kernel, presented) else {
+            scaled_below |= presented(id).scale != (1., 1.);
+            let Some((c, scaled)) = overflow(&child, kernel, presented) else {
                 continue;
             };
+            scaled_below |= scaled;
             let left = if axes.0 == Overflow::Visible {
                 bounds.0.min(c.0)
             } else {
@@ -722,6 +727,11 @@ pub(crate) fn content_size_with(
             };
             bounds = (left, top, right - left, bottom - top);
         }
+        // Keep layout overflow on branches whose descendants were not rescaled.
+        if !scaled_below {
+            bounds.2 = bounds.2.max(node.content.0);
+            bounds.3 = bounds.3.max(node.content.1);
+        }
         let map = space::mapping(kernel, node, &p);
         let after = space::mapped_bounds(&map, bounds).unwrap_or(border);
         // CSS Transforms 1 section 3: keep the border box before and after
@@ -730,13 +740,20 @@ pub(crate) fn content_size_with(
         let top = border.1.min(after.1);
         let right = (border.0 + border.2).max(after.0 + after.2);
         let bottom = (border.1 + border.3).max(after.1 + after.3);
-        Some((left, top, right - left, bottom - top))
+        Some((
+            (left, top, right - left, bottom - top),
+            scaled_below || p.scale != (1., 1.),
+        ))
     }
-    let mut stack = node.children();
+    let mut stack = if has_scale {
+        node.children()
+    } else {
+        Vec::new()
+    };
     let mut transformed = false;
     while let Some(id) = stack.pop() {
         if let Some(child) = kernel.node_unblocked(id) {
-            if presented(id).moves() || child.style.translate_z != 0. {
+            if presented(id).scale != (1., 1.) {
                 transformed = true;
                 break;
             }
@@ -761,7 +778,7 @@ pub(crate) fn content_size_with(
     let mut size = (node.frame.width, node.frame.height);
     for id in node.children() {
         if let Some(child) = kernel.node_unblocked(id) {
-            let Some(r) = overflow(&child, kernel, presented) else {
+            let Some((r, _)) = overflow(&child, kernel, presented) else {
                 continue;
             };
             size.0 = size.0.max(r.0 + r.2 - node.frame.x + pr);

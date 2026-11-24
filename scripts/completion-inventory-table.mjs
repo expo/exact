@@ -409,7 +409,7 @@ export const classifications = [
     ["painted:host/painted/src/holds.rs", "Host::retained_input_eligible"],
     ["painted:host/painted/src/host.rs",
       "Host::agent Host::app_roots Host::carry Host::content_region Host::document_value Host::engine Host::executor Host::executor_with Host::grants Host::kernel Host::log " +
-      "Host::now Host::preorder Host::presented Host::project_navigation Host::roots Host::router_op Host::runner Host::size_new_symbols " +
+      "Host::has_scale Host::now Host::preorder Host::presented Host::project_navigation Host::roots Host::router_op Host::runner Host::size_new_symbols " +
       "Host::take_commands Host::take_surface_updates Host::viewport Host::wants_frames"],
     ["painted:host/painted/src/lower.rs", "Host::layer_tracks Host::lower_eligibility Host::spinner_tracks"],
     ["painted:host/painted/src/media_session.rs", "handled"],

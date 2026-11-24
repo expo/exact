@@ -402,6 +402,25 @@ fn engine(layout: &mut Option<Box<dyn LayoutMirror>>) -> &mut LayoutTree {
 }
 
 impl Kernel {
+    /// Whether any live node has a non-identity scale row.
+    pub fn has_scale(&self) -> bool {
+        !self.arena.scaled.is_empty()
+    }
+
+    /// Whether a descendant has a non-identity scale row.
+    pub fn has_scaled_descendant(&self, key: NodeKey) -> bool {
+        self.arena.scaled.iter().any(|slot| {
+            let mut parent = self.arena.parent(slot);
+            while let Some(at) = parent {
+                if self.arena.key(at) == key {
+                    return true;
+                }
+                parent = self.arena.parent(at);
+            }
+            false
+        })
+    }
+
     /// Nodes the layout engine holds: the live nodes, when every removal
     /// reached it.
     #[cfg(test)]

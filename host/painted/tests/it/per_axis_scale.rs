@@ -132,3 +132,60 @@ fn per_axis_scale_motion_and_press_keep_y_only_changes() {
     )
     .unwrap();
 }
+
+#[test]
+fn scroll_extent_ignores_translate_rotate_and_press_but_tracks_scale_holds() {
+    use exact_motion::{HoldEnd, Property, Value};
+    let source = r#"component App
+  state n = 0
+  action noop
+    n = n + 1
+  view
+    view testId="port" width=120 height=120 overflow="auto"
+      view testId="child" width=100 height=100 press=noop -exact-press-scale=0.5
+        view width=160 height=400
+"#;
+    let extent = |p: &mut Presenter<()>| {
+        p.frame();
+        let port = id(p, "port");
+        let f = p.host().kernel().node(port).unwrap().frame;
+        p.scrollers_at(f.x + 5., f.y + 5.)
+            .chain
+            .into_iter()
+            .find(|s| s.id == port)
+            .unwrap()
+            .max
+    };
+    let baseline = extent(&mut boot(source));
+    assert_eq!(baseline, (40., 280.));
+    for row in ["translate=\"50px 70px\"", "rotate=45"] {
+        let mut p = boot(&source.replace(
+            "width=100 height=100 press",
+            &format!("width=100 height=100 {row} press"),
+        ));
+        assert_eq!(extent(&mut p), baseline, "{row}");
+    }
+    let mut p = boot(source);
+    let child = id(&p, "child");
+    let f = p.host().kernel().node(child).unwrap().frame;
+    p.pointer_down(f.x + 50., f.y + 50., 0.).unwrap();
+    p.advance(100.);
+    assert_eq!(extent(&mut p), baseline);
+    p.pointer_cancel(100.).unwrap();
+    let held = p
+        .host_mut()
+        .hold_begin(child, Property::Scale, 100.)
+        .unwrap()
+        .unwrap();
+    p.host_mut()
+        .hold_update(held.token, Value::new(1., 0.5), 110.)
+        .unwrap();
+    assert_eq!(extent(&mut p), (40., 105.));
+    p.host_mut()
+        .hold_update(held.token, Value::new(1., 1.), 120.)
+        .unwrap();
+    assert_eq!(extent(&mut p), baseline);
+    p.host_mut()
+        .hold_end(held.token, HoldEnd::Cancel, 120.)
+        .unwrap();
+}

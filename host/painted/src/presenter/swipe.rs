@@ -187,7 +187,15 @@ impl<D: DataSource> Presenter<D> {
         let progress = ways.progress(value.x);
         let caught = ways.progress(held.primary.value.x);
         for companion in companions.iter().flatten() {
-            let value = Value::scalar(indicator(companion.value.x, caught, progress));
+            let mapped = indicator(companion.value.x, caught, progress);
+            let value = Value::new(
+                mapped,
+                if companion.token.property() == Property::Scale {
+                    mapped
+                } else {
+                    0.
+                },
+            );
             self.host
                 .hold_update(companion.token, value, now_ms)
                 .map_err(|e| format!("hold: {e:?}"))?;

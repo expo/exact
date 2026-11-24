@@ -8,6 +8,9 @@ pub(super) fn scaled_content(
     kernel: &Kernel,
     padding: bool,
 ) -> Option<(f32, f32)> {
+    if !kernel.has_scale() || !kernel.has_scaled_descendant(node.key) {
+        return None;
+    }
     use exact_kernel::svg::transform as tf;
     fn bounds(node: &NodeRef<'_>, kernel: &Kernel, padding: bool) -> ([f32; 4], bool) {
         let children = node.children();

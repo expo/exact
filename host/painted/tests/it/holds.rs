@@ -147,8 +147,8 @@ fn invalid_live_samples_leave_host_and_engine_clocks_and_presentation_unchanged(
     let start = h.hold_begin(row, Property::Scale, 10.).unwrap().unwrap();
     for (value, time) in [
         (Value::four(0.5, 1., 1., 0.), 100.),
-        (Value::scalar(0.5), 9.),
-        (Value::scalar(f64::NAN), 100.),
+        (Value::new(0.5, 0.5), 9.),
+        (Value::new(f64::NAN, f64::NAN), 100.),
     ] {
         assert!(h.hold_update(start.token, value, time).is_err());
         assert_eq!(h.now(), 10.);

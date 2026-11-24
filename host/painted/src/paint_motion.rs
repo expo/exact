@@ -302,7 +302,14 @@ impl<D: DataSource> Host<D> {
                 Property::Layout => {
                     entry.layout = layout_presented(&self.engine, p.node, p.value).map(|v| v as f32)
                 }
-                Property::Scale => entry.scale = (p.value.x as f32, p.value.y as f32),
+                Property::Scale => {
+                    entry.scale = (p.value.x as f32, p.value.y as f32);
+                    if entry.scale == (1., 1.) {
+                        self.scaled_presented.remove(&view);
+                    } else {
+                        self.scaled_presented.insert(view);
+                    }
+                }
                 Property::Rotate => {
                     entry.rotate = p.value.x as f32;
                     entry.rotate_axis = exact_kernel::style::space::RotateAxis(

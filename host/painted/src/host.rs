@@ -107,6 +107,7 @@ pub struct Host<D: DataSource> {
     pub(crate) engine: Engine,
     keys: BTreeMap<NodeKey, ViewId>,
     presented: BTreeMap<ViewId, Presented>,
+    scaled_presented: std::collections::BTreeSet<ViewId>,
     /// Paint motion's owners and the appearance they resolve by (LLP 1062).
     paint: PaintMotion,
     viewport: (f32, f32),
@@ -333,6 +334,7 @@ impl<D: DataSource> Host<D> {
             engine: Engine::new(),
             keys: BTreeMap::new(),
             presented: BTreeMap::new(),
+            scaled_presented: Default::default(),
             paint: Default::default(),
             viewport: (width, height),
             now_ms: 0.0,
@@ -684,6 +686,10 @@ impl<D: DataSource> Host<D> {
     /// The roots, in order.
     pub fn roots(&self) -> Vec<ViewId> {
         self.runner.roots()
+    }
+
+    pub(crate) fn has_scale(&self) -> bool {
+        self.runner.kernel().has_scale() || !self.scaled_presented.is_empty()
     }
 
     /// A node's presentation values: the engine's, else the committed style's.
@@ -1282,6 +1288,7 @@ impl<D: DataSource> Host<D> {
                 self.forget_transform_handle(*key);
                 if let Some(id) = self.keys.remove(key) {
                     self.presented.remove(&id);
+                    self.scaled_presented.remove(&id);
                     self.values.committed(id, None);
                 }
             }
@@ -1304,6 +1311,7 @@ impl<D: DataSource> Host<D> {
                 self.cancel_press(*key);
                 if let Some(id) = self.keys.get(key).copied() {
                     self.presented.remove(&id);
+                    self.scaled_presented.remove(&id);
                     self.renewed.push(id);
                     self.scroll_anchors.renewed(id, *key);
                     self.values.committed(id, None);

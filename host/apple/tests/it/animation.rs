@@ -252,6 +252,8 @@ fn per_axis_scale_scroll_extent_matches_chrome() {
         ("-1 0.5", 120, 225),
         ("1 -0.5", 160, 120),
         ("0.5 3", 120, 1100),
+        ("1 1\" translate=\"50px 70px", 160, 400),
+        ("1 1\" rotate=\"45deg", 160, 400),
     ] {
         let source = source.replace("scale=\"1 0.5\"", &format!("scale=\"{scale}\""));
         let plan = contract::compile(&source).unwrap();

@@ -1195,6 +1195,7 @@ impl<D: DataSource> Presenter<D> {
                                 &n,
                                 collection_limits.get(id).copied(),
                                 &|id| self.host.presented(id),
+                                self.host.has_scale(),
                             )
                         })
                         .clamp(*off);
@@ -1258,6 +1259,7 @@ impl<D: DataSource> Presenter<D> {
                 &node,
                 collection_limits.get(&id).copied(),
                 &|id| self.host.presented(id),
+                self.host.has_scale(),
             )
         });
         (bounds.max.0.max(0.), bounds.max.1.max(0.))

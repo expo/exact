@@ -128,7 +128,7 @@ final class SwipeHold {
     weak var view: NodeView?
     let generation: Int
     let primary: NativeHold
-    var indicators: [(NativeHold, Double)] = []
+    var indicators: [(NativeHold, Double, UInt32)] = []
     private(set) var ended = false
     private var finishing = false
     private var displacement = 0.0
@@ -176,7 +176,7 @@ final class SwipeHold {
         if let indicator = NodeView.committed(view.subviews).first(where: { $0.props["swipeIndicator"] == "true" }) {
             for property: UInt32 in [3, 1] {
                 let (token, batch) = session.runtime.holdBegin(indicator.id, property: property, now: session.now())
-                if let token { indicators.append((token, token.x)) }
+                if let token { indicators.append((token, token.x, property)) }
                 session.apply(batch)
             }
         }
@@ -224,8 +224,9 @@ final class SwipeHold {
         let (right, left) = directions
         let progress = SwipeRecognition.progress(value, right: right, left: left)
         let caught = SwipeRecognition.progress(primary.x, right: right, left: left)
-        for (hold, base) in indicators {
-            session.apply(session.runtime.holdUpdate(hold.token, x: SwipeIndicator(base: base, progressAtCatch: caught).value(progress), y: 0, now: session.now()))
+        for (hold, base, property) in indicators {
+            let value = SwipeIndicator(base: base, progressAtCatch: caught).value(progress)
+            session.apply(session.runtime.holdUpdate(hold.token, x: value, y: property == 1 ? value : 0, now: session.now()))
         }
         return live
     }
@@ -263,7 +264,7 @@ final class SwipeHold {
             } else {
                 session.apply(session.runtime.holdEnd(primary.token, cancel: refused, measured: true, now: session.now(), at: at))
             }
-            for (hold, _) in indicators {
+            for (hold, _, _) in indicators {
                 session.apply(session.runtime.holdEnd(hold.token, cancel: true, now: session.now()))
             }
             session.presenter.collections.releaseInteractionLater(ifCurrent: pin)

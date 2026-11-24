@@ -358,3 +358,68 @@ fn per_axis_scale_rows_and_keyframes_round_trip() {
         vec![(Property::Scale, Value::new(-2., 0.))]
     );
 }
+
+#[test]
+fn scale_presence_follows_row_changes_removal_and_reset() {
+    let mut k = Kernel::with_monospace();
+    k.apply(
+        0,
+        1,
+        &[
+            Op::CreateView {
+                id: 1,
+                node_type: NodeType::View,
+            },
+            Op::CreateView {
+                id: 2,
+                node_type: NodeType::View,
+            },
+            Op::SetChildren {
+                id: 1,
+                children: vec![2],
+            },
+            Op::AttachRoot { id: 1 },
+        ],
+    )
+    .unwrap();
+    let root = k.node(1).unwrap().key;
+    assert!(!k.has_scale());
+    for (batch, value, scaled) in [(2, "1 0.5", true), (3, "none", false), (4, "2", true)] {
+        let mut patch = StyleProps::default();
+        patch
+            .set_dynamic(StyleId::Scale, &StyleValue::Text(value.into()))
+            .unwrap();
+        k.apply(
+            0,
+            batch,
+            &[Op::SetStyle {
+                id: 2,
+                patch: Box::new(patch),
+            }],
+        )
+        .unwrap();
+        assert_eq!(k.has_scale(), scaled);
+        assert_eq!(k.has_scaled_descendant(root), scaled);
+        assert!(!k.has_scaled_descendant(k.node(2).unwrap().key));
+    }
+    k.apply(0, 5, &[Op::DestroyView { id: 2 }]).unwrap();
+    assert!(!k.has_scale());
+    assert!(!k.has_scaled_descendant(root));
+    let mut patch = StyleProps::default();
+    patch
+        .set_dynamic(StyleId::Scale, &StyleValue::Text("2".into()))
+        .unwrap();
+    k.apply(
+        0,
+        6,
+        &[Op::SetStyle {
+            id: 1,
+            patch: Box::new(patch),
+        }],
+    )
+    .unwrap();
+    assert!(k.has_scale());
+    assert!(!k.has_scaled_descendant(root));
+    k.reset();
+    assert!(!k.has_scale());
+}

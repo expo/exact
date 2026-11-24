@@ -33,6 +33,11 @@ impl NodeArena {
 
     fn set_shared_style(&mut self, slot: u32, style: Rc<StyleProps>) {
         self.relative.update(slot, !style.relative.is_empty());
+        if style.scale.x != 1. || style.scale.y != 1. {
+            self.scaled.insert(slot);
+        } else {
+            self.scaled.remove(slot);
+        }
         if crate::fragment::is_multicol(&style) {
             self.frag.containers.insert(slot);
         } else {

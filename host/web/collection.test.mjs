@@ -744,7 +744,7 @@ test('same-clock rebegin rejects stale completion and delayed release holds its 
 });
 
 test('motion destroy/remount/reset cancel only owned animations', async()=>{
-  const result=await evaluate(`(() => {const f=(${motionFixture})();const m=f.motion,n=f.node; m.animate({id:2,property:'scale',values:[1,2],delay:0,duration:10000}); const old=n.getAnimations()[0];m.destroy(2);m.animate({id:2,property:'scale',values:[1,2],delay:0,duration:10000});const next=n.getAnimations()[0];m.reset();return {old:old.playState,next:next.playState,remaining:n.getAnimations().length};})()`);
+  const result=await evaluate(`(() => {const f=(${motionFixture})();const m=f.motion,n=f.node; m.animate({id:2,property:'scale',values:[[1,1],[2,2]],delay:0,duration:10000}); const old=n.getAnimations()[0];m.destroy(2);m.animate({id:2,property:'scale',values:[[1,1],[2,2]],delay:0,duration:10000});const next=n.getAnimations()[0];m.reset();return {old:old.playState,next:next.playState,remaining:n.getAnimations().length};})()`);
   expect(result).toEqual({old:'idle',next:'idle',remaining:0});
 });
 
@@ -832,7 +832,7 @@ test('signed swipe resistance and caught indicators stay continuous across both 
     m.style(2,'translate:'+base+'px');m.style(6,'height:10px;width:10px;opacity:'+indicator+';scale:'+indicator);
     m.attachSwipe(n,2,(name,fn)=>events[name]=fn);const event=(type,x)=>({type,isPrimary:true,button:0,pointerId:7,clientX:x,clientY:0,target:n,preventDefault(){},stopPropagation(){}});
     events.pointerdown(event('pointerdown',0));events.pointermove(event('pointermove',10));
-    const samples=offsets.map(offset=>{f.advance(20);events.pointermove(event('pointermove',10+offset));return f.calls.filter(c=>c.op==='move').slice(-3).map(c=>c.x);});
+    const samples=offsets.map(offset=>{f.advance(20);events.pointermove(event('pointermove',10+offset));const moves=f.calls.filter(c=>c.op==='move').slice(-3); const s=getComputedStyle(companion).scale.split(/\s+/).map(Number);if(moves[2].x!==moves[2].y || (s[1]??s[0])!==s[0]) throw Error('swipe indicator lost its height');return moves.map(c=>c.x);});
     events.pointercancel(event('pointercancel',10));return samples;};
     return {positive:run(100,1,[0,-180,-212,-244,-308,-318,-308]),negative:run(-100,0.5,[0,20,180,244]),middle:run(32,0.6,[0,-16,-32,16,32]),zero:run(0,0.5,[0,32,64])};})()`);
   expect(result.positive).toEqual([[100,1,1],[64,1,1],[32,0.5,0.5],[0,0,0],[-64,0,0],[-66,0,0],[-64,0,0]]);

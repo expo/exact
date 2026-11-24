@@ -249,7 +249,6 @@ fn function(name: &str, args: &[&str], span: Span) -> Result<(usize, Expr), Stri
         ("scale", _) => return Err("`scale(…)` takes one or two numbers".into()),
         ("scalex" | "scaley", _) => return Err(format!("`{name}(…)` takes one number")),
         ("scalez" | "scale3d", _) => return Err(format!("`{name}(…)` is a 3D function")),
-
         ("matrix" | "matrix3d" | "skew" | "skewx" | "skewy", _) => {
             return Err(format!("`{name}(…)` has no individual property"));
         }

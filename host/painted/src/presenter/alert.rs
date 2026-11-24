@@ -687,6 +687,7 @@ impl<D: DataSource> Presenter<D> {
                     &node,
                     None,
                     &|id| self.host.presented(id),
+                    self.host.has_scale(),
                 );
                 bounds.max.0 > 0. || bounds.max.1 > 0.
             })
@@ -720,11 +721,14 @@ impl<D: DataSource> Presenter<D> {
         let Some(node) = kernel.node(id) else {
             return false;
         };
-        let bounds =
-            self.brush
-                .scroll_bounds(kernel, self.host.content_region(), &node, None, &|id| {
-                    self.host.presented(id)
-                });
+        let bounds = self.brush.scroll_bounds(
+            kernel,
+            self.host.content_region(),
+            &node,
+            None,
+            &|id| self.host.presented(id),
+            self.host.has_scale(),
+        );
         let border = node
             .computed_style(exact_kernel::StyleMask::EMPTY)
             .border_widths_in(&kernel.env_of(id));

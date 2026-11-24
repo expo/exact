@@ -536,7 +536,8 @@ mod tests {
         let mut tokens = Vec::new();
         for (property, should_hold) in [Property::Translate, Property::Scale].into_iter().zip(held)
         {
-            for value in [Value::scalar(-0.0), Value::scalar(3.0)] {
+            for n in [-0.0, 3.0] {
+                let value = Value::new(n, if property == Property::Scale { n } else { 0. });
                 e.observe(Change {
                     node: 7,
                     property,
@@ -621,7 +622,7 @@ mod tests {
             e.begin_transform_hold_with_counter(
                 7,
                 f64::NAN,
-                Some([Value::scalar(f64::NAN); 2]),
+                Some([Value::new(f64::NAN, f64::NAN); 2]),
                 &counter
             ),
             Ok(None)
@@ -637,7 +638,7 @@ mod tests {
         let mut e = Engine::new();
         for (property, value) in [
             (Property::Translate, Value::ZERO),
-            (Property::Scale, Value::scalar(-f64::MAX)),
+            (Property::Scale, Value::new(-f64::MAX, -f64::MAX)),
         ] {
             e.observe(Change {
                 node: 7,
@@ -657,7 +658,7 @@ mod tests {
             .unwrap();
         for (property, value) in [
             (Property::Translate, Value::new(40.0, 10.0)),
-            (Property::Scale, Value::scalar(f64::MAX)),
+            (Property::Scale, Value::new(f64::MAX, f64::MAX)),
         ] {
             e.observe(Change {
                 node: 7,
@@ -874,12 +875,12 @@ mod tests {
         e.observe(Change {
             node: 7,
             property: Property::Scale,
-            value: Value::scalar(1.0),
+            value: Value::new(1.0, 1.0),
             velocity: None,
         })
         .unwrap();
         let scale = e
-            .begin_hold(7, Property::Scale, 1.0, Some(Value::scalar(1.5)))
+            .begin_hold(7, Property::Scale, 1.0, Some(Value::new(1.5, 1.5)))
             .unwrap()
             .unwrap()
             .token;
@@ -893,7 +894,7 @@ mod tests {
             assert!(!e.owns_return(token));
         }
         assert!(e
-            .update_transform_hold(pair, 1.1, [Value::new(30.0, 0.0), Value::scalar(1.2)])
+            .update_transform_hold(pair, 1.1, [Value::new(30.0, 0.0), Value::new(1.2, 1.2)])
             .unwrap());
         for token in [pair.translate().token, pair.scale().token] {
             assert!(e.end_hold(token, 1.1, HoldEnd::Cancel).unwrap());
@@ -901,7 +902,7 @@ mod tests {
             assert!(!e.has_hold(token));
         }
         assert!(!e
-            .update_transform_hold(pair, f64::NAN, [Value::scalar(f64::NAN); 2])
+            .update_transform_hold(pair, f64::NAN, [Value::new(f64::NAN, f64::NAN); 2])
             .unwrap());
     }
 

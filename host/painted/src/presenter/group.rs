@@ -533,6 +533,7 @@ impl<D: DataSource> Presenter<D> {
                 &node,
                 limits.get(&id).copied(),
                 &|id| self.host.presented(id),
+                self.host.has_scale(),
             );
             let off = self.scroll_of(id);
             let scrolls = |o: Overflow| matches!(o, Overflow::Scroll | Overflow::Auto);
@@ -595,6 +596,7 @@ impl<D: DataSource> Presenter<D> {
             &node,
             self.collection_scroll_limits().get(&id).copied(),
             &|id| self.host.presented(id),
+            self.host.has_scale(),
         );
         let old = self.scroll_of(id);
         let next = if vertical {

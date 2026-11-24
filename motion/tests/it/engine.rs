@@ -518,7 +518,7 @@ fn the_engine_refuses_bad_input_by_name() {
         engine.observe(Change {
             node: 1,
             property: Property::Scale,
-            value: Value::scalar(f64::INFINITY),
+            value: Value::new(f64::INFINITY, f64::INFINITY),
             velocity: None
         }),
         Err(EngineError::NonFinite)
@@ -568,7 +568,7 @@ fn a_removed_node_holds_no_property_and_one_removed_property_leaves_the_rest() {
             let change = Change {
                 node,
                 property,
-                value: Value::scalar(0.5),
+                value: Value::new(0.5, if property == Property::Scale { 0.5 } else { 0. }),
                 velocity: None,
             };
             engine.observe(change).expect("observed");
@@ -605,7 +605,11 @@ fn a_node_at_rest_observed_again_is_as_one_forgotten_first() {
             let change = Change {
                 node,
                 property,
-                value: Value::scalar(value),
+                value: if property == Property::Scale {
+                    Value::new(value, value)
+                } else {
+                    Value::scalar(value)
+                },
                 velocity: None,
             };
             engine.observe(change).expect("observed");
