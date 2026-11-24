@@ -82,9 +82,6 @@ extension NavigationBarIOSTests {
         let window = try XCTUnwrap(self.window), menus = session.presenter.menus
         let pop = try XCTUnwrap(session.presenter.carrying("popover").first { $0.props["id"] == "bar-menu" })
         let nav = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation)
-        guard !nav.traitCollection.placesVerticalBar else {
-            throw XCTSkip("the touch runner's taps press no button of a vertical bar, a plain UIKit one's included (QUEUE.md)")
-        }
         let item = try XCTUnwrap((nav.topViewController?.navigationItem.leftBarButtonItems ?? []).first { $0.accessibilityLabel == "More" })
         func tap(_ point: CGPoint) throws {
             var request = try TouchRunner.aim(point, in: window)
