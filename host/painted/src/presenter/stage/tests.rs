@@ -879,6 +879,9 @@ fn predictive_back_seeks_the_pops_flights_and_springs_on_or_back() {
         assert!(p.back_progress(1, 0.4, 0, now + 50.));
         after(&mut p, 500.0);
         assert_eq!(flight(&p), (hero, thumb, 0.4), "held by the gesture");
+        // No Material preview pose: the route keeps its place, as in Compose.
+        let route = rect(&mut p, "route-detail");
+        assert!(near(route.0, 0.0) && near(route.2, 412.0), "{route:?}");
         let now = p.host().now();
         if commit {
             assert!(p.system_back(now));

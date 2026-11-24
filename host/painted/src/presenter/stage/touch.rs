@@ -23,7 +23,8 @@
 //! itself, whose pop starts from where the preview left the route. Nothing
 //! commits before the gesture does. A route whose exit is declared, pushed
 //! or full screen, previews that exit instead (`authored.rs`); one zoomed
-//! from a source runs its container's return (`zoom.rs`).
+//! from a source runs its container's return (`zoom.rs`). One whose pop
+//! flies names stays in place while the gesture seeks them (LLP 1013.004 D4).
 use super::*;
 
 /// A slop of Android's (`ViewConfiguration`'s touch slop, 8 dp).
@@ -92,6 +93,9 @@ pub(in crate::presenter) struct Preview {
     /// The container a zoomed route returns into: the preview runs its
     /// return, as Compose seeks a shared transition.
     pub(super) container: Option<zoom::Container>,
+    /// The pop flies names: the gesture seeks them and the route keeps
+    /// its place, as Compose's NavHost seeks its shared transition.
+    flies: bool,
 }
 
 impl Preview {
@@ -180,6 +184,9 @@ impl Preview {
     fn pose_at(&self, p: f32, width: f32, height: f32) -> Pose {
         if let Some(container) = self.container {
             return container.pose(false, zoom::emphasized(p), None);
+        }
+        if self.flies {
+            return Pose::REST;
         }
         let way = if self.edge == 1 { -1.0 } else { 1.0 };
         Pose {
@@ -629,12 +636,15 @@ impl<D: DataSource> Presenter<D> {
                         .and_then(|n| self.return_container(outgoing, n.id)),
                     _ => None,
                 };
+                let flies = matches!(target, Some(Target::Page { outgoing, .. })
+                    if self.stage.pops.1 == Some(outgoing) && !self.stage.pops.2.is_empty());
                 self.stage.preview = target.map(|target| Preview {
                     target,
                     progress,
                     edge,
                     release: None,
                     container,
+                    flies,
                 });
             }
             1 => {
