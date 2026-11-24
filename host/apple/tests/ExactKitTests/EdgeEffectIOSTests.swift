@@ -140,8 +140,7 @@ final class EdgeEffectIOSTests: XCTestCase {
     /// route node that sets any aspect of its edge effect, by LLP 1123 D14's
     /// forms or by the retired one, stops the follow from the reach pass after
     /// the restyle: the top shows again, or stays as it stands where the node
-    /// hides its top, since the property does not style the viewport (LLP 1077
-    /// D16).
+    /// hides its top.
     func testARouteThatSetsItsEdgeEffectStopsItsViewportFollowingTheList() throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("scroll edge effects require iOS 26") }
         guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
@@ -170,6 +169,54 @@ final class EdgeEffectIOSTests: XCTestCase {
         route.node.style = style
         p.reachPageEdges()
         XCTAssertTrue(page.topEdgeEffect.isHidden, "and one that sets no form has it follow the list again, at rest")
+    }
+
+    /// UIKit draws the bar's effect on the viewport, the outermost scroll view
+    /// under it, so the viewport shows the list's own top effect (LLP 1077 D16):
+    /// UIKit's where the list says nothing, the style the list writes from the
+    /// reach pass after a restyle, and none where the list hides its top. A
+    /// route node that sets its own edge effect stops the follow, and the
+    /// viewport's top takes UIKit's style again.
+    func testAViewportShowsTheTopEffectOfTheListItFollows() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("scroll edge effects require iOS 26") }
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
+        let session = try fixture(in: scene), p = session.presenter
+        p.apply(wireBatch([["op": "props", "id": Int(try node("app").id), "set": ["interactiveWidget": "resizes-visual"]]]))
+        XCTAssertNil(Agent(session: session).tap(["id": Int(try node("tab-inline").id)])["error"])
+        try waitForRoute("inline")
+        let route = try XCTUnwrap(p.navigationHost.primaryNavigation?.topViewController as? RouteController)
+        let page = try XCTUnwrap(route.contentViewport, "the visual policy scrolls the route's page in a viewport")
+        let content = try node("content-inline"), list = try XCTUnwrap(content.scrollView)
+        XCTAssertTrue(route.contentScrollView(for: .top) === list, "the bar follows the list in the page")
+        let scrollers = sequence(first: list as UIView, next: \.superview).prefix { $0 !== route.view }.filter { $0 is UIScrollView }
+        XCTAssertTrue(scrollers.last === page, "the viewport is the outermost scroll view under the bar, where UIKit draws its effect")
+        list.contentOffset.y = -list.adjustedContentInset.top + 200
+        XCTAssertFalse(page.topEdgeEffect.isHidden)
+        XCTAssertEqual(page.topEdgeEffect.style, .automatic, "a list that says nothing leaves UIKit's")
+        let unsaid = content.style
+        for (style, hidden) in [("soft", false), ("hard", false), ("none", true)] {
+            var restyled = unsaid
+            restyled["scroll_edge_effect"] = .string(style)
+            content.applyStyle(restyled)
+            p.reachPageEdges()
+            XCTAssertEqual(page.topEdgeEffect.isHidden, hidden, style)
+            if !hidden { XCTAssertEqual(page.topEdgeEffect.style, style == "hard" ? .hard : .soft, style) }
+        }
+        var soft = unsaid
+        soft["scroll_edge_effect"] = .string("soft")
+        content.applyStyle(soft)
+        let own = route.node.style
+        route.node.style["scroll_edge_effect_hidden"] = .number(4)
+        p.reachPageEdges()
+        XCTAssertFalse(page.topEdgeEffect.isHidden)
+        XCTAssertEqual(page.topEdgeEffect.style, .automatic, "a route node that sets its own edge effect stops the follow, in UIKit's style")
+        route.node.style = own
+        p.reachPageEdges()
+        XCTAssertEqual(page.topEdgeEffect.style, .soft, "and the list's again once the node sets none")
+        content.applyStyle(unsaid)
+        p.reachPageEdges()
+        XCTAssertFalse(page.topEdgeEffect.isHidden)
+        XCTAssertEqual(page.topEdgeEffect.style, .automatic, "UIKit's again once the list says nothing")
     }
 
     func testADocumentScrollerRevealsContentOutsideItsInnerScroller() throws {
