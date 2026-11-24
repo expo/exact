@@ -821,6 +821,9 @@ fn a_plain_fill_on_the_band_reaches_it_and_a_decorated_box_keeps_its_place() {
         ],
         vec![fill, (StyleId::Rotate, "10deg")],
         vec![fill, reach("none")[0], reach("none")[1]],
+        vec![(StyleId::BackgroundColor, "light-dark(transparent, #336699)")],
+        vec![fill, (StyleId::BackgroundClip, "content-box")],
+        vec![fill, (StyleId::SafeAreaExtend, "top")],
     ] {
         assert_eq!(at(&decorated), 0.0, "{decorated:?}");
     }

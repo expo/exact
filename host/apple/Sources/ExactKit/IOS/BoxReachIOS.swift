@@ -8,31 +8,42 @@
 import UIKit
 
 extension NodeView {
-    /// Its laid-out border box in its own coordinates: its bounds less the reach a box that does
-    /// not scroll is drawn past it by.
-    package var laidOutBox: CGRect { scrollView == nil ? bounds.inset(by: reach) : bounds }
+    /// Its laid-out border box in its own coordinates: where reach draws it past its frame on the
+    /// pixel grid, the box at its origin, as the grid drew it; else its bounds.
+    package var laidOutBox: CGRect {
+        guard scrollView == nil, reach != .zero, let place = grid else { return bounds }
+        return CGRect(origin: .zero, size: place.drawn.size)
+    }
 
     /// A box that does not scroll drawn past its laid-out frame by `reach` (`setReach`).
     func reachBox(_ reach: UIEdgeInsets) {
         guard reach != self.reach || !reachGiven else { return }
         more.reachGiven = true
         more.reach = reach
-        moveOrPlace { outsetByReach() }
+        guard let place = grid else { return }
+        moveOrPlace {
+            let r = reached(place)
+            guard r != nil || bounds.origin != .zero else { return }
+            let t = transform
+            transform = .identity
+            frame = r?.frame ?? place.drawn
+            bounds.origin = r?.origin ?? .zero
+            transform = t
+            placeExtension()
+        }
     }
 
-    /// Its frame outset by its reach on the grid it is placed on, and its bounds origin shifted so
-    /// that its children keep their places, as each frame it is given is (`Presenter.applyFrame`).
-    func outsetByReach() {
-        guard scrollView == nil, let place = grid, let presenter else { return }
+    /// Its frame drawn past `place` by its reach on the grid it is placed on, and the bounds origin
+    /// that keeps its children where layout put them. `nil` where it draws no reach: a scroller,
+    /// whose scroll view reaches; a row a grouped list carries into its cell, which the cell places;
+    /// a box a surface paints at its own size; and one that reaches nothing.
+    func reached(_ place: GridPlace) -> (frame: CGRect, origin: CGPoint)? {
+        guard scrollView == nil, reach != .zero, surface == nil, let presenter else { return nil }
+        if presenter.groupedLists?.carriesRows == true, presenter.groupedLists?.cellFrame(of: self, at: place) != nil { return nil }
         let r = reach, origin = presenter.gridOrigin(above: self)
         let outset = UIEdgeInsets(top: -r.top, left: -r.left, bottom: -r.bottom, right: -r.right)
-        let drawn = r == .zero ? place.drawn : PixelGrid.place(place.layout.inset(by: outset), in: origin, scale: presenter.gridScale(under: origin)).drawn
-        let t = transform
-        transform = .identity
-        frame = drawn
-        bounds.origin = CGPoint(x: drawn.minX - place.drawn.minX, y: drawn.minY - place.drawn.minY)
-        transform = t
-        placeExtension()
+        let drawn = PixelGrid.place(place.layout.inset(by: outset), in: origin, scale: presenter.gridScale(under: origin)).drawn
+        return (drawn, CGPoint(x: drawn.minX - place.drawn.minX, y: drawn.minY - place.drawn.minY))
     }
 }
 
