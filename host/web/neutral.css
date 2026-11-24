@@ -319,8 +319,18 @@
   #exact-root [data-groupedrowseparator]:is([role="tablist"]:has(> button[data-button-style][role="tab"], > :where([data-exact-list-item]) > button[data-button-style][role="tab"]):not(:has(> [aria-controls], > :where([data-exact-list-item]) > [aria-controls])), [role="radiogroup"]:has(> button[data-button-style][role="radio"], > :where([data-exact-list-item]) > button[data-button-style][role="radio"])) { width: auto; background-color: transparent; border-radius: 0; }
 
   /* The root tab bar, narrow: a bar of the page's ground under a 1 px line, each tab its symbol over its label, the
-     selected one in the accent. */
+     selected one in the accent. As UIKit's, the root's bar along the bottom (`placeTabBar` in routes.js) reaches the
+     window's bottom and sides while its tabs keep inside the safe area, above the home indicator
+     (`viewport-fit=cover`). */
   :where(#exact-root [role="tablist"]:has(> [role="tab"][aria-controls], > :where([data-exact-list-item]) > [role="tab"][aria-controls])) { background-color: var(--exact-background); box-shadow: none; border-top: 1px solid var(--exact-separator); }
+  :where(#exact-root [role="tablist"][data-exact-tab-bar]) { padding-right: env(safe-area-inset-right, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); padding-left: env(safe-area-inset-left, 0px); }
+  /* Where its touch targets do not fit, as at a large text size on a phone, it scrolls, so every tab stays in reach. */
+  @media (any-pointer: coarse) { :where(#exact-root [role="tablist"][data-exact-tab-bar]) { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; } #exact-root :is([role="tablist"][data-exact-tab-bar], [role="tablist"][data-exact-tab-bar] > :where([data-exact-list-item])) > [role="tab"]:focus-visible { outline-offset: -2px; } }
+  /* The box before that bar in the root's flow ends above the home indicator, so its own bottom inset is 0 (LLP 1123 D9);
+     a box laid over the window keeps the window's, a dialog or popover in the top layer within it included
+     (CSS Position 4, "Top layer"). */
+  :where(#exact-root [data-exact-above-tab-bar]) { --exact-safe-area-inset-bottom: 0px; }
+  :where(#exact-root [data-exact-above-tab-bar] :is(:modal, :popover-open)) { --exact-safe-area-inset-bottom: env(safe-area-inset-bottom, 0px); }
   #exact-root :is([role="tablist"], [role="tablist"] > :where([data-exact-list-item])) > button[role="tab"][aria-controls]:is([data-button-style="bordered"], [data-button-style="gray"]) { min-height: 3.5rem; border: none; padding: .375rem .5rem; font-size: .75rem; --exact-button-leading-areas: "image" "space" "title"; --exact-button-columns: minmax(var(--exact-button-title-min, min-content), auto); --exact-button-space: var(--exact-button-row-space); --exact-button-space-width: 0px; --exact-button-space-height: 2px; justify-items: center; }
   #exact-root :is([role="tablist"], [role="tablist"] > :where([data-exact-list-item])) > button[role="tab"][aria-controls]:is([data-button-style="bordered"], [data-button-style="gray"]) > img { width: 1.375rem; height: 1.375rem; }
   #exact-root :is([role="tablist"], [role="tablist"] > :where([data-exact-list-item])) > button[role="tab"][aria-controls]:is([data-button-style="bordered"], [data-button-style="gray"]):enabled { color: var(--exact-secondary-label); }
@@ -562,9 +572,10 @@
   :where(#exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet])) { color: var(--exact-label); }
   /* Every browser uses the same sheet ground; an authored ground still wins. */
   #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { background-color: var(--exact-background); position: fixed !important; inset: calc(env(safe-area-inset-top, 0px) + 12px) 0 0 !important; margin: 0 !important; box-sizing: border-box !important; width: auto !important; height: auto !important; max-height: none !important; z-index: 1; border-radius: calc(12px * var(--exact-curve-reach)) calc(12px * var(--exact-curve-reach)) 0 0; corner-shape: var(--exact-curve); overflow: clip; transition: translate .4s cubic-bezier(.32, .72, 0, 1), scale .4s cubic-bezier(.32, .72, 0, 1); }
-  /* Its content reads the sheet's own insets (LLP 1123 D9): none at its top, below the status bar; a wide
-     window's card, clear of every edge, has none at all. */
-  #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { --exact-safe-area-inset-top: 0px; }
+  /* Its content reads the sheet's own insets (LLP 1123 D9): none at its top, below the status bar, and the window's
+     at its bottom, as a sheet is fixed to the window whatever the bar beneath it clears (a full-screen route stays in
+     its stack's box and keeps that box's); a wide window's card, clear of every edge, has none at all. */
+  #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { --exact-safe-area-inset-top: 0px; --exact-safe-area-inset-bottom: env(safe-area-inset-bottom, 0px); }
   @media (min-width: 900px) { #exact-root :is([navigationPresentation="modal"], [data-exact-in-sheet]) { --exact-safe-area-inset-right: 0px; --exact-safe-area-inset-bottom: 0px; --exact-safe-area-inset-left: 0px; } }
   @starting-style { #exact-root [navigationPresentation="modal"] { translate: 0 100vh; } }
   /* The scrim is one box under the stack's top sheet, fixed to the window: the routes' parent's, which navigation.js

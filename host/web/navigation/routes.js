@@ -1,4 +1,5 @@
 import { viewChildren, unwrapListItem, viewParent } from "./lists.js";
+import { placeTabBar, inFlow } from "./tab-bar.js";
 import { fold, foldColumns, launched, onFold, launchLocation, launchVisits } from "./environment.js";
 import { agentParameters } from "./agent-parameters.js";
 import { inertAncestor } from "./layers.js";
@@ -117,40 +118,6 @@ export function sheetLeaves(el) {
   return true;
 }
 // @ref LLP 1115.000 D4.8 — a sheet the look draws (fixed to the window) slides back down as it closes, as it slid up (neutral.css), unless the person asks for less motion. A runtime asks this before it removes a modal route (glue.js's `destroy`; rt.js's `clear`, `each` and presence's `Leave`); a sheet that leaves stays whole until it is off the window, from where it stands, out of input, accessibility and the routes as presence-glue.js's leaving views are (LLP 1063), the focus leaving it as a removed one's would (input-glue.js's `arrive` takes one a blur does not reach). One holding media or a field whose decorations the browser paints closes at once, as its runtime empties those with the commit, and so does one holding an open dialog or popover, which the top layer would leave frozen on the window; a native view slides, showing what its module left in it. It keeps its ids for what it draws, though a command by id passes over it (`liveById`), and its stack's projection ends it on showing a sheet that was not beneath it, which may share them (compared as elements: a replace keeps its key).
-const placed = new WeakMap();
-const flow = style => /^(static|relative)$/.test(style.position);
-const column = style => /flex/.test(style.display) && style.flexDirection.startsWith("column");
-
-// LLP 1115.002 item 5. Only the nav containing the root tabs and their footer belongs to
-// the sidebar. Another nav, or a footer inside a route, keeps its place in the document.
-function placeTabBar(root, list, wide) {
-  const parent = viewParent(list);
-  const children = parent?.localName === "nav" && viewParent(parent) === root ? viewChildren(parent) : [];
-  const footer = children.length === 2 ? children.find(el => el !== list && el.localName === "footer") : null;
-  const wrapper = footer ? parent : null;
-  const orientation = list?.getAttribute("aria-orientation");
-  const placement = [wide, parent === root, orientation, ...[root, wrapper, list, footer].map(el => el && [
-    el.className, el.style.display, el.style.flexDirection, el.style.position, el.style.appearance
-  ].join("|"))].join("/");
-  const last = placed.get(root);
-  if (last?.placement === placement && last.list === list && last.wrapper === wrapper) return;
-
-  // Read authored placement without our own CSS. An unrelated commit must not restyle the page.
-  root.removeAttribute("data-exact-sidebar");
-  last?.list?.removeAttribute("data-exact-sidebar-tabs");
-  last?.wrapper?.removeAttribute("data-exact-tab-navigation");
-  placed.set(root, { placement, list, wrapper });
-  if ((!wide && !wrapper) || (!wrapper && parent !== root) || orientation === "vertical") return;
-  const bar = getComputedStyle(list);
-  if (bar.appearance === "none" || !flow(bar) || !bar.flexDirection?.startsWith("row") || !column(getComputedStyle(root))) return;
-  if (wrapper) {
-    const style = getComputedStyle(wrapper);
-    if (!flow(style) || !(style.display === "block" || style.display === "contents" || column(style)) || !flow(getComputedStyle(footer))) return;
-    wrapper.setAttribute("data-exact-tab-navigation", bar.display === "none" ? "hidden" : wide ? "sidebar" : "bar");
-  }
-  root.toggleAttribute("data-exact-sidebar", wide);
-  list.toggleAttribute("data-exact-sidebar-tabs", wide);
-}
 // @ref LLP 1075.003 §3.7 — tabs name their kept panels with aria-controls; each panel holds a route stack.
 // Attribute and parent walks also work in the server renderer's DOM, which has no selector engine.
 const tabsOf = (nav) => {
@@ -239,7 +206,7 @@ function bottomScroller(route) {
   let el = route.lastElementChild;
   while (el) {
     const style = getComputedStyle(el);
-    if (style.display === "none" || style.position === "absolute" || style.position === "fixed") {
+    if (!inFlow(style)) {
       el = el.previousElementSibling;
       continue;
     }
