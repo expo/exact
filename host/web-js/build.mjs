@@ -335,10 +335,10 @@ if (siteBase !== '/') {
   writeFileSync(resolve(gen, 'site.js'), readFileSync(resolve(here, 'site.js'), 'utf8').replace('__EXACT_SITE_BASE__', JSON.stringify(siteBase)));
   runtime.push('site.js');
   const edits = [
-    ['rt.js', "export { animationClocks, launchLocation, launchVisits } from './navigation.js';", `export { animationClocks } from './navigation.js';
-import { launchLocation as browserLocation, launchVisits as browserVisits } from './navigation.js';
-import { appLocation } from './site.js';
-export const launchLocation = () => appLocation(browserLocation()), launchVisits = () => browserVisits().map(appLocation);`],
+    ['rt.js', "export { animationClocks, launchVisits } from './navigation.js';", `export { animationClocks } from './navigation.js';
+import { launchVisits as browserVisits } from './navigation.js';
+import { appLocation } from './site.js'; export const launchVisits = () => browserVisits().map(appLocation);`],
+    ['rt.js', 'export const launchLocation = () => (checkpoint(), browserLocation());', 'export const launchLocation = () => (checkpoint(), appLocation(browserLocation()));'],
     ['router.js', 'import { canonical, locationOf,', 'import { locationOf,'],
     ['router.js', 'export { canonical, locationOf };', `import { canonical, appLocation, siteLocation, siteCanonical } from './site.js';
 export { canonical, locationOf };`],

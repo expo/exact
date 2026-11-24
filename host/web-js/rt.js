@@ -13,7 +13,10 @@ import { rt as Link } from './rt-link.js';
 export { liveTime } from './live-time.js';
 import { liveById, installFits, installSymbolEffects } from './navigation.js';
 // synced animations (LLP 1055.002, emit.rs `clocks`)
-export { animationClocks, launchLocation, launchVisits } from './navigation.js';
+export { animationClocks, launchVisits } from './navigation.js';
+import { launchLocation as browserLocation } from './navigation.js';
+/** The browser's location once it is the page's own (mount.js `checkpoint`). */
+export const launchLocation = () => (checkpoint(), browserLocation());
 export { fontFamily } from './font-family.js';
 export { cssNames } from './regions.js';
 import { Head, markDocument, projectRoots, openTabs, prepareTabs, unopened, tp } from './document.js';
@@ -57,7 +60,7 @@ import { Resources, Mutations, lateReaders, lateIdle } from './resources.js';
 import { Views, viewId } from './tree.js';
 import { KeyEvent, Propagating } from './events.js';
 import { Pres, Present, Sh, Input, pressFeedback } from './pieces.js';
-import { Booting, start, finishTaskScopes, Portals } from './mount.js';
+import { Booting, start, checkpoint, finishTaskScopes, Portals } from './mount.js';
 export * from './clock.js';
 export * from './resources.js';
 export * from './tree.js';
