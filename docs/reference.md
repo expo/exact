@@ -3213,7 +3213,7 @@ Rust and TypeScript storage share the bundled provider. Swift code in the same
 process must not open a database the Rust provider owns: Apple's launch-service
 dylibs still link system SQLite (`host/apple/launch-parts.mjs`), and closing a
 file through another copy can release the provider's POSIX locks
-([SQLite's locking rules](https://sqlite.org/howtocorrupt.html#posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)).
+([SQLite's locking rules](https://sqlite.org/howtocorrupt.html#_posix_advisory_locks_canceled_by_a_separate_thread_doing_close_)).
 A native production build links SQLite only when the app grants `sqlite.open`
 or names `"sqlite"` in the manifest's `link` list. Naming it without the grant
 links unused code: adding `sqlite.open` changes the compatibility identity and
