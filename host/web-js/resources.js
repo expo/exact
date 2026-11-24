@@ -427,11 +427,13 @@ export function res(
           root = r.path === undefined;
         r.baked = false;
         if (baked) r.stale = true;
-        // the first frame's build-time answer, said once when it starts to stand in for an answer (the runner's
-        // `journal_build_time`)
+        // the first frame's build-time answer, or a store reader's placeholder in place of one (store-reader.js), said
+        // once when it starts to stand in for an answer (the runner's `journal_build_time`)
         let quiet = false;
         const stands = () => {
-          if (!was && !quiet && r.stale && r.stand === 'build') say(`${name} shows its build-time answer until its source answers`);
+          if (was || quiet || !r.stale) return;
+          if (r.stand === 'build') say(`${name} shows its build-time answer until its source answers`);
+          else r.unseen?.();
         };
         if (!forced && !rev) {
           // Reuse follows the request in flight; the displayed value may answer older arguments (LLP 1016 D5).
@@ -469,7 +471,8 @@ export function res(
         if (ans && ans.store) r.store = true;
         r.watches = ans?.watches;
         if (ans && 'v' in ans) {
-          stands();
+          // a placeholder answered as it is asked shows in no frame
+          if (r.stand) stands();
           const stood = r.stale && r.stand && [eq(ans.v, r.value), r.stand];
           try {
             take(ans.v, a, Ov.tick(), undefined, ans.madeBy);
