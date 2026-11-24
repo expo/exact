@@ -214,6 +214,8 @@ pub struct TaffyTree<NodeContext = ()> {
     outset_paddings: SecondaryMap<DefaultKey, Rect<f32>>,
     /// EXACT PATCH 81: each bar's slot depth on its parent's last final layout.
     bar_depths: SecondaryMap<DefaultKey, f32>,
+    /// EXACT PATCH 81: each bar's slot on its parent's last final layout, in the parent's space.
+    bar_slots: SecondaryMap<DefaultKey, Rect<f32>>,
 
     // EXACT PATCH 29: the layouts of marked roots, by what they read.
     memo: Memo,
@@ -1459,6 +1461,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
             grid_origins: SecondaryMap::new(),
             outset_paddings: SecondaryMap::new(),
             bar_depths: SecondaryMap::new(),
+            bar_slots: SecondaryMap::new(),
             memo: Memo::default(),
         }
     }
@@ -1554,6 +1557,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.grid_origins.clear();
         self.outset_paddings.clear();
         self.bar_depths.clear();
+        self.bar_slots.clear();
     }
 
     /// Remove a specific node from the tree and drop it
@@ -1587,6 +1591,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.grid_origins.remove(key);
         self.outset_paddings.remove(key);
         self.bar_depths.remove(key);
+        self.bar_slots.remove(key);
         if let Some(index) = self.changed_layout_indices.remove(key) {
             self.changed_layouts.swap_remove(index);
             if let Some(&moved) = self.changed_layouts.get(index) {
@@ -1930,6 +1935,12 @@ impl<NodeContext> TaffyTree<NodeContext> {
     /// its edge; `None` for a box that is no bar, or a bar that took no slot.
     pub fn bar_depth(&self, node: NodeId) -> Option<f32> {
         self.bar_depths.get(node.into()).copied()
+    }
+
+    /// EXACT PATCH 81: the slot a bar was last laid out in, its sides from the parent's
+    /// border-box origin, as a child's location is; `None` where [`Self::bar_depth`] is.
+    pub fn bar_slot(&self, node: NodeId) -> Option<Rect<f32>> {
+        self.bar_slots.get(node.into()).copied()
     }
 
     /// EXACT PATCH 34: forget recorded layouts when a calc handle's environment changes.

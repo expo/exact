@@ -174,34 +174,105 @@ package final class ControlBars {
 
     /// Lift the bars above their scrollers' content and give each UIKit's edge
     /// effect over its scroller (D3, D4); a bar no longer one, removed from
-    /// the tree included, goes back.
+    /// the tree included, goes back. A bar an authored `edge-effect` registers
+    /// (LLP 1123 D12) takes that registration instead, one with no scroller too.
     static func sync(_ wanted: [(bar: NodeView, scroller: NodeView, edge: UIRectEdge)], in presenter: Presenter) {
         guard let viewport = presenter.viewport as? Viewport else { return }
-        var kept = Set<ObjectIdentifier>()
+        var kept = Set<ObjectIdentifier>(), edges: [ObjectIdentifier: Edge] = [:]
         for w in wanted {
             kept.insert(ObjectIdentifier(w.bar))
             viewport.controlBars[ObjectIdentifier(w.bar)] = Weak(w.bar)
             if w.bar.bandOver != w.scroller.paintRank { w.bar.bandOver = w.scroller.paintRank; if let p = w.bar.superview { PaintOrder.changed(p) } }
-            #if os(iOS)
-            if #available(iOS 26.0, *), let sv = w.scroller.scrollView {
-                let i = (w.bar.edgeInteraction as? UIScrollEdgeElementContainerInteraction) ?? {
-                    let made = UIScrollEdgeElementContainerInteraction()
-                    w.bar.addInteraction(made); w.bar.edgeInteraction = made
-                    return made
-                }()
-                if i.scrollView !== sv { i.scrollView = sv }
-                if i.edge != w.edge { i.edge = w.edge }
-            }
-            #endif
+            edges[ObjectIdentifier(w.bar)] = Edge(bar: w.bar, scrollView: w.scroller.scrollView, edge: w.edge)
         }
         for (key, held) in viewport.controlBars where !kept.contains(key) {
             viewport.controlBars[key] = nil
             guard let bar = held.value else { continue }
             bar.bandOver = nil
             if let p = bar.superview { PaintOrder.changed(p) }
-            if let i = bar.edgeInteraction as? UIInteraction { bar.removeInteraction(i) }
-            bar.edgeInteraction = nil
         }
+        // A flat bar takes a view to hold the interaction, mounted at once, which it keeps while it is registered
+        // (`FlatLeaves.demote`)
+        let flat = viewport.authoredBars.keys.filter { presenter.flats.isFlat($0) }
+        if !flat.isEmpty {
+            for id in flat { presenter.flats.promote(id) }
+            presenter.flats.flush()
+        }
+        for (id, a) in viewport.authoredBars {
+            guard let bar = presenter.views[id] else { continue }
+            edges[ObjectIdentifier(bar)] = Edge(bar: bar, scrollView: a.scroller.flatMap { presenter.views[$0]?.scrollView }, edge: a.edge)
+        }
+        register(edges, in: viewport)
+    }
+
+    /// Replaces the authored `edge-effect` registrations (LLP 1123 D12), each a bar by id, its physical
+    /// edge and the scroller beneath it, `nil` for none, and syncs the bars: activation supplies them
+    /// from `Kernel::bar_edge_effect` (stage 5), and tests set them directly.
+    package static func setBarEdgeEffects(_ wanted: [(bar: UInt32, edge: UIRectEdge, scroller: UInt32?)], in presenter: Presenter) {
+        guard let viewport = presenter.viewport as? Viewport else { return }
+        viewport.authoredBars = Dictionary(wanted.map { ($0.bar, (edge: $0.edge, scroller: $0.scroller)) }) { _, last in last }
+        presenter.reachPageEdges()
+    }
+
+    struct Edge { let bar: NodeView, scrollView: UIScrollView?, edge: UIRectEdge }
+
+    /// The one writer of the bars' `UIScrollEdgeElementContainerInteraction`s (iOS 26), which UIKit
+    /// gives one scroll view: each bar in `edges` holds one with its scroll view on its edge where
+    /// both are in one window, and every other bar view loses its own. One that already names them
+    /// is kept.
+    private static func register(_ edges: [ObjectIdentifier: Edge], in viewport: Viewport) {
+        #if os(iOS)
+        guard #available(iOS 26.0, *) else { return }
+        let drop = { (bar: NodeView) in
+            detach(bar)
+            viewport.edgeBars[ObjectIdentifier(bar)] = nil
+        }
+        for (key, held) in viewport.edgeBars where edges[key] == nil {
+            viewport.edgeBars[key] = nil
+            held.value.map(drop)
+        }
+        for (key, e) in edges {
+            guard let sv = e.scrollView, let window = e.bar.window, sv.window === window else { drop(e.bar); continue }
+            let i = (e.bar.edgeInteraction as? UIScrollEdgeElementContainerInteraction) ?? {
+                let made = UIScrollEdgeElementContainerInteraction()
+                made.scrollView = sv
+                made.edge = e.edge
+                e.bar.addInteraction(made); e.bar.edgeInteraction = made
+                return made
+            }()
+            if i.scrollView !== sv { i.scrollView = sv }
+            if i.edge != e.edge { i.edge = e.edge }
+            viewport.edgeBars[key] = Weak(e.bar)
+        }
+        #endif
+    }
+
+    /// Runs the reach pass again once `view`, a scroller, a bar holding an interaction or one an authored
+    /// registration names, moved into or out of a window, so that none holds an interaction across windows
+    /// and each, inferred or authored, comes back with its bar or scroller: once the batch that moved it
+    /// ends, or on the run loop's next turn outside one, so that the pass reads the settled tree once however
+    /// many views moved. An inferred bar that comes back alone, its scroller staying, has its interaction at
+    /// the next reach pass.
+    static func moved(_ view: NodeView) {
+        #if os(iOS)
+        guard #available(iOS 26.0, *), let presenter = view.presenter, let viewport = presenter.viewport as? Viewport,
+              !viewport.edgesOwed, view.scrollView != nil || view.edgeInteraction != nil || viewport.authoredBars[view.id] != nil
+        else { return }
+        viewport.edgesOwed = true
+        let pass = { [weak presenter] in
+            viewport.edgesOwed = false
+            presenter?.reachPageEdges()
+        }
+        if presenter.applying { presenter.afterBatch(pass) } else { DispatchQueue.main.async(execute: pass) }
+        #endif
+    }
+
+    /// Takes `bar`'s scroll edge element interaction away, as its node goes or is parked, or the presenter
+    /// resets: the next sync gives it one again where it is a bar then.
+    static func detach(_ bar: NodeView) {
+        guard let i = bar.edgeInteraction as? UIInteraction else { return }
+        bar.removeInteraction(i)
+        bar.edgeInteraction = nil
     }
 
     /// A bar, held weakly: a view the pool keeps is cleaned when it is no bar.

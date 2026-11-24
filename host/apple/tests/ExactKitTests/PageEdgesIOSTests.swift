@@ -386,6 +386,110 @@ final class PageEdgesIOSTests: XCTestCase {
         }
     }
 
+    /// An authored `edge-effect` registration (LLP 1123 D12) gives a bar's view UIKit's scroll edge element
+    /// interaction with the scroller it names, on its edge, over LLP 1131's inferred one for that view, and one
+    /// naming no scroller removes it. The same registration keeps its interaction, one follows its scroller's new
+    /// scroll view, a scroller out of the window gives none, clearing the authored ones gives the inferred one back,
+    /// a painted bar 1131 rejects and a flat box register when authored, a destroyed bar loses its interaction with
+    /// its registration, and a reset takes every interaction away.
+    func testAnAuthoredBarEdgeEffectWinsOverTheInferredOne() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("UIScrollEdgeElementContainerInteraction is iOS 26's") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter, list = try node(session, "list"), filter = try node(session, "filter")
+        until("the switcher is a bar over the list") { list.pageBand.top > 0 }
+        let sv = try XCTUnwrap(list.scrollView)
+        let held = { (bar: NodeView) in bar.interactions.compactMap { $0 as? UIScrollEdgeElementContainerInteraction } }
+        XCTAssertEqual(held(filter).map(\.edge), [.top])
+        XCTAssertTrue(held(filter).first?.scrollView === sv, "LLP 1131 infers the switcher's registration")
+        ControlBars.setBarEdgeEffects([(filter.id, .top, nil)], in: p)
+        XCTAssertTrue(held(filter).isEmpty, "an authored registration with no scroller wins")
+        ControlBars.setBarEdgeEffects([(filter.id, .bottom, list.id)], in: p)
+        let authored = try XCTUnwrap(held(filter).first)
+        XCTAssertEqual(held(filter).count, 1)
+        XCTAssertTrue(authored.scrollView === sv)
+        XCTAssertEqual(authored.edge, .bottom)
+        ControlBars.setBarEdgeEffects([(filter.id, .bottom, list.id)], in: p)
+        XCTAssertTrue(held(filter).first === authored, "the same registration keeps its interaction")
+        // The runner's restyles replace the list's scroll view, and the batch's end moves the registration onto the new one
+        let scrolling = list.style.mapValues(\.any)
+        let still = scrolling.merging(["overflow_x": "visible", "overflow_y": "visible"]) { _, b in b }
+        p.apply(wireBatch([["op": "style", "id": list.id, "style": still]]))
+        XCTAssertNil(list.scrollView, "no scroll view while it does not scroll")
+        XCTAssertTrue(held(filter).isEmpty, "and no registration")
+        p.apply(wireBatch([["op": "style", "id": list.id, "style": scrolling]]))
+        let recreated = try XCTUnwrap(list.scrollView)
+        XCTAssertTrue(recreated !== sv && held(filter).first?.scrollView === recreated, "it follows the list's new scroll view")
+        p.apply(wireBatch([["op": "create", "id": 9000, "kind": "scroll", "style": ["overflow_y": "auto"]]]))
+        XCTAssertNotNil(p.views[9000]?.scrollView)
+        ControlBars.setBarEdgeEffects([(filter.id, .top, 9000)], in: p)
+        XCTAssertTrue(held(filter).isEmpty, "a scroller out of the window gives none")
+        ControlBars.setBarEdgeEffects([], in: p)
+        XCTAssertEqual(held(filter).map(\.edge), [.top])
+        XCTAssertTrue(held(filter).first?.scrollView === recreated, "the inferred registration comes back")
+        // It goes as its scroller leaves the window and comes back with it, a reach pass between them included
+        let home = try XCTUnwrap(list.superview), place = try XCTUnwrap(home.subviews.firstIndex(of: list))
+        list.removeFromSuperview()
+        until("its scroller's leaving takes the inferred one away") { held(filter).isEmpty }
+        p.reachPageEdges()
+        home.insertSubview(list, at: place)
+        until("and it comes back with its scroller") { held(filter).first?.scrollView === recreated }
+        p.press(try node(session, "pick-painted").id)
+        // The list keeps the foot's margin, at the foot of a page that fits (LLP 1131 D2)
+        until("the painted switcher is no bar") { list.pageBand.top == 0 }
+        let painted = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "filter" && $0.window != nil })
+        XCTAssertTrue(held(painted).isEmpty)
+        ControlBars.setBarEdgeEffects([(painted.id, .top, list.id)], in: p)
+        XCTAssertTrue(held(painted).first?.scrollView === recreated, "an authored registration needs no inferred bar")
+        let (viewport, bar) = (try XCTUnwrap(p.viewport as? Viewport), painted.id)
+        p.press(try node(session, "pick-chat").id)
+        until("the switcher goes") { painted.window == nil }
+        XCTAssertNil(viewport.authoredBars[bar], "a destroyed bar's registration goes with it")
+        XCTAssertTrue(held(painted).isEmpty, "and its view's interaction")
+        // A flat box takes a view to hold its interaction, and a reset takes every interaction away
+        let q = Presenter()
+        q.viewport.frame = try XCTUnwrap(list.window).bounds
+        try XCTUnwrap(list.window).addSubview(q.viewport)
+        defer { q.viewport.removeFromSuperview() }
+        q.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["testId": "root"]],
+            ["op": "create", "id": 2, "kind": "scroll", "props": ["testId": "pane"], "style": ["overflow_y": "auto"]],
+            ["op": "create", "id": 3, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 400.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 40.0, "w": 300.0, "h": 360.0],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 0.0, "w": 300.0, "h": 40.0],
+        ]))
+        XCTAssertTrue(q.flats.isFlat(3), "a plain box is a flat leaf")
+        ControlBars.setBarEdgeEffects([(3, .top, 2)], in: q)
+        let (promoted, root) = (try XCTUnwrap(q.views[3]), try XCTUnwrap(q.views[1]))
+        let pane = try XCTUnwrap(q.views[2]?.scrollView)
+        XCTAssertNotNil(promoted.window, "the promoted bar is in the window, under \(String(describing: promoted.superview))")
+        XCTAssertNotNil(pane.window, "and so is the pane's scroll view")
+        XCTAssertTrue(held(promoted).first?.scrollView === pane, "and registers as a view: \(held(promoted))")
+        // It goes as its scroller leaves the window and comes back with it, the bar mounted throughout
+        let scroller = try XCTUnwrap(q.views[2])
+        scroller.removeFromSuperview()
+        until("its scroller's leaving takes it away") { held(promoted).isEmpty }
+        root.insertSubview(scroller, at: 0)
+        until("and its return gives it back") { held(promoted).first?.scrollView === pane }
+        // Its interaction goes as the bar leaves the window, at once as it is forgotten or parked, and at a
+        // reset; its return gives it back, as a reach pass does while it is registered
+        promoted.removeFromSuperview()
+        until("leaving the window") { held(promoted).isEmpty }
+        root.addSubview(promoted)
+        until("back in the window") { held(promoted).count == 1 }
+        promoted.forget()
+        XCTAssertTrue(held(promoted).isEmpty, "forgotten")
+        q.reachPageEdges()
+        promoted.recycle()
+        XCTAssertTrue(held(promoted).isEmpty, "parked")
+        q.reachPageEdges()
+        XCTAssertEqual(held(promoted).count, 1)
+        q.reset()
+        XCTAssertTrue(held(promoted).isEmpty, "a reset takes the interactions away")
+    }
+
     /// A transcript in a box over a composer its author filled: the composer is no bar, so
     /// the rows stop above it, and the top still runs under the inline bar, as a hand-built
     /// table under its navigation bar does whatever is pinned under it (bake-off r28's chat).

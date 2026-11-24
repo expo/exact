@@ -536,6 +536,7 @@ extension NodeView {
     /// and its empty text hierarchy or symbol glyph view, which the next row reuses.
     func recycle() {
         layoutHits = nil
+        ControlBars.detach(self)
         trackClipboardHandlers(false)
         trackIntersections(listening: false)
         holdGone() // a held state goes with its node, parked under its row (HeldState.swift)

@@ -86,7 +86,7 @@ impl Kernel {
                 arena,
                 slot,
                 &space,
-                &sides(arena, slot, &space, band).0,
+                &sides(arena, slot, &space, band, None).0,
                 named,
             ),
             None => [0.0; 4],
@@ -111,19 +111,31 @@ impl Kernel {
     }
 }
 
-fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
+pub(super) fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
+    terms_holding(arena, slot, space, None).0
+}
+
+/// [`terms`], with whether the reservation of the bar's slot `bar` lies in `slot`'s area
+/// (`area::area_holding`).
+pub(super) fn terms_holding(
+    arena: &NodeArena,
+    slot: u32,
+    space: &Space,
+    bar: Option<area::BarSlot>,
+) -> (ScrollTerms, bool) {
     let ignored = ignore::edges(arena, slot, SafeAreaIgnore::Container);
     let mut container = ignored.map(|ignores| !ignores);
     let Some(band) = space.band else {
         let keyboard = [0.0, 0.0, keyboard::taken(arena, slot, space, 0.0), 0.0];
-        return ScrollTerms {
+        let terms = ScrollTerms {
             keyboard,
             container,
             ..Default::default()
         };
+        return (terms, false);
     };
     let band_reaches = area::open_edges(arena, slot, space, band);
-    let (sides, reserving, roots) = sides(arena, slot, space, band);
+    let (sides, reserving, roots, held) = sides(arena, slot, space, band, bar);
     for e in (0..4).filter(|&e| roots[e]) {
         container[e] = true;
     }
@@ -133,26 +145,29 @@ fn terms(arena: &NodeArena, slot: u32, space: &Space) -> ScrollTerms {
         reserving[e].then(|| (sides[e][1] - (edges[e] - reach[e])).max(0.0))
     });
     let keyboard = [0.0, 0.0, keyboard::taken(arena, slot, space, reach[2]), 0.0];
-    ScrollTerms {
+    let terms = ScrollTerms {
         reach,
         reserved,
         keyboard,
         band_reaches,
         container,
-    }
+    };
+    (terms, held)
 }
 
 /// The area that reaches `slot` on each edge, its outer and inner sides from the space's edges,
 /// and whether Exact reserves there; for an owner's root that scrolls and reserves, what its host
 /// clears, as a controller's view lies under its own additional insets, the third value naming
-/// those edges. A root that does not scroll lies clear of its own reservations.
+/// those edges. A root that does not scroll lies clear of its own reservations. The fourth is
+/// whether the reservation of `bar`'s slot lies in the area.
 fn sides(
     arena: &NodeArena,
     slot: u32,
     space: &Space,
     band: [f32; 4],
-) -> ([[f32; 2]; 4], [bool; 4], [bool; 4]) {
-    let (mut sides, mut reserving) = area::area_reserving(arena, slot, space, band);
+    bar: Option<area::BarSlot>,
+) -> ([[f32; 2]; 4], [bool; 4], [bool; 4], bool) {
+    let (mut sides, mut reserving, held) = area::area_holding(arena, slot, space, band, bar);
     let mut roots = [false; 4];
     if space.owner == Some(slot) && area::scroll_view(arena, slot) {
         let clear = block::clearance(arena, slot);
@@ -162,7 +177,7 @@ fn sides(
             }
         }
     }
-    (sides, reserving, roots)
+    (sides, reserving, roots, held)
 }
 
 /// How far `slot` reaches past its border box on each edge `named` names (D13): to the outer side

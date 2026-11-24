@@ -365,6 +365,7 @@ package final class Presenter {
     /// A restart: every view goes.
     func reset() {
         resetting = true; defer { resetting = false }
+        if let v = viewport as? Viewport { v.authoredBars = [:]; v.edgeBars.values.forEach { $0.value.map(ControlBars.detach) }; v.edgeBars = [:] }
         listRowDependencies = nil
         resetFragments()
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
@@ -1094,6 +1095,7 @@ package final class Presenter {
                 views[id]?.applyColumns(op.payload)
             case .table: tableGrid.apply(id, op.payload)
             case .destroy:
+                (viewport as? Viewport)?.authoredBars[id] = nil
                 listRowDependencies?.rows.removeValue(forKey: id)
                 listRowDependencies?.rowOwners.removeValue(forKey: id)
                 views[id]?.holdGone()

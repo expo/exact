@@ -588,6 +588,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// The view is gone: no load in flight may report for it.
     func forget() {
         layoutHits = nil
+        ControlBars.detach(self)
         holdGone() // out of the map: a hold on it is let go (HeldState.swift)
         cancelPressContact()
         let previousTransform = transformHold; transformHold = nil
@@ -681,6 +682,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         presenter?.noteOwedText(self)
         super.didMoveToWindow()
         if window == nil { pressEpoch &+= 1 }
+        ControlBars.moved(self)
         // Focused by its autofocus and moved out of the window in the same
         // turn, which resigned it: a sheet's route going into the controller
         // UIKit presents, a grouped list's row into its cell. Its autofocus

@@ -595,8 +595,8 @@ pub(super) fn token_fields(
 /// instance path to it (D6), and the kernel's frames: `frame` relative to
 /// the parent (a block's root in its own block), `absolute` in the root's
 /// space or the viewport when the host places its block (as `frame()`
-/// reports it), `content` when it scrolls, and a scroller's D13 and D14 terms
-/// (`scrollTerms`).
+/// reports it), `content` when it scrolls, a scroller's D13 and D14 terms
+/// (`scrollTerms`), and an `edge-effect` bar's registration (`barEdgeEffect`).
 /// Observations of the runner's memory, tagged with the generation, epoch and
 /// incarnation; a host adds the spaces and what it mounted. An id that is
 /// not a live node in this incarnation is refused by name.
@@ -797,6 +797,16 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
             s,
             ",\"extension\":[{}]",
             e.map(|x| num(x as f64).to_string()).join(",")
+        );
+    }
+    // An `edge-effect` bar's registration (LLP 1123 D12)
+    if let Some(b) = kernel.bar_edge_effect(node.key) {
+        let scroller = b.scroller.and_then(|k| kernel.node_by_key(k)).map(|n| n.id);
+        let _ = write!(
+            s,
+            ",\"barEdgeEffect\":{{\"edge\":\"{}\",\"scroller\":{}}}",
+            b.edge.name(),
+            scroller.map_or("null".into(), |id| id.to_string())
         );
     }
     // LLP 1056 §5: a 2D canvas's last list, readable (bounded: 200 lines,

@@ -27,6 +27,7 @@ pub(crate) mod bar;
 pub(crate) mod block;
 mod cover;
 mod document;
+mod edge_bar;
 mod environment;
 mod geometry;
 mod height_targets;
@@ -60,6 +61,7 @@ pub(crate) use cover::{
     style_changed as cover_style_changed,
 };
 pub use cover::{credited_edges, HostCover};
+pub use edge_bar::BarEdgeEffect;
 pub use keyboard::{Keyboard, KeyboardPolicy};
 pub use margins::OwnerMargins;
 pub use owner_update::{decode_registration, encode_registration, OwnerUpdate};

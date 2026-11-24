@@ -778,3 +778,7 @@ fn an_extensions_bound_reads_the_boxs_own_containers() {
     );
     assert_eq!(extension(&k, 2).map(|e| e[0]), Some(0.0));
 }
+
+// An edge-effect bar registers with the first scroller beneath its slot (D12)
+#[path = "edge_bar_tests.rs"]
+mod edge_bar;

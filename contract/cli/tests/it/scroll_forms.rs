@@ -319,3 +319,36 @@ fn an_extending_boxs_node_reply_carries_its_extension() {
     assert!(hero.contains("\"extension\":[47,0,0,0]"), "{hero}");
     assert!(!exact_runner::agent::node(&r, id(&r, "plain")).contains("\"extension\""));
 }
+
+#[test]
+fn an_edge_effect_bars_node_reply_carries_its_registration() {
+    // @ref LLP 1123 D12 — a top bar over a scroller registers with it; a bottom one over a box that
+    // does not scroll registers with none; a box that is no bar says nothing of it
+    let source = "component A\n  view\n    column\n      column height=600\n        column testId=\"bar\" -exact-safe-area-bar=\"top edge-effect\" height=50\n        column testId=\"list\" overflow-y=\"scroll\" flex-grow=1\n          text \"a\"\n      column height=200\n        column testId=\"plain\" flex-grow=1\n        column testId=\"lone\" -exact-safe-area-bar=\"bottom edge-effect\" height=40\n";
+    let mut r = boot(source);
+    let root = r.roots()[0];
+    let k = r.kernel_mut();
+    k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
+    k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
+        .unwrap();
+    let id = |r: &Runner<Source>, t: &str| {
+        r.kernel()
+            .node_by_key(r.kernel().find_by_test_id(t)[0])
+            .unwrap()
+            .id
+    };
+    let bar = exact_runner::agent::node(&r, id(&r, "bar"));
+    let list = id(&r, "list");
+    assert!(
+        bar.contains(&format!(
+            "\"barEdgeEffect\":{{\"edge\":\"top\",\"scroller\":{list}}}"
+        )),
+        "{bar}"
+    );
+    let lone = exact_runner::agent::node(&r, id(&r, "lone"));
+    assert!(
+        lone.contains("\"barEdgeEffect\":{\"edge\":\"bottom\",\"scroller\":null}"),
+        "{lone}"
+    );
+    assert!(!exact_runner::agent::node(&r, id(&r, "plain")).contains("barEdgeEffect"));
+}

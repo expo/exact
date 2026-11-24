@@ -17,8 +17,8 @@ pub(crate) struct Bars {
     /// The boxes whose style names an edge to be a bar on: none, in most
     /// documents, lets layout skip asking each box's children.
     pub(crate) styled: SlotSet,
-    /// Each bar's slot depth on its parent's last layout (Taffy patch 81).
-    pub(crate) depths: IdMap<u32, f32>,
+    /// Each bar's slot on its parent's last layout (Taffy patch 81).
+    pub(crate) slots: IdMap<u32, Slot>,
     /// What each parent of a bar observes inside its border, past which its
     /// slots begin, as the readers' solve last measured it
     /// (`Kernel::check_slots`); none before it has. An owner's root is not
@@ -30,9 +30,18 @@ pub(crate) struct Bars {
 impl Bars {
     pub(crate) fn forget(&mut self, slot: u32) {
         self.styled.remove(slot);
-        self.depths.remove(&slot);
+        self.slots.remove(&slot);
         self.observed.remove(&slot);
     }
+}
+
+/// A bar's slot: its depth, what it reserves of its parent, and its rectangle, x, y, width and
+/// height in its layout's space as its frame is, which the scrollers beneath it are read from
+/// (`Kernel::bar_edge_effect`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Slot {
+    pub(crate) depth: f32,
+    pub(crate) rect: [f32; 4],
 }
 
 /// The edge `slot` is a bar of its parent on, top 0, right 1, bottom 2, left 3, or `None`: its
@@ -218,7 +227,7 @@ pub(crate) fn reserved(arena: &NodeArena, parent: u32, via: Option<u32>) -> [f32
         }
         if let (Some(e), Some(d)) = (
             edge(arena, child),
-            arena.observations.bars.depths.get(&child),
+            arena.observations.bars.slots.get(&child).map(|s| &s.depth),
         ) {
             depths[e] += d;
         }

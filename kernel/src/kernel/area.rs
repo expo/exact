@@ -39,11 +39,39 @@ pub(super) fn area_reserving(
     space: &Space,
     band: [f32; 4],
 ) -> ([[f32; 2]; 4], [bool; 4]) {
+    let (sides, reserved, _) = area_holding(arena, slot, space, band, None);
+    (sides, reserved)
+}
+
+/// A bar's slot whose reservation D12 asks after: its parent, its edge, its depth, and how far in
+/// from the space's edge its inner side lies.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct BarSlot {
+    pub(super) parent: u32,
+    pub(super) edge: usize,
+    pub(super) depth: f32,
+    pub(super) inner: f32,
+}
+
+/// [`area_reserving`], with whether the reservation of the bar's slot `bar` lies in the area on
+/// its edge: it has depth, no scroller between its parent and `slot` takes the area there, and
+/// each nearer reservation joins the area without ending it short of the slot's inner side (D12).
+pub(super) fn area_holding(
+    arena: &NodeArena,
+    slot: u32,
+    space: &Space,
+    band: [f32; 4],
+    bar: Option<BarSlot>,
+) -> ([[f32; 2]; 4], [bool; 4], bool) {
     let from = |open: [bool; 4]| -> [[f32; 2]; 4] {
         std::array::from_fn(|e| [0.0, if open[e] { band[e] } else { 0.0 }])
     };
     if arena.reserving.is_empty() && arena.observations.bars.styled.is_empty() {
-        return (from(open_edges(arena, slot, space, band)), [false; 4]);
+        return (
+            from(open_edges(arena, slot, space, band)),
+            [false; 4],
+            false,
+        );
     }
     let mut reserving = Vec::new();
     let mut open = [true; 4];
@@ -69,7 +97,7 @@ pub(super) fn area_reserving(
         }
         above = (space.root != Some(s)).then(|| arena.parent(s)).flatten();
     }
-    let (mut sides, mut reserved) = (from(open), [false; 4]);
+    let (mut sides, mut reserved, mut held) = (from(open), [false; 4], false);
     for (s, r, bars, open) in reserving.into_iter().rev() {
         let edges = match space.owner == Some(s) {
             true => [0.0; 4],
@@ -98,8 +126,10 @@ pub(super) fn area_reserving(
         };
         for e in 0..4 {
             if open[e] && (r.added[e] != 0.0 || r.padding[e] != 0.0 || bars[e] != 0.0) {
-                // A padding edge at or past the area's inner side joins it
-                let outer = match edges[e] <= sides[e][1] + tolerance {
+                // A padding edge at or past the area's inner side joins it, and one short of
+                // it starts an area apart, which holds nothing of what lay outside
+                let joins = edges[e] <= sides[e][1] + tolerance;
+                let outer = match joins {
                     true => sides[e][0].min(edges[e]),
                     false => edges[e],
                 };
@@ -109,10 +139,17 @@ pub(super) fn area_reserving(
                 };
                 sides[e] = [outer, edges[e] + inner];
                 reserved[e] = true;
+                if let Some(b) = bar.filter(|b| b.edge == e) {
+                    let kept = match s == b.parent {
+                        true => b.depth > 0.0,
+                        false => held && joins,
+                    };
+                    held = kept && sides[e][1] >= b.inner - tolerance;
+                }
             }
         }
     }
-    (sides, reserved)
+    (sides, reserved, held)
 }
 
 /// The band a box observes and where it lies.
