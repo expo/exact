@@ -239,9 +239,9 @@ final class NodeExtras {
     var reachGiven = false
     /// The bottom inset a keyboard toolbar gives its scroll view (`KeyboardToolbarIOS.swift`).
     var keyboardInset: CGFloat = 0
-    /// A control bar over a scroller's content (LLP 1131 D3, D4): the scroller's paint rank, which it is placed
-    /// above, and UIKit's edge effect.
-    var bandOver: Int64?
+    /// A control bar over a scroller's content (LLP 1131 D3, D4): its sibling that holds the scroller, which
+    /// it is placed above, and UIKit's edge effect.
+    weak var bandOver: NodeView?
     var navigationPaint = NavigationPaintRole.sibling
     var edgeInteraction: AnyObject?
     var scrollWritten: String?
@@ -571,7 +571,7 @@ extension NodeView {
         sv.contentInsetAdjustmentBehavior != .never ? sv.adjustedContentInset.left : extras?.nativeScrollContentInsets.left ?? 0
     }
     package var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
-    var bandOver: Int64? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
+    var bandOver: NodeView? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
     /// Whether a touch at `point` can reach this box's children. Overflow
     /// that is not visible clips them at the padding edge (CSS Overflow 3

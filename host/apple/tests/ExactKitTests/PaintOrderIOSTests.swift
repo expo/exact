@@ -188,6 +188,49 @@ final class PaintOrderIOSTests: XCTestCase {
         XCTAssertEqual(order(), [above, panel, carrier, navigation, before, bar])
     }
 
+    /// LLP 1131 D3: a control bar goes over its sibling that holds its scroller as that sibling is placed:
+    /// beside the routes, both at the navigation rank, the later sibling's place is above its rank's, and the
+    /// bar goes over it there and takes the touch first.
+    func testAControlBarGoesOverItsSiblingAsTheSiblingIsPlaced() throws {
+        let p = fixture()
+        let mount = try XCTUnwrap(p.views[1]).container
+        let bar = try XCTUnwrap(p.views[2]), column = try XCTUnwrap(p.views[3])
+        for view in [bar, column] {
+            view.setRank(1)
+            view.navigationPaint = .besideRoutes
+        }
+        PaintOrder.changed(mount)
+        XCTAssertEqual(bar.paintZPosition, column.paintZPosition, accuracy: 1e-9, "beside the routes, equals share a place")
+        bar.bandOver = column
+        PaintOrder.changed(mount)
+        XCTAssertGreaterThan(bar.paintZPosition, column.paintZPosition, "the bar goes over its sibling's place")
+        XCTAssertTrue(NodeView.hitOrder(mount.subviews).first { $0 === bar || $0 === column } === bar, "and takes the touch first")
+    }
+
+    /// LLP 1131 D3: bars lifted over one sibling share a place, so the later takes the touch first, as in tree
+    /// order; and a bar ranked under the origin is lifted no higher than halfway to it, where native layers stay.
+    func testBarsOverOneSiblingShareAPlaceUnderTheOrigin() throws {
+        let p = fixture()
+        let mount = try XCTUnwrap(p.views[1]).container
+        let first = try XCTUnwrap(p.views[2]), second = try XCTUnwrap(p.views[3]), column = try XCTUnwrap(p.views[4])
+        for view in [first, second, column] { view.setRank(1) }
+        first.bandOver = column
+        second.bandOver = column
+        PaintOrder.changed(mount)
+        XCTAssertEqual(first.paintZPosition, second.paintZPosition, accuracy: 1e-9, "one place")
+        XCTAssertGreaterThan(first.paintZPosition, column.paintZPosition)
+        XCTAssertTrue(NodeView.hitOrder(mount.subviews).first { $0 === first || $0 === second } === second,
+                      "the later bar takes the touch first, as in tree order")
+        // No child at the origin now: the bar and its sibling under it, the others over it
+        second.bandOver = nil
+        first.setRank(-2)
+        column.setRank(-2)
+        try XCTUnwrap(p.views[5]).setRank(1)
+        PaintOrder.changed(mount)
+        XCTAssertGreaterThan(first.paintZPosition, column.paintZPosition)
+        XCTAssertLessThan(first.paintZPosition, 0, "under the origin, where native layers stay")
+    }
+
     /// A long-pressed row's context menu: UIKit hides the row and adds its
     /// highlight to the route's mount (`LiftTarget.container`) after the route,
     /// at depth 0, under the positioned route's ½. It goes to the route's depth,
