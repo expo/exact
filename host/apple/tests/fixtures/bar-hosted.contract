@@ -3,7 +3,8 @@
 // their `href`, and a readout of a spinner and its words, each readout hosted,
 // its entry in UIKit's overflow menu its name, in a header that hears `press`;
 // on History, a native button whose `color` is its item's tint, and a filled
-// button of one text, UIKit's own item.
+// button of one text, UIKit's own item. Show Updating brings in a readout of a
+// spinner and its words while the bar is on screen, as a refresh does.
 routes nav
   home "/"
     history "/history"
@@ -16,6 +17,7 @@ component BarHosted
   state retried = 0
   state noted = 0
   state headerPresses = 0
+  state updating = false
   action follow(url: string)
     nav = go(nav, url)
   action retry
@@ -24,6 +26,8 @@ component BarHosted
     noted = noted + 1
   action pressHeader
     headerPresses = headerPresses + 1
+  action showUpdating
+    updating = true
   view
     main navigationKey=`${top(nav).id}` navigate=follow width="100%" height="100%"
       for e in stack(nav) key=e.id
@@ -39,6 +43,10 @@ component BarHosted
               row role="status" aria-label="Syncing" gap=6 align-items="center" testId="syncing"
                 progress
                 text "Syncing" font-size=13
+              if updating
+                row role="status" gap=6 align-items="center" testId="updating"
+                  progress
+                  text "Updating"
             if e.name == "history"
               link href="/history/about" aria-label="About" testId="about-link"
                 image "symbol:info" width=20 height=20
@@ -51,3 +59,5 @@ component BarHosted
           text `${headerPresses}` testId="header-presses"
           button press=retry testId="retry"
             text "Retry"
+          button press=showUpdating testId="show-updating"
+            text "Show Updating"

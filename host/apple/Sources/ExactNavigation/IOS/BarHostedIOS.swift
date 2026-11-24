@@ -34,10 +34,14 @@ final class HostedItemView: UIView {
     private(set) var size = CGSize.zero
     private var relay: MountRelay?
     private var readout: UIAccessibilityElement?
+    private lazy var width = widthAnchor.constraint(equalToConstant: 0)
+    private lazy var height = heightAnchor.constraint(equalToConstant: 0)
 
     init(node: NodeView, parent: NodeView) {
         self.node = node
         super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([width, height])
         stand.parent = parent
         addSubview(stand)
         if let presenter = node.presenter { relay = MountRelay(presenter, mount: self) }
@@ -129,15 +133,15 @@ final class HostedItemView: UIView {
         return children.compactMap { $0 as? NSObject }.flatMap { readoutControls(in: $0) }
     }
 
-    /// UIKit sizes a bar item's custom view by its frame where it has no
-    /// constraints, and reads `intrinsicContentSize` where it does: both.
+    /// UIKit sizes a bar item's custom view by its constraints and follows
+    /// them as they change. An item the bar inserts with its animation keeps
+    /// the frame its view had then, so a frame would leave the item at the
+    /// size it was made with.
     private func resize() {
-        if frame.size != size { frame.size = size }
-        invalidateIntrinsicContentSize()
+        if width.constant != size.width { width.constant = size.width }
+        if height.constant != size.height { height.constant = size.height }
         setNeedsLayout()
     }
-
-    override var intrinsicContentSize: CGSize { size }
 
     override func layoutSubviews() {
         super.layoutSubviews()

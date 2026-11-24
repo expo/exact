@@ -525,7 +525,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         XCTAssertNil(item.action, "nothing presses a readout")
         if #available(iOS 26.0, *) { XCTAssertTrue(item.hidesSharedBackground, "nothing in it presses: no glass") }
         until("laid out in its block") { readout.frame.width > 7 + 6 && words.frame.width > 0 }
-        XCTAssertEqual(view.intrinsicContentSize.width, readout.frame.maxX, accuracy: 0.5, "the item is the element's size")
+        until("the item is the element's size") { abs(view.bounds.width - readout.frame.maxX) < 0.5 }
         XCTAssertEqual(readout.accessibilityLabel, "0 composed", "its `aria-label`")
         // What it leaves unsaid is the bar's: a plain bar item title's size and weight (D3); what it writes wins.
         let unsaid = try node(session, "readout-unsaid"), bar = FieldChromeCache.barItemFont(plain.traitCollection)

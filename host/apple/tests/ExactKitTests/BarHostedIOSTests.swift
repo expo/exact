@@ -552,6 +552,30 @@ final class BarHostedIOSTests: XCTestCase {
         waitFor("the accessibility element's label follows the readout", cap: 5) { self.stops(in: ready).first?.accessibilityLabel == "Retrying" }
     }
 
+    /// A readout that comes into the bar while it is on screen, as a refresh's
+    /// does, is laid out at its whole width once UIKit has placed it: drawn
+    /// wider than its item, it would run past the item's room toward the bar's
+    /// edge and the safe area beyond it.
+    func testAReadoutThatComesIntoTheBarTakesItsWholeWidth() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else {
+            throw missing("scene", "UIKit lays out the bar in the app window")
+        }
+        let session = try session(), p = session.presenter
+        let nav = try XCTUnwrap(p.navigationHost.primaryNavigation), home = try XCTUnwrap(nav.topViewController)
+        let ready = try XCTUnwrap(item("sync-status", on: home).customView)
+        waitFor("the bar is laid out") { ready.isDescendant(of: nav.navigationBar) && !ready.bounds.isEmpty }
+        p.press(try node("show-updating", in: p).id)
+        waitFor("the readout has its item") { (try? self.item("updating", on: home)) != nil }
+        let view = try XCTUnwrap(item("updating", on: home).customView as? HostedItemView)
+        waitFor("UIKit lays the readout out at its whole width") {
+            view.isDescendant(of: nav.navigationBar) && view.size.width > 0 && abs(view.bounds.width - view.size.width) < 0.5
+        }
+        let slot = try XCTUnwrap(view.superview), bar = nav.navigationBar
+        XCTAssertTrue(slot.bounds.insetBy(dx: -0.5, dy: -0.5).contains(view.convert(view.stand.frame, to: slot)), "drawn inside its item")
+        let safe = bar.bounds.inset(by: UIEdgeInsets(top: 0, left: bar.safeAreaInsets.left, bottom: 0, right: bar.safeAreaInsets.right))
+        XCTAssertTrue(safe.insetBy(dx: -0.5, dy: -0.5).contains(view.convert(view.stand.frame, to: bar)), "and inside the bar's safe area")
+    }
+
     func testAHostedReadoutAnnouncesAnUpdateOnce() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else {
             throw missing("scene", "the readout announces from the bar in the app window")
