@@ -2516,12 +2516,13 @@ and Windows deliver files in the order the source supplies them, and macOS
 receives a promised file (Photos', an Exact app's) before the action runs.
 A browser without `getAsFileSystemHandle` hands the app read-only copies.
 iOS and iPadOS take a drag from another app or from the same one through
-UIKit's drop interaction, a file as a copy; a field there keeps text, links
-and text files, as UIKit's text views do. tvOS, Linux, Android and the
-terminal take no drop yet. The driver's
+UIKit's drop interaction, a file as a copy and no folder; a field there
+keeps text, links and text files, and the text of a drag that also carries
+files, as UIKit's text views do. tvOS, Linux, Android and the terminal take
+no drop yet. The driver's
 `tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
-folders, text and a link, at least one of them, as a test's `tap "zone"
-drop …` step does.
+folders (not on iOS), text and a link, at least one of them, as a test's
+`tap "zone" drop …` step does.
 
 `dragenter` and `dragleave` are DOM's, as a node hears them when it ignores
 moves between its own descendants (the `currentTarget.contains(relatedTarget)`

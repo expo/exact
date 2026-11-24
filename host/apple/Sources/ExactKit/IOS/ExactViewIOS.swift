@@ -312,6 +312,7 @@ public final class ExactView: UIView {
         if window != nil { reportScheme() }
         #if os(iOS)
         if window != nil { session.presenter.resolveOrientationLock() } // a lock told before there was a window
+        session.presenter.dragIn?.sync() // a drag is heard through the window it joined, and none it left
         #endif
         session.tellPage() // `hasFocus` is this window's scene's
         session.natives.scopesChanged()

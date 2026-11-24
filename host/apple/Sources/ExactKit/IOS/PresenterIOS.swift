@@ -790,9 +790,13 @@ package final class Presenter {
         }
     }
     package func key(_ id: UInt32, _ press: KeyPress) { send(id) { [self] in onKey?(id, press) } }
-    func clipboard(_ id: UInt32, _ kind: UInt32, _ text: String) { send(id) { [self] in onClipboard?(id, kind, text) } }
-    /// A drop (38) and a drag's enter (55) and leave (56), with their lines (LLP 1094.001 D1).
-    package func dragEvent(_ id: UInt32, _ kind: UInt32, _ line: String) { send(id) { [self] in onClipboard?(id, kind, line) } }
+    /// An event of `kind` with its line at node `id`: a clipboard's, a popover's toggle, a drag's (LLP 1094.001 D1).
+    /// False when no node `id` is there to hear it.
+    @discardableResult package func clipboard(_ id: UInt32, _ kind: UInt32, _ text: String) -> Bool {
+        guard textHost(id) != nil else { return false }
+        send(id) { [self] in onClipboard?(id, kind, text) }
+        return true
+    }
     package func contextmenu(_ id: UInt32) { send(id) { [self] in onContextmenu?(id) } }
     /// A `contextmenu` with its point (studio diary R22): kind 10 and its line.
     func contextmenu(_ id: UInt32, line: String) { send(id) { [self] in onClipboard?(id, 10, line) } }

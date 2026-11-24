@@ -9,17 +9,20 @@ import UIKit
 
 /// What the core asks of the capability.
 package protocol DragInCapability: AnyObject {
-    /// A presenter's drop target: one drop interaction on its viewport.
+    /// A presenter's drop target.
     func target(_ presenter: Presenter) -> DragInTarget
 }
 
 /// A presenter's drop target.
 package protocol DragInTarget: AnyObject {
-    /// After a batch: each field's own text drop follows whether its node
-    /// declares `drop` (D2).
+    /// After a batch: the window's drop interaction follows whether a node
+    /// hears a drag's events, and each field's own text drop whether its
+    /// node declares `drop` (D2).
     func sync()
     func reset()
-    /// The drop points VoiceOver offers on `view` (D4).
+    /// The drop point VoiceOver offers on `view` (D4): its own node's, or
+    /// its nearest authored ancestor's that declares `drop`; none, rather
+    /// than UIKit's own, where that node takes no drop now.
     func dropPoints(of view: NodeView) -> [UIAccessibilityLocationDescriptor]?
     /// The agent's `tap <target> drop|dragenter|dragleave` over `view` (D6).
     func agentDrag(_ req: [String: Any], over view: NodeView) -> [String: Any]
@@ -27,7 +30,7 @@ package protocol DragInTarget: AnyObject {
 
 extension NodeView {
     package override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
-        get { super.accessibilityDropPointDescriptors ?? (handlers.contains("drop") ? presenter?.dragIn?.dropPoints(of: self) : nil) }
+        get { super.accessibilityDropPointDescriptors ?? presenter?.dragIn?.dropPoints(of: self) }
         set { super.accessibilityDropPointDescriptors = newValue }
     }
 }
