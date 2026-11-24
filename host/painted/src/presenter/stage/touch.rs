@@ -647,7 +647,11 @@ impl<D: DataSource> Presenter<D> {
                 };
                 let flies = self.host.flights.enabled
                     && matches!(target, Some(Target::Page { outgoing, .. })
-                        if self.stage.pops.1 == Some(outgoing) && !self.stage.pops.2.is_empty());
+                    if self.stage.pops.1 == Some(outgoing)
+                        && (self.stage.pops.2.iter()).any(|(from, _)| {
+                            (self.host.flights.recorded)
+                                .contains(&exact_kernel::motion::motion_node(*from))
+                        }));
                 self.stage.preview = target.map(|target| Preview {
                     target,
                     progress,

@@ -22,14 +22,10 @@ extension Presenter {
         guard !DisplayPreferences.reducedMotion else { return }
         let pairs = Self.routePairs(leaving: named(in: leaving, excluding: zoom), arriving: named(in: arriving, excluding: zoom))
         for pair in pairs { holds[ObjectIdentifier(pair.from)] = pair.from }
-        // Kept for a transition that starts in this turn; a later one flies nothing.
-        DispatchQueue.main.async { [weak self] in
-            for pair in pairs { self?.holds.removeValue(forKey: ObjectIdentifier(pair.from)) }
-        }
     }
 
     /// The pairs a route change flies: each name `leaving` holds once and
-    /// `arriving` holds once (LLP 1013.004 D1), in `leaving`'s order.
+    /// `arriving` holds once (LLP 1013.004 D1), in the order the nodes were made.
     static func routePairs(leaving: [NodeView], arriving: [NodeView]) -> [(from: NodeView, to: NodeView)] {
         func once(_ nodes: [NodeView]) -> [String: NodeView] {
             var seen: [String: NodeView?] = [:]
@@ -65,6 +61,8 @@ extension Presenter {
         guard coordinator.isAnimated, !DisplayPreferences.reducedMotion else { return false }
         let pairs = Self.routePairs(leaving: named(in: leaving, excluding: zoom), arriving: named(in: arriving, excluding: zoom))
             .filter { $0.from.window != nil && flights[$0.to.id] == nil }
+        // A hold lasts until the transition that flies it, or until its route leaves the window.
+        holds = holds.filter { held in held.value.window != nil && !pairs.contains { $0.from === held.value } }
         guard !pairs.isEmpty else { return false }
         // Hidden now, before UIKit pictures the routes for a zoom.
         let held = pairs.map { (flight: Flight(id: $0.to.id, source: flightSource($0.from)), leaver: $0.from, alpha: $0.from.alpha) }
@@ -75,11 +73,13 @@ extension Presenter {
         probe.isUserInteractionEnabled = false
         probe.alpha = 0
         let owner = NSObject()
-        coordinator.animate(alongsideTransition: { [weak self] context in
+        let queued = coordinator.animate(alongsideTransition: { [weak self] context in
             guard let self else { return }
             UIView.performWithoutAnimation {
                 context.containerView.addSubview(probe)
                 for h in held where self.flights[h.flight.id] === h.flight { self.liftFlight(h.flight, in: context.containerView) }
+                // One that could not lift shows where it is.
+                for h in held where self.flights[h.flight.id] !== h.flight { h.leaver.alpha = h.alpha }
             }
             probe.alpha = 1
             let tick = { [weak self, weak probe] in
@@ -105,6 +105,10 @@ extension Presenter {
             }
             self?.paintVisibleText()
         })
+        guard queued else {
+            for h in held { flights.removeValue(forKey: h.flight.id); h.leaver.alpha = h.alpha }
+            return false
+        }
         return true
     }
 }

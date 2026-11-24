@@ -1411,6 +1411,10 @@ impl<D: DataSource> Presenter<D> {
             }
             // posed = at + d + o + s(p - o) for p in the route; rest = at + p.
             let (o, d, s) = (pose.origin, (pose.dx, pose.dy), pose.scale);
+            // A route scaled to nothing has no rest to aim at yet.
+            if s.abs() < 1e-3 {
+                continue;
+            }
             f.unpose = [
                 1.0 / s,
                 at.0 + o.0 - (at.0 + d.0 + o.0) / s,

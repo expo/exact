@@ -73,6 +73,26 @@ impl<D: DataSource> Host<D> {
     /// is; one from another source (an in-commit handoff of a name a route
     /// change pairs, LLP 1013.004 D1) yields, so the name flies once.
     pub(crate) fn fly(&mut self, from: NodeKey, to: NodeKey, transition: &Transition, route: bool) {
+        self.start_flight(from, to, Some(transition), 0.0, route);
+    }
+
+    /// Hold each pair's flight at `progress`, a predictive Back's, starting
+    /// those not flying yet (LLP 1013.004 D4).
+    pub(crate) fn seek_flights(&mut self, pairs: &[(NodeKey, NodeKey)], progress: f32) {
+        for &(from, to) in pairs {
+            self.start_flight(from, to, None, progress, true);
+        }
+    }
+
+    /// `fly`, or with no `transition` a seek, held at `progress`.
+    fn start_flight(
+        &mut self,
+        from: NodeKey,
+        to: NodeKey,
+        transition: Option<&Transition>,
+        progress: f32,
+        route: bool,
+    ) {
         if !self.flights.enabled
             || !self.flights.recorded.contains(&motion_node(from))
             || self.runner.kernel().node_by_key(to).is_none()
@@ -86,61 +106,38 @@ impl<D: DataSource> Host<D> {
             self.flights.running.remove(i);
             self.engine.remove(node);
         }
-        let lands_after = aim(&mut self.engine, node, Some(transition), END);
+        // A seek has no curve: the value is the gesture's.
+        let seeking = transition.is_none();
+        let x = if seeking {
+            f64::from(progress) * END
+        } else {
+            END
+        };
+        let lands_after = aim(&mut self.engine, node, transition, x);
         match self.flights.running.iter_mut().find(|f| f.frame.to == to) {
             Some(f) => {
-                f.seeking = false;
+                f.seeking = seeking;
                 f.lands_after = lands_after;
+                if seeking {
+                    f.frame.progress = progress;
+                }
             }
             None => {
                 self.flights.running.push(Flight {
                     frame: FlightFrame {
                         from,
                         to,
-                        progress: 0.0,
+                        progress,
                         ancestor_opacity: 1.0,
                         unpose: [1.0, 0.0, 0.0],
                         dissolve: route,
                     },
                     lands_after,
-                    seeking: false,
+                    seeking,
                 });
-                self.flights.reveal.push(to);
-            }
-        }
-    }
-
-    /// Hold each pair's flight at `progress`, a predictive Back's, starting
-    /// those not flying yet (LLP 1013.004 D4).
-    pub(crate) fn seek_flights(&mut self, pairs: &[(NodeKey, NodeKey)], progress: f32) {
-        for &(from, to) in pairs {
-            if !self.flights.enabled
-                || !self.flights.recorded.contains(&motion_node(from))
-                || self.runner.kernel().node_by_key(to).is_none()
-            {
-                continue;
-            }
-            self.drop_flight_to(from);
-            let node = motion_node(to) | FLIGHT;
-            // No curve: the value is the gesture's.
-            aim(&mut self.engine, node, None, f64::from(progress) * END);
-            match self.flights.running.iter_mut().find(|f| f.frame.to == to) {
-                Some(f) => {
-                    f.seeking = true;
-                    f.frame.progress = progress;
+                if !seeking {
+                    self.flights.reveal.push(to);
                 }
-                None => self.flights.running.push(Flight {
-                    frame: FlightFrame {
-                        from,
-                        to,
-                        progress,
-                        ancestor_opacity: 1.0,
-                        unpose: [1.0, 0.0, 0.0],
-                        dissolve: true,
-                    },
-                    lands_after: None,
-                    seeking: true,
-                }),
             }
         }
     }

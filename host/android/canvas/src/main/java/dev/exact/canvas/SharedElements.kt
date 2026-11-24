@@ -77,7 +77,8 @@ internal class SharedElements(
             val at = 4 + n * 10
             val from = key(b, at); val to = key(b, at + 2); val progress = f(b, at + 4)
             val opacity = f(b, at + 5)
-            val flight = flights[to] ?: capture(from)?.let {
+            // One from another source has yielded (an in-page handoff to a name a route change pairs).
+            val flight = flights[to]?.takeIf { it.source == from } ?: capture(from)?.let {
                 val route = b.get(at + 9) != 0
                 val source = elements[from]?.takeIf { route }
                 Flight(from, it, progress, opacity, route, source?.content, source?.box?.let(::RectF),

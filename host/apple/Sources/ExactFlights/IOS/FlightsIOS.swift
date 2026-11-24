@@ -43,7 +43,7 @@ final class Flight {
     var clip: UIView?
     var geometry: BatchOp?
     var saved: (interaction: Bool, hidden: Bool)?
-    /// A route change's (LLP 1013.004 D3): its transition lifts it, and it scales by its shown box's
+    /// A route change's (LLP 1013.004 D3): its transition lifts it, and a text scales by its shown box's
     /// height, not its width, since a paragraph's box can be the row's width at one end and its words'
     /// at the other while its height is its font's.
     var crossing = false
@@ -289,7 +289,8 @@ extension Presenter {
         // re-reads its slot each frame, so it follows.
         afterBatch { [weak self, weak slot, weak f] in
             guard let self, let slot, let f else { return }
-            self.scrollIntoView(slot)
+            // A route change's destination is where its route puts it.
+            if !f.crossing { self.scrollIntoView(slot) }
             self.showFlight(f)
         }
         guard let own = container ?? ViewPresentation.root(of: parent) else { slot.removeFromSuperview(); flights.removeValue(forKey: f.id); return }
@@ -353,7 +354,7 @@ extension Presenter {
             // units, as the leaver's was captured (D4.4).
             let layout = slot.bounds.size
             var s = FlightScale.of(shown: shown.size, layout: layout) ?? 1
-            if f.crossing, layout.height > 0 { s = shown.height / layout.height }
+            if f.crossing, view.kind == "text", layout.height > 0 { s = shown.height / layout.height }
             let ratio = to.width / max(layout.width, 1)
             clip.frame = shown
             clip.layer.cornerRadius = mix(f.source.radius, (view.cornerRadii(in: CGRect(origin: .zero, size: layout)).max() ?? 0) * ratio)

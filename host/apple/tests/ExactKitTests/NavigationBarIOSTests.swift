@@ -454,16 +454,13 @@ final class NavigationBarIOSTests: XCTestCase {
     }
 
     func testATransparentBarStaysEmptyOverARootWithNothingInIt() throws {
-        let session = try fixture("authored-header", module: false)
-        let p = session.presenter
-        let nav = try XCTUnwrap(p.navigationHost.primaryNavigation)
-        let route = try XCTUnwrap(nav.topViewController as? RouteController)
+        let session = try fixture("authored-header", module: false), p = session.presenter
+        let nav = try XCTUnwrap(p.navigationHost.primaryNavigation), route = try XCTUnwrap(nav.topViewController as? RouteController)
         p.apply(wireBatch([["op": "style", "id": Int(try node(session, "header-home").id), "style": ["display": "none", "written": ["display"]]]]))
         XCTAssertTrue(nav.isNavigationBarHidden)
         p.apply(wireBatch([["op": "props", "id": Int(route.node.id), "set": ["navigationBar": "transparent"]]]))
         XCTAssertFalse(nav.isNavigationBarHidden, "a push then brings its items into UIKit's bar")
-        XCTAssertNil(route.navigationItem.title)
-        XCTAssertNil(route.navigationItem.rightBarButtonItems)
+        XCTAssert(route.navigationItem.title == nil && route.navigationItem.rightBarButtonItems == nil, "and an empty bar")
     }
 
     func testAppearanceNoneOnAButtonKeepsOnlyThatButtonAuthored() throws {

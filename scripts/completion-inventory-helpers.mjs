@@ -207,7 +207,7 @@ export function helperClassifications(group) {
     "runner/router.rs host_root commits the current router's host root; painted stage/authored.rs retains the route's transition parts until arrival; stage/zoom.rs resolves the live source and retains geometry only for its route's transition.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_host_root exact_route_part"],
     ["runner:runner/src/runner/router.rs", "Runner::host_root"],
-    ["painted:host/painted/src/flights.rs", "Host::fly Host::flying Host::seek_flights Host::start_flights"],
+    ["painted:host/painted/src/flights.rs", "Host::fly Host::flying Host::seek_flights Host::start_flight Host::start_flights"],
     ["painted:host/painted/src/presenter/arrive.rs", "Presenter::focus_landed"],
     ["painted:host/painted/src/presenter/reveal.rs", "Presenter::reveal_flights"],
     ["painted:host/painted/src/presenter/stage/authored.rs", "Presenter::entrance Presenter::hold_arriving Presenter::top_of"],
