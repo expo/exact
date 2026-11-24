@@ -105,9 +105,9 @@ impl<D: DataSource> Presenter<D> {
                 }
                 "deliveryActivate" => self.owe_update(true),
                 "relaunch" => self.host.log(if self.agent {
-                    "relaunch refused: the agent owns this process; start a new drive on the same storage"
+                    "relaunch refused: the agent owns this process; start a new drive on the same storage".to_string()
                 } else {
-                    "relaunch refused: process relaunch is unsupported on Linux"
+                    format!("relaunch refused: process relaunch is unsupported on {}", crate::agent::HOST_NAME)
                 }),
                 "setScheme" => self.app_scheme(super::preferences::app_dark(c.args.first())),
                 // The shell's haptic engine (LLP 1077 D14); desktop Linux has

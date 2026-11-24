@@ -902,7 +902,7 @@ fn resize_input_uses_presenter_and_paints_before_ack() {
 }
 
 /// The driver's `close` (the window's close button, `beforeunload`): the
-/// Linux presenter closes no window, and says so rather than doing nothing.
+/// painted presenter closes no window, and says so rather than doing nothing.
 #[test]
 fn close_is_refused_by_name() {
     let plan = contract::compile("component App\n  view\n    text \"a\"\n").unwrap();
@@ -917,7 +917,9 @@ fn close_is_refused_by_name() {
     .unwrap();
     let reply = handle(&mut p, r#"{"op":"tap","close":true}"#);
     assert!(
-        reply.contains("unsupported: the Linux presenter closes no window"),
+        reply.contains(&format!(
+            "unsupported: the {HOST_NAME} presenter closes no window"
+        )),
         "{reply}"
     );
     assert!(serde_json::from_str::<serde_json::Value>(&reply).unwrap()["malformed"].is_null());
