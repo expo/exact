@@ -270,7 +270,7 @@ export function res(
         r.stand = null;
       }
       r.asleep = r.slept = true;
-      r.forced = r.rev = r.reconciling = false;
+      r.forced = r.rev = r.reconciling = r.launch = false;
       if (!r.ticket?.upload) release();
       if (r.failed) {
         r.failed = null;
@@ -401,7 +401,8 @@ export function res(
           rev = r.rev,
           reconciling = r.reconciling,
           mk = finiteArguments(a) ? data.uploads.at(r, a) : null;
-        // `launch`: true while the launch's own ask waits for the source, false once a refresh was asked meanwhile
+        // `launch`: true while the launch's own ask waits for the source, false once a refresh was asked meanwhile or
+        // the gate closed, as a wake is asked as a refresh is (LLP 1161.002 D3)
         r.forced = r.rev = r.reconciling = false;
         if (forced) r.launch = undefined;
         // A failure keeps the value for its arguments, including NaN; `refresh` or new ones ask again (settlement.rs),
@@ -616,6 +617,7 @@ export function res(
       r.renderCall,
       r.stand,
       r.stale,
+      r.asked,
     ],
     restore: x => {
       [r.value, r.settled, r.ticket] = x;
@@ -645,6 +647,7 @@ export function res(
       r.renderCall = x[25];
       r.stand = x[26];
       r.stale = x[27];
+      r.asked = x[28];
       write(pend.n, x[19]);
       // and what it shows is read again, from what was put back
       write(ver.n, ver.n.v + 1);

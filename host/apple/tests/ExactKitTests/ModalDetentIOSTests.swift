@@ -401,8 +401,14 @@ final class ModalDetentIOSTests: XCTestCase {
         XCTAssertEqual(sheet.detents.map(\.identifier), [.medium, .large])
         XCTAssertEqual(sheet.selectedDetentIdentifier, .large)
         XCTAssertFalse(sheet.prefersGrabberVisible)
+        XCTAssertEqual(presented.view.backgroundColor, .systemBackground, "at its large detent the sheet's ground is the system background")
         sheet.animateChanges { sheet.selectedDetentIdentifier = .medium }
         until("the footer follows the sheet to medium") { port() < large - 100 && abs(bottom() - port()) < 1 }
+        // UIKit tells the delegate only of a detent a person dragged to.
+        sheet.delegate?.sheetPresentationControllerDidChangeSelectedDetentIdentifier?(sheet)
+        // In regular width the ground stays the system background, as the route's does.
+        let below: UIColor = presented.traitCollection.horizontalSizeClass == .regular ? .systemBackground : .clear
+        XCTAssertEqual(presented.view.backgroundColor, below, "below it a compact sheet's ground is left to UIKit's glass (LLP 1141.001 D3)")
         dialog.props["navigationGrabber"] = "visible"
         p.menus.sync()
         XCTAssertTrue(sheet.prefersGrabberVisible)
@@ -419,6 +425,8 @@ final class ModalDetentIOSTests: XCTestCase {
         let sheet = try XCTUnwrap(sheet()?.sheetPresentationController)
         let fitted = try XCTUnwrap(sheet.detents.first)
         XCTAssertEqual(sheet.selectedDetentIdentifier, fitted.identifier)
+        let below: UIColor = self.sheet()?.traitCollection.horizontalSizeClass == .regular ? .systemBackground : .clear
+        XCTAssertEqual(self.sheet()?.view.backgroundColor, below, "a compact sheet that opens below its large detent opens on UIKit's glass")
         XCTAssertEqual(sheet.largestUndimmedDetentIdentifier, .large, "the authored backdrop replaces UIKit's dimming at every height")
         until("initial content height") { fitted.resolvedValue(in: Context(800)) == 100 }
         try tap(session, "grow-fitted")

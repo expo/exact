@@ -59,13 +59,14 @@ functions: call -> result
   pending(resourceOrMutation)  current(resource)  failed(resourceOrMutation)  failure(resourceOrMutation)  path("route", args…)  empty(field=value, …)  some(expr)  DeclaredShape(field=value, …)
 
 tags: attributes; on events. Every tag also takes CSS style attributes and colour roles (`contract vocab <style>`)
-  view box row column main nav article aside section header footer hr table caption thead tbody tfoot tr th td dl dt dd: id testId role title tabindex; on press hover key keyup focus blur contextmenu dblclick
+  view box row column main nav article aside section header footer hr table caption thead tbody tfoot tr th td dl dt dd: id testId role title tabindex aria-live; on press hover key keyup focus blur contextmenu dblclick
   text "…": markup; on selectionchange
   image "…": alt; on load
   button: disabled buttonStyle destructive; on press
   link: href; on press
-  input: value type inputmode min max step maxlength placeholder enterkeyhint autocomplete autocapitalize autofocus disabled readonly checked name accept multiple; on input change submit select selectionchange beforeinput
-  textarea: value placeholder maxlength enterkeyhint; on input change select selectionchange beforeinput
+  input textarea: value placeholder maxlength inputmode enterkeyhint autocomplete autocapitalize autocorrect spellcheck autofocus disabled readonly emojiPicker; on input change select selectionchange beforeinput
+  input: type min max step checked name accept multiple; on submit
+  textarea: rows markup
   select: value disabled; on change
   option "…": value
   time: datetime format
@@ -207,6 +208,7 @@ component App
 ```
 - `select value=v change=set` holds `option "Label" value="x"`. Tabs: a `row role="tablist"` of `button role="tab" aria-controls="panel-x" aria-selected=… press=…`, each panel a `column role="tabpanel" id="panel-x"`; `routes nav`, `tab`, `select(nav, name)`.
 - `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
+- No announce call: a screen reader reads a mounted `text role="status"` (or `"alert"`) as its text changes (`vocab live`).
 - Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
-idioms with code (vocab <name>): bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics status-bar toast titlebar share use members svg env safe-area var media css cache rtl :active
+idioms with code (vocab <name>): bluetooth scroll loading plural choice select screen notfound modal confirm date persist swipe task mutation resource source match for if let fn shape props derive action stepper gradients menu search menubar ::placeholder ::backdrop view-transition glass bar-buttons haptics status-bar live toast titlebar share use members svg env safe-area var media css cache rtl :active
 symbol roles ("symbol:<role>"; * has a <role>-fill; symbol:sf/<name> is Apple-only): back close compose add microphone send search copy select-text more delete forward home* person* messages notifications* settings repeat activity bookmark* document select* reorder list cart sort filter heart* reply share ellipsis photo play* pause* skip-back-15 skip-forward-15 skip-back-30 skip-forward-30 speaker speaker-mute moon pin link checkmark forward-chevron at hashtag follow sign-out quote feeds calendar book layers lock people stop* circle alert* minus-circle pencil waveform info* camera star* minus chart sparkles refresh menu adjust chooser download install open-app download-pending package mail emoji translate bag* phone smartphone article radio running walking stopwatch timer history ruler speed location* location-off* skip-next* finish

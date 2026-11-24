@@ -114,7 +114,7 @@ pub use fields::Profile;
 pub use identity::compiler_identity;
 pub use lint::{lint, lint_unused};
 use lint::{unknown_attr, unknown_tag};
-pub use native::{is_module_tag, module_tags};
+pub use native::{is_module_tag, module_tags, CONTROL_PROPS};
 pub use native_typed::{DeclaredView, DeclaredViews, EVENT_MARKER};
 pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, Written};
 pub use states::PRESS_OPACITY_TO;

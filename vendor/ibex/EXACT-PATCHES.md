@@ -1260,6 +1260,17 @@ exact2's web worker answers alike. `src/tests.rs` covers each statement
 kind, and exact2's `exact-js` `topics` test what announces. Replay on a
 refresh.
 
+## Local patch 52, `llvm-lipo` off a Mac
+
+`build_support.rs` selects Xcode's `lipo` on a Mac and `llvm-lipo` off a Mac to
+inspect and thin Apple Simulator archives. Off a Mac it looks in
+`EXACT_APPLE_LLVM_BIN` when set and nonempty, otherwise on `PATH`. Launch errors
+name the executable path tried and give the remedy for the missing tool. Failed
+`-archs` and `-thin` commands name the executable that ran. `build.rs` emits
+`cargo:rerun-if-env-changed=EXACT_APPLE_LLVM_BIN` only when linking Hermes for a
+Simulator off a Mac. `tests/build_support.rs` covers tool selection, archive staging
+off a Mac, and the launch and command errors. Replay on a refresh.
+
 ## Windows recursive removal
 
 On filesystems that support POSIX disposition, a reader can keep its open

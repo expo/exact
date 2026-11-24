@@ -29,6 +29,7 @@ capabilities.
   - [Tools: what a call answers](#tools-what-a-call-answers)
 - [Views, layout, and interaction](#views-layout-and-interaction)
   - [Tabular numbers](#tabular-numbers)
+  - [Announcing a change](#announcing-a-change)
   - [Sound, MIDI and media](#sound-midi-and-media)
 - [Routes and web documents](#routes-and-web-documents)
 - [Tabs and stacks](#tabs-and-stacks)
@@ -3321,6 +3322,34 @@ beneath its own directory, an absolute path or a `data:` URL, a regular file of 
 64 MiB; it downloads nothing and has no app directories yet, so an `http(s)` or `app:/`
 source is an `error` there. A drive sees both after `clock +<ms>
 real`; `clock settle` can return just before them.
+
+### Announcing a change
+
+There is no announce call. A screen reader reads a live region as its text changes: a
+`text role="status"` (or `aria-live="polite"`) is polite, asking to wait for current
+speech, and a `text role="alert"` (or `aria-live="assertive"`) asks to interrupt it.
+`aria-live` wins over the role's, and `aria-live="off"` silences a `status`. To announce
+a result, a form's error or "3 selected", keep such a `text` mounted, empty until there is
+something to say, and change its text ([recipe](recipes/announce.md)):
+
+- Put the role on the `text` itself. Apple hosts read the text under a live box, but on
+  Windows a box is read by its own accessible name, which it takes only from an
+  `aria-label`, so a `row role="status"` whose child text changes says nothing there;
+  Android sends the change from the box, and what TalkBack reads of it is untested.
+- Leave `aria-label` off the region: on Android and Windows it is what is read, and a
+  change of the text alone is not.
+- Text the region already had is not read again. One that arrives holding its text is read
+  on some hosts and not others (below), so mount it first.
+
+| Host | What it does |
+| --- | --- |
+| iOS, iPadOS, tvOS | `UIAccessibility.post(notification: .announcement)` with the region's text, queued behind current speech when polite. An `alert` that arrives is also announced, except one already there when the app launches. A region under `aria-hidden` says nothing |
+| macOS | `NSAccessibility.post(… .announcementRequested)` with the text, at low priority when polite and high when assertive; an arriving `alert` as on iOS. VoiceOver may still finish the focused control's speech first |
+| Web | the browser: the element carries its `role` and any `aria-live`, and the screen reader treats it as any page's live region |
+| Android | the node is a polite or assertive live region (`AccessibilityNodeInfo.setLiveRegion`), and a content change is sent from it when its accessible name changes and, usually, when it arrives; that is what TalkBack reads a live region by. TalkBack itself has not been heard reading one |
+| Windows | AccessKit's UI Automation adapter: the node's `LiveSetting`, and a `LiveRegionChanged` event when its name changes or it arrives with one. Not yet heard from Narrator |
+| Linux | nothing yet: the Linux host serves no screen reader (no AT-SPI) |
+| watchOS | nothing: the watch entry refuses `aria-live`, and its SwiftUI driver posts no announcement for a `status` or `alert` |
 
 ### Sound, MIDI and media
 

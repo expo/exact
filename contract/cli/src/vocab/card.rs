@@ -127,6 +127,24 @@ pub fn tag_lines() -> Vec<TagLine> {
         .collect()
 }
 
+/// A tag's attributes and events, from every `tags` line naming it.
+pub fn tag_words(tag: &str) -> [(&'static str, Vec<&'static str>); 2] {
+    let lines: Vec<TagLine> = tag_lines()
+        .into_iter()
+        .filter(|l| l.tags.contains(&tag))
+        .collect();
+    [
+        (
+            "attributes",
+            lines.iter().flat_map(|l| l.attrs.clone()).collect(),
+        ),
+        (
+            "events",
+            lines.iter().flat_map(|l| l.events.clone()).collect(),
+        ),
+    ]
+}
+
 /// The test steps: the first cell of each row of the recipe's table.
 pub fn steps() -> Vec<String> {
     TESTS
@@ -438,6 +456,61 @@ mod tests {
                     .filter(|e| !is_event(e))
                     .map(|e| format!("`{e}` is no event")),
             );
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A form-control attribute the compiler takes on `input` or `textarea` is
+    /// on that tag's lines, which `vocab <tag>` prints too: an agent reads an
+    /// attribute left off as unsupported (#1408). The Markdown editor's
+    /// (`atoms`, `decorations`, …) need declarations and are not checked.
+    #[test]
+    fn the_card_names_every_field_attribute_the_compiler_takes() {
+        let dir = crate::scratch::Scratch::new(format!("exact-fields-{}", std::process::id()));
+        let path = dir.join("app.contract");
+        let compiles = |tag: &str, extra: &str, attr: &str, value: &str| {
+            let app = format!(
+                "component App\n  view\n    {tag}{extra} {attr}={value} aria-label=\"F\"\n"
+            );
+            std::fs::write(&path, app).unwrap();
+            contract::compile_path_all_warned(&path, false).0.is_ok()
+        };
+        let lines = tag_lines();
+        let mut failures = Vec::new();
+        for tag in ["input", "textarea"] {
+            let listed: Vec<&str> = lines
+                .iter()
+                .filter(|l| l.tags.contains(&tag))
+                .flat_map(|l| l.attrs.iter().copied())
+                .collect();
+            // Some of `input`'s belong to one `type`.
+            let types: &[&str] = if tag == "input" {
+                &[
+                    "",
+                    " type=\"checkbox\"",
+                    " type=\"radio\"",
+                    " type=\"file\"",
+                ]
+            } else {
+                &[""]
+            };
+            let fields =
+                contract_lower::CONTROL_PROPS
+                    .iter()
+                    .chain(&["rows", "maxlength", "disabled"]);
+            for attr in fields {
+                let taken = types.iter().any(|extra| {
+                    ["\"none\"", "\"image/*\"", "true", "3"]
+                        .iter()
+                        .any(|value| compiles(tag, extra, attr, value))
+                });
+                if taken && !listed.contains(attr) {
+                    failures.push(format!("`{tag} {attr}` compiles; put it on card.md"));
+                }
+                if !taken && listed.contains(attr) {
+                    failures.push(format!("`{tag} {attr}` is refused; take it off card.md"));
+                }
+            }
         }
         assert!(failures.is_empty(), "{failures:#?}");
     }

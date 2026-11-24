@@ -48,13 +48,14 @@ toFixed: (literal digits)
 toString: x.toString() -> string
 
 ## tags
-view box row column main nav article aside section header footer hr table caption thead tbody tfoot tr th td dl dt dd | id testId role title tabindex | press hover key keyup focus blur contextmenu dblclick
+view box row column main nav article aside section header footer hr table caption thead tbody tfoot tr th td dl dt dd | id testId role title tabindex aria-live | press hover key keyup focus blur contextmenu dblclick
 text | markup | selectionchange
 image | alt | load
 button | disabled buttonStyle destructive | press
 link | href | press
-input | value type inputmode min max step maxlength placeholder enterkeyhint autocomplete autocapitalize autofocus disabled readonly checked name accept multiple | input change submit select selectionchange beforeinput
-textarea | value placeholder maxlength enterkeyhint | input change select selectionchange beforeinput
+input textarea | value placeholder maxlength inputmode enterkeyhint autocomplete autocapitalize autocorrect spellcheck autofocus disabled readonly emojiPicker | input change select selectionchange beforeinput
+input | type min max step checked name accept multiple | submit
+textarea | rows markup
 select | value disabled | change
 option | value
 time | datetime format
@@ -81,6 +82,7 @@ component App
 ```
 - `select value=v change=set` holds `option "Label" value="x"`. Tabs: a `row role="tablist"` of `button role="tab" aria-controls="panel-x" aria-selected=… press=…`, each panel a `column role="tabpanel" id="panel-x"`; `routes nav`, `tab`, `select(nav, name)`.
 - `min`, `max`, `step` are numbers; with `inputmode="decimal"` a negative `min` gives the pad its ± key.
+- No announce call: a screen reader reads a mounted `text role="status"` (or `"alert"`) as its text changes (`vocab live`).
 - Not in Contract (ask `vocab <name>`): abs pow sqrt sort reduce find some every contains padStart parseInt.
 
 ## how

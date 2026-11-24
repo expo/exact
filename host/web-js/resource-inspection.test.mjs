@@ -830,11 +830,12 @@ test("a refused refresh while waiting leaves the launch's ask ordinary, and a fa
   } finally { await browser.close(); server.stop(true); }
 });
 
-test("a refresh of a resource that slept through its source becoming ready is a refresh", async () => {
+// Its wake asks it again as a refresh does (LLP 1161.002 D3), and so does a refresh of it in the commit that wakes it.
+test.each(['wake', 'refresh'])("a %s of a resource that slept through its source becoming ready is a refresh", async how => {
   const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
   try {
     await page.goto(server.url.href);
-    const observed = await page.evaluate(async () => {
+    const observed = await page.evaluate(async how => {
       globalThis.__exactRender = true;
       const sent = [], callbacks = [];
       globalThis.fetch = async (input, init) => { sent.push(new Request(input, init).cache ?? 'default'); return new Response('reply'); };
@@ -857,10 +858,10 @@ test("a refresh of a resource that slept through its source becoming ready is a 
       ready = true;
       for (const f of callbacks) f();
       const asleep = sent.length;
-      rt.commit(() => { rt.W(open, true); rt.R(g); });
+      rt.commit(() => { rt.W(open, true); if (how === 'refresh') rt.R(g); });
       while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
       return { asleep, sent };
-    });
+    }, how);
     expect(observed).toEqual({ asleep: 0, sent: ['reload'] });
   } finally { await browser.close(); server.stop(true); }
 });
@@ -1169,6 +1170,32 @@ test('a resource idle at its first settlement shows its placeholder over a build
         'opened shows its build-time answer until its source answers',
       ],
     });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
+// A refused commit puts back what a wake asked at too: a write over a resource idle since boot still shows over its
+// placeholder at no arguments, as over the runner's placeholder state.
+test('a write over a resource idle since boot is overlaid at no arguments after a refused wake', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const observed = await page.evaluate(async () => {
+      const rt = await import('/host/web-js/rt.js');
+      rt.data.answer = source => source === 'save' ? { promise: new Promise(() => {}) } : { v: 'fresh' };
+      rt.data.overlay = (source, args, answer) => ({ value: `${answer} at ${JSON.stringify(args)}`, keep: [] });
+      const open = rt.sig(false), refusing = rt.sig(false), saved = rt.sig(null);
+      const idle = rt.res('idle', 'echo', Object.assign(() => ['wake'], { gate: () => open() }), undefined, undefined, 's', 'waiting');
+      const guard = rt.memo(() => { if (idle() && refusing()) throw new rt.Refusal('refused'); return ''; });
+      let write;
+      rt.mount(root => {
+        write = rt.mut('saved', saved, [idle], 'b');
+        rt.hd(root, { headTitle: () => idle() + guard() });
+      });
+      const woke = rt.commit(() => { rt.W(open, true); rt.W(refusing, true); });
+      rt.commit(() => rt.M(write, 'save', []));
+      return { woke, shown: idle() };
+    });
+    expect(observed).toEqual({ woke: false, shown: 'waiting at []' });
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
 

@@ -1452,6 +1452,30 @@ controls with `var(--exact-safe-area-inset-*)`.
 
 More: docs/contract-for-agents.md (`status-bar-style`, `system-bars-hidden`)
 
+## live: telling a screen reader what changed (a live region, an announcement)
+names: aria-live, status, live-region, polite, assertive, announceForAccessibility, AccessibilityInfo, accessibilityLiveRegion, UIAccessibility
+
+No call announces. A screen reader reads a `text role="status"` politely as its text
+changes, and a `text role="alert"` at once where the platform allows (`aria-live="polite"`
+and `"assertive"` without the role). Keep the `text` mounted and change its text; put the
+role on the `text`, not on a box around it, and give it no `aria-label`.
+
+```contract
+component App
+  state picked = 0
+  action pick
+    picked = picked + 1
+  view
+    column padding=16 gap=8
+      button press=pick testId="pick"
+        text "Pick one"
+      text (picked == 0 ? "" : `${picked} selected`) role="status" testId="picked"
+```
+
+- iOS, tvOS and macOS post the platform's announcement, the web leaves it to the browser,
+  Android and Windows mark a live region; the Linux host and watchOS say nothing yet
+  (docs/contract-for-agents.md#announcing-a-change; `vocab announce` for the recipe).
+
 ## toast: a message that shows for a moment
 names: Toast, snackbar, Snackbar, react-native-toast-message, burnt
 
