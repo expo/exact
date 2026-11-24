@@ -416,6 +416,30 @@ test('a page rendered at another location seeds no answer and journals that it r
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
 
+// LLP 1048.001 D5 — what the reader did before the runtime ran reaches the same elements, and is dropped and journaled
+// where they are gone: here the page's own, cleared as it was rendered at another location.
+test('an early input whose element is gone is dropped and journaled', async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const boot = await page.evaluate(async () => {
+      const cp = document.createElement('script');
+      cp.type = 'application/vnd.exact.checkpoint';
+      cp.textContent = JSON.stringify({ location: '/elsewhere', answers: [], pending: [] });
+      document.head.append(cp);
+      const root = document.getElementById('exact-root') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'exact-root' }));
+      const gone = root.appendChild(document.createElement('button')), kept = document.body.appendChild(document.createElement('button'));
+      const clicks = [];
+      for (const [name, e] of [['gone', gone], ['kept', kept]]) e.addEventListener('click', () => clicks.push(name));
+      globalThis.exact = { taps: () => [gone, kept].map(target => ({ type: 'click', target })) };
+      const rt = await import('/host/web-js/rt.js');
+      rt.mount(root => rt.hd(root, { headTitle: () => '' }));
+      return { clicks, journal: rt.journal.filter(l => / early /.test(l)).map(l => l.slice(l.indexOf(' ') + 1)) };
+    });
+    expect(boot).toEqual({ clicks: ['kept'], journal: ['document: an early click was dropped (its element is gone)'] });
+  } finally { await browser.close(); server.stop(true); }
+}, 30000);
+
 // A resource asked again at other arguments keeps its earlier answer while the request is pending, and that request's
 // ticket puts the answer in `open`, so the reader's page shows it and asks again
 test('a render lists an answer whose request is still pending for the reader\'s page to ask again', async () => {

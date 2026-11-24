@@ -617,7 +617,9 @@ export function mount(f) {
   root.dataset.bootMs = String(Math.round(performance.now()));
   // Replayed once, in order, on the same elements (LLP 1048.001 D5), each
   // edited control first showing what the reader left in it (its row, if it
-  // waits for a slice, adopted first, so adoption doesn't write over it).
+  // waits for a slice, adopted first, so adoption doesn't write over it). One
+  // whose element is gone, with another location's document or an abandoned
+  // one, is dropped.
   for (const t of early) adoptAt(t.target);
   for (const [e, v, c] of shown)
     if (e.isConnected) {
@@ -625,8 +627,9 @@ export function mount(f) {
       else if (e.type !== 'file') e.value = v;
     }
   for (const t of early)
-    if (t.target.isConnected)
-      t.type === 'click' ? t.target.click() : t.target.dispatchEvent(new Event(t.type, { bubbles: true }));
+    if (!t.target.isConnected) say(`document: an early ${t.type} was dropped (its element is gone)`);
+    else if (t.type === 'click') t.target.click();
+    else t.target.dispatchEvent(new Event(t.type, { bubbles: true }));
 }
 /** The page's checkpoint (LLP 1048.000 D6): the time the render stopped at, and by resource name the `source` and
  * `answers` its document used, each `[args, value, open, reads]`: one, or a list's elements', where a new element
