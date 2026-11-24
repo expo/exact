@@ -48,15 +48,30 @@ pub(super) fn progress(forward: bool, now: f64) -> Glide {
 /// into `linear()`, so the elements in the box move as the box does
 /// (LLP 1013.004 D4).
 pub(super) fn clock(forward: bool) -> exact_motion::Transition {
+    sampled(if forward { ENTER } else { RETURN }, emphasized)
+}
+
+/// A cancelled preview's return from `from` as a flight's curve: the
+/// container plays its entrance back on the standard curve (`go_back`) and
+/// shows `emphasized` of it, so the flights, held at `emphasized(from)`,
+/// fall as the box does.
+pub(super) fn returning(from: f32) -> exact_motion::Transition {
+    let held = emphasized(from).max(f32::EPSILON);
+    sampled(ENTER, |t| {
+        1.0 - emphasized(from * (1.0 - Curve::Standard.ease(t))) / held
+    })
+}
+
+fn sampled(ms: f64, curve: impl Fn(f32) -> f32) -> exact_motion::Transition {
     use exact_motion::easing::{Easing, LinearStop, MAX_LINEAR_STOPS};
     let last = (MAX_LINEAR_STOPS - 1) as f32;
     let stops = (0..MAX_LINEAR_STOPS).map(|i| LinearStop {
         input: f64::from(i as f32 / last),
-        output: f64::from(emphasized(i as f32 / last)),
+        output: f64::from(curve(i as f32 / last)),
     });
     exact_motion::Transition {
         property: exact_motion::TransitionProperty::All,
-        duration: if forward { ENTER } else { RETURN } / 1000.0,
+        duration: ms / 1000.0,
         delay: 0.0,
         timing: exact_motion::TimingFunction::Easing(Easing::PiecewiseLinear(stops.collect())),
     }

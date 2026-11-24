@@ -88,6 +88,9 @@ internal class SharedElements(
                 flight.unpose = floatArrayOf(f(b, at + 6), f(b, at + 7), f(b, at + 8))
             }
         }
+        // A dissolve's source drawing outlives its element only while its flight does.
+        val held = next.values.mapNotNullTo(HashSet()) { it.content } + elements.values.map { it.content }
+        for (gone in flights.values) gone.content?.takeIf { it !in held }?.discardDisplayList()
         flights.clear(); flights.putAll(next)
         val live = 4 + b.get(3) * 10
         alive.clear()

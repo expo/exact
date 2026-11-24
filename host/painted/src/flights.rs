@@ -79,6 +79,7 @@ impl<D: DataSource> Host<D> {
         {
             return;
         }
+        self.drop_flight_to(from);
         let node = motion_node(to) | FLIGHT;
         let at = self.flights.running.iter().position(|f| f.frame.to == to);
         if let Some(i) = at.filter(|&i| self.flights.running[i].frame.from != from) {
@@ -119,6 +120,7 @@ impl<D: DataSource> Host<D> {
             {
                 continue;
             }
+            self.drop_flight_to(from);
             let node = motion_node(to) | FLIGHT;
             // No curve: the value is the gesture's.
             aim(&mut self.engine, node, None, f64::from(progress) * END);
@@ -141,6 +143,19 @@ impl<D: DataSource> Host<D> {
                 }),
             }
         }
+    }
+
+    /// A flight still landing at `key`, which now leaves as a source, ends:
+    /// the name flies once.
+    fn drop_flight_to(&mut self, key: NodeKey) {
+        let engine = &mut self.engine;
+        self.flights.running.retain(|f| {
+            let keep = f.frame.to != key;
+            if !keep {
+                engine.remove(motion_node(key) | FLIGHT);
+            }
+            keep
+        });
     }
 
     /// A predictive Back ended: each flight it seeks goes on to its
@@ -248,6 +263,11 @@ impl<D: DataSource> Host<D> {
                 frame
             })
             .collect()
+    }
+
+    /// Whether a flight to `to` runs.
+    pub(crate) fn in_flight(&self, to: NodeKey) -> bool {
+        self.flights.running.iter().any(|f| f.frame.to == to)
     }
 
     pub(crate) fn flying(&self, id: ViewId) -> bool {

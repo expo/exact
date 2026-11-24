@@ -400,6 +400,19 @@ class SharedElementsTest {
         pixels.recycle()
     }
 
+    @Test fun aDissolvesSourceDrawingIsDiscardedWhenItsFlightLeaves() {
+        val t = Fixture()
+        t.shared.begin(state(listOf(1))); t.define(definition(1, RectF(0f, 0f, 80f, 20f))); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), dissolve = true))
+        t.define(definition(2, RectF(0f, 40f, 100f, 80f))); t.shared.finish()
+        val flights = SharedElements::class.java.getDeclaredField("flights").apply { isAccessible = true }
+        val flight = (flights.get(t.shared) as Map<*, *>).values.single()!!
+        val content = flight.javaClass.getDeclaredField("content").apply { isAccessible = true }.get(flight) as RenderNode
+        assertTrue(content.hasDisplayList())
+        t.shared.begin(state(listOf(2))); t.shared.finish()
+        assertFalse(content.hasDisplayList())
+    }
+
     @Test fun aRouteFlightScalesABoxByWidthAndAChildInsideItsFlyingParent() {
         // Halfway from 80 by 20 to 100 by 40 the box is 90 by 30 at 0, 20; by height its fill would end at 75.
         val t = Fixture()

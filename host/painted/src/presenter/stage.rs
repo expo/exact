@@ -503,11 +503,11 @@ impl<D: DataSource> Presenter<D> {
         }
         // A cancelled preview shows the route beneath until the flights it
         // sent back have landed.
-        let landed = self.host.flight_frames().is_empty();
-        self.stage
-            .preview
-            .take_if(|p| !p.live(&keys) || p.returned(now) && landed);
-        // A route change no crossing flies (a cut, an authored part) ends a
+        let (host, pairs) = (&self.host, &self.stage.pops.2);
+        self.stage.preview.take_if(|p| {
+            !p.live(&keys) || p.returned(now) && !pairs.iter().any(|(_, to)| host.in_flight(*to))
+        });
+        // A pop whose crossing flies nothing (a fade through) ends a
         // preview's flights where Back went.
         if self.stage.preview.is_none() {
             self.host.release_flights(&bounds_spring(), true);

@@ -902,6 +902,70 @@ fn predictive_back_seeks_the_pops_flights_and_springs_on_or_back() {
 }
 
 #[test]
+fn predictive_back_keeps_the_material_pose_where_nothing_can_fly() {
+    let mut p = paired();
+    p.host_mut().flights.enabled = false;
+    tap(&mut p, "open");
+    after(&mut p, 1000.0);
+    let now = p.host().now();
+    assert!(p.back_progress(0, 0.0, 0, now));
+    assert!(p.back_progress(1, 0.4, 0, now + 50.));
+    after(&mut p, 50.0);
+    let route = rect(&mut p, "route-detail");
+    assert!(route.2 < 400.0, "{route:?}");
+}
+
+#[test]
+fn back_while_the_push_flight_lands_flies_the_name_once() {
+    let mut p = paired();
+    tap(&mut p, "open");
+    after(&mut p, 320.0);
+    assert!(!p.host().flight_frames().is_empty(), "still landing");
+    let now = p.host().now();
+    assert!(p.back_progress(0, 0.0, 0, now));
+    assert!(p.back_progress(1, 0.2, 0, now + 8.));
+    after(&mut p, 8.0);
+    let (hero, thumb) = (key(&p, "hero"), key(&p, "thumb"));
+    assert_eq!(flight(&p), (hero, thumb, 0.2));
+}
+
+#[test]
+fn a_cancelled_container_preview_takes_its_names_back_with_the_box() {
+    let plan = PAIRED
+        .replace(
+            "box sharedElement=\"photo\" testId=\"thumb\"",
+            "box id=\"thumb\" sharedElement=\"photo\" testId=\"thumb\"",
+        )
+        .replace(
+            "testId=\"route-detail\"",
+            "navigationSource=\"thumb\" testId=\"route-detail\"",
+        );
+    let mut p = paired_with(&plan);
+    tap(&mut p, "open");
+    after(&mut p, 1000.0);
+    let now = p.host().now();
+    assert!(p.back_progress(0, 0.0, 0, now));
+    assert!(p.back_progress(1, 0.6, 0, now + 8.));
+    after(&mut p, 8.0);
+    assert!(p
+        .stage
+        .preview
+        .as_ref()
+        .is_some_and(|p| p.container.is_some()));
+    p.back_progress(2, 0.0, 0, p.host().now());
+    for _ in 0..4 {
+        after(&mut p, 80.0);
+        let now = p.host().now();
+        let shown = p.stage.preview.as_ref().map_or(0.0, |s| s.shown(now));
+        let progress = flight(&p).2;
+        assert!(
+            (progress - super::zoom::emphasized(shown)).abs() < 0.03,
+            "{progress} {shown}"
+        );
+    }
+}
+
+#[test]
 fn a_flight_aims_at_its_destinations_rest_not_its_crossing_pose() {
     let mut p = paired();
     tap(&mut p, "open");

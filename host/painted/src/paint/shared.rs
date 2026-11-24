@@ -140,24 +140,17 @@ impl Painter {
         if self.lift(walk, id, offset) {
             return;
         }
+        let name = (walk.scene.kernel.node(id))
+            .filter(|n| (n.props.str(PropId::SharedElement)).is_some_and(|s| !s.is_empty()));
         let named = self.backend.name() == "canvas"
             && self.shared.epoch.is_some()
             && walk.dialog.is_none()
-            && walk.scene.kernel.node(id).is_some_and(|n| {
-                n.props
-                    .str(PropId::SharedElement)
-                    .is_some_and(|s| !s.is_empty())
-                    && n.style.display != Display::None
-                    && !(walk.scene.hidden)(id)
-            });
+            && name
+                .as_ref()
+                .is_some_and(|n| n.style.display != Display::None && !(walk.scene.hidden)(id));
         // A kept drawing keeps a shared element apart, so a crossing that
         // flies it from a removed route leaves it out (LLP 1013.004 D4).
-        let kept = walk
-            .scene
-            .kernel
-            .node(id)
-            .filter(|n| (n.props.str(PropId::SharedElement)).is_some_and(|s| !s.is_empty()));
-        if let Some((parent, key)) = self.recording().zip(kept.map(|n| n.key)) {
+        if let Some((parent, key)) = self.recording().zip(name.as_ref().map(|n| n.key)) {
             let drawing =
                 self.record_layer(|painter| painter.node_content(walk, id, ts, offset, clip));
             parent.named(key, Rc::new(drawing));
@@ -167,7 +160,7 @@ impl Painter {
             self.node_content(walk, id, ts, offset, clip);
             return;
         }
-        let node = walk.scene.kernel.node(id).expect("named live node");
+        let node = name.expect("named live node");
         let rect = paint_rect(node.frame, sticky(walk.scene, id, offset));
         let shown = (walk.scene.presented)(id);
         let paint = BoxPaint::capture(&node, walk.scene.kernel, self.dark);
@@ -253,7 +246,11 @@ impl Painter {
         // A background that reaches under the bars flies with them, as a
         // Compose screen drawn edge to edge does.
         let (x, y, w, h) = shown.surface(rect);
-        let [top, right, bottom, left] = self.bleed(walk.scene.kernel, id, &geometry.outer, ts);
+        let paints = paint.background[3] != 0 || !paint.gradients.is_empty();
+        let [top, right, bottom, left] = match paints {
+            true => self.bleed(walk.scene.kernel, id, &geometry.outer, ts),
+            false => [0.0; 4],
+        };
         let opened = self.backend.shared_begin(&SharedElement {
             key: motion_node(node.key),
             rect: (x - left, y - top, w + left + right, h + top + bottom),
@@ -263,7 +260,11 @@ impl Painter {
             image,
             // 6: a label, which a route flight scales by its lines' width.
             fit: if !plain_image {
-                u32::from(node.node_type == NodeType::Text) * 6
+                if node.node_type == NodeType::Text {
+                    6
+                } else {
+                    0
+                }
             } else {
                 match node.style.object_fit {
                     ObjectFit::Fill => 1,

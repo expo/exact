@@ -181,6 +181,15 @@ impl Preview {
         self.progress = 0.0;
     }
 
+    /// The curve a cancelled preview's flights go back on: a container's
+    /// own return, so the names stay in the box (LLP 1013.004 D4).
+    fn release_curve(&self) -> Transition {
+        match (self.container, self.release) {
+            (Some(_), Some(g)) => zoom::returning(g.from),
+            _ => bounds_spring(),
+        }
+    }
+
     fn pose_at(&self, p: f32, width: f32, height: f32) -> Pose {
         if let Some(container) = self.container {
             return container.pose(false, zoom::emphasized(p), None);
@@ -636,8 +645,9 @@ impl<D: DataSource> Presenter<D> {
                         .and_then(|n| self.return_container(outgoing, n.id)),
                     _ => None,
                 };
-                let flies = matches!(target, Some(Target::Page { outgoing, .. })
-                    if self.stage.pops.1 == Some(outgoing) && !self.stage.pops.2.is_empty());
+                let flies = self.host.flights.enabled
+                    && matches!(target, Some(Target::Page { outgoing, .. })
+                        if self.stage.pops.1 == Some(outgoing) && !self.stage.pops.2.is_empty());
                 self.stage.preview = target.map(|target| Preview {
                     target,
                     progress,
@@ -682,7 +692,11 @@ impl<D: DataSource> Presenter<D> {
                 };
                 self.host.seek_flights(&pairs, progress);
             }
-            _ => self.host.release_flights(&bounds_spring(), false),
+            _ => {
+                let curve = (self.stage.preview.as_ref())
+                    .map_or_else(bounds_spring, Preview::release_curve);
+                self.host.release_flights(&curve, false)
+            }
         }
         self.stage.preview.is_some()
     }
@@ -694,7 +708,8 @@ impl<D: DataSource> Presenter<D> {
         if let Some(p) = self.stage.preview.as_mut().filter(|p| p.release.is_none()) {
             p.go_back(now, still);
             self.dirty = true;
-            self.host.release_flights(&bounds_spring(), false);
+            let curve = p.release_curve();
+            self.host.release_flights(&curve, false);
         }
     }
 

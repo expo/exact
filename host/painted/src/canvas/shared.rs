@@ -312,31 +312,39 @@ mod tests {
 
     #[test]
     fn a_named_box_takes_the_band_its_background_reaches_into() {
-        let app = "component App\n  view\n    main width=\"100%\" height=\"100%\"\n      box sharedElement=\"hero\" height=100 background-color=\"#ff0000\"\n";
-        let (mut p, error) = Presenter::boot_with(
-            &crate::test_plan(app),
-            (),
-            (400., 800.),
-            1.,
-            std::path::PathBuf::new(),
-            PainterChoice::Canvas,
-        )
-        .unwrap();
-        assert!(error.is_none(), "{error:?}");
-        let window = crate::presenter::Window {
-            size: (400., 800.),
-            bars: [24., 0., 16., 0.],
-            cutout: [0.; 4],
-            keyboard: [0.; 4],
-            gestures: [0.; 4],
-        };
-        assert!(p.set_window(window).is_none());
-        p.frame();
-        let ops = take();
-        let def = sets(&ops)[0];
-        // The page starts under the 24 point status bar, which the box's red fills.
-        let [y, h] = [8, 10].map(|i| f32::from_bits(def[i]));
-        assert_eq!((y, h), (-24.0, 124.0));
+        // The page starts under the 24 point status bar, which a red box fills
+        // and a box with no background leaves alone.
+        for (background, want) in [
+            (" background-color=\"#ff0000\"", (-24.0, 124.0)),
+            ("", (0.0, 100.0)),
+        ] {
+            let app = format!(
+                "component App\n  view\n    main width=\"100%\" height=\"100%\"\n      box sharedElement=\"hero\" height=100{background}\n"
+            );
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&app),
+                (),
+                (400., 800.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            let window = crate::presenter::Window {
+                size: (400., 800.),
+                bars: [24., 0., 16., 0.],
+                cutout: [0.; 4],
+                keyboard: [0.; 4],
+                gestures: [0.; 4],
+            };
+            assert!(p.set_window(window).is_none());
+            p.frame();
+            let ops = take();
+            let def = sets(&ops)[0];
+            let [y, h] = [8, 10].map(|i| f32::from_bits(def[i]));
+            assert_eq!((y, h), want, "{background}");
+        }
     }
 
     #[test]

@@ -117,7 +117,8 @@ pub fn pair_routes(
         return Vec::new();
     }
     let names = |route: NodeKey| {
-        let mut found: Vec<(String, usize, NodeKey)> = Vec::new();
+        // By name: how many hold it, the first, and that one's tree order.
+        let mut found: HashMap<&str, (usize, NodeKey, usize)> = HashMap::new();
         let mut stack: Vec<_> = kernel
             .node_by_key(route)
             .map(|n| n.id)
@@ -132,22 +133,21 @@ pub fn pair_routes(
                 .str(PropId::SharedElement)
                 .filter(|s| !s.is_empty())
             {
-                match found.iter_mut().find(|f| f.0 == name) {
-                    Some(f) => f.1 += 1,
-                    None => found.push((name.to_owned(), 1, node.key)),
-                }
+                let order = found.len();
+                found.entry(name).or_insert((0, node.key, order)).0 += 1;
             }
             stack.extend(node.children().into_iter().rev());
         }
         found
     };
     let arrived = names(arriving);
-    names(leaving)
+    let mut pairs: Vec<_> = names(leaving)
         .into_iter()
-        .filter(|f| f.1 == 1)
-        .filter_map(|(name, _, from)| {
-            let to = arrived.iter().find(|a| a.0 == name && a.1 == 1)?;
-            Some((from, to.2))
+        .filter_map(|(name, left)| match (left, arrived.get(name)) {
+            ((1, from, order), Some(&(1, to, _))) => Some((order, from, to)),
+            _ => None,
         })
-        .collect()
+        .collect();
+    pairs.sort_unstable_by_key(|p| p.0);
+    pairs.into_iter().map(|(_, from, to)| (from, to)).collect()
 }

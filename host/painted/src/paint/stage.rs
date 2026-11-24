@@ -463,7 +463,6 @@ impl Painter {
     ) {
         self.row_refuse();
         self.damage.unsupported = true;
-        let fades = cross.opacity < 1.0;
         let posed = cross.pose(origin);
         let rounded = cross.radius > 0.0 || cross.height.is_some();
         if rounded {
@@ -476,17 +475,13 @@ impl Painter {
         let source = (cross.lift.zip(self.stage.lifted.clone()))
             .map(|((_, fit, over), tape)| (tape, posed.pre_scale(fit, fit), over));
         let over = source.as_ref().is_some_and(|s| s.2);
-        let replay = |painter: &mut Self, (tape, ts, _): &(Rc<Tape>, Transform, bool)| {
-            tape.replay(
-                painter.backend.as_mut(),
-                &mut painter.text.borrow_mut(),
-                *ts,
-            );
+        let replay = |painter: &mut Self, tape: &Tape, ts: Transform| {
+            tape.replay(painter.backend.as_mut(), &mut painter.text.borrow_mut(), ts);
         };
-        if let Some(source) = source.as_ref().filter(|_| !over) {
-            replay(self, source);
+        if let Some((tape, ts, _)) = source.as_ref().filter(|_| !over) {
+            replay(self, tape, *ts);
         }
-        let fades = fades && !over;
+        let fades = cross.opacity < 1.0 && !over;
         if fades {
             self.backend.push_opacity(cross.opacity.clamp(0.0, 1.0));
         }
@@ -500,10 +495,10 @@ impl Painter {
         if fades {
             self.backend.pop_opacity();
         }
-        if let Some(source) = source.as_ref().filter(|_| over) {
+        if let Some((tape, ts, _)) = source.as_ref().filter(|_| over) {
             self.backend
                 .push_opacity((1.0 - cross.opacity).clamp(0.0, 1.0));
-            replay(self, source);
+            replay(self, tape, *ts);
             self.backend.pop_opacity();
         }
         if rounded {
@@ -514,11 +509,13 @@ impl Painter {
     /// Record `id` instead of drawing it where it is when a crossing's
     /// container draws it, in its border box's space.
     pub(super) fn lift(&mut self, walk: &mut Walk<'_, '_>, id: ViewId, offset: (f32, f32)) -> bool {
+        if self.kept.recording.is_some() || self.stage.crossing.iter().all(|c| c.lift.is_none()) {
+            return false;
+        }
         let Some(node) = walk.scene.kernel.node(id) else {
             return false;
         };
-        let lifts = (self.stage.crossing.iter()).any(|c| c.lift.is_some_and(|l| l.0 == node.key));
-        if !lifts || self.kept.recording.is_some() {
+        if !(self.stage.crossing.iter()).any(|c| c.lift.is_some_and(|l| l.0 == node.key)) {
             return false;
         }
         self.row_refuse();
