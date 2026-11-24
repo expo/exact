@@ -973,6 +973,9 @@ impl Backend for Recorder {
     fn shared_begin(&mut self, e: &crate::paint::SharedElement<'_>) -> bool {
         self.shared_open(e)
     }
+    fn shared_text(&mut self, content: Rect4, transform: Transform) {
+        self.shared_content(content, transform);
+    }
     fn shared_end(&mut self) {
         self.shared_close();
     }

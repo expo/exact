@@ -380,21 +380,23 @@ class SharedElementsTest {
         assertEquals(a.right, b.left + 0.75f * b.width(), 0.01f)
     }
 
-    @Test fun aRouteFlightDissolvesAndScalesByHeightAsALabelsFontWould() {
-        // A label's box spans its row at the destination: 100 wide, 40 high, a 20 point glyph at its left.
+    @Test fun aRouteFlightDissolvesAndScalesALabelByItsLinesWidth() {
+        // A label's box spans its row at both ends; its lines take 60 of 80 at the source and 40 of 100
+        // at the destination, where a 20 point glyph 40 high stands at their left.
         val from = RectF(0f, 0f, 80f, 20f)
         val to = RectF(0f, 40f, 100f, 80f)
         val clear = intArrayOf(2, Color.TRANSPARENT) + rect(from) + IntArray(8)
         val glyph = intArrayOf(1, f(1f), 0, 0, f(1f), f(to.left), f(to.top), 2, Color.RED) + rect(RectF(0f, 0f, 20f, 40f)) + IntArray(8)
         val t = Fixture()
-        t.shared.begin(state(listOf(1))); t.define(definition(1, from, fit = 6, content = clear)); t.shared.finish()
+        t.shared.begin(state(listOf(1)))
+        t.define(definition(1, from, fit = 6, content = clear, contentBox = RectF(0f, 0f, 60f, 20f))); t.shared.finish()
         t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), dissolve = true))
-        t.define(definition(2, to, fit = 6, content = glyph)); t.shared.finish()
+        t.define(definition(2, to, fit = 6, content = glyph, contentBox = RectF(0f, 40f, 40f, 80f))); t.shared.finish()
         val pixels = t.pixels()
-        // Halfway the box is 90 by 30 at 0, 20: the glyph is 15 wide, not 18 as the width would make it,
+        // Halfway its lines are 50 wide: the glyph is 25 wide, not 15 as the box's height would make it,
         // and at full strength, as the source is at its own.
-        assertEquals(Color.RED, pixels.getPixel(12, 30))
-        assertEquals(Color.WHITE, pixels.getPixel(16, 30))
+        assertEquals(Color.RED, pixels.getPixel(22, 30))
+        assertEquals(Color.WHITE, pixels.getPixel(28, 30))
         pixels.recycle()
     }
 

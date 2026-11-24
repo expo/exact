@@ -512,6 +512,10 @@ pub trait Backend {
     fn shared_begin(&mut self, _element: &super::SharedElement<'_>) -> bool {
         false
     }
+    /// The open named subtree is a label whose lines take `content`: what a
+    /// route flight scales, as Compose's `scaleToBounds` scales a text by
+    /// its own width.
+    fn shared_text(&mut self, _content: Rect4, _transform: Transform) {}
     /// Finish a named live subtree.
     fn shared_end(&mut self) {}
     /// The last frame's (encode + render, readback) milliseconds, on a

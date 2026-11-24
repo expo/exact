@@ -256,11 +256,14 @@ internal class SharedElements(
                 // briefly, and each holds full strength half that time, so content alike
                 // at both ends does not dim.
                 val t = ((flight.progress - 0.2f) / 0.4f).coerceIn(0f, 1f)
+                // Bounded by the box: a null bound is the view's clip, which would cut off
+                // what reaches into the bars' bands.
+                val bounds = RectF(0f, 0f, pose.box.width(), pose.box.height())
                 flight.content?.takeIf { t < 1f }?.let { content ->
-                    canvas.saveLayerAlpha(null, (min(1f, 2f * (1f - t)) * 255f + 0.5f).toInt())
+                    canvas.saveLayerAlpha(bounds, (min(1f, 2f * (1f - t)) * 255f + 0.5f).toInt())
                     drawScaled(canvas, content, flight.box!!, flight.contentBox!!, pose, element.fit == LABEL)
                     canvas.restore()
-                    canvas.saveLayerAlpha(null, (min(1f, 2f * t) * 255f + 0.5f).toInt())
+                    canvas.saveLayerAlpha(bounds, (min(1f, 2f * t) * 255f + 0.5f).toInt())
                 }
                 drawScaled(canvas, element.content, element.box, element.contentBox, pose,
                     flight.route && element.fit == LABEL)
@@ -269,17 +272,19 @@ internal class SharedElements(
         }
     }
 
-    /** A route flight scales a label's content box by height, as a font's size goes: a label's box is
-     * often as wide as its row at one end and its text at the other, and padded differently. Other
-     * content scales by width, as Material's container transform fits it. The flight's box clips the rest. */
+    /** A route flight scales a label by its lines' width, which its content box is, as Compose's
+     * `scaleToBounds` scales a text by its own: its box is often as wide as its row at one end and its
+     * text at the other, and its line height need not follow its font. Other content scales by width,
+     * as Material's container transform fits it. The flight's box clips the rest. */
     private fun drawScaled(canvas: Canvas, content: RenderNode, box: RectF, contentBox: RectF, pose: Pose,
-        byHeight: Boolean) {
+        label: Boolean) {
         val save = canvas.save()
-        if (byHeight) {
-            val scale = pose.contentBox.height() / contentBox.height().coerceAtLeast(0.001f)
-            canvas.translate(pose.contentBox.left - pose.box.left, pose.contentBox.top - pose.box.top)
+        if (label) {
+            val scale = pose.contentBox.width() / contentBox.width().coerceAtLeast(0.001f)
+            // Centred on its lines, as `scaleToBounds` aligns it.
+            canvas.translate(pose.contentBox.left - pose.box.left, pose.contentBox.centerY() - pose.box.top)
             canvas.scale(scale, scale)
-            canvas.translate(box.left - contentBox.left, box.top - contentBox.top)
+            canvas.translate(box.left - contentBox.left, box.top - contentBox.centerY())
         } else {
             val scale = pose.box.width() / box.width().coerceAtLeast(0.001f)
             canvas.scale(scale, scale)

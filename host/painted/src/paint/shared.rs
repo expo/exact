@@ -1,6 +1,7 @@
 //! Named live subtrees kept by the Android reader (LLP 1013.000).
 use super::*;
 use exact_kernel::motion::motion_node;
+use exact_kernel::TextAlign;
 
 /// The reader captures geometry before applying the frame that carries this state.
 #[derive(Default)]
@@ -249,14 +250,18 @@ impl Painter {
             .iter()
             .flat_map(|&(x, y)| [x, y])
             .fold(0.0, f32::max);
+        // A background that reaches under the bars flies with them, as a
+        // Compose screen drawn edge to edge does.
+        let (x, y, w, h) = shown.surface(rect);
+        let [top, right, bottom, left] = self.bleed(walk.scene.kernel, id, &geometry.outer, ts);
         let opened = self.backend.shared_begin(&SharedElement {
             key: motion_node(node.key),
-            rect: shown.surface(rect),
+            rect: (x - left, y - top, w + left + right, h + top + bottom),
             radius,
             opacity: shown.opacity,
             transform,
             image,
-            // 6: a label, which a route flight scales by its height.
+            // 6: a label, which a route flight scales by its lines' width.
             fit: if !plain_image {
                 u32::from(node.node_type == NodeType::Text) * 6
             } else {
@@ -272,6 +277,17 @@ impl Painter {
             crop,
         });
         self.node_content(walk, id, ts, offset, clip);
+        if let Some(lines) = walk.text.get(&node.key).filter(|_| opened) {
+            let (x, y, w, h) = geometry.content;
+            let width = lines.width.min(w);
+            let computed = node.computed_style(StyleMask::INHERITED);
+            let dx = match computed.text_align.physical(computed.direction) {
+                TextAlign::Left | TextAlign::Start | TextAlign::Justify => 0.0,
+                TextAlign::Right | TextAlign::End => w - width,
+                TextAlign::Center => (w - width) / 2.0,
+            };
+            self.backend.shared_text((x + dx, y, width, h), transform);
+        }
         if opened {
             self.backend.shared_end();
             self.shared.recorded.insert(motion_node(node.key));
