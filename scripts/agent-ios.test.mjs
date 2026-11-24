@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync,
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
+import { appleArtifacts } from '../host/apple/build.mjs';
 import { buildFirst, nativeBuild } from './agent-build.mjs';
 import { resolveApp } from './app.mjs';
 
@@ -34,29 +34,103 @@ test('test and agent carry one native startup check to every test file on iOS an
     import * as shells from './scripts/app-shells.mjs';
     import * as builds from './scripts/web-build.mjs';
     import { writeFileSync } from 'node:fs';
+    import { basename } from 'node:path';
     const spawn = processes.spawn;
     let checks = 0, launches = 0;
     mock.module('./scripts/app-shells.mjs', () => ({ ...shells, platformOf: () => null }));
     mock.module('./scripts/web-build.mjs', () => ({ ...builds, privateNativeBuild: () => ({ env: {}, seed() {}, close() {} }) }));
     mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
-      if (args[0].endsWith('/scripts/agent-build.mjs')) {
+      if (basename(args[0]) === 'agent-build.mjs') {
         checks++;
         assert.ok(options.env.EXACT_BUILD_CHECK_OUT);
         writeFileSync(options.env.EXACT_BUILD_CHECK_OUT, 'checked-' + checks);
-      } else if (args[0].endsWith('/scripts/agent.mjs')) {
+      } else if (basename(args[0]) === 'agent.mjs') {
         launches++;
         assert.equal(options.env.EXACT_BUILD_CHECKED, 'checked-' + checks);
       } else assert.fail('unexpected subprocess: ' + args);
       return spawn(command, ['-e', ''], options);
     } }));
     const { run } = await import('./scripts/app-cli.mjs');
-    for (const host of ['ios', 'macos']) for (const verb of ['test', 'agent']) {
+    const platforms = new Set([process.platform, 'win32']);
+    for (const platform of platforms) for (const host of ['ios', 'macos']) for (const verb of ['test', 'agent']) {
+      Object.defineProperty(process, 'platform', { value: platform });
       const before = [checks, launches];
+      const windows = platform === 'win32';
       assert.equal(await run({ dir: process.env.EXACT_APP_DIR, name: 'launch-once', exact2: process.cwd(),
-        args: [verb, host, ...(verb === 'agent' ? ['tree'] : [])] }), 0);
-      assert.equal(checks - before[0], 1);
-      assert.equal(launches - before[1], verb === 'test' ? 2 : 1);
+        args: [verb, host, ...(verb === 'agent' ? ['tree'] : [])] }), windows ? 2 : 0);
+      assert.equal(checks - before[0], windows ? 0 : 1);
+      assert.equal(launches - before[1], windows ? 0 : verb === 'test' ? 2 : 1);
     }
+  `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.skipIf(process.platform === 'win32')('a warm test ios run checks the seeded build once', () => {
+  const dir = fixture();
+  try { run(`
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import { EventEmitter } from 'node:events';
+    import * as processes from 'node:child_process';
+    import * as shells from './scripts/app-shells.mjs';
+    import * as launch from './scripts/agent-launch.mjs';
+    import * as sweep from './scripts/sweep.mjs';
+    import { appleArtifacts } from './host/apple/build.mjs';
+    import { resolveApp } from './scripts/app.mjs';
+    import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+    import { basename, resolve } from 'node:path';
+    const dir = process.env.EXACT_APP_DIR;
+    process.env.CARGO_TARGET_DIR = resolve(dir, 'target');
+    const app = resolveApp(dir);
+    let checks = 0, launches = 0, builds = 0;
+    mock.module('./scripts/app-shells.mjs', () => ({ ...shells, platformOf: () => null }));
+    mock.module('./scripts/sweep.mjs', () => ({ ...sweep, startSweep() {} }));
+    const receiptChanges = launch.receiptChanges;
+    mock.module('./scripts/agent-launch.mjs', () => ({ ...launch,
+      receiptChanges(...args) { checks++; return receiptChanges(...args); },
+    }));
+    const { buildFirst, nativeBuild, refuseBuild } = await import('./scripts/agent-build.mjs');
+    const build = () => {
+      builds++;
+      const paths = appleArtifacts(app, { destination: 'ios-simulator' });
+      const receipt = resolve(paths.bundle, 'receipt.json'), time = new Date(Date.now() + 60_000);
+      mkdirSync(paths.bundle, { recursive: true });
+      writeFileSync(receipt, JSON.stringify({ target: paths.target, started: time.toISOString(),
+        build: { trust: 'development', binary: { inputs: [], missing: [], directories: [] } } }));
+      utimesSync(receipt, time, time);
+      return { code: 0, output: '' };
+    };
+    mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
+      const child = new EventEmitter();
+      Promise.resolve().then(async () => {
+        switch (basename(args[0])) {
+          case 'agent-build.mjs': return buildFirst('ios', app, { say() {}, wait() {}, build });
+          case 'agent.mjs': {
+            launches++;
+            const state = nativeBuild('ios', app, { checked: options.env.EXACT_BUILD_CHECKED });
+            assert.equal(state.checked, true);
+            refuseBuild('ios', state, app);
+            return 0;
+          }
+          default: assert.fail('unexpected subprocess: ' + args);
+        }
+      }).then(code => child.emit('exit', code), error => { console.error(error); child.emit('exit', 1); });
+      return child;
+    } }));
+    const { run } = await import('./scripts/app-cli.mjs');
+    const drive = async () => {
+      const listeners = process.listeners('exit');
+      const code = await run({ dir, name: app.name, exact2: process.cwd(), args: ['test', 'ios'] });
+      for (const fn of process.listeners('exit').filter(fn => !listeners.includes(fn))) {
+        process.off('exit', fn);
+        fn(code);
+      }
+      assert.equal(code, 0);
+    };
+    await drive();
+    assert.equal(builds, 1);
+    checks = launches = 0;
+    await drive();
+    assert.deepEqual({ checks, launches, builds }, { checks: 1, launches: 1, builds: 1 });
   `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -75,9 +149,10 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     import * as wire from './scripts/agent-wire.mjs';
     import * as touches from './host/apple/touches.mjs';
     import * as cleanup from './scripts/sweep.mjs';
-    import { existsSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+    import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
     import { dirname, resolve } from 'node:path';
-    import { resolveApp } from './scripts/app.mjs';
+    import { appleExecutableName, resolveApp } from './scripts/app.mjs';
+    import * as tools from './scripts/tools.mjs';
     const dir = process.env.EXACT_APP_DIR, app = resolveApp(dir), records = resolve(dir, 'keyboard-records');
     const paths = builds.appleArtifacts(app, { destination: 'ios-simulator' });
     const receipt = resolve(paths.products, 'receipt.json');
@@ -89,20 +164,29 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     const counts = { check: 0, list: 0, boot: 0, keyboard: {}, container: {} }, settings = { A: '1', B: '0' }, assets = [];
     const states = { A: 'Shutdown', B: 'Booted' };
     let reinstall = false, failRestore = false, generation = 1, now = Date.now();
+    let failingBoot, replacement = 'A';
     Date.now = () => now;
     const container = udid => resolve(dir, udid + '-' + generation + '.app');
     for (const udid of ['A', 'B']) mkdirSync(container(udid));
+    for (const bundle of [paths.bundle, container('B')]) {
+      mkdirSync(resolve(bundle, '_CodeSignature'));
+      for (const part of [appleExecutableName(app, true), 'receipt.json', '_CodeSignature/CodeResources']) {
+        const file = resolve(bundle, part);
+        writeFileSync(file, 'installed'); utimesSync(file, 1, 1);
+      }
+    }
     const result = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
     const simctl = args => {
       assert.equal(args[0], 'simctl');
       if (args[1] === 'list') {
         counts.list++;
         return result(JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': ['A', 'B'].map(udid => ({
-          udid, name: udid, state: states[udid], deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro',
+          udid, name: failingBoot && udid === replacement ? 'replacement' : udid, state: states[udid], deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro',
         })) } }));
       }
+      if (args[1] === failingBoot && args[2] === replacement) return { status: 1, stderr: 'device became unavailable' };
       if (args[1] === 'boot') { counts.boot++; states[args[2]] = 'Booted'; return result(); }
-      if (args[1] === 'bootstatus') return result();
+      if (args[1] === 'bootstatus' || args[1] === 'shutdown') return result();
       if (args[1] === 'get_app_container') {
         counts.container[args[2]] = (counts.container[args[2]] ?? 0) + 1;
         return result(container(args[2]));
@@ -117,10 +201,17 @@ test('two iOS launches check once and look up each device once; reinstalls refre
       }
       assert.fail('unexpected simctl: ' + args);
     };
+    const file = resolve(dir, 'recovery.test.contract');
+    const authored = ['first', 'shutdown', 'third'].map(name => ({ name, steps: [{ op: 'clock', arg: 'data', line: 2 }] }));
+    mock.module('./scripts/tools.mjs', () => ({ ...tools, contractTool: () => ({ cmd: 'contract', pre: [] }) }));
     mock.module('./scripts/sweep.mjs', () => ({ ...cleanup, startSweep() {} }));
     mock.module('node:child_process', () => ({ ...processes,
       spawnSync(command, args, options) {
         if (command === 'git') return realSpawnSync(command, args, options);
+        if (command === 'contract') {
+          assert.deepEqual(args, ['test', file]);
+          return result(JSON.stringify({ tests: authored, properties: [] }));
+        }
         assert.equal(command, 'xcrun'); return simctl(args);
       },
       spawn(command, args) {
@@ -140,10 +231,13 @@ test('two iOS launches check once and look up each device once; reinstalls refre
       receiptChanges(...args) { counts.check++; return receiptChanges(...args); },
       exclusiveIOS: (udid, id, open) => open(),
     }));
-    const withSoftwareKeyboard = devices.withSoftwareKeyboard;
+    const { withSoftwareKeyboard, keepInstalledRelease } = devices;
     mock.module('./host/apple/devices.mjs', () => ({ ...devices,
       withSoftwareKeyboard: (dev, open) => withSoftwareKeyboard(dev, open, { records }),
-      showSimulator() {}, crashWatch: () => () => [], keepInstalledRelease: () => ({ install: reinstall }),
+      showSimulator() {}, crashWatch: () => () => [],
+      keepInstalledRelease: (udid, id, bundle, executable, options) => udid === 'B'
+        ? keepInstalledRelease(udid, id, bundle, executable, { ...options, installRecords: resolve(dir, 'install-records') })
+        : { install: reinstall },
     }));
     mock.module('./host/apple/build.mjs', () => ({ ...builds, install() {
       generation++; mkdirSync(container(process.env.EXACT_SIM)); reinstall = false;
@@ -152,7 +246,7 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     mock.module('./scripts/agent-wire.mjs', () => ({ ...wire,
       simulatorConsole: () => ({ done: states[process.env.EXACT_SIM] !== 'Booted', retry: () => false,
         exited: Promise.resolve(0), process: { kill() {} } }),
-      jsonLines: () => ({ next: async () => ({ ready: true }), ask: async () => ({}), fail() {} }),
+      jsonLines: () => ({ next: async () => ({ ready: true }), ask: async () => ({ mutationRequests: 0 }), fail() {} }),
     }));
     // The asset root is read at launch, before any fake wire traffic.
     const fsAssets = await import('./host/apple/assets.mjs');
@@ -178,27 +272,36 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     assert.deepEqual(assets, [container('A'), container('A')]);
     // A second device has its own cache, including a keyboard read that needs no warning.
     process.env.EXACT_SIM = 'B';
-    for (let i = 0; i < 2; i++) { const carrier = await openIOS({ app: dir }); await carrier.close(); now += 6000; }
+    for (let i = 0; i < 2; i++) { const carrier = await openIOS({ app: dir }); await carrier.close(); }
     assert.deepEqual(counts, { check: 1, list: 2, boot: 1, keyboard: { A: { read: 2, delete: 1, write: 1 }, B: { read: 1, delete: 0, write: 0 } }, container: { A: 1, B: 1 } });
     assert.equal(settings.B, '0');
+    const lastUsed = resolve(dir, '.exact/simulator');
+    assert.equal(readFileSync(lastUsed, 'utf8').trim(), 'B');
     process.env.EXACT_SIM = 'A'; reinstall = true;
     const old = container('A'), carrier = await openIOS({ app: dir }); await carrier.close();
     assert.ok(existsSync(old)); // Invalidation must work even while the old directory remains.
     assert.notEqual(assets.at(-1), old);
     assert.equal(assets.at(-1), container('A'));
     assert.equal(counts.container.A, 2);
+    assert.equal(readFileSync(lastUsed, 'utf8').trim(), 'A');
     assert.equal(counts.check, 1);
-    // A shutdown fails one launch. Even within five seconds, the next launch re-lists and boots.
-    states.A = 'Shutdown';
-    await assert.rejects(openIOS({ app: dir }), /simulator launch exited/);
-    const recoveredLaunch = await openIOS({ app: dir });
-    assert.equal(settings.A, null);
-    await recoveredLaunch.close();
+    rmSync(container('A'), { recursive: true });
+    generation++; mkdirSync(container('A'));
+    const replaced = await openIOS({ app: dir }); await replaced.close();
+    assert.equal(assets.at(-1), container('A'));
+    assert.equal(counts.container.A, 3);
+    // The shutdown falls within the life of B's device list. A new list must see A shut down.
+    const { runTests } = await import('./scripts/agent-test.mjs');
+    const recovery = await runTests({ host: 'ios', app: dir, file, atResult(test) {
+      if (test.name === 'first') states.A = 'Shutdown';
+    } });
+    assert.deepEqual(recovery.results.map(test => [test.name, test.failures.length]), [['first', 0], ['shutdown', 1], ['third', 0]], JSON.stringify(recovery.results));
+    assert.match(recovery.results[1].failures[0], /simulator launch exited/);
     assert.equal(settings.A, '1');
     const nextLaunch = await openIOS({ app: dir }); await nextLaunch.close();
     assert.equal(counts.list, 3);
     assert.equal(counts.boot, 2);
-    assert.equal(counts.container.A, 3);
+    assert.equal(counts.container.A, 4);
     assert.deepEqual(counts.keyboard.A, { read: 4, delete: 2, write: 2 });
     assert.equal(counts.check, 1);
     assert.ok(nativeBuild('ios', app).changed.some(path => path.endsWith('app.contract')), 'the next run sees the edit');
@@ -222,8 +325,19 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     const stillFailed = await open(() => ({ close() {} })); await stillFailed.close();
     assert.ok(existsSync(record));
     failRestore = false;
-    const recovered = await open(() => ({ close() {} })); await recovered.close();
+    const readCount = counts.keyboard.A.read;
+    const recovered = await withSoftwareKeyboard({ udid: 'A' }, () => ({ close() {} }), { records }); await recovered.close();
+    assert.equal(counts.keyboard.A.read, readCount + 1);
     assert.equal(settings.A, '1'); assert.ok(!existsSync(record));
+
+    for (const command of ['boot', 'bootstatus']) {
+      const options = { cached: true, app: command };
+      failingBoot = command; replacement = 'A'; states.A = 'Shutdown'; states.B = 'Booted';
+      devices.forgetSimulator('A');
+      assert.throws(() => devices.simulator('replacement', options), new RegExp('simctl ' + command + ': device became unavailable'));
+      replacement = 'B';
+      assert.equal(devices.simulator('replacement', options).udid, 'B');
+    }
   `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

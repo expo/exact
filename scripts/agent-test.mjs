@@ -895,9 +895,9 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     const launch = (environment) => open({ host, browser, plan, ...facts, env: { ...environment, EXACT_AGENT_EPHEMERAL_PORT: '1' }, app, webDist, device, phone, reader, url: opensAt ?? url, storage: store, touch: fingers, chrome: bars, scale, port, ax });
     let s;
     try { s = await launch(fresh); } catch (e) {
-      if (!running || e.missingBuild) throw e; // no build: the next test would say the same
+      if ((!running && !e.retrySimulator) || e.missingBuild) throw e; // no build: the next test would say the same
       let why = e.message;
-      try { running.check(); } catch (dead) { why = dead.message; }
+      try { running?.check(); } catch (dead) { why = dead.message; }
       landed({ name: t.name, index: n, failures: [`${t.name}: ${why}`], notes });
       continue;
     }

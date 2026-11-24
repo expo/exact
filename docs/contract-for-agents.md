@@ -216,9 +216,9 @@ bun exact.mjs agent web tree "tap add" state logs "screenshot out.png"
 bun exact.mjs agent web --size 390x844 "screenshot phone.png"   # a phone-sized viewport
 ```
 
-On iOS and macOS, `agent` and `test` check the native build once at the start,
-then use it for every launch and `reload` in that run (LLP 1012.001.000 D1).
-Edits made during the run are checked by the next run.
+On macOS and the iOS simulator, `agent` and `test` check the native build once
+at startup and use it for every launch, including an authored test's `reload`
+(LLP 1012.001.000 D1). Edits made during the run are checked by the next run.
 
 The web carrier opens at 420×900; `--size <w>x<h>` (before the operations) opens
 another viewport, and a test's first step `size <w>x<h>` does the same for that test.

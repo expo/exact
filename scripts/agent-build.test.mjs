@@ -507,7 +507,10 @@ test('a missing or stale build is built first, said in one line; a fresh one run
     // A source edited since: the same refusal the driver makes, and the build first instead, naming what changed.
     utimesSync(resolve(dir, 'app.contract'), edited, edited);
     assert.deepEqual(nativeBuild('ios', app).changed.map(p => resolve(p)), [resolve(dir, 'app.contract')]);
-    for (const checked of ['not-json', '{broken']) {
+    const digest = createHash('sha256').update(readFileSync(receipt)).digest('hex');
+    for (const checked of ['not-json', '{broken', ...[
+      { receipt: digest }, { receipt: digest, plan: 123 }, { receipt: digest, plan: {} }, { receipt: null, plan: null }, { receipt: 123, plan: null },
+    ].map(record => JSON.stringify(record))]) {
       assert.deepEqual(nativeBuild('ios', app, { checked }).changed.map(p => resolve(p)), [resolve(dir, 'app.contract')]);
     }
     assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /^Error: ios build is stale: .*app\.contract changed since .*; run \(cd .* && bun exact\.mjs ios\); if .*no build reads.*`\.exact\/`/);
@@ -562,7 +565,7 @@ test('a missing or stale build is built first, said in one line; a fresh one run
 // is older than it, though the build read the file before the edit (polls: a prebuild tested the old UI); the receipt's
 // `started` bounds it. And a build another process claims between the check and this one is waited for, not failed on.
 test('a source edited while the build ran is stale; a build claimed meanwhile is waited for, then the check is made again', async () => {
-  const previous = process.env.EXACT_APP_DIR, macBin = process.env.EXACT_MAC_BIN;
+  const previous = process.env.EXACT_APP_DIR, macBin = process.env.EXACT_MAC_BIN, checkOut = process.env.EXACT_BUILD_CHECK_OUT;
   const { dir, write } = scratchApp('race-log');
   try {
     process.env.EXACT_APP_DIR = dir;
@@ -599,7 +602,21 @@ test('a source edited while the build ran is stale; a build claimed meanwhile is
     said.length = 0;
     assert.equal(await buildFirst('ios', app, { say: line => said.push(line), wait: () => {}, build: async () => ({ code: 101, output: 'error: could not compile\n' }) }), 101);
     assert.match(said.at(-1), /the iOS build failed \(exit 101\)/);
+
+    const check = process.env.EXACT_BUILD_CHECK_OUT = resolve(dir, '.exact/checked');
+    mkdirSync(dirname(check), { recursive: true });
+    const rebuild = (edited) => buildFirst('ios', app, { say() {}, wait() {}, build: async () => {
+      stamp('app.contract', edited); built(true); return { code: 0, output: '' };
+    } });
+    await assert.rejects(rebuild(-5), /ios build is stale: .*app\.contract changed/);
+    assert.ok(!existsSync(check));
+    const launch = () => refuseBuild('ios', nativeBuild('ios', app, { checked: existsSync(check) ? readFileSync(check, 'utf8') : null }), app);
+    assert.throws(launch, /ios build is stale/);
+    assert.equal(await rebuild(-60), 0);
+    stamp('app.contract', -5);
+    assert.doesNotThrow(launch);
   } finally {
+    if (checkOut === undefined) delete process.env.EXACT_BUILD_CHECK_OUT; else process.env.EXACT_BUILD_CHECK_OUT = checkOut;
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
     if (macBin === undefined) delete process.env.EXACT_MAC_BIN; else process.env.EXACT_MAC_BIN = macBin;
     rmSync(dir, { recursive: true, force: true });
@@ -795,7 +812,7 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     };
     build();
     const said = [], builds = [], bakes = [];
-    let baked = { ...module }, bakeFails = null, bakeSays = '', buildSays = '';
+    let baked = { ...module }, bakeFails = null, bakeSays = '', buildSays = '', buildAt = 65;
     const bake = async (a, into) => {
       bakes.push(into);
       if (bakeFails) return { code: 1, output: bakeFails };
@@ -804,7 +821,7 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
       return { code: 0, output: bakeSays };
     };
     const drive = (code = 0) => buildFirst('ios', app, { say: line => said.push(line), wait: () => {}, bake,
-      build: async args => (builds.push(args), { code, output: buildSays }) });
+      build: async args => (builds.push(args), build({}, buildAt), { code, output: buildSays }) });
     const reset = () => { said.length = builds.length = bakes.length = 0; };
     const kept = () => planOverride('ios', app, nativeBuild('ios', app));
     process.env.EXACT_BUILD_CHECK_OUT = resolve(dir, '.exact/checked');
@@ -866,7 +883,10 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     assert.deepEqual(planOverride('ios', app, nativeBuild('ios', app, { checked: planCheck })), selectedPlan);
     assert.equal(planOverride('ios', app, nativeBuild('ios', app, { checked: freshCheck })), null);
     assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /ios build is stale/);
-    reset();
+    rmSync(overrideDir('ios', app), { recursive: true });
+    const gone = nativeBuild('ios', app, { checked: planCheck });
+    assert.equal(planOverride('ios', app, gone), null);
+    assert.throws(() => refuseBuild('ios', gone, app), /ios build is stale/); reset();
     assert.equal(await drive(), 0);
     assert.deepEqual([said.length, builds.length, bakes.length], [1, 0, 1]);
     assert.match(said[0], /^iOS: (app\.contract, app\.ts|app\.ts, app\.contract) changed; running the new plan on the existing build \(no native rebuild\)\. Only the agent's drives run it: .*`bun exact\.mjs ios` before timing one$/);
@@ -891,12 +911,12 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     assert.deepEqual([bakes.length, builds.length, said[1], said.length], [0, 1, warning, 3]);
     // Built again over the same warning: its count alone.
     reset();
-    stamp('app.json', 70);
+    stamp('app.json', 70); buildAt = 75;
     assert.equal(await drive(), 0);
     buildSays = '';
     assert.equal(said.length, 2);
     assert.match(said[1], /^compiler: 1 warning, as before \(\S+\/warnings-ios\.txt lists them; /);
-    assert.match(said[0], /^building for iOS: the build is older than its sources \((app\.contract, app\.json|app\.json, app\.contract) changed\); its log: /);
+    assert.match(said[0], /^building for iOS: the build is older than its sources \(app\.json changed\); its log: /);
     assert.ok(!existsSync(overrideDir('ios', app)));
 
     // What a build must still make: new grants, a Rust data crate, a build that links only what its plan used.
@@ -906,7 +926,7 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
       [() => build({ linked: ['router', 'io'] }, 70), 'the build links only what its plan used (--link plan)'],
     ]) {
       build({}, 70); baked = { ...module }; setup(); reset();
-      stamp('app.json', -60); stamp('app.contract', 80);
+      stamp('app.json', -60); stamp('app.contract', 80); buildAt = 85;
       assert.equal(await drive(), 0);
       assert.deepEqual([builds.length, kept()], [1, null], why);
       assert.match(said[0], new RegExp(`^building for iOS: the build is older than its sources \\(app\\.contract changed\\), and ${why.replace(/[().]/g, '\\$&')}; its log: `));

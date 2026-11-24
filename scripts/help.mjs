@@ -175,7 +175,7 @@ Backend  start snapback4 dev on app.ts’s selected origin’s port first; check
 Lines    tap, type, expect text|tree|state|disabled|refusal, clock data|settle|+<ms>|until state …, reload, back, fail|pass
          fetch, answer fetch "<prefix>" with <status> [json], request: docs/recipes/tests.md;
          all: docs/contract-grammar.md "Authored tests".`,
-    bodyAll: `A phone's build is ios --device's; on macOS with multiple Apple teams, set EXACT_IDENTITY=- or DEVELOPMENT_TEAM=<team-id>. iOS/macOS check once per run, including reload, so edits are checked by the next run.
+    bodyAll: `A phone's build is ios --device's; on macOS with multiple Apple teams, set EXACT_IDENTITY=- or DEVELOPMENT_TEAM=<team-id>. macOS and iOS simulator tests reuse the startup build check on reload. The next run checks edits.
 Ports    --port <n> or EXACT_PORT chooses the page’s port; otherwise web: headless Chrome over a pipe; the page on 127.0.0.1, each test at a
          port fixed by its own store's name (20000-47999).
          ${NATIVE_PORTS}`,

@@ -23,7 +23,7 @@ export function privateNativeBuild(app, kind) {
   const directory = mkdtempSync(resolve(root, `${kind}-`));
   const env = { EXACT_APPLE_OUTPUT: resolve(directory, 'apple'), EXACT_WINDOWS_OUTPUT: resolve(directory, 'windows'), EXACT_BAKE_OUTPUT: resolve(directory, 'bake'), EXACT_WEB_TYPES: 'private' };
   let keep = () => {}, stale = false;
-  return { env, async seed(host) {
+  return { env, async seed(host, { checkInDrive = false } = {}) {
     host = host === 'mac' ? 'macos' : host;
     const { nativeBuild, planSource, receiptPath, windowsBuild } = await import('./agent-build.mjs');
     const { refuseBackendOrigin } = await import('./agent-launch.mjs');
@@ -40,15 +40,15 @@ export function privateNativeBuild(app, kind) {
     };
     // An Apple build is reusable when its receipt names its binary's inputs and only its plan's sources changed
     // since. One stale in more is kept when the drive's check would rebuild it rather than refuse it for its backend.
-    const apple = () => {
-      const state = nativeBuild(host, app);
+    const apple = checked => {
+      const state = nativeBuild(host, app, { checked });
       const checkable = !state.missing && !!state.receipt && Array.isArray(JSON.parse(readFileSync(state.receipt, 'utf8')).build?.binary?.inputs);
       const reusable = checkable && state.changed.every(path => planSource(path, app));
       let rebuildable = checkable && !reusable;
       if (rebuildable) try { refuseBackendOrigin(state, app); } catch { rebuildable = false; }
       return { reusable, kept: reusable || rebuildable };
     };
-    const reusable = () => host === 'windows' ? windowsBuild(app).changed?.length === 0 : apple().reusable;
+    const reusable = checked => host === 'windows' ? windowsBuild(app).changed?.length === 0 : apple(checked).reusable;
     const locked = use => {
       let release;
       try { release = takeLock(resolve(cache, '.lock'), { waitMs: 0 }); }
@@ -75,18 +75,28 @@ export function privateNativeBuild(app, kind) {
             writeFileSync(override, JSON.stringify(record) + '\n');
           }
         }
-        // A kept stale build lets the drive's check name what changed (a linked package's file, say) and build over it.
-        if (host === 'windows' ? !reusable() : !apple().kept) throw new Error('native artifact inputs changed');
-        stale = host !== 'windows' && !apple().reusable;
+        if (checkInDrive) {
+          // Let buildFirst check the copied inputs after preparation. A cache for another backend would be refused
+          // there, so leave it out and start with an empty build directory.
+          const path = receiptPath(host, app), receipt = path && JSON.parse(readFileSync(path, 'utf8'));
+          if (!Array.isArray(receipt?.build?.binary?.inputs)) throw new Error('native artifact has no input receipt');
+          try { refuseBackendOrigin(receipt.build, app); } catch { throw new Error('native artifact has another backend'); }
+          stale = true;
+        } else {
+          // Keep a stale build so the drive can name what changed and build over it.
+          const status = host === 'windows' ? { kept: reusable() } : apple();
+          if (!status.kept) throw new Error('native artifact inputs changed');
+          stale = host !== 'windows' && !status.reusable;
+        }
         seeded = JSON.stringify(nativeFiles(directory));
       } catch (error) {
         rmSync(directory, { recursive: true, force: true }); mkdirSync(directory);
         if (!['ENOENT', 'ENOTDIR'].includes(error.code) && !(error instanceof SyntaxError) && !/native artifact/.test(error.message)) throw error;
       }
     }));
-    keep = () => locked(() => selected(() => {
+    keep = checked => locked(() => selected(() => {
       if (seeded && JSON.stringify(nativeFiles(directory)) === seeded) return;
-      if (!reusable()) return;
+      if ((checkInDrive && !checked) || !reusable(checked)) return;
       const stage = mkdtempSync(resolve(cache, '.stage-'));
       try {
         cpSync(directory, resolve(stage, 'files'), { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
@@ -96,7 +106,7 @@ export function privateNativeBuild(app, kind) {
     }));
   // A build over a kept stale one that failed (in signing, say) can leave a receipt that matches its sources: only a
   // command that succeeded publishes it. `code` is the process's exit code (app-cli.mjs closes on 'exit').
-  }, close(code = 0) { if (!existsSync(directory)) return; try { if (!(stale && code)) keep(); } finally { rmSync(directory, { recursive: true, force: true }); } } };
+  }, close(code = 0, checked) { if (!existsSync(directory)) return; try { if (!(stale && code)) keep(checked); } finally { rmSync(directory, { recursive: true, force: true }); } } };
 }
 
 function nativeFiles(directory, prefix = '') {

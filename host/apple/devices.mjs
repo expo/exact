@@ -372,9 +372,15 @@ export function simulators(set) {
 /** The simulator to use — `pick` (a udid or a name; EXACT_SIM by default), else the one booted iPhone, else the iPhone Pro on the newest iOS — booted and waited for. When several are booted, the one `app` (a bundle id) is installed on, and of several so, the one the app in `dir` last used (its `.exact/simulator`, written when a simulator is named or chosen so), said on stderr; refused when that is none or several, naming how to choose: `hint`, the caller's own way. With `tv`, the same choice among Apple TVs on tvOS. An iPhone is one by its device type, not its name: a simulator renamed `work-phone` is still one. */
 const saidSimulator = new Set(); // a verify opens a dozen sessions: the choice is said once
 export function simulator(pick = process.env.EXACT_SIM, options = {}) {
-  const dev = chooseSimulator(pick, options), booted = bootSimulator(dev);
-  if (options.cached) dev.state = 'Booted';
-  return { ...booted };
+  const dev = chooseSimulator(pick, options);
+  try {
+    const booted = bootSimulator(dev);
+    if (options.cached) dev.state = 'Booted';
+    return { ...booted };
+  } catch (error) {
+    if (options.cached) forgetSimulator(dev.udid);
+    throw error;
+  }
 }
 const driveSimulators = new Map();
 /** A failed launch may mean the device shut down. The next launch must ask simctl again. */
@@ -393,7 +399,16 @@ const recentSimulators = () => (chosenFrom && Date.now() - chosenFrom.at < 5000 
  * `cached` keeps that choice for the runner's later launches, including a test's reloads. */
 export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint = 'EXACT_SIM=<udid|name>', app, dir, cached = false } = {}) {
   const key = pick => JSON.stringify([pick, tv, app, dir]);
-  if (cached && driveSimulators.has(key(pick))) return driveSimulators.get(key(pick));
+  const used = dir ? resolve(dir, '.exact', tv ? 'simulator-tv' : 'simulator') : null;
+  const lastUsed = () => { try { return used && readFileSync(used, 'utf8').trim(); } catch { return null; } };
+  const remember = (dev, last) => {
+    if (used && dev.udid !== last) try { mkdirSync(dirname(used), { recursive: true }); writeFileSync(used, `${dev.udid}\n`); } catch { /* remembered next time, if it can be */ }
+  };
+  const kept = cached && driveSimulators.get(key(pick));
+  if (kept) {
+    if (pick) remember(kept, lastUsed());
+    return kept;
+  }
   const all = recentSimulators();
   const version = (d) => Number(/(?:iOS|tvOS)-(\d+)-(\d+)/.exec(d.runtime)?.slice(1).join('.') ?? 0);
   const kind = (d) => d.type || d.name.replaceAll(' ', '-');
@@ -403,8 +418,7 @@ export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint
   // Several booted: whose is which is not this process's to guess (an install onto another drive's simulator,
   // 2026-10-09: build.mjs --ios takes --sim, not --phone, for a simulator). One booted, or none, is still chosen.
   const booted = iphones.filter((d) => d.state === 'Booted');
-  const used = dir ? resolve(dir, '.exact', tv ? 'simulator-tv' : 'simulator') : null;
-  let last = null; try { last = used && readFileSync(used, 'utf8').trim(); } catch { /* none chosen yet */ }
+  const last = lastUsed();
   // What `used` remembers: a simulator named, or one the installed-app check chose.
   let chosen = Boolean(pick);
   if (!pick && booted.length > 1) {
@@ -420,7 +434,7 @@ export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint
   }
   dev ??= booted[0] ?? iphones.find((d) => /^iPhone-\d+-Pro$/.test(kind(d))) ?? iphones[0];
   if (!dev) throw new Error(`no ${tv ? 'Apple TV' : 'iPhone'} simulator on ${tv ? 'tvOS' : 'iOS'}; add one in Xcode, or name any simulator by udid or name with EXACT_SIM (or --sim)`);
-  if (used && chosen && dev.udid !== last) try { mkdirSync(dirname(used), { recursive: true }); writeFileSync(used, `${dev.udid}\n`); } catch { /* remembered next time, if it can be */ }
+  if (chosen) remember(dev, last);
   if (cached) { driveSimulators.set(key(pick), dev); driveSimulators.set(key(dev.udid), dev); }
   return dev;
 }
@@ -456,7 +470,10 @@ export function showSimulator(dev, background = false) {
  *  the same size and time (simctl install keeps both). A drive then skips the install, 0.3–0.5 s of each launch. The
  *  bundle's container is looked in first where `simctl get_app_container` last said it was (~0.1 s, each drive): a
  *  reinstall or a removal takes that directory away, and any other answer asks simctl again. */
-export function installedAlready(udid, id, bundle, executable, { records = resolve(homedir(), '.cache/exact/simulator-installs') } = {}) {
+export function installedAlready(udid, id, bundle, executable, options) {
+  return !!matchingInstall(udid, id, bundle, executable, options);
+}
+function matchingInstall(udid, id, bundle, executable, { records = resolve(homedir(), '.cache/exact/simulator-installs'), container } = {}) {
   const same = (installed) => {
     try {
       return [executable, 'receipt.json', '_CodeSignature/CodeResources'].every((file) => {
@@ -465,13 +482,14 @@ export function installedAlready(udid, id, bundle, executable, { records = resol
       });
     } catch { return false; }
   };
+  if (container && same(container)) return container;
   const record = resolve(records, `${udid}-${id}`);
-  try { if (same(readFileSync(record, 'utf8'))) return true; } catch { /* none remembered */ }
+  try { const installed = readFileSync(record, 'utf8'); if (same(installed)) return installed; } catch { /* none remembered */ }
   const r = read('xcrun', ['simctl', 'get_app_container', udid, id, 'app']);
-  if (r.status !== 0) return false;
+  if (r.status !== 0) return null;
   const installed = r.stdout.trim();
   try { mkdirSync(records, { recursive: true }); writeFileSync(record, installed); } catch { /* asked again next time */ }
-  return same(installed);
+  return same(installed) ? installed : null;
 }
 
 /** The build of `id` installed on a simulator: its bundle's path, its receipt's `build.trust` (`unreceipted` with
@@ -500,8 +518,9 @@ export function replacedNote(udid, app, replaced, release) {
  *  Both share the bundle id, so a later benchmark or person would otherwise find the development build with no way
  *  back (euxy port). Nothing is reinstalled for the drive: that is the person's call. A clone that cannot be made
  *  throws, and nothing is installed. A drive's later sessions find the development build and copy nothing. */
-export function keepInstalledRelease(udid, id, bundle, executable, { records = resolve(homedir(), '.cache/exact/simulator-releases') } = {}) {
-  if (installedAlready(udid, id, bundle, executable)) return { install: false };
+export function keepInstalledRelease(udid, id, bundle, executable, { records = resolve(homedir(), '.cache/exact/simulator-releases'), installRecords, container } = {}) {
+  const matching = matchingInstall(udid, id, bundle, executable, { records: installRecords, container });
+  if (matching) return { install: false, container: matching };
   const { installed, trust, what } = installedBuild(udid, id) ?? {};
   if (!installed || trust === 'development') return { install: true };
   // Copied beside the older copy first, which a failed copy leaves in place.

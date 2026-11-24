@@ -14,9 +14,8 @@
 // the bake alone runs (`exact-js-bake`, the web dev loop's producer, about a
 // second), its plan, module and source map are kept beside the build, and the
 // driver launches the build with them as its launch generation (EXACT_PLAN),
-// the first boot a build that baked them would make. The driver runs them only
-// while they are the bake of the sources as they now are, on the build they
-// were made for: any other edit, or a real build since, retires them.
+// the first boot a build that baked them would make. A run keeps its selected
+// plan while the checked receipt matches and the plan is still present.
 //
 //   bun scripts/agent-build.mjs <ios|macos|windows> --app <name>
 
@@ -57,10 +56,12 @@ export function nativeBuild(host, app, { sample = false, checked = null, hashed 
   if (!existsSync(built)) return { built, missing: true, changed: [] };
   const receipt = receiptPath(host, app, { sample });
   const backendOrigin = receipt ? JSON.parse(readFileSync(receipt, 'utf8')).build?.backendOrigin : null;
-  let selected = null;
-  try { selected = checked ? JSON.parse(checked) : null; } catch { /* a malformed check requires a full check */ }
-  const same = !!receipt && selected?.receipt === digestOf(receipt);
-  const changed = same ? [] : receiptChanges(receipt, app, { hashed: !!hashed && !!receipt && hashed === digestOf(receipt), launch });
+  let prior = null;
+  try { prior = checked ? JSON.parse(checked) : null; } catch { /* a malformed check requires a full check */ }
+  const digest = receipt && (prior || hashed) ? digestOf(receipt) : null;
+  const same = typeof prior?.receipt === 'string' && prior.receipt === digest
+    && (prior.plan === null || (typeof prior.plan === 'string' && existsSync(prior.plan)));
+  const changed = same ? [] : receiptChanges(receipt, app, { hashed: !!hashed && hashed === digest, launch });
   if (!ios && !sample && receipt) {
     const bundled = resolve(appleArtifacts(app).bundle, 'Contents/Resources/receipt.json');
     try {
@@ -70,7 +71,7 @@ export function nativeBuild(host, app, { sample = false, checked = null, hashed 
       if (actual.build?.trust !== 'development' || JSON.stringify(identity(selected)) !== JSON.stringify(identity(actual))) changed.push(bundled);
     } catch { changed.push(bundled); }
   }
-  return { built, receipt, changed, backendOrigin, ...(same ? { checked: true, plan: selected.plan } : {}) };
+  return { built, receipt, changed, backendOrigin, ...(same ? { checked: true, plan: prior.plan } : {}) };
 }
 
 /** Whether the macOS build a drive of `app` launches signs the App Sandbox (`mac --sandbox`, LLP 1030.005 D4), as
@@ -256,10 +257,8 @@ export function planSources(app, graph = graphOf(app)) {
 /** Where a plan-only edit's bake is kept: beside the build it runs on. */
 export const overrideDir = (host, app) => resolve(appleArtifacts(app, host === 'ios' ? { destination: 'ios-simulator' } : {}).namespace, 'plan');
 
-/** The bake the driver launches `state`'s build (`nativeBuild`) with, or null:
- * when the build is fresh, missing, or stale in anything but its plan's
- * sources, or the bake kept is for another build (a real build since retires
- * it) or for sources that have changed since it was made. */
+/** The run's checked plan, or, for an unchecked build, an override whose receipt
+ * and sources still match a plan-only edit. Returns null without an override. */
 export function planOverride(host, app, state, graph) {
   if (state.checked && !state.changed.length) return state.plan ? { plan: state.plan, dir: dirname(state.plan) } : null;
   graph ??= graphOf(app);
@@ -455,7 +454,10 @@ export async function buildFirst(host, app, { say = line => console.error(line),
   if (code) say(failureSummary(output, { host, code, log: shown(log) }));
   // The compiler's warnings, which Cargo said for the bake's build script (LLP 1116.004 D7): the new ones in full.
   else for (const line of warningLines(app.dir, host, compilerWarnings(output))) say(line);
-  return code || checked(null, receiptPath(host, app));
+  if (code || !process.env.EXACT_BUILD_CHECK_OUT) return code;
+  const rebuilt = nativeBuild(host, app);
+  refuseBuild(host, rebuilt, app);
+  return checked(null, rebuilt.receipt);
 }
 
 /** What a Windows drive of `app` launches, `dist-windows/<name>.exe`, and its changes since the build that packaged it

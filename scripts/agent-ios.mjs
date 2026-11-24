@@ -75,6 +75,7 @@ export async function openIOS({
   } catch (error) {
     forgetSimulator(dev.udid);
     for (const key of appContainers.keys()) if (JSON.parse(key)[0] === dev.udid) appContainers.delete(key);
+    error.retrySimulator = true;
     throw error;
   }
 }
@@ -109,11 +110,12 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
       : null;
   // A Release build installed under the bundle id is copied aside first, and the note says how to put it back
   // (`keepInstalledRelease`).
-  let kept = null;
+  const key = containerKey(dev.udid, id);
+  let kept;
   try {
-    kept = keepInstalledRelease(dev.udid, id, bundle, hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true));
+    kept = keepInstalledRelease(dev.udid, id, bundle, hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true), { container: appContainers.get(key) });
     if (kept.install) {
-      appContainers.delete(containerKey(dev.udid, id));
+      appContainers.delete(key);
       install(dev, bundle, a, hostFixture, true);
     }
   } catch (e) {
@@ -142,10 +144,9 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   // The launch brings the app to the front: not while another drive reads this simulator's display. The caller
   // holds the display lock (`simulatorDisplay`) through the accessibility setup and the launch.
   try {
-    const key = containerKey(dev.udid, id);
-    let container = appContainers.get(key);
-    if (!extra.EXACT_ASSETS && (!container || !existsSync(container))) {
-      container = simulatorAppContainer(dev.udid, id, 'app');
+    let container = kept.container ?? appContainers.get(key);
+    if (!extra.EXACT_ASSETS) {
+      if (!container || !existsSync(container)) container = simulatorAppContainer(dev.udid, id, 'app');
       appContainers.set(key, container);
     }
     env.EXACT_ASSETS = simulatorAssetRoot(extra.EXACT_ASSETS ? null : container, extra.EXACT_ASSETS, resolve(dir, 'assets'));

@@ -616,13 +616,15 @@ if (verb === 'contract') {
     if (!found.length) { console.error(`no test file matches ${named}`); return log(2); }
     tests.push(...found);
   }
+  let buildCheck;
+  const checksApple = drivesNative && host !== 'windows';
   if (drivesWeb || drivesNative || verb === 'verify' && ['web', 'ios', 'windows'].includes(host)) {
     const { resolveApp } = await import(resolve(exact2, 'scripts/app.mjs'));
     const { privateWebBuild, privateNativeBuild } = await import(resolve(exact2, 'scripts/web-build.mjs'));
     const build = (host === 'web' ? privateWebBuild : privateNativeBuild)(resolveApp(dir), verb);
     Object.assign(process.env, build.env);
-    if (host !== 'web') await build.seed(host);
-    process.once('exit', build.close);
+    if (host !== 'web') await build.seed(host, { checkInDrive: checksApple });
+    process.once('exit', code => build.close(code, buildCheck));
   }
   if (drivesWeb || drivesNative) {
     // A flag the drive does not take is refused before the build, not after it (scripts/help.mjs).
@@ -632,12 +634,19 @@ if (verb === 'contract') {
     const prepared = await prepare();
     if (prepared) return log(prepared);
     // A native test or agent run checks once, including its reloads (LLP 1012.001.000 D1).
-    const checked = drivesNative ? resolve(tmpdir(), `exact-build-check-${process.pid}`) : null;
-    if (checked) process.env.EXACT_BUILD_CHECK_OUT = checked;
+    const checked = checksApple ? resolve(tmpdir(), `exact-build-check-${process.pid}`) : null;
+    if (checked) {
+      rmSync(checked, { force: true });
+      delete process.env.EXACT_BUILD_CHECKED;
+      process.env.EXACT_BUILD_CHECK_OUT = checked;
+    }
     // A web build says every compiler warning each time; the drive says the new ones and a count (`warningLines`).
     const built = drivesWeb ? await webBuildQuiet(spawned, [resolve(exact2, verbs['web-build'][0]), ...verbs['web-build'].slice(1)], dir)
       : await script(['scripts/agent-build.mjs', host, '--app', name], [], [0, 2, 2]);
-    if (checked) { delete process.env.EXACT_BUILD_CHECK_OUT; try { process.env.EXACT_BUILD_CHECKED = readFileSync(checked, 'utf8'); rmSync(checked); } catch {} }
+    if (checked) {
+      delete process.env.EXACT_BUILD_CHECK_OUT;
+      try { process.env.EXACT_BUILD_CHECKED = buildCheck = readFileSync(checked, 'utf8'); rmSync(checked); } catch {}
+    }
     if (built) return log(await withCargoFault(built));
     const refusal = verb === 'test' ? (await import(resolve(exact2, 'scripts/verify.mjs'))).appServer(dir)?.refusal : null;
     if (refusal) { console.error(`test: ${refusal}`); return log(1); }
