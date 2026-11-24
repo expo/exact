@@ -923,7 +923,7 @@ test.each(['success', 'failure'])('web std preparation isolates Cargo homes afte
       import { mock } from 'bun:test';
       import * as processes from 'node:child_process';
       import assert from 'node:assert/strict';
-      import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+      import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
       import { resolve } from 'node:path';
       const dir = ${JSON.stringify(dir)}, sysroot = resolve(dir, 'sysroot');
       const library = resolve(sysroot, 'lib/rustlib/src/rust/library');
@@ -932,10 +932,7 @@ test.each(['success', 'failure'])('web std preparation isolates Cargo homes afte
       writeFileSync(resolve(library, 'Cargo.toml'), '[workspace]');
       writeFileSync(resolve(library, 'Cargo.lock'), '');
       const prepared = home => resolve(home, 'std-dependencies');
-      if (${failFirst}) {
-        mkdirSync(first, { recursive: true });
-        writeFileSync(prepared(first), '');
-      }
+      if (${failFirst}) { mkdirSync(first, { recursive: true }); writeFileSync(prepared(first), ''); }
       const calls = [];
       let failures = ${failFirst ? 1 : 0};
       mock.module('node:child_process', () => ({ ...processes, spawnSync(command, args, { env }) {
@@ -962,8 +959,8 @@ test.each(['success', 'failure'])('web std preparation isolates Cargo homes afte
         return { status: 0 };
       }}));
       const { webToolchainEnv, WEB_TOOLCHAIN, WEB_SIZE } = await import(${JSON.stringify(resolve(import.meta.dir, 'app.mjs'))});
-      const prepare = home => {
-        const env = webToolchainEnv({ ...process.env, CARGO_HOME: home });
+      const prepare = (home, options) => {
+        const env = webToolchainEnv({ ...process.env, CARGO_HOME: home }, options);
         assert.equal(env.CARGO_HOME, home);
         assert.equal(env.RUSTUP_TOOLCHAIN, WEB_TOOLCHAIN);
         assert.equal(env.EXACT_WEB_SIZE, WEB_SIZE);
@@ -982,9 +979,12 @@ test.each(['success', 'failure'])('web std preparation isolates Cargo homes afte
       }
       assert.ok(existsSync(prepared(second)), 'the second Cargo home has its own std dependencies');
       const fetches = calls.filter(([, verb]) => verb === 'fetch').length;
+      rmSync(prepared(first)); // Cargo's cache loses std's sources under the marker
       prepare(first);
       prepare(second);
       assert.equal(calls.filter(([, verb]) => verb === 'fetch').length, fetches);
+      prepare(first, { recheck: true });
+      assert.ok(existsSync(prepared(first)), 'a recheck fetches what the marker vouched for');
     `);
     const result = spawnSync(process.execPath, ['--no-env-file', script], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
