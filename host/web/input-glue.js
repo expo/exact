@@ -265,30 +265,12 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     // the unsaid dim, a native button's highlight, a `-exact-press-scale`, a pressed paint.
     if (event.key === " " && el?.matches?.("button:enabled") && root.contains(el)) return keyed(el);
     if (typeof el?.matches !== "function" || !root.contains(el) || !pressesByKey(el)) return;
-    if (el.closest(":disabled,[disabled]:not([disabled='false'])")) return; // a disabled box takes no press by key either (LLP 1121 D8)
+    if (el.closest(DISABLED)) return; // a disabled box takes no press by key either (LLP 1121 D8)
     if (event.key !== "Enter" && !(event.key === " " && el.getAttribute("role") !== "link")) return;
     event.preventDefault();
     el.click();
     if (event.key === " " && !surface(el)) keyed(el);
   });
-  // Hold the default dim for at least 0.1 s after it appears, then fade over 0.2 s (LLP 1115.000 D6;
-  // PressFeedback.swift `dimHold`, `dimFade`). Only animate a node that showed the dim; immediate cancellation
-  // and the agent's clock skip the fade.
-  const DIM = { opacity: "0.65", hold: 100, fade: 200 };
-  const dimStarts = new WeakMap(), dimFades = new WeakMap();
-  const markPressed = (el, down, now = false) => {
-    if (down !== el.hasAttribute("data-pressed")) {
-      if (down) {
-        dimFades.get(el)?.cancel();
-        dimStarts.set(el, performance.now());
-      } else if (!now && !agentMode && el.isConnected && getComputedStyle(el).opacity === DIM.opacity) {
-        const hold = Math.max(0, (dimStarts.get(el) ?? 0) + DIM.hold - performance.now());
-        // No closing keyframe: the fade ends at whatever lies beneath the dim.
-        dimFades.set(el, el.animate([{ opacity: DIM.opacity }, { opacity: DIM.opacity, offset: hold / (hold + DIM.fade), easing: "ease-out" }], { duration: hold + DIM.fade }));
-      }
-    }
-    el.toggleAttribute("data-pressed", down);
-  };
   // @ref LLP 1115.000 D6 — a pressable covering the window is a surface (a
   // scrim that closes a sheet, a viewer that toggles its bars) and shows no
   // press, as on iOS (PressFeedback.swift `platformPressDims`). CSS cannot
@@ -305,7 +287,8 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   const keyed = el => {
     const up = (e, now = false) => {
       if (e?.type === "keyup" && e.key !== " ") return;
-      showPress(el, false, now);
+      // The element can blur before the window does. Cancel that edge without showing a quick tap.
+      showPress(el, false, now, e?.type !== "blur");
       removeEventListener("keyup", up, true); el.removeEventListener("blur", up);
       if (keyHold === up) keyHold = null;
     };
@@ -315,61 +298,40 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     keyHold = up;
     addEventListener("keyup", up, true); el.addEventListener("blur", up);
   };
-  // @ref LLP 1061 D3 — press feedback by UIKit's rule, not `:active`'s: the
-  // innermost node with a `press` handler takes the press (its pressable
-  // ancestors, which `:active` would also match, do not), and shows it only
-  // while the pointer is inside the box it had when pressed — leaving
-  // releases it, coming back presses again; a pan or a cancel ends it. The
-  // browser eases a separate factor, multiplied into CSS `scale`, so
-  // authored transforms, transitions and keyframes keep their values. A
-  // native button is pressed by the same rule with or without a row or a
-  // handler of its own, as a UIButton highlights (neutral.css draws the
-  // highlight: a wash, or a plain button's fading face).
-  const feedback = new WeakMap();
-  // @ref LLP 1061 D7 — the author's pressed paint, shown by the same rule
-  // and on the same ease as the scale: an important rule of the node's own
-  // (`paintRule`) paints its pressed values `--exact-press-paint` of the way
-  // (which this piece eases) over its look beneath, read again whenever the
-  // node's style or class changes, the scheme flips, or the press turns. It
-  // writes no property in a way that starts one of the node's authored
-  // transitions (`paintRule`), so they run as authored. Its `color` reaches
-  // the subtree as CSS's does.
-  // `:active`'s opacity is the press's absolute target (`--exact-press-opacity-to`,
-  // LLP 1121 D8), eased from what shows at the press, a hover look's included.
-  const PAINT = ["--exact-press-opacity", "--exact-press-opacity-to", "--exact-press-background-color", "--exact-press-color"];
-  const paints = new Map();
-  const hasPaint = el => PAINT.some(p => el.style.getPropertyValue(p));
-  const EASE = { duration: 120, easing: "cubic-bezier(0.16,1,0.3,1)", fill: "both" };
-  const pressDuration = (el, duration) => agentMode || el.matches('button[data-button-style]') ? 0 : duration;
-  // Start the ease toward `state.to` from where it shows, over `duration`,
-  // on the node's look beneath, read now (`paintRule`): at the press, as it
-  // shows; later (the release, a change of the node's style or class, the
-  // scheme) with the paint on, its kept declarations in place.
-  const paint = (el, state, duration) => {
-    const from = Number(getComputedStyle(el).getPropertyValue("--exact-press-paint")) || 0;
-    // The paint stays on while it is read again (`paintRule`): taking it off would itself be a style change.
-    const rule = paintRule(el, state);
-    state.animation?.cancel();
-    const ms = pressDuration(el, duration);
-    const animation = state.animation = el.animate([{ "--exact-press-paint": from }, { "--exact-press-paint": state.to }], { ...EASE, duration: ms });
-    const written = new Set(el.getAnimations());
-    el.setAttribute("data-exact-painting", hold(el, state, rule));
-    // Writing a kept declaration back is the glue's own change, which Firefox (its transition styles see the
-    // animation) would time with the node's transition: one it starts is none of the node's.
-    if (Object.keys(state.kept ?? {}).length) { getComputedStyle(el).opacity; for (const a of el.getAnimations()) if (!written.has(a) && a.transitionProperty in state.kept) a.cancel(); }
-    // A finish already queued when a re-press replaced the ease ends nothing.
-    if (state.to === 0) animation.onfinish = () => { if (state.animation === animation) endPaint(el, state); };
-    if (ms === 0) animation.finish();
+  // @ref LLP 1061 D3, D7 — the innermost pressable owns the progress of its press over its own base styles.
+  const PRESS = {
+    ...(PRESS_PAINT ? {
+      "background-color": "--exact-press-background-progress",
+      color: "--exact-press-color-progress", opacity: "--exact-press-opacity-progress",
+    } : {}),
+    translate: "--exact-pressed", scale: "--exact-press-scale-progress", button: "--exact-button-press", dim: "opacity",
   };
-  const endPaint = (el, state) => {
-    if (paints.get(el) !== state) return;
-    paints.delete(el);
-    if (!paints.size) { sheets.disconnect(); gone.disconnect(); }
-    state.observer.disconnect();
-    state.animation?.cancel();
-    el.removeAttribute("data-exact-painting");
-    drop(state);
+  const PAINT_ROWS = {
+    "background-color": ["--exact-press-background-color"], color: ["--exact-press-color"],
+    opacity: ["--exact-press-opacity", "--exact-press-opacity-to"],
   };
+  const presses = new Map();
+  const DEFAULT_TIMING = [120, 0, "cubic-bezier(.16,1,.3,1)"]; // LLP 1061 D7
+  const DISABLED = ":disabled,[disabled]:not([disabled='false'])";
+  const unavailable = el => !el.isConnected || !root.contains(el) || el.closest(`${DISABLED},[data-exiting]`) || inertAncestor(el);
+  let held = null;
+  const heldPress = el => held?.state === "active" && held.el === el;
+  // Whether a live press on `el` is over because the node is gone, disabled, leaving or inert. A held node is not
+  // live: its own watcher lets a gone or disabled one go, and it keeps its paint through inertness.
+  const lostLive = el => !heldPress(el) && unavailable(el);
+  const nativeButton = el => el.matches("button[data-button-style]");
+  const refreshPaint = (el, state) => {
+    if (!PRESS_PAINT || (!state.painted && !state.rule)) return;
+    const declarations = paintRule(el, state), written = new Set(el.getAnimations());
+    const key = hold(el, state, declarations);
+    if (key) el.setAttribute("data-exact-painting", key);
+    else el.removeAttribute("data-exact-painting");
+    // Cancel only transitions Firefox started by writing the paint rule
+    for (const a of el.getAnimations()) {
+      if (!written.has(a) && a.transitionProperty in state.kept) a.cancel();
+    }
+  };
+  const paintProgress = (cs, property) => Number(cs.getPropertyValue(PRESS[property]));
   // Whether the node declares a transition on `property` (by its name, `all`, or a shorthand holding it): the last
   // entry naming it decides, by its combined duration (duration + delay, which may be negative) above 0.
   const HOLDS = { "background-color": ["background"], "background-position": ["background"], "background-position-x": ["background", "background-position"], "background-position-y": ["background", "background-position"], "background-size": ["background"],
@@ -405,16 +367,14 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     }
     return out.join("; ");
   };
-  // The node's important paint (LLP 1061 D7), its own pressed values `--exact-press-paint` of the way over its look
-  // beneath: the pressed colours as the properties, mixed from the look beneath as CSS mixes colours (premultiplied,
-  // so a pressed colour stands in for the node's own, translucent too, and one equal to it changes nothing); the
-  // pressed opacity as the property where the engine hands its own number (computedStyleMap; a float, exact) and
-  // elsewhere (Firefox) a uniform mask, which multiplies as opacity does (WebKit clips a mask to the border box, a
-  // shadow with it, so it takes the number). Where the node declares a transition on a property the rule writes,
-  // the rule is exactly the look beneath at 0 (else a transition starts and, above every declaration, hides the
-  // paint), written only from a look whose numbers round-trip (an rgb() colour, the engine's opacity), left out
-  // while a transition of the property runs (added when it ends), and, once written, kept as it is for the press:
-  // re-read with the paint on, so the paint's turn starts nothing (Firefox's transition styles see the animation).
+  // Mix pressed colours over their bases in premultiplied sRGB (LLP 1061 D7). Write opacity directly where
+  // computedStyleMap gives the exact base. Use a uniform mask in Firefox where it can represent the target.
+  // WebKit supplies the exact number and clips masks to the box, including shadows.
+  // Where the node declares a transition on a property the rule writes, match the underlying value at progress 0,
+  // so no CSS transition starts and hides the paint: write only a base that round-trips (an rgb() colour, the
+  // engine's opacity), wait for a running transition of that property before writing, then keep the rule for the
+  // press, re-read with the paint on, so the paint's turn starts nothing (Firefox's transition styles see the
+  // animation).
   // An opaque pressed background colour that can't be written so (over another space's look, or while its
   // transition runs) is for the press a background-image layer over the node's background-color instead, which
   // is the same mix (images change discretely, starting no transition).
@@ -435,9 +395,9 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     // declaration off is a change there) toward the very look beneath the kept one was written from: none of the
     // node's, cancelled at once. One toward another look is the base's own move, the node's to time (D8).
     for (const a of el.getAnimations()) if (!before.has(a) && a.transitionProperty in was && String(a.effect.getKeyframes().at(-1)?.[PAINTED_KEY[a.transitionProperty]]) === state.keptBase?.[a.transitionProperty]) a.cancel();
-    const p = "var(--exact-press-paint)", out = [], next = {};
+    const out = [], next = {};
     const number = (name, copy) => { if (!own(name)) return null; const v = parseFloat(cs.getPropertyValue(copy)); return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : null; };
-    const settle = () => { if (paints.get(el) === state) repaint(el); };
+    const settle = () => { if (presses.get(el) === state) refreshPaint(el, state); };
     const later = property => { const a = running(el, property); if (a && !state.waits?.has(a)) { (state.waits ??= new Set()).add(a); a.finished.then(settle, settle); } return !!a; };
     // `name` `p` of the way from the look beneath to the pressed colour (`inSrgb`, its `color(srgb …)`),
     // premultiplied. From an rgb() look (b at alpha β; every colour of the app's has an 8-bit alpha, which written
@@ -446,6 +406,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     // another look, color-mix, where the node declares no transition of `name`. Null where neither applies:
     // another space doesn't compute as it reads.
     const mixed = (name, look, pressed, inSrgb) => {
+      const p = `var(${PRESS[name]})`;
       const m = /^rgba?\((\d+), (\d+), (\d+)(?:, ([\d.]+))?\)$/.exec(look), x = /^color\(srgb ([-\d.e]+) ([-\d.e]+) ([-\d.e]+)(?: \/ ([\d.]+))?\)$/.exec(cs.getPropertyValue(inSrgb).trim());
       if (m && x) {
         const b = m.slice(1, 4).map(Number), v = x.slice(1, 4).map(Number), a = x[4] == null ? 1 : Number(x[4]);
@@ -464,13 +425,14 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       else if (state.layered || opaque) {
         // Once layered, layered for the press: the property written later would start the node's transition.
         state.layered = true;
-        const bg = layer(cs, "background", `linear-gradient(color-mix(in srgb, var(--exact-press-background-color) calc(${p} * 100%), transparent) 0 0)`);
+        const bg = layer(cs, "background", `linear-gradient(color-mix(in srgb, var(--exact-press-background-color) calc(var(${PRESS["background-color"]}) * 100%), transparent) 0 0)`);
         if (bg) out.push(bg);
         state.background = !!bg;
       } else later("background-color");
     }
     const to = number("--exact-press-opacity-to", "--exact-press-opacity-to-number"), share = number("--exact-press-opacity", "--exact-press-opacity-number");
     const held = el.computedStyleMap?.().get("opacity")?.value, base = Number.isFinite(held) ? held : Number(cs.opacity);
+    const p = `var(${PRESS.opacity})`;
     state.factor = null;
     if (kept.opacity) next.opacity = kept.opacity;
     else if ((to != null || share != null) && Number.isFinite(base) && !later("opacity")) {
@@ -492,7 +454,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     // own colour paints it, on this node's progress, inherited (`hold`).
     const coloured = !!next.color || out.some(d => d.startsWith("color:"));
     state.below = coloured ? pressBelow(el) : [];
-    if (state.below.length) out.push("--x-press-paint: var(--exact-press-paint)");
+    if (state.below.length) out.push(`--x-press-color-progress: var(${PRESS.color})`);
     state.kept = next;
     // The look each kept declaration was written from: carried with it while it is kept (a re-read with it on sees
     // the painted look, not that one), read now only where it was written now.
@@ -505,15 +467,15 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   // own images and masks aren't in it), its colour. Without OffscreenCanvas, the background-color beneath.
   // The agent's node detail reports it (scripts/agent-inspect.mjs), and the press tests read it.
   if (AGENT_ADMITTED && PRESS_PAINT) (globalThis.exact ??= {}).pressShown = el => {
-    const state = paints.get(el);
-    if (!state?.animation) return null;
-    const cs = getComputedStyle(el), paint = Number(cs.getPropertyValue("--exact-press-paint")) || 0;
-    const shown = { paint, opacity: String(+(Number(cs.opacity) * (state.factor?.(paint) ?? 1)).toPrecision(6)), color: cs.color, backgroundColor: cs.backgroundColor };
+    const state = presses.get(el);
+    if (!state?.painted) return null;
+    const cs = getComputedStyle(el), opacity = paintProgress(cs, "opacity");
+    const shown = { opacity: String(+(Number(cs.opacity) * (state.factor?.(opacity) ?? 1)).toPrecision(6)), color: cs.color, backgroundColor: cs.backgroundColor };
     if (state.background && typeof OffscreenCanvas === "function") {
       const g = new OffscreenCanvas(1, 1).getContext("2d");
       if (!g) return shown;
       g.fillStyle = cs.backgroundColor; g.fillRect(0, 0, 1, 1);
-      g.globalAlpha = Math.min(1, Math.max(0, paint)); g.fillStyle = cs.getPropertyValue("--exact-press-background-in-srgb").trim(); g.fillRect(0, 0, 1, 1);
+      g.globalAlpha = Math.min(1, Math.max(0, paintProgress(cs, "background-color"))); g.fillStyle = cs.getPropertyValue("--exact-press-background-in-srgb").trim(); g.fillRect(0, 0, 1, 1);
       const [r, gr, b, a] = g.getImageData(0, 0, 1, 1).data;
       shown.backgroundColor = a === 255 ? `rgb(${r}, ${gr}, ${b})` : `rgba(${r}, ${gr}, ${b}, ${Math.round(a / 255 * 1000) / 1000})`;
     }
@@ -558,7 +520,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       const base = getComputedStyle(b).color, mark = `${state.key}.${n}`;
       if (!base || !pressed) return;
       b.setAttribute("data-x-pr", mark);
-      state.rule.below.push([b, mark, insert(`${painting} [data-x-pr="${mark}"] { color: color-mix(in srgb, ${pressed} calc(var(--x-press-paint) * 100%), ${base}) !important }`)]);
+      state.rule.below.push([b, mark, insert(`${painting} [data-x-pr="${mark}"] { color: color-mix(in srgb, ${pressed} calc(var(--x-press-color-progress) * 100%), ${base}) !important }`)]);
     });
     return state.key;
   };
@@ -570,146 +532,180 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     for (const i of at) sheet.deleteRule(i);
     for (const [b, mark] of below) if (b.getAttribute("data-x-pr") === mark) b.removeAttribute("data-x-pr");
   };
-  // The look beneath changed: the ease goes on from where it is, over the rest of its time.
-  // `stale`: a sheet, the scheme or a token changed, which no attribute of the node's says.
-  const repaint = (el, stale = false) => {
-    // (Its callers are gated too; this gate also ends the cycle paint → paintRule → repaint, which the minifier would
-    // keep.)
-    if (!PRESS_PAINT) return;
-    const state = paints.get(el);
-    if (!state) return;
-    showScale(el, state.to === 1);
-    if (!state.animation && !hasPaint(el)) return;
-    if (stale) state.stale = true;
-    const t = state.animation?.effect.getComputedTiming();
-    paint(el, state, t ? Math.max(0, (t.endTime ?? 0) - (t.localTime ?? 0)) : EASE.duration);
+  const targets = (el, state) => {
+    const own = row => el.style.getPropertyValue(row);
+    const authored = PRESS_PAINT ? Object.keys(PAINT_ROWS).filter(p => PAINT_ROWS[p].some(own)) : [];
+    state.painted = authored.length > 0;
+    if (own("--exact-press")) authored.push("scale");
+    if (own("--exact-press-translate")) authored.push("translate");
+    if (nativeButton(el)) authored.push("button");
+    else if (!authored.length && !el.style.opacity) {
+      const cs = getComputedStyle(el);
+      if (Number(cs.getPropertyValue("--exact-dims")) && (state.tracks.has("dim") || Number(cs.opacity) === 1)) {
+        authored.push("dim");
+      }
+    }
+    return authored;
   };
-  if (PRESS_PAINT) globalThis.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => { for (const el of paints.keys()) repaint(el, true); });
-  // So does a live edit that reaches it through a sheet (a state look's rule, the theme's) or the root's
-  // modes and tokens (the JS target's), which change no style of the node's own (LLP 1121 D8).
-  const sheets = PRESS_PAINT && new MutationObserver(() => { for (const el of paints.keys()) repaint(el, true); });
-  // A painting node gone from the page (removed, re-rendered) ends its paint and lets go of its rule at once.
-  const gone = PRESS_PAINT && new MutationObserver(() => { for (const [el, state] of paints) if (!el.isConnected) endPaint(el, state); });
-  // The JS target writes its tokens and tuples through the CSSOM, which no observer sees: it calls this (modes.js).
-  if (PRESS_PAINT) (globalThis.exact ??= {}).repaintPress = () => { for (const el of paints.keys()) repaint(el, true); };
-  // `now`: the press ends at once (the window or the page went), as it does
-  // for a node no longer in the page.
-  const showPaint = (el, down, now = false) => {
-    if (!PRESS_PAINT) return;
-    let state = paints.get(el);
-    if ((state?.to ?? 0) === (down ? 1 : 0)) return;
+  const dropTrack = (el, state, property) => {
+    state.tracks.get(property)?.animation.cancel();
+    state.tracks.delete(property);
+    if (property === "button") el.removeAttribute("data-exact-button-press");
+  };
+  // CSS Transitions 1 §3.1. Keep the logical start and factor for the next reversal.
+  const moveTrack = (el, state, property, to, timing) => {
+    const old = state.tracks.get(property);
+    const sample = old?.animation.effect.getComputedTiming();
+    const progress = sample?.progress ?? 0;
+    const running = sample?.localTime < sample?.endTime;
+    const from = old ? running ? old.from + (old.to - old.from) * progress : old.to : 0;
+    const reverses = running && to === old.start;
+    const shortening = reverses ? Math.min(1, Math.abs(progress * old.shortening + 1 - old.shortening)) : 1;
+    const [duration, delay, easing] = (from === to ? null : timing) ?? [0, 0, "linear"];
+    const ms = duration * shortening, wait = delay < 0 ? delay * shortening : delay;
+    if (old) dropTrack(el, state, property);
+    if (!to && (from === to || ms + wait <= 0)) return;
+    const value = p => property === "dim" ? 1 - .35 * p : p; // 65% at full press (LLP 1115.000 D6)
+    const name = PRESS[property];
+    const animation = el.animate([{ [name]: value(from) }, { [name]: value(to) }], {
+      duration: ms, delay: wait, easing: ms + wait > 0 ? easing : "linear", fill: "both",
+    });
+    state.tracks.set(property, { animation, from, to, start: reverses ? old.to : from, shortening });
+    animation.onfinish = () => {
+      if (state.tracks.get(property)?.animation !== animation) return;
+      if (to) {
+        // Land at the pressed endpoint even if linear() ends at another output
+        if (animation.effect.getComputedTiming().progress !== 1) animation.effect.updateTiming({ easing: "linear" });
+        return;
+      }
+      dropTrack(el, state, property);
+      if (!state.tracks.size) endPress(el, state);
+    };
+    if (property === "button") el.setAttribute("data-exact-button-press", "");
+    if (ms + wait <= 0) animation.finish();
+  };
+  const endPress = (el, state) => {
+    presses.delete(el);
+    if (!presses.size) { sheets.disconnect(); gone.disconnect(); }
+    state.observer.disconnect();
+    cancelAnimationFrame(state.frame);
+    for (const property of state.tracks.keys()) dropTrack(el, state, property);
+    el.removeAttribute("data-pressed");
+    if (PRESS_PAINT && state.rule) {
+      el.removeAttribute("data-exact-painting");
+      drop(state);
+    }
+  };
+  const repaint = (el, state, stale = false) => {
+    state.stale ||= stale;
+    if (lostLive(el)) return endPress(el, state);
+    let current = targets(el, state);
+    for (const property of state.tracks.keys()) {
+      if (!current.includes(property)) dropTrack(el, state, property);
+    }
+    refreshPaint(el, state);
+    if (!current.length) current = targets(el, state);
+    // Land newly added properties at once. CSS updates an existing track's target at its current progress.
+    if (state.down) for (const property of current) {
+      if (!state.tracks.has(property)) moveTrack(el, state, property, 1);
+    }
+    if (!state.down && !state.tracks.size) endPress(el, state);
+  };
+  const refreshPresses = () => { for (const [el, state] of presses) repaint(el, state, true); };
+  const sheets = new MutationObserver(refreshPresses);
+  const gone = new MutationObserver(() => {
+    if (press && unavailable(press.el)) release(true);
+    for (const [el, state] of presses) if (lostLive(el)) endPress(el, state);
+  });
+  globalThis.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", refreshPresses);
+  (globalThis.exact ??= {}).repaintPress = refreshPresses; // The JS target changes its token sheet through the CSSOM
+
+  const showPress = (el, down, now = false, tap = true) => {
+    let state = presses.get(el);
+    if (now || lostLive(el)) {
+      if (state) endPress(el, state);
+      return;
+    }
     if (!state) {
-      state = { observer: new MutationObserver(() => repaint(el)) };
-      state.observer.observe(el, { attributes: true, attributeFilter: ["style", "class"] });
-      if (!paints.size) {
+      if (!down) return;
+      const observer = new MutationObserver(() => repaint(el, state));
+      state = { observer, tracks: new Map(), down: false, frame: 0, deferred: false };
+      observer.observe(el, { attributes: true, attributeFilter: ["style", "class", "data-button-style"] });
+      if (!presses.size) {
         sheets.observe(document.head, { childList: true, subtree: true, characterData: true });
         sheets.observe(document.documentElement, { attributes: true });
       }
-      gone.observe(el.ownerDocument, { childList: true, subtree: true }); // a frame's node, its own document
-      paints.set(el, state);
+      gone.observe(el.ownerDocument, { childList: true, subtree: true, attributes: true, attributeFilter: ["disabled", "data-exiting", "inert"] });
+      presses.set(el, state);
     }
-    state.to = down ? 1 : 0;
-    // A hold exists before its first computed target; only a written paint starts an animation.
-    if (!state.animation && !hasPaint(el)) { if (!down) endPaint(el, state); return; }
-    paint(el, state, EASE.duration);
-    if (!down && (now || !el.isConnected)) endPaint(el, state);
-  };
-  const showScale = (el, down, now = false) => {
-    // A design token's scale is its property's `var()`: the computed value
-    // is the token's (LLP 1121 D7).
-    const press = el.style.getPropertyValue("--exact-press");
-    const to = down ? Number((press.includes("var(") ? getComputedStyle(el).getPropertyValue("--exact-press") : press) || 1) : 1;
-    const old = feedback.get(el), shift = !!el.style.getPropertyValue("--exact-press-translate");
-    const pressed = down && shift ? 1 : 0;
-    if (old?.to === to && old.pressed === pressed) { old.release = false; return; }
-    if (!old && to === 1 && !pressed) return;
-    const progress = old?.animation.effect.getComputedTiming().progress ?? 0;
-    // A translating quick tap shows its ease-in before returning, on the same curve as scale.
-    if (!down && old?.pressed && progress < 1 && !now && pressDuration(el, EASE.duration)) {
-      old.release = true;
+    if (state.down === down && !state.deferred) return;
+    if (!down && tap && state.frame && !state.deferred) {
+      // Show the pressed endpoints through the first frame, then release on the next one
+      for (const property of [...state.tracks.keys()]) moveTrack(el, state, property, 1);
+      state.deferred = true;
       return;
     }
-    const from = old ? old.from + (old.to - old.from) * progress : 1;
-    const offset = old ? old.offset + (old.pressed - old.offset) * progress : 0;
-    old?.animation.cancel();
-    const ms = pressDuration(el, EASE.duration);
-    const animation = el.animate([
-      { "--exact-press-factor": from, "--exact-pressed": offset },
-      { "--exact-press-factor": to, "--exact-pressed": pressed },
-    ], { ...EASE, duration: ms });
-    const state = { animation, from, to, offset, pressed };
-    feedback.set(el, state);
-    animation.onfinish = () => {
-      if (feedback.get(el) !== state) return;
-      if (state.release) showScale(el, false);
-      else if (to === 1 && !pressed) { animation.cancel(); feedback.delete(el); }
-    };
-    if (ms === 0 || now) animation.finish();
-  };
-  // Keep the release style only until its transitions end. Immediate cancellation and the agent's clock skip it.
-  const releases = new WeakMap(), RELEASED = new Set(["opacity", "background-color", "--exact-wash"]);
-  const showPress = (el, down, now = false) => {
-    const native = el.matches("button[data-button-style]");
-    const eased = native && !down && !now && !agentMode && el.hasAttribute("data-pressed");
-    const running = eased ? new Set(el.getAnimations({ subtree: true })) : null;
-    markPressed(el, down, now);
-    if (native && down) {
-      // Flush the pressed style so a tap released before the next frame still shows its highlight (LLP 1061 D2)
-      el.removeAttribute("data-exact-released");
-      getComputedStyle(el).opacity;
-    } else if (eased) {
-      el.setAttribute("data-exact-released", "");
-      // Leave an author's running transitions independent of the release marker
-      const ease = el.getAnimations({ subtree: true }).filter(a => !running.has(a) && RELEASED.has(a.transitionProperty) && (a.effect.target === el || a.effect.target.parentElement === el));
-      const ends = Promise.allSettled(ease.map(a => a.finished));
-      releases.set(el, ends);
-      ends.then(() => { if (releases.get(el) === ends) el.removeAttribute("data-exact-released"); });
+    cancelAnimationFrame(state.frame);
+    state.frame = 0;
+    state.deferred = false;
+    state.down = down;
+    el.toggleAttribute("data-pressed", down);
+    const current = targets(el, state);
+    refreshPaint(el, state);
+    const row = el.style.getPropertyValue("--exact-press-timing");
+    const timings = row ? JSON.parse(row) : null;
+    for (const property of new Set([...state.tracks.keys(), ...current])) {
+      const timing = property === "button" || property === "dim" ? DEFAULT_TIMING
+        : timings ? timings[property] : nativeButton(el) ? null : DEFAULT_TIMING;
+      moveTrack(el, state, property, Number(down && current.includes(property)), agentMode ? null : timing);
     }
-    showPaint(el, down, now);
-    showScale(el, down, now);
+    if (down && !agentMode) state.frame = requestAnimationFrame(() => {
+      state.frame = state.deferred ? requestAnimationFrame(() => {
+        state.frame = 0;
+        state.deferred = false;
+        showPress(el, false);
+      }) : 0;
+    });
+    if (!down && !state.tracks.size) endPress(el, state);
   };
-  // A re-press may catch the release easing out. Neutralize only our effect
-  // for this synchronous measurement, then restore it before a frame. The
-  // browser undoes exactly that factor about transform-origin, including
-  // SVG's reference box and transformed ancestors; no transform is guessed.
-  const unpressedBox = el => {
-    const effect = feedback.get(el)?.animation.effect;
-    const frames = effect?.getKeyframes();
-    effect?.setKeyframes(frames.map(frame => ({ ...frame, "--exact-press-factor": 1 })));
+  // Keep the press offset in the hit box (LLP 1061 D7). Neutralize the scale about the browser's transform origin.
+  const unscaledBox = el => {
+    const effect = presses.get(el)?.tracks.get("scale")?.animation.effect;
+    if (!effect) return el.getBoundingClientRect();
+    const frames = effect.getKeyframes();
+    effect.setKeyframes(frames.map(frame => ({ ...frame, [PRESS.scale]: 0 })));
     const box = el.getBoundingClientRect();
-    if (effect) effect.setKeyframes(frames);
+    effect.setKeyframes(frames);
     return box;
   };
-  // A press's target as `inside` tests it: its unpressed box's edges.
-  const boxOf = el => { const r = unpressedBox(el); return [r.left, r.top, r.right, r.bottom]; };
+  const boxOf = el => { const r = unscaledBox(el); return [r.left, r.top, r.right, r.bottom]; };
   let press = null;
   // @ref LLP 1122 D8, LLP 1121 stage 8 E — a held state, shown as the real one: `active` the press of the node the
   // press resolves to (its paint and scale, eased as a real press, at once on the agent's clock), `hover` and
   // `focus-visible` that node's look (`data-exact-held`, which the looks rules take beside `:hover` and
   // `:focus-visible`; it snaps, an authored transition or not), handlers never told. One at a time; a disabled node
-  // refuses one; real input on the node, its going or its disabling lets it go (`dropped(reason)`). A real press on
-  // the node as it is held ends there: the hold has it (its release unpaints nothing).
-  const DISABLED = ":disabled,[disabled]:not([disabled='false'])";
+  // refuses one. Real input on the node, its going or its disabling lets it go (`dropped(reason)`). A real press on
+  // the node as it is held ends there: the hold has it (its release unpaints nothing). Window blur and temporary
+  // inertness cancel live input; a design hold keeps its paint through both.
   if (AGENT_ADMITTED) {
-    let held = null;
     // (A leaving view, `data-exiting`, is gone as it starts to leave.)
     const watch = new MutationObserver(() => { if (!held?.el.isConnected || held.el.closest("[data-exiting]")) letGo("gone"); else if (held.el.closest(DISABLED)) letGo("disabled"); });
     // (Held still as a look's edge is, below: `data-exact-snap`, which the press paint's observer doesn't watch.)
     const snap = (el, change) => stillThrough([el], change);
     // `reason` null: let go unsaid (a dev loop's new generation, whose tree goes and whose hold the server replays).
-    const letGo = (reason) => {
+    const letGo = (reason, tap = false) => {
       if (!held) return;
       const h = held;
       held = null;
       watch.disconnect();
-      if (h.state === "active") showPress(h.el, false); else snap(h.el, () => h.el.removeAttribute("data-exact-held"));
+      if (h.state === "active") showPress(h.el, false, reason == null || reason === "gone" || reason === "disabled", tap); else snap(h.el, () => h.el.removeAttribute("data-exact-held"));
       if (reason) h.dropped?.(reason);
     };
     // (Announced once it is: a hold sent while the glue loads, after paint, waits for it — `exact-hold`.)
     queueMicrotask(() => globalThis.dispatchEvent?.(new Event("exact-hold")));
     (globalThis.exact ??= {}).hold = (el, state, dropped) => {
       if (state != null && !["active", "hover", "focus-visible"].includes(state)) return { error: "holdState is active, hover, focus-visible or null", malformed: true };
-      letGo("replaced");
+      letGo("replaced", state == null);
       if (state == null) return { held: null };
       // `active`: the innermost node with a press handler or a view's link, as a real press's (theme2's 07:48; LLP 1121 D8);
       // none there is `gone`.
@@ -1009,7 +1005,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     }
     if (!press || !holds(e.target, press.el)) return;
     press.box = boxOf(press.el);
-    if (!press.delay) showPress(press.el, stillUnder(press));
+    if (!press.delay) showPress(press.el, stillUnder(press), false, false);
   }, { capture: true, passive: true });
   const inside = (p, e) => { const [l, t, r, b] = p.box; return e.clientX >= l && e.clientX <= r && e.clientY >= t && e.clientY <= b; };
   // Whether the finger, where it last was, is over the target as the page last moved it.
@@ -1017,7 +1013,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   // Play the haptic when feedback appears, where `navigator.vibrate` is available (LLP 1077 D14)
   const begin = p => {
     // Discard delayed feedback if the target became unavailable before its timer fired
-    if (!p.el.isConnected || p.el.closest(DISABLED) || inertAncestor(p.el)) {
+    if (unavailable(p.el)) {
       if (press === p) {
         press = null;
       }
@@ -1029,31 +1025,16 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     }
     return true;
   };
-  // Keep a quick tap's feedback through its ease-in without releasing a later press on the same node
-  const lifts = new Map();
-  const unlift = (el, now = false) => {
-    const p = lifts.get(el);
-    lifts.delete(el);
-    clearTimeout(p.lift);
-    if (press?.el !== el || press.delay) showPress(p.el, false, now);
-  };
-  // `lifted`: the pointer came up inside the box, so a tap still waiting out the delay shows its press now.
+  // A tap still waiting out the touch delay begins and ends before its first frame
   const release = (now = false, lifted = false) => {
     const p = press;
     press = null;
     if (!p) return;
-    if (!p.delay) return showPress(p.el, false, now);
-    clearTimeout(p.delay);
-    if (!lifted) return;
-    if (!begin(p)) {
-      if (lifts.has(p.el)) {
-        unlift(p.el);
-      }
-      return;
+    if (p.delay) {
+      clearTimeout(p.delay);
+      if (!lifted || !begin(p)) return;
     }
-    clearTimeout(lifts.get(p.el)?.lift);
-    p.lift = setTimeout(() => unlift(p.el), EASE.duration);
-    lifts.set(p.el, p);
+    showPress(p.el, false, now, lifted);
   };
   root.addEventListener("pointerdown", e => {
     if (e.button !== 0 || !e.isPrimary) return;
@@ -1082,7 +1063,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     press.at = [e.clientX, e.clientY];
     // Inside the delay the browser decides: a scroll cancels the touch, a tap lifts it.
     if (press.delay) return;
-    showPress(press.el, inside(press, e));
+    showPress(press.el, inside(press, e), false, false);
   }, true);
   // A touch belongs to the target it began on, as UIKit hit-tests a touch once: lifted outside that target's box as it
   // stands now (the app may have moved it from under the finger), it presses nothing, though the browser aims its
@@ -1110,7 +1091,11 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   // Leaving the page, the window or the tab may take the release with it, as the pointer dispatch below assumes: the
   // press, a key's too, ends at once. A gesture that claims the contact (motion-glue's swipe) ends the press as it
   // claims it, as a pan cancels a touch.
-  const leave = () => { release(true); for (const el of lifts.keys()) unlift(el, true); keyHold?.(null, true); };
+  const leave = () => {
+    release(true);
+    keyHold?.(null, true);
+    for (const [el, state] of presses) if (!heldPress(el)) endPress(el, state);
+  };
   addEventListener("blur", e => { if (e.target === window) leave(); });
   addEventListener("pagehide", leave);
   document.addEventListener("visibilitychange", () => { if (document.hidden) leave(); });

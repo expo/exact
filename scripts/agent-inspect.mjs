@@ -441,7 +441,7 @@ function renderNode(n) {
   if (n.native) out.push(`  native ${sorted(n.native).filter(([k]) => k !== 'subviews').map(([k, v]) => `${k}=${typeof v === 'string' ? v : q(v)}`).join(' ')}`);
   if (n.browser) out.push(`  browser ${sorted(n.browser).map(([k, v]) => `${k}=${q(v)}`).join(' ')}`);
   // A pressed paint, which the computed opacity and background don't show where it is on the page's images (LLP 1061 D7).
-  if (n.press_shown) out.push(`  press shows opacity=${n.press_shown.opacity} background=${q(n.press_shown.backgroundColor)} color=${q(n.press_shown.color)} (paint ${n.press_shown.paint})`);
+  if (n.press_shown) out.push(`  press shows opacity=${n.press_shown.opacity} background=${q(n.press_shown.backgroundColor)} color=${q(n.press_shown.color)}`);
   if (n.native?.subviews) out.push(...renderSubviews(n.native.subviews));
   return out;
 }

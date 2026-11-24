@@ -17,7 +17,7 @@ const NAVIGATION = ['TABS', 'SPLITS', 'SHEETS', 'BARS', 'CLEAR_BARS'];
 const INPUT = ['PRESS_PAINT', 'STATE_LOOKS', 'PANS', 'ROVING', 'RADIO_GROUPS', 'SHORTCUTS'];
 // A string only each behaviour's code holds.
 const NAVIGATION_MARKS = { TABS: 'data-exact-sidebar', SPLITS: 'data-exact-split-row', SHEETS: '--exact-sheet-detent', BARS: 'part="back"', CLEAR_BARS: 'data-exact-clear' };
-const INPUT_MARKS = { PRESS_PAINT: '--exact-press-paint', STATE_LOOKS: 'data-exact-looks', PANS: 'pan cancelled', ROVING: 'menuitem', RADIO_GROUPS: 'radiogroup', SHORTCUTS: 'Backquote' };
+const INPUT_MARKS = { PRESS_PAINT: '--exact-press-background-progress', STATE_LOOKS: 'data-exact-looks', PANS: 'pan cancelled', ROVING: 'menuitem', RADIO_GROUPS: 'radiogroup', SHORTCUTS: 'Backquote' };
 
 // What a production page ships of `input`: its exports' closure, minified, the agent left out (`gateAgent`); `load`
 // gives a module's text by its id.

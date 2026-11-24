@@ -1404,7 +1404,7 @@ fn a_record_field_named_proto_is_an_own_descriptor_field() {
 }
 
 #[test]
-fn a_pressed_nodes_bound_scale_reaches_its_composed_presentation() {
+fn press_transforms_compose_and_bound_transitions_write_press_timing() {
     let plan = contract::compile(
         r#"component App
   state shown = false
@@ -1414,6 +1414,8 @@ fn a_pressed_nodes_bound_scale_reaches_its_composed_presentation() {
     column
       view scale=(shown ? 1 : 0.01) press=toggle -exact-press-scale=0.92 transition="scale 200ms ease"
       view scale=(shown ? 1 : 0.01)
+      view press=toggle -exact-press-scale=(shown ? 1 : 0.9) transition="scale 300ms linear"
+      view press=toggle -exact-press-opacity=0.7 transition=(shown ? "none" : "opacity 250ms")
 "#,
     )
     .unwrap();
@@ -1424,6 +1426,15 @@ fn a_pressed_nodes_bound_scale_reaches_its_composed_presentation() {
         output.js
     );
     assert!(output.js.contains(",\"scale\",\"\",()=>"), "{}", output.js);
+    assert!(
+        output.css.contains("scale 0s,--exact-scale 0.3s linear 0s"),
+        "{}",
+        output.css
+    );
+    assert!(output
+        .js
+        .contains(r#"--exact-press-timing:{\"scale\":[300.0,0.0,\"linear\"]}"#));
+    assert!(output.js.contains(",\"--exact-press-timing\",\"\",()=>"));
 }
 
 /// LLP 1094.000 D2: a bound drag's files and `url` reach the page by the

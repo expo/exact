@@ -142,11 +142,11 @@ test('the neutral sheet\'s lengths and ratios are the metric table\'s neutral co
     'mark-dot': `radial-gradient(circle closest-side, currentColor ${percent('mark-dot')},`,
     'mark-disabled-alpha': `:disabled { opacity: ${alpha('mark-disabled-alpha')}; }`,
     'button-tint-alpha': `{ background-color: color-mix(in srgb, var(--exact-accent, AccentColor) ${percent('button-tint-alpha')}, transparent); }`,
-    'button-hover-tinted': `:hover { background-color: color-mix(in srgb, var(--exact-accent, AccentColor) ${percent('button-tint-alpha')}, transparent); background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: color-mix(in srgb, var(--exact-accent, AccentColor) ${percent('button-hover-tinted')}, transparent); }`,
-    'button-hover-filled': `:hover { background-color: var(--exact-accent, AccentColor); background-image: linear-gradient(color-mix(in srgb, currentColor ${percent('button-hover-filled')}, transparent) 0 0); }`,
-    'button-pressed-tinted': `[data-button-style="bordered-tinted"]):is([data-pressed], [data-exact-open]):not(:disabled) { background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: color-mix(in srgb, var(--exact-accent, AccentColor) ${percent('button-pressed-tinted')}, transparent); }`,
-    'button-pressed-alpha': [`{ background-color: light-dark(color-mix(in srgb, var(--exact-accent, AccentColor) ${percent('button-pressed-alpha')}, transparent),`, `& > :not(img), &::after { opacity: ${alpha('button-pressed-alpha')}; }`, `& > img { --exact-tint: color-mix(in srgb, currentColor ${percent('button-pressed-alpha')}, transparent); }`],
-    'button-pressed-lighten': [`color-mix(in srgb, var(--exact-accent, AccentColor), #fff ${percent('button-pressed-lighten')})); background-image: none; }`, `{ background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: color-mix(in srgb, #fff ${percent('button-pressed-lighten')}, transparent); }`],
+    'button-hover-tinted': `--exact-button-hover: color-mix(in srgb, var(--exact-accent, AccentColor) ${percent('button-hover-tinted')}, transparent)`,
+    'button-hover-filled': `currentColor calc(${percent('button-hover-filled')} * (1 - var(--exact-button-highlight)))`,
+    'button-pressed-tinted': `--exact-wash: color-mix(in srgb, color-mix(in srgb, var(--exact-accent, AccentColor) ${percent('button-pressed-tinted')}, transparent)`,
+    'button-pressed-alpha': [`calc(100% - var(--exact-button-highlight) * ${100 - parseFloat(percent('button-pressed-alpha'))}%)`, `opacity: calc(1 - .${100 - parseFloat(percent('button-pressed-alpha'))} * var(--exact-button-highlight))`],
+    'button-pressed-lighten': [`#fff calc(var(--exact-button-highlight) * ${percent('button-pressed-lighten')})`, `#fff calc(var(--exact-button-highlight) * ${percent('button-pressed-lighten')}), transparent)`],
     'bar-hover-alpha': `{ opacity: var(--exact-hover-dim, ${alpha('bar-hover-alpha')}); }`,
     'select-line-height-coarse': `--exact-control-line-height: ${value.get('select-line-height-coarse')};`,
     'switch-thumb': `radial-gradient(circle closest-side, currentColor ${percent('switch-thumb')},`,
@@ -562,30 +562,22 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
       expect([at('link'), await page.evaluate(() => css('inline', 'textDecorationLine'))]).toEqual([at('link'), 'underline']);
       await page.mouse.move(1, 1);
       expect(await page.evaluate(() => [css('pressable', 'backgroundImage'), css('inline', 'textDecorationLine')])).toEqual(['none', 'none']);
-      // In a bar it dims instead, to the shell's press dim, with no wash, and at once: nothing moves, hovered or left,
-      // pressed or let go. An author's hover look (here its variable) replaces the dim, and an opacity the author wrote wins.
+      // Bar hover dims without a wash. An author can replace it with a hover look or set the opacity.
       const seen = (id) => page.evaluate((id) => [css(id, 'opacity'), css(id, 'backgroundImage'), document.getElementById(id).getAnimations().length], id);
-      // A press, held then let go: its opacity each time, and whether anything moved rather than changed at once.
-      const press = (id) => page.evaluate((id) => { const b = document.getElementById(id), held = []; for (const on of [true, false]) { b.toggleAttribute('data-pressed', on); held.push(css(id, 'opacity'), b.getAnimations().length); } return held; }, id);
       expect([at('bar at rest'), await seen('bar-plain')]).toEqual([at('bar at rest'), ['1', 'none', 0]]);
       await page.hover('#bar-plain');
       expect([at('bar hover'), await seen('bar-plain')]).toEqual([at('bar hover'), ['0.65', 'none', 0]]);
-      expect([at('bar hover press'), await press('bar-plain')]).toEqual([at('bar hover press'), ['0.65', 0, '0.65', 0]]);
       await page.hover('#bar-said');
       expect([at('bar left'), await seen('bar-plain')]).toEqual([at('bar left'), ['1', 'none', 0]]);
       expect([at('bar hover said'), await seen('bar-said')]).toEqual([at('bar hover said'), ['1', 'none', 0]]);
-      expect([at('bar press said'), await press('bar-said')]).toEqual([at('bar press said'), ['0.65', 0, '1', 0]]);
       await page.hover('#bar-own');
       expect([at('bar hover own'), await seen('bar-own')]).toEqual([at('bar hover own'), ['0.5', 'none', 0]]);
-      expect([at('bar press own'), await press('bar-own')]).toEqual([at('bar press own'), ['0.5', 0, '0.5', 0]]);
       // A form control in a bar keeps its own hover.
       await page.evaluate(() => { const select = Object.assign(document.createElement('select'), { id: 'bar-select', innerHTML: '<option>One</option>' }); select.setAttribute('data-exact-on', 'press'); document.getElementById('bar-own').after(select); });
       await page.hover('#bar-select');
       expect([at('bar hover select'), (await seen('bar-select'))[0]]).toEqual([at('bar hover select'), '1']);
       await page.evaluate(() => document.getElementById('bar-select').remove());
       await page.mouse.move(1, 1);
-      // A press with no hover (a finger) dims and comes back at once, as the shell's press does.
-      expect([at('bar press'), await press('bar-plain')]).toEqual([at('bar press'), ['0.65', 0, '1', 0]]);
 
       // Held, a plain, borderless, filled or glass button shows UIKit's highlight. Its face fades: a title, the name a
       // sheet's bar draws in place of a symbol (LLP 1116.020 D2), and a symbol, by its tint, unless the symbol's colour
@@ -608,10 +600,15 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
         const b = document.getElementById(id), seen = [];
         for (const on of [false, true]) {
           b.toggleAttribute('data-pressed', on);
+          b.toggleAttribute('data-exact-button-press', on);
+          b.style.setProperty('--exact-button-press', on ? '1' : '0');
           const image = css(id, 'backgroundImage');
-          seen.push([color(id, 'backgroundColor'), image === 'none' ? image : rgba(image.match(/rgba?\([^)]*\)|color\([^)]*\)/)[0]), css(id, 'opacity'), getComputedStyle(pseudo ? b : b.firstElementChild, pseudo).opacity, [...b.querySelectorAll('img')].map((img) => [rgba(getComputedStyle(img).backgroundColor), getComputedStyle(img).opacity])]);
+          const wash = image === 'none' ? null : rgba(image.match(/rgba?\([^)]*\)|color\([^)]*\)/)[0]);
+          seen.push([color(id, 'backgroundColor'), wash?.[3] ? wash : 'none', css(id, 'opacity'), getComputedStyle(pseudo ? b : b.firstElementChild, pseudo).opacity, [...b.querySelectorAll('img')].map((img) => [rgba(getComputedStyle(img).backgroundColor), getComputedStyle(img).opacity])]);
         }
         b.removeAttribute('data-pressed');
+        b.removeAttribute('data-exact-button-press');
+        b.style.removeProperty('--exact-button-press');
         return seen;
       }, [id, pseudo]);
       const NONE = [0, 0, 0, 0];
@@ -637,28 +634,14 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
       const OWN = [[52, 199, 89, 1], '1'], [inks, heldInks] = (await highlight('translucent')).map((seen) => seen[4]);
       expect([at('symbols'), inks, heldInks]).toEqual([at('symbols'), [[inks[0][0], '1'], OWN, OWN], [[[...inks[0][0].slice(0, 3), 0.75], '1'], OWN, OWN]]);
       // A button whose popover is open (menu-rows.js marks it) shows its press.
-      const shows = (id, mark) => page.evaluate(([id, mark]) => { const b = document.getElementById(id); b.toggleAttribute(mark, true); const seen = [css(id, 'backgroundImage'), css(id, 'backgroundColor')]; b.removeAttribute(mark); return seen; }, [id, mark]);
-      const open = await shows('bordered', 'data-exact-open');
-      expect([at('open'), open]).toEqual([at('open'), await shows('bordered', 'data-pressed')]);
-      expect([at('open'), open[0]]).not.toEqual([at('open'), await page.evaluate(() => css('bordered', 'backgroundImage'))]);
-      // Released (the input glue marks it), a button eases out of its press over a quarter second: a filled button's
-      // fill, a face, a symbol in the button's ink, a sheet's word and a wash; a symbol in a colour of its own has
-      // nothing to ease.
-      const released = (id) => page.evaluate((id) => {
-        const b = document.getElementById(id);
-        b.setAttribute('data-pressed', '');
-        getComputedStyle(b).opacity;
-        b.removeAttribute('data-pressed');
-        b.setAttribute('data-exact-released', '');
-        // (WebKit eases an `::after` that draws nothing too.)
-        const eases = b.getAnimations({ subtree: true }).filter((a) => !a.effect.pseudoElement || getComputedStyle(a.effect.target, a.effect.pseudoElement).content !== 'none');
-        const seen = eases.map((a) => `${a.effect.target.id || a.effect.target.localName}${a.effect.pseudoElement ?? ''} ${a.transitionProperty} ${a.effect.getTiming().duration} ${a.effect.getTiming().easing}`).sort();
-        for (const a of eases) a.finish();
-        b.removeAttribute('data-exact-released');
-        return seen;
-      }, id);
-      const EASED = { translucent: ['span opacity', 'translucent background-color', 'unsaid background-color'], 'sheet-cancel': ['sheet-cancel::after opacity'], glass: ['glass --exact-wash', 'span opacity'], bordered: ['bordered --exact-wash'], gray: ['gray --exact-wash'], tinted: ['tinted --exact-wash'] };
-      for (const [id, eased] of Object.entries(EASED)) expect([at('released'), id, await released(id)]).toEqual([at('released'), id, eased.map((ease) => `${ease} 250 ease-in-out`)]);
+      const open = await page.evaluate(() => {
+        const b = document.getElementById('bordered');
+        b.setAttribute('data-exact-open', '');
+        const wash = rgba(css('bordered', 'backgroundImage').match(/rgba?\([^)]*\)|color\([^)]*\)/)[0]);
+        b.removeAttribute('data-exact-open');
+        return wash;
+      });
+      expect([at('open and pressed'), open]).toEqual([at('open and pressed'), (await highlight('bordered'))[1][1]]);
       // A tinted button held shows its stronger wash under a pointer too.
       await page.hover('#tinted');
       expect([at('tinted hovered'), (await highlight('tinted')).map((seen) => seen[1][3])]).toEqual([at('tinted hovered'), [0.08, 0.16]]);
@@ -693,9 +676,8 @@ for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${en
       await hold('row-2', false);
       expect([at('row press'), hovered !== 'none', pressed[0] !== 'none' && pressed[0] !== hovered, pressed[1]]).toEqual([at('row press'), true, true, '1']);
       await page.hover('#none-1');
-      await hold('none-1', true);
-      expect([at('no mark press'), await page.evaluate(() => css('none-1', 'opacity'))]).toEqual([at('no mark press'), '0.65']);
-      await hold('none-1', false);
+      const dim = await page.evaluate(() => getComputedStyle(document.getElementById('none-1')).getPropertyValue('--exact-dims'));
+      expect([at('no mark press'), dim.trim()]).toEqual([at('no mark press'), '1']);
       await page.keyboard.press('Tab');
       expect([at('row focus'), await page.evaluate(() => { const row = document.getElementById('row-2'); row.focus(); return [row.matches(':focus-visible'), css('row-2', 'outlineOffset'), css('row-2', 'outlineStyle') !== 'none']; })])
         .toEqual([at('row focus'), [true, '-2px', true]]);

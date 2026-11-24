@@ -8,10 +8,12 @@ mod clears;
 pub mod control_size;
 mod decorations;
 mod fonts;
+mod press;
 mod selection;
 pub mod text_style;
 pub use decorations::{atom_faces, decoration_styles};
 pub use fonts::{font_alias, font_family_names, runtime_font_family};
+pub use press::PRESS_ROWS;
 
 use exact_kernel::style::safe_area_properties::SafeAreaProperties;
 use exact_kernel::style::ColorValue;
@@ -37,20 +39,21 @@ pub const HAIRLINE: &str = "var(--exact-hairline, 1px)";
 /// Keep `em` and viewport units for the browser: its control fonts and viewport
 /// variants can differ from the kernel's.
 pub fn css_text(style: &StyleProps, font_names: &[String]) -> (String, Vec<Skipped>) {
-    css_text_in(style, font_names, false)
+    css_text_in(style, font_names, false, Default::default())
 }
 
 /// [`css_text`] preserving authored `rem`/`em` for [`crate::host::template`].
 /// The JS target keeps no kernel; the browser follows root and parent font changes.
 /// @ref LLP 1069.000 D3
 pub fn css_text_relative(style: &StyleProps, font_names: &[String]) -> (String, Vec<Skipped>) {
-    css_text_in(style, font_names, true)
+    css_text_in(style, font_names, true, Default::default())
 }
 
-fn css_text_in(
+pub(crate) fn css_text_in(
     style: &StyleProps,
     font_names: &[String],
     relative: bool,
+    bound_press: exact_kernel::StyleMask,
 ) -> (String, Vec<Skipped>) {
     let authored = |out: &mut String, id| {
         use exact_kernel::style::relative::Unit;
@@ -95,8 +98,12 @@ fn css_text_in(
     let mut out = String::from(exact_kernel::style::roles::scheme_color(style));
     let mut skipped = Vec::new();
     // @ref LLP 1061: row scale and host feedback multiply independently.
-    let press = press_composes(style);
-    let shift = style.mask.union(style.written).has(StyleId::PressTranslate);
+    let press = press_composes(style) || bound_press.has(StyleId::PressScale);
+    let shift = style
+        .mask
+        .union(style.written)
+        .union(bound_press)
+        .has(StyleId::PressTranslate);
     if shift {
         out.push_str("--exact-translate-composes:1;");
         if style.mask.has(StyleId::Translate) {
@@ -676,6 +683,7 @@ fn css_text_in(
             }),
         }
     }
+    press::write_timing(&mut out, style, bound_press);
     (out, skipped)
 }
 

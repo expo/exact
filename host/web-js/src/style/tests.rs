@@ -501,7 +501,7 @@ fn a_computed_transition_is_checked_as_an_authors() {
     ];
     assert_eq!(
         run(
-            &transition_map(&transition_entries(), false, false),
+            &transition_map(&transition_entries(&transition_spring()), false, false),
             &values
         ),
         serde_json::json!([
@@ -518,7 +518,10 @@ fn a_computed_transition_is_checked_as_an_authors() {
 #[test]
 fn bound_spring_transitions_match_the_static_css_writer() {
     exact_kernel::style::link_all();
-    assert_spring_transitions(&transition_map(&transition_entries(), false, false), false);
+    assert_spring_transitions(
+        &transition_map(&transition_entries(&transition_spring()), false, false),
+        false,
+    );
 }
 
 pub(crate) fn assert_spring_transitions(map: &str, pressed: bool) {
@@ -828,4 +831,32 @@ fn llp_1123_rows_write_nothing_on_the_js_target() {
             "{id:?}"
         );
     }
+}
+
+#[test]
+fn a_class_that_writes_opacity_carries_the_dim_exclusion_marker() {
+    let plan = contract::compile(
+        r#"component App
+  state dimmed = false
+  action toggle
+    dimmed = not dimmed
+  view
+    column
+      view press=toggle opacity=1 testId="opaque"
+      view press=toggle opacity=0.5 testId="faded"
+      view press=toggle opacity=(dimmed ? 0.5 : 1) testId="bound"
+      view press=toggle testId="unsaid"
+"#,
+    )
+    .unwrap();
+    let sites = crate::emit::Sites::new(&plan).unwrap();
+    let parts = crate::style::project(&plan, &sites, &mut Vec::new()).unwrap();
+    let marked: Vec<_> = parts
+        .iter()
+        .flatten()
+        .filter(|part| part.props.contains_key("data-exact-opacity"))
+        .map(|part| part.props.get("data-testid").unwrap().as_str())
+        .collect();
+    // A bound opacity is the element's own style, which the dim check reads directly.
+    assert_eq!(marked, ["opaque", "faded"]);
 }

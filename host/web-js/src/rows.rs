@@ -155,7 +155,6 @@ impl Em<'_> {
     ) -> Result<(), String> {
         let plan = self.plan;
         let row = &plan.node(NodesId(i));
-        let press = parts.css.contains("--exact-press:");
         let shift = parts.css.contains("--exact-translate-composes:1");
         let binding = |id: StyleId| {
             row.bindings
@@ -163,6 +162,9 @@ impl Em<'_> {
                 .map(|b| plan.binding(b))
                 .find(|b| b.kind == BindingKind::Style && b.id == id as u16)
         };
+        let press = parts.css.contains("--exact-press:")
+            || binding(StyleId::PressScale)
+                .is_some_and(|b| style::literal(plan, plan.code(b.expr)).is_none());
         // A clock (LLP 1055.002) plays on the page's timeline: only a drag
         // timeline's consumer is paused for the drag to seek.
         let clock = |s: &str| s.trim_start().starts_with("-exact-clock(");
@@ -428,14 +430,9 @@ impl Em<'_> {
                 let _ = write!(self.out, "{piece}();");
                 one(name, Some(map.into()))
             }
-            // The feedback's factor, and `scale` as its product (css.rs), on
-            // a node whose own `scale` does not also compose through it.
             StyleId::PressScale => {
-                if [StyleId::Scale, StyleId::Transition, StyleId::Animation]
-                    .into_iter()
-                    .any(|r| binding(r).is_some())
-                {
-                    return refuse("a dynamic `-exact-press-scale` beside `scale`, `transition` or `animation`");
+                if binding(StyleId::Scale).is_some() || binding(StyleId::Animation).is_some() {
+                    return refuse("a dynamic `-exact-press-scale` beside `scale` or `animation`");
                 }
                 let press = self.uses.rt("pressFeedback");
                 let _ = write!(self.out, "{press}();");
@@ -470,9 +467,7 @@ impl Em<'_> {
                 let (name, _) = style::style_marker(id);
                 one(&name, Some("v=>v==null||/^\\s*none\\s*$/i.test(v)?null:v".into()))
             }
-            // On a pressed node an animation of `scale` plays its rule's
-            // `-exact-press` copy, and `scale` transitions as `--exact-scale`
-            // (css.rs `keyframes_name`, `css_text`).
+            // Animate the authored transform bases under the press factors
             StyleId::Translate if shift => ["x", "y", "z"].iter().enumerate().map(|(i, axis)| (
                 format!("--exact-translate-{axis}"), String::new(), Some(format!(
                     r#"v=>{{const text=String(v??'').trim();if(!CSS.supports('translate',text))return '0px';const p=text.match(/calc\([^)]*\)|[^\s]+/g)??[];return !p.length||/^(none|unset|initial)$/i.test(p[0])?'0px':p[{i}]??'0px'}}"#
@@ -493,8 +488,15 @@ impl Em<'_> {
                 w
             }
             StyleId::Transition => {
-                let entries = self.uses.constant("$transitionEntries", style::transition_entries);
-                one("transition", Some(self.uses.share('m', style::transition_map(&entries, press, shift))))
+                let spring = self.uses.constant("$transitionSpring", style::transition_spring);
+                let entries = self.uses.constant("$transitionEntries", || style::transition_entries(&spring));
+                let mut writes = one("transition", Some(self.uses.share('m', style::transition_map(&entries, press, shift))));
+                if exact_web::css::PRESS_ROWS.iter().any(|(id, _)| binding(*id).is_some()) {
+                    let parser = crate::paint::Parser::Transition.emit(plan, &mut self.uses);
+                    let map = crate::paint::press_timing_map(&parser, &spring, b.written);
+                    writes.extend(one("--exact-press-timing", Some(self.uses.share('m', map))));
+                }
+                writes
             }
             StyleId::LayoutTransition => {
                 let parser = crate::paint::Parser::Transition.emit(plan, &mut self.uses);
@@ -872,6 +874,7 @@ pub(super) fn presence_decls(css: &mut String) -> String {
                 "--exact-press-x:",
                 "--exact-press-y:",
                 "--exact-base-translated:",
+                "--exact-press-timing:",
                 "--exact-press-opacity:",
                 "--exact-press-opacity-to:",
                 "--exact-press-background-color:",
@@ -1188,7 +1191,11 @@ mod tests {
         exact_kernel::style::link_all();
         // LLP 1081 D5, as `style`'s map, then `scale` moved to the press's
         // `--exact-scale`.
-        let map = crate::style::transition_map(&crate::style::transition_entries(), true, false);
+        let map = crate::style::transition_map(
+            &crate::style::transition_entries(&crate::style::transition_spring()),
+            true,
+            false,
+        );
         assert_eq!(
             crate::style::tests::run(
                 &map,

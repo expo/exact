@@ -120,7 +120,7 @@
     #exact-root, #exact-root * { --exact-accent-text: lab(from var(--exact-accent, AccentColor) calc((49 - l) * 1e6 + 100) 0 0 / 1); }
     #exact-root button:is([data-button-style="filled"], [data-button-style="bordered-prominent"], [data-button-style="prominent-glass"], [data-button-style="prominent-clear-glass"]) { color: lab(from var(--exact-accent, AccentColor) calc((49 - l) * 1e6 + 100) 0 0 / 1); }
   }
-  /* Draw hover and press washes over the fill. Register `--exact-wash` so the release can interpolate its colour.
+  /* Draw hover and press washes over the fill.
      Tinted buttons use the accent even with authored title ink, matching UIKit's `.tinted()` on iOS 27;
      Chrome cannot interpolate `currentColor` in this custom property. */
   @property --exact-wash { syntax: "<color>"; inherits: false; initial-value: transparent; }
@@ -128,17 +128,25 @@
      trackpad) and the last one used was not a finger (`data-exact-input`, the input glue's): each platform shows
      hover for its pointer and none for a touch. */
   @media (any-hover: hover) { :where(html:not([data-exact-input="touch"])) {
-    #exact-root button:is([data-button-style="bordered"], [data-button-style="gray"]):not([role="tab"], [role="radio"], :disabled):hover { background-color: transparent; background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: var(--exact-quaternary-fill); }
+    #exact-root button:is([data-button-style="bordered"], [data-button-style="gray"]):not([role="tab"], [role="radio"], :disabled):hover { background-color: transparent; background-image: linear-gradient(var(--exact-wash) 0 0); --exact-button-hover: var(--exact-quaternary-fill); --exact-wash: var(--exact-button-hover); }
     #exact-root button[data-button-style="gray"]:not([role="tab"], [role="radio"], :disabled):hover { background-color: var(--exact-secondary-fill); }
-    #exact-root button:is([data-button-style="tinted"], [data-button-style="bordered-tinted"]):not(:disabled):hover { background-color: color-mix(in srgb, var(--exact-accent, AccentColor) 12%, transparent); background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: color-mix(in srgb, var(--exact-accent, AccentColor) 8%, transparent); }
-    #exact-root button:is([data-button-style="filled"], [data-button-style="bordered-prominent"]):not(:disabled):hover { background-color: var(--exact-accent, AccentColor); background-image: linear-gradient(color-mix(in srgb, currentColor 12%, transparent) 0 0); }
+    #exact-root button:is([data-button-style="tinted"], [data-button-style="bordered-tinted"]):not(:disabled):hover { background-color: color-mix(in srgb, var(--exact-accent, AccentColor) 12%, transparent); background-image: linear-gradient(var(--exact-wash) 0 0); --exact-button-hover: color-mix(in srgb, var(--exact-accent, AccentColor) 8%, transparent); --exact-wash: var(--exact-button-hover); }
+    #exact-root button:is([data-button-style="filled"], [data-button-style="bordered-prominent"]):not(:disabled):hover { background-color: var(--exact-accent, AccentColor); background-image: linear-gradient(color-mix(in srgb, currentColor calc(12% * (1 - var(--exact-button-highlight))), transparent) 0 0); }
   } }
-  /* Each press ties its hover's specificity and wins by coming after it, so these stay below the hover block. A
-     button shows its press while the popover it opened is open (`data-exact-open`, menu-rows.js), as a pop-up or
-     pull-down button stays highlighted while its menu is open on the Mac. */
-  #exact-root button:is([data-button-style="bordered"], [data-button-style="gray"]):not([role="tab"], [role="radio"]):is([data-pressed], [data-exact-open]) { background-color: transparent; background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: var(--exact-tertiary-fill); }
-  #exact-root button[data-button-style="gray"]:not([role="tab"], [role="radio"]):is([data-pressed], [data-exact-open]) { background-color: var(--exact-secondary-fill); }
-  #exact-root button:is([data-button-style="tinted"], [data-button-style="bordered-tinted"]):is([data-pressed], [data-exact-open]):not(:disabled) { background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: color-mix(in srgb, var(--exact-accent, AccentColor) 16%, transparent); }
+  /* The web button's highlight follows its own press animation (LLP 1061 D7).
+     Press rules tie the hover rules' specificity and win by coming after them.
+     A button that opened a popover stays highlighted while the popover is open. */
+  @property --exact-button-press { syntax: "<number>"; inherits: false; initial-value: 0; }
+  #exact-root button[data-button-style] { --exact-button-highlight: var(--exact-button-press); --exact-button-hover: transparent; }
+  #exact-root button[data-exact-open] { --exact-button-highlight: 1; }
+  #exact-root button:is([data-button-style="bordered"], [data-button-style="gray"]):not([role="tab"], [role="radio"], :disabled):is([data-exact-button-press], [data-exact-open]) {
+    background-image: linear-gradient(var(--exact-wash) 0 0);
+    --exact-wash: color-mix(in srgb, var(--exact-tertiary-fill) calc(var(--exact-button-highlight) * 100%), var(--exact-button-hover));
+  }
+  #exact-root button:is([data-button-style="tinted"], [data-button-style="bordered-tinted"]):is([data-exact-button-press], [data-exact-open]):not(:disabled) {
+    background-image: linear-gradient(var(--exact-wash) 0 0);
+    --exact-wash: color-mix(in srgb, color-mix(in srgb, var(--exact-accent, AccentColor) 16%, transparent) calc(var(--exact-button-highlight) * 100%), var(--exact-button-hover));
+  }
   /* Held, a plain, borderless, filled or glass button shows UIKit's highlight, whatever its accent (measured on iOS 27):
      - Its face is at 75%, as `UIButton.Configuration` draws a highlighted button's ink. The face is the button's
        children, and the name a sheet's bar draws in place of a symbol (`::after`, below), so the focus ring keeps its
@@ -154,22 +162,13 @@
      whatever press its author wrote (NativeButtonsIOS.swift's `isHighlighted`; `authorsPress` in PressFeedback.swift
      gates only the dim of a pressable that is no control). A disabled button takes none, and a menu's or a chooser's
      row keeps its own look. */
-  #exact-root button:is([data-button-style="plain"], [data-button-style="borderless"], [data-button-style="filled"], [data-button-style="bordered-prominent"], [data-button-style$="glass"]):is([data-pressed], [data-exact-open]):not(:disabled, :is([role="menu"], [data-exact-chooser]) *) {
-    &:is([data-button-style="filled"], [data-button-style="bordered-prominent"]) { background-color: light-dark(color-mix(in srgb, var(--exact-accent, AccentColor) 75%, transparent), color-mix(in srgb, var(--exact-accent, AccentColor), #fff 20%)); background-image: none; }
-    &[data-button-style$="glass"] { background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: color-mix(in srgb, #fff 20%, transparent); }
-    & > :not(img), &::after { opacity: .75; }
-    & > img { --exact-tint: color-mix(in srgb, currentColor 75%, transparent); }
-  }
-  /* Ease the highlight back over 250 ms, ease-in-out, matching UIKit on iOS 27. The press starts immediately,
-     so a quick tap still shows. The input glue keeps `data-exact-released` only while these effects run;
-     later state changes, such as enabling a filled button, keep their own timing. */
-  #exact-root button[data-exact-released]:not(:disabled, :is([role="menu"], [data-exact-chooser]) *) {
-    &:is([data-button-style="bordered"], [data-button-style="gray"]):not([role="tab"], [role="radio"]), &:is([data-button-style="tinted"], [data-button-style="bordered-tinted"], [data-button-style$="glass"]) { background-image: linear-gradient(var(--exact-wash) 0 0); transition: --exact-wash .25s ease-in-out; }
-    &:is([data-button-style="filled"], [data-button-style="bordered-prominent"]) { transition: background-color .25s ease-in-out; }
-    &:is([data-button-style="plain"], [data-button-style="borderless"], [data-button-style="filled"], [data-button-style="bordered-prominent"], [data-button-style$="glass"]) {
-      & > :not(img), &::after { transition: opacity .25s ease-in-out; }
-      & > img { transition: background-color .25s ease-in-out; }
+  #exact-root button:is([data-button-style="plain"], [data-button-style="borderless"], [data-button-style="filled"], [data-button-style="bordered-prominent"], [data-button-style$="glass"]):is([data-exact-button-press], [data-exact-open]):not(:disabled, :is([role="menu"], [data-exact-chooser]) *) {
+    &:is([data-button-style="filled"], [data-button-style="bordered-prominent"]) {
+      background-color: light-dark(color-mix(in srgb, var(--exact-accent, AccentColor) calc(100% - var(--exact-button-highlight) * 25%), transparent), color-mix(in srgb, var(--exact-accent, AccentColor), #fff calc(var(--exact-button-highlight) * 20%)));
     }
+    &[data-button-style$="glass"] { background-image: linear-gradient(var(--exact-wash) 0 0); --exact-wash: color-mix(in srgb, #fff calc(var(--exact-button-highlight) * 20%), transparent); }
+    & > :not(img), &::after { opacity: calc(1 - .25 * var(--exact-button-highlight)); }
+    & > img { --exact-tint: color-mix(in srgb, currentColor calc(100% - var(--exact-button-highlight) * 25%), transparent); }
   }
   /* Disabled, in every style (LLP 1116.005 D8): the grey ink, and the neutral fill where the style filled with the
      accent; an outline fades to a divider. */
@@ -396,7 +395,7 @@
   }
   /* A pressable nobody styled in a bar dims where a pointer hovers, as a bar button dims under a finger on iOS, in
      place of the unsaid wash, which would fill a box the button does not show (around a chevron or a word). It dims
-     to the shell's press dim, at once as a press does, so a press shows nothing more. The rule weighs no more than
+     to the shell's press dim. The rule weighs no more than
      the shell's reset of a `button` (`button:where()`), which it follows, so an opacity the author wrote wins; an
      author's hover look replaces the dim (looks.rs sets it to 1). */
   :where(#exact-root :is([navigationkey], [navigationkey] > :where([data-exact-list-item])) > header:where(:not([data-exact-site], [data-exact-said~="appearance"]))) :is(button, a[data-view][href], [data-exact-on~="press"]):not([data-button-style], [data-native]) { --exact-hover-wash: none; }

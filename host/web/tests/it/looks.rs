@@ -132,8 +132,15 @@ fn a_text_with_a_look_keeps_its_box() {
         };
         check_batch(&boot);
         for (id, display) in [(text, "display:contents;"), (parent, "display:block;")] {
-            let parts = exact_web::host::template::parts_with(kernel, &plan, id, true, true, false)
-                .unwrap();
+            let parts = exact_web::host::template::parts_with(
+                kernel,
+                &plan,
+                id,
+                true,
+                true,
+                Default::default(),
+            )
+            .unwrap();
             assert_eq!(parts.css.contains(display), folds, "{parts:?}");
         }
         let doc = host.document().unwrap();

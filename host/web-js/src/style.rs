@@ -326,18 +326,25 @@ pub fn project(
             continue;
         }
         let child_may_fold = matches!(tree[i].as_slice(), [c] if may_fold[*c as usize]);
-        let press_translate = node.bindings.iter().map(|b| plan.binding(b)).any(|b| {
-            b.kind == BindingKind::Style
-                && b.id == StyleId::PressTranslate as u16
-                && literal(plan, plan.code(b.expr)).is_none()
-        });
+        let mut bound_press = exact_kernel::StyleMask::default();
+        for binding in node.bindings.iter().map(|b| plan.binding(b)) {
+            if binding.kind == BindingKind::Style
+                && literal(plan, plan.code(binding.expr)).is_none()
+            {
+                for (id, _) in exact_web::css::PRESS_ROWS {
+                    if id as u16 == binding.id {
+                        bound_press.set(id);
+                    }
+                }
+            }
+        }
         let mut parts = template::parts_with(
             &kernel,
             plan,
             view(i),
             may_fold[i],
             child_may_fold,
-            press_translate,
+            bound_press,
         )
         .ok_or("a view the kernel lost")?;
         if kernel
@@ -706,15 +713,12 @@ fn ramp_rem(text: &str) -> Option<String> {
     ))
 }
 
-/// A computed `transition`'s entries as an author's (LLP 1081 D5), shared by
-/// the ordinary and the pressed mappers: comments go (CSS removes them, so a
-/// check must too); each entry is folded to ASCII lower case, as the native
-/// parser reads its words in any case (motion/src/word.rs); springs on
-/// non-physics properties become `linear()`; an entry naming the host's
-/// `--exact-*` or an old spelling is dropped, as the native parser refuses it.
-/// `-exact-tint-color` becomes the property the browser animates,
-/// `--exact-tint`.
-pub(super) fn transition_entries() -> String {
+/// The shared sampler for CSS transitions and press tracks.
+pub(super) fn transition_spring() -> String {
+    include_str!("../transition-spring.js").into()
+}
+
+fn spring_entries(sampler: &str) -> String {
     use exact_motion::Property;
     let mut properties: std::collections::BTreeMap<_, Vec<&str>> = Property::ALL
         .into_iter()
@@ -746,9 +750,15 @@ pub(super) fn transition_entries() -> String {
         })
         .filter(|n| !n.starts_with("border-") || *n == "border-color")
         .collect();
-    let spring = include_str!("../transition-spring.js")
+    include_str!("../transition-spring-entry.js")
+        .replace("SAMPLER", sampler)
         .replace("ALL_PROPERTIES", &serde_json::to_string(&all).unwrap())
-        .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap());
+        .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap())
+}
+
+/// Map computed CSS transitions, filtering private rows and lowering springs (LLP 1081 D5).
+pub(super) fn transition_entries(sampler: &str) -> String {
+    let spring = spring_entries(sampler);
     format!("v=>{{const spring={spring};return v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim().replace(/[A-Z]+/g,c=>c.toLowerCase())).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"))}}")
 }
 

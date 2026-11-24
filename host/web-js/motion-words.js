@@ -51,6 +51,10 @@
     }
     return true;
   };
+  const springConfig = s => {
+    const args = trim(s.slice(s.indexOf("(") + 1, -1));
+    return args ? split(args, ",").map(arg => number(trim(arg))) : [100, 10, 1];
+  };
   // css.rs `num` and Easing::css carry numbers as f32, in their shortest decimal.
   const num = n => {
     const f = Math.fround(n);
@@ -151,5 +155,5 @@
   };
   // Written as a time, even one `time` refuses (`1.2.3s`).
   const timeLike = word => /^[+-]?\.?\d/.test(unit(word, "ms") ?? unit(word, "s") ?? "");
-  return { trim, number, split, easing, lower, time, timeLike, num };
+  return { trim, number, split, easing, lower, time, timeLike, num, springConfig };
 })()

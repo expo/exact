@@ -7678,8 +7678,12 @@ under `:disabled`, and `:disabled` is your own disabled look (no default dim).
 `:active` is the host's own press of the innermost node with a `press` or a link's
 `href` (`link href=`, `button href=`, as CSS's `a:active`): it takes
 `background-color`, `color`, `opacity`, `translate` and `-exact-press-scale`, which become the
-node's pressed paint (LLP 1061 D7). Custom nodes ease on the press curve (under
-Reduce Motion too) and replace the host's unsaid press. Native controls keep
+node's pressed paint (LLP 1061 D7). On the web each pressed property follows
+the node's `transition`. With `transition="none"`, or when the transition
+doesn't cover a property, the change lands at once. With no authored transition,
+custom nodes ease over 120 ms, including under Reduce Motion. Other hosts
+continue to use their press timing until they adopt per-property timing.
+Authored pressed paint replaces the host's unsaid press on custom nodes. Native controls keep
 their native state beneath each authored override. Its `opacity` is the opacity
 it shows pressed, not a share. Its `translate` is an offset added to the node’s
 own translation: `translate="4px 4px"` moves a button onto an offset shadow

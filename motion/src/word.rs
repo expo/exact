@@ -3,7 +3,7 @@
 //! animation's keyframes name (contract-syntax's `scope.rs`, through
 //! [`crate::animation::Slots`]), and through them the kernel, lowering and
 //! both web targets. The web target's script readers (`host/web-js`'s
-//! `transition-paint.js`, `transition-spring.js`, `shared.js`) fold the same
+//! `transition-paint.js`, `transition-spring-entry.js`, `shared.js`) fold the same
 //! ASCII case, and its tests hold them to this module.
 //!
 //! @ref LLP 1002 §2, LLP 1055 D5

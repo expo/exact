@@ -5,8 +5,8 @@
 // the text is folded first.
 (() => {
   const properties = PROPERTIES, maxTransitions = MAX_TRANSITIONS;
-  const { trim, split, easing, lower, time, num } = WORDS;
-  return (v, css = true) => {
+  const { trim, split, easing, lower, time, num, springConfig } = WORDS;
+  return (v, css = true, pressItem) => {
     const out = { held: false, stacks: false, css: null };
     if (v == null) return out;
     if (typeof v !== "string") return null;
@@ -36,6 +36,7 @@
       const [duration = 0, delay = 0] = times;
       if (times.length > 2 || duration < 0 || (timing === 2 && (duration !== 0 || delay < 0))) return null;
       out.stacks ||= property === null || properties[property];
+      pressItem?.(property, duration, delay, curve, timing === 2 ? springConfig(curve) : null, easing);
       // Layout is outside Property::ALL. Only the last omitted property or `all` covers it.
       if (property === null || property === "all") layout = [duration, delay, curve];
     }

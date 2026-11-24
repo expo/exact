@@ -844,8 +844,8 @@ test('perf deltas match list members through reordering and removal', () => {
 });
 
 test('layout shows what a pressed paint shows, beside the computed base', () => {
-  const lines = render('layout', { viewport: { w: 400, h: 300 }, clock: 0, nodes: [], node: { id: 3, type: 'View', style: {}, press_shown: { paint: 1, opacity: '0.4', backgroundColor: 'rgb(0, 0, 255)', color: 'rgb(255, 0, 0)' } } });
-  expect(lines).toContain('press shows opacity=0.4 background="rgb(0, 0, 255)" color="rgb(255, 0, 0)" (paint 1)');
+  const lines = render('layout', { viewport: { w: 400, h: 300 }, clock: 0, nodes: [], node: { id: 3, type: 'View', style: {}, press_shown: { opacity: '0.4', backgroundColor: 'rgb(0, 0, 255)', color: 'rgb(255, 0, 0)' } } });
+  expect(lines).toContain('press shows opacity=0.4 background="rgb(0, 0, 255)" color="rgb(255, 0, 0)"');
 });
 
 test('a scroll track starts on a node, keeps its cursor, and its stop joins the last page', async () => {
