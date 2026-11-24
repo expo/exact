@@ -3,7 +3,8 @@
 //! `for` key is.
 
 use super::{infer, Scope, Shapes, Sink, Ty, TypeError};
-use contract_syntax::{Component, Expr};
+use contract_syntax::{Component, Expanded, Expr, Owner};
+use std::collections::BTreeSet;
 
 pub(crate) mod sequences;
 
@@ -62,6 +63,65 @@ pub(crate) fn reads_own_request(child: &Component) -> Option<TypeError> {
             span: st.span,
         })
     })
+}
+
+/// A child's state initializer that reads, through a prop, a resource or a
+/// mutation of a component around it whose instance is the same: the two uses
+/// have no region between them, so their states start together, before the
+/// instance's requests (LLP 1035.005.004 D2).
+pub(crate) fn starts_from_request(ex: &Expanded) -> Vec<TypeError> {
+    let (root, name) = (&ex.root, |n: u32| &ex.instances[n as usize].component);
+    let resources = (root.resources.iter())
+        .zip(ex.resource_owners.iter().zip(&ex.resource_instances))
+        .map(|(r, at)| (r.name.as_str(), "resource", at));
+    let mutations = (root.mutations.iter())
+        .zip(ex.mutation_owners.iter().zip(&ex.mutation_instances))
+        .map(|(m, at)| (m.name.as_str(), "mutation", at));
+    let requests: Vec<_> = (resources.chain(mutations))
+        .filter(|(.., (owner, _))| **owner != Owner::Root)
+        .collect();
+    let read = |n: &str| {
+        (root.derives.iter().find(|d| d.name == n).map(|d| &d.expr))
+            .or_else(|| ex.thunks.iter().find(|t| t.name == n).map(|t| &t.expr))
+    };
+    (root.states.iter())
+        .zip(ex.owners.iter().zip(&ex.state_instances))
+        .filter_map(|(state, (owner, &at))| {
+            let (request, kind, (_, &of)) = requests.iter().find(|(request, _, (o, &of))| {
+                *o == owner && of != at && reads_through(&state.expr, request, &read, &mut BTreeSet::new())
+            })?;
+            let shown = |n: &str| n.split('#').next().unwrap_or_default().to_string();
+            let (seen, told) = match *kind {
+                "resource" => ("its placeholder", ", set the state from an action that runs once the answer is there"),
+                _ => ("`none`", ""),
+            };
+            Some(TypeError {
+                id: "type-state-reads-request",
+                message: format!(
+                    "`state {}` in `{}` starts from a prop that reads the {kind} `{}` of `{}`: with no `if`, `match` or `for` between the two, they start together, and a state's initializer runs once, before its instance's requests are asked, so it would see only {seen}. Read the prop in a `derive` or in the view{told}, or use `{}` inside an `if` that waits for the answer",
+                    shown(&state.name), name(at), shown(request), name(of), name(at)
+                ),
+                span: ex.instances[at as usize].span,
+            })
+        })
+        .collect()
+}
+
+/// Whether `e` reads `name`, itself or through the derives and instance
+/// expressions `read` gives, each looked into once (`seen`).
+fn reads_through<'a>(
+    e: &'a Expr,
+    name: &str,
+    read: &impl Fn(&str) -> Option<&'a Expr>,
+    seen: &mut BTreeSet<&'a str>,
+) -> bool {
+    match e {
+        Expr::Ident(n, _) if n == name => true,
+        Expr::Ident(n, _) => {
+            seen.insert(n) && read(n).is_some_and(|e| reads_through(e, name, read, seen))
+        }
+        _ => (e.operands()).any(|operand| reads_through(operand, name, read, seen)),
+    }
 }
 
 /// The refusal of a use of a component that declares a request under a

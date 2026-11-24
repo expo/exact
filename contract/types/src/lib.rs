@@ -1463,6 +1463,7 @@ fn check_root(
             sink.push(tasks::repeated_owner(file, u, repeat));
         }
     }
+    (tasks::starts_from_request(expanded).into_iter()).for_each(|e| sink.push(e));
     let independent = sink.errors.len();
     types.components[0] = component::check_component(
         &expanded.root,

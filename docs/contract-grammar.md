@@ -404,7 +404,9 @@ resource over a list, and a child that owns requests or tasks is used where its 
 are bounded: outside every region, under `if` and `match`, or in a row of
 `stack(nav)`, `t.stack` or `nav.tabs`, never under another `for` or in a
 virtualized list (`type-child-resource`). Its state initializers do not read its
-own resources (`type-state-reads-request`). The device's facts are sources a
+own resources, nor does a state initializer of a component it uses outside any
+`if`, `match` or `for` of its own read its resources or mutations through a prop
+(`type-state-reads-request`). The device's facts are sources a
 component declares, the root or a child: `resource v = exactViewport() as shape
 V` (or `exactPage()`), with no arguments and no `else`, opens no request, and
 every instance reads the root's one answer (`EmptyState` reads

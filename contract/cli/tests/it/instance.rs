@@ -313,6 +313,50 @@ fn a_childs_state_may_not_start_from_its_own_request() {
     );
 }
 
+/// A child's state may not start from a prop that reads a request of a
+/// component around it in the same region arm, or, like it, outside every
+/// region: their states start together, before the requests (LLP
+/// 1035.005.004 D2). One in an `if` of its own is another instance, and the
+/// root's requests are asked before any child's state.
+#[test]
+fn a_childs_state_may_not_start_from_a_request_it_starts_with() {
+    let app = |use_: &str, own: &str, grand: &str, value: &str| {
+        format!("component A\n  state on = true\n  view\n    column\n{use_}\ncomponent Row\n  {own}\n  view\n    column\n{grand}\ncomponent Between\n  props\n    value: {value}\n  view\n    column\n      Field(value=value)\ncomponent Field\n  props\n    value: {value}\n  state first = value\n  view\n    text (first == value ? \"same\" : \"changed\")\n")
+    };
+    let (resource, mutation) = (
+        "resource s = s() as shape string\n  derive shown = s",
+        "mutation s as shape string\n  derive shown = s\n  action send\n    send s = s()",
+    );
+    let held = [
+        "      Field(value=s)\n",
+        "      Field(value=shown)\n",
+        "      Between(value=s)\n",
+    ];
+    for use_ in ["      Row()\n", "      if on\n        Row()\n"] {
+        for (held, (own, value, kind, seen)) in held.into_iter().flat_map(|h| {
+            [
+                (h, (resource, "string", "resource", "its placeholder")),
+                (h, (mutation, "option<string>", "mutation", "`none`")),
+            ]
+        }) {
+            let e = contract::compile(&app(use_, own, held, value)).unwrap_err();
+            assert_eq!(e.id, "type-state-reads-request", "{e}");
+            assert!(
+                e.message.starts_with(&format!(
+                    "`state first` in `Field` starts from a prop that reads the {kind} `s` of `Row`:"
+                )) && e.message.contains(seen),
+                "{}",
+                e.message
+            );
+        }
+        // In a region of its own, it is another instance.
+        let waits = "      if not pending(s)\n        Field(value=shown)\n";
+        contract::compile(&app(use_, resource, waits, "string")).unwrap_or_else(|e| panic!("{e}"));
+    }
+    let root = "component A\n  resource s = s() as shape string\n  view\n    Field(value=s)\ncomponent Field\n  props\n    value: string\n  state first = value\n  view\n    text first\n";
+    contract::compile(root).unwrap_or_else(|e| panic!("{e}"));
+}
+
 #[test]
 fn a_child_owns_its_mutation_except_where_data_sizes_its_uses() {
     // In a screen: each instance sends on its own, and its `then` names its

@@ -999,8 +999,9 @@ is idle and keeps its last answer; when the tab shows again it is asked again,
 and that answer shows until the new one lands (`current(days)` is false until
 then). `refresh days` reaches only the instance whose action ran: two instances
 ask, refresh and answer apart, even with equal arguments. A state initializer
-does not read its own component's resources (`type-state-reads-request`); a
-derive or the view does.
+does not read its own component's resources, nor, through a prop, those of a
+component around it with no `if`, `match` or `for` between them
+(`type-state-reads-request`); a derive or the view does.
 
 A component may own a mutation the same way (LLP 1035.005.004 D6). Each
 instance sends it on its own, with its own `pending`, failure, queue and answer,
