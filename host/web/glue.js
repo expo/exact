@@ -1,4 +1,4 @@
-import { listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popoverCommand, contextAt, placePopovers, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, stampOpenings, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
+import { onVisualViewport, listItem, syncListItemRoles, sheetLeaves, liveById, sourceField, popoverCommand, contextAt, placePopovers, grantOrigins, createGrantSet, grantError, rawGrantText, scopedGrantSet, deferredFulfill, refusal, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, focusController, runFocusCommands, controlEvent, environment, onKeyboard, preferences, updateCode, onPreferences, inertAncestor, modalLayers, stampOpenings, editMenu, navigation, afterPaintPieces, afterPaint, presenceLoader, animationClock, scrollFollowers, renderMarkup, navigableURL, navigates, refuseURL, frameURL, dataURL, releaseAssets, devFirst, reportPlace, reportTime, launchLocation, pageReporter, appRootFontSize, valuedControl, typedControl, settleValue, foldBits, foldEnv, onFold, preferFold, fold, animationClocks, onSelection, noteFit, refitTexts, pageTitle, pageStore, routeFlags, scrollDrag } from "./navigation.js";
 import { send, applyBatch } from "./wasm/commit.js";
 import { positionContexts, contextPanel } from "./wasm/context.js";
 import { syncViewportFit } from "./wasm/views.js";
@@ -567,7 +567,7 @@ export const scrollDocs = new Set(), markScrollDocument = () => {
   }
   host.pagePath = path;
 };
-visualViewport?.addEventListener("resize", syncViewportFit);
+onVisualViewport(syncViewportFit);
 host.sending = 0;
 // batches being applied: a dispatch run while another's applies (a focus it moved) is one deeper
 // LLP 1016: grants come from one whole-set parse; `unparsed` names why an

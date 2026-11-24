@@ -32,6 +32,16 @@ export function keyboardInset(platform = globalThis) {
 export function onKeyboard(changed, platform = globalThis) {
   platform.navigator?.virtualKeyboard?.addEventListener?.("geometrychange", changed);
 }
+/** The root's height under `interactive-widget=resizes-content` (`resizes`), which Safari ignores: its keys shrink only the visual viewport. The root then takes the visual viewport's height while the page is at its own scale and does not scroll itself, so what ends at the root's bottom stays above the keys. Each target calls it as the visual viewport resizes (`onVisualViewport`). */
+export function fitVisualViewport(root, resizes) {
+  const vv = globalThis.visualViewport;
+  root.style.height = resizes && vv?.scale === 1 && !document.documentElement.hasAttribute("data-scrolldocument") ? `${Math.min(innerHeight, vv.height)}px` : "";
+}
+/** Calls `fit` as the visual viewport resizes, and as the window does, whose `resize` comes before the visual viewport's: both listeners are made before the route projection's, so a projection measures the root at its new height. */
+export function onVisualViewport(fit) {
+  globalThis.visualViewport?.addEventListener("resize", fit);
+  addEventListener("resize", fit);
+}
 // Read CSS when the JS fold interfaces are absent (LLP 1078 D6). Share agent substitutes with agent-navigation.js; they change facts, not CSS env() resolution (D7).
 const r2 = (x) => Math.round(x * 100) / 100;
 function readFold() {

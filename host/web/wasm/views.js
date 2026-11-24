@@ -1,7 +1,7 @@
 import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
 import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from "../drag-input.js";
 import { picker, track, iframeLoading, localAssetURL, host, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
-import { pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue } from "../navigation.js";
+import { pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
 import { send } from "./commit.js";
 import { attach } from "./input.js";
 export function appSource(el, name, value, then) {
@@ -645,6 +645,5 @@ export function syncViewportFit() {
   if (meta && meta.content !== want) {
     meta.content = want;
   }
-  const vv = globalThis.visualViewport;
-  root.style.height = widget === "resizes-content" && vv && vv.scale === 1 && !document.documentElement.hasAttribute("data-scrolldocument") ? `${Math.min(innerHeight, vv.height)}px` : "";
+  fitVisualViewport(root, widget === "resizes-content");
 }

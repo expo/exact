@@ -72,6 +72,8 @@ mod timers;
 mod trapped;
 #[path = "type_descriptors.rs"]
 mod type_descriptors;
+#[path = "viewport.rs"]
+mod viewport;
 use regions::root_slot;
 pub use sites::{Site, Sites};
 use type_descriptors::type_code;
@@ -506,6 +508,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let owned = em.uses.rt("ownedTasks");
         let _ = write!(body, "{owned}();");
     }
+    viewport::fit(&mut em, sites.root as usize, &mut body);
     let mount = em.uses.rt("mount");
     let _ = write!(body, "{mount}($R=>{{{view}}});");
     // A plan whose actions read geometry fetches the page's reader after
@@ -585,20 +588,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     }
     timers::timers(&mut em, &mut body)?;
     timers::sequences(&mut em, &mut body)?;
-    let viewport = em.parts[sites.root as usize].as_ref().and_then(|p| {
-        let fit = p.props.get("viewportFit");
-        let widget = p.props.get("interactiveWidget");
-        (fit.is_some() || widget.is_some()).then(|| {
-            let mut m = String::from("width=device-width, initial-scale=1");
-            if let Some(f) = fit {
-                let _ = write!(m, ", viewport-fit={f}");
-            }
-            if let Some(w) = widget {
-                let _ = write!(m, ", interactive-widget={w}");
-            }
-            m
-        })
-    });
+    let root = em.parts[sites.root as usize].as_ref();
+    let viewport = root.and_then(viewport::meta);
     // The sources' parameter types, then `|` and the answer's type, for a
     // data module that needs values encoded by type (records and lists are
     // both arrays here).

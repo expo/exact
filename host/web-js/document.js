@@ -15,7 +15,7 @@
 // host's `documentHead` writes them (document-glue.js). Where no head sets a
 // title it is the selected route's header's heading, else the app's name
 // (navigation.js `pageTitle`, both web targets': LLP 1115.000 D4.1).
-import { unselected, unselectedForHead, pageTitle, panelsOf, viewChildren, overPage } from "./navigation.js";
+import { unselected, unselectedForHead, pageTitle, panelsOf, viewChildren, overPage, fitVisualViewport, onVisualViewport } from "./navigation.js";
 import { scope, owner, onEnd, adopting, end, stood, PrepareTasks } from "./rt.js";
 
 /** The active head's fields by prop name (`headTitle` …): what a renderer
@@ -147,6 +147,17 @@ export function markRoutes(root) {
   }
 }
 
+/** `interactive-widget=resizes-content` on the root, which Safari ignores: the root follows the visual viewport
+ * (`fitVisualViewport`) from before the first layout, again when the page starts or stops scrolling itself. */
+let Fit = null;
+export function fitViewport() {
+  const root = document.getElementById("exact-root");
+  if (!root) return;
+  Fit = () => fitVisualViewport(root, true);
+  onVisualViewport(Fit);
+  Fit();
+}
+
 /** The elements that may be the page's scroller: `<html data-scrolldocument>`
  * while one is (D4), which the shell's rule reads, as the web host's glue.
  * One in a route or panel the projection hid is `data-exact-offpage`, an inner
@@ -169,8 +180,10 @@ export function markDocument() {
   const page = live.length === 1 ? live[0] : null, scrolls = typeof globalThis.scrollTo === "function" && typeof globalThis.scrollY === "number";
   if (scrolls && !Listening) { Listening = true; addEventListener("scroll", () => { if (Page?.isConnected) Scrolled.set(Page, [scrollX, scrollY]); }, { passive: true }); }
   for (const e of live) e.removeAttribute("data-exact-offpage");
+  const was = Marked;
   Marked = live.length > 0;
   document.documentElement?.toggleAttribute?.("data-scrolldocument", Marked);
+  if (Marked !== was) Fit?.();
   const path = [];
   for (let a = page?.parentElement; a && a.id !== "exact-root"; a = a.parentElement) path.push(a);
   for (const a of Path) if (!path.includes(a)) a.removeAttribute("data-exact-frame");
