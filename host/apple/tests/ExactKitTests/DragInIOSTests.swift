@@ -32,14 +32,15 @@ final class DragInIOSTests: XCTestCase {
     }
 
     /// A column (1) hearing `column` on the page (9), holding a textarea (2)
-    /// hearing `editor` at its top and, below it, a paragraph (4).
-    private func presenter(column: [String], editor: [String] = ["input"]) -> Presenter {
+    /// hearing `editor` at its top and, below it, a paragraph (4). In a new
+    /// window, or in `shared` at `frame`, its events heard with `tag`.
+    private func presenter(column: [String], editor: [String] = ["input"], in shared: UIWindow? = nil, frame: CGRect? = nil, tag: String = "") -> Presenter {
         let p = Presenter()
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
-        p.viewport.frame = window.bounds
+        if shared == nil { window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800)) }
+        p.viewport.frame = frame ?? window.bounds
         window.addSubview(p.viewport)
         window.makeKeyAndVisible()
-        p.onClipboard = { [unowned self] id, kind, line in heard.append("\(id):\(kind)" + (kind == 38 ? ":" + line.split(separator: "\n").last.map(String.init)! : "")) }
+        p.onClipboard = { [unowned self] id, kind, line in heard.append("\(tag)\(id):\(kind)" + (kind == 38 ? ":" + line.split(separator: "\n").last.map(String.init)! : "")) }
         p.apply(wireBatch([
             ["op": "create", "id": 9, "kind": "view"],
             ["op": "create", "id": 1, "kind": "view", "handlers": column],
@@ -68,12 +69,13 @@ final class DragInIOSTests: XCTestCase {
         objects.forEach { provider.registerObject($0, visibility: .all) }
         return provider
     }
-    /// A file representation of `url` as `type`, handed over once `gate` (if any) is signalled.
-    private func fileProvider(_ url: URL?, type: UTType, inPlace: Bool = false, gate: DispatchSemaphore? = nil) -> NSItemProvider {
+    /// A file representation of `url` as `type`, handed over once `gate` (if
+    /// any) is signalled, signalling `then` (if any) once it has.
+    private func fileProvider(_ url: URL?, type: UTType, inPlace: Bool = false, gate: DispatchSemaphore? = nil, then: DispatchSemaphore? = nil) -> NSItemProvider {
         let provider = NSItemProvider()
         provider.registerFileRepresentation(forTypeIdentifier: type.identifier, fileOptions: inPlace ? [.openInPlace] : [], visibility: .all) { done in
             // A provider in this process loads on the asking thread, so a gated one answers from another
-            let answer = { done(url, inPlace, url == nil ? CocoaError(.fileNoSuchFile) : nil) }
+            let answer = { done(url, inPlace, url == nil ? CocoaError(.fileNoSuchFile) : nil); then?.signal() }
             if let gate { DispatchQueue.global().async { gate.wait(); answer() } } else { answer() }
             return nil
         }
@@ -123,8 +125,9 @@ final class DragInIOSTests: XCTestCase {
     func testTheItemsFilesAreCopiedOutInOrderAndTheirTextAndLinkReadApart() throws {
         let first = try fixture("first.pdf", "%PDF-1.4 first"), second = try fixture("second.txt", "second"), late = DispatchSemaphore(value: 0)
         let link = provider([NSURL(string: "https://example.com/fuji")!, "Mount Fuji" as NSString])
+        // The first file is handed over only once the last has been
         let providers = [fileProvider(first, type: .pdf, gate: late), fileProvider(nil, type: .pdf), fileProvider(folder, type: .folder), link,
-                         fileProvider(second, type: .plainText, inPlace: true)]
+                         fileProvider(second, type: .plainText, inPlace: true, then: late)]
         let read = expectation(description: "read")
         var said: [String] = []
         DropItems.read(providers, log: { said.append($0) }) { files, text, url, into in
@@ -135,7 +138,6 @@ final class DragInIOSTests: XCTestCase {
             XCTAssertEqual(url, "https://example.com/fuji")
             read.fulfill()
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { late.signal() }
         wait(for: [read], timeout: 10)
         drain()
         XCTAssertTrue(said.contains { $0.contains("did not arrive") } && said.contains { $0.contains("is a folder") }, "\(said)")
@@ -184,6 +186,57 @@ final class DragInIOSTests: XCTestCase {
         drag.textDroppableView(editor, dropSessionDidExit: next)
         drain()
         XCTAssertEqual(heard, ["1:55", "1:56"], "the exit from the view that reports it")
+    }
+
+    /// A drag that moves from one presenter's zone onto another's field in
+    /// the same window, the field reporting it before the window's exit, is
+    /// followed by the second alone: the first lets it go, and takes the
+    /// next drag once it is cancelled.
+    func testAFieldTakesTheDragFromAnotherPresenterInItsWindow() throws {
+        let a = presenter(column: ["drop", "dragenter", "dragleave"], frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let b = presenter(column: ["drop", "dragenter", "dragleave"], in: window, frame: CGRect(x: 0, y: 400, width: 400, height: 400), tag: "b")
+        let drops = try drops(a), next = try target(b), editor = try XCTUnwrap(b.views[2]?.textArea)
+        XCTAssertTrue(try self.drops(b) === drops, "one interaction for the window")
+        let session = Session([provider(["words" as NSString])], at: try XCTUnwrap(a.views[1]).convert(below, to: nil))
+        drops.dropInteraction(interaction, sessionDidEnter: session)
+        session.point = editor.convert(CGPoint(x: 20, y: 20), to: nil)
+        next.textDroppableView(editor, dropSessionDidEnter: session)
+        drops.dropInteraction(interaction, sessionDidExit: session)
+        drain()
+        XCTAssertEqual(heard, ["1:55", "1:56", "b1:55"], "the first lets it go as the second's field takes it")
+        next.textDroppableView(editor, dropSessionDidEnd: session)
+        drops.dropInteraction(interaction, sessionDidEnd: session)
+        XCTAssertEqual(heard, ["1:55", "1:56", "b1:55", "b1:56"])
+        let after = Session([provider(["next" as NSString])], at: try XCTUnwrap(a.views[1]).convert(below, to: nil))
+        XCTAssertEqual(drops.dropInteraction(interaction, sessionDidUpdate: after).operation, .copy, "the first takes the next drag")
+        XCTAssertEqual(heard.last, "1:55")
+    }
+
+    /// A target its own `dragenter` replaces as the drop lands is the node the
+    /// drop was at: the replacement takes nothing, through the window or the agent.
+    func testATargetReplacedByItsOwnEnterTakesNothing() throws {
+        let p = presenter(column: ["drop", "dragenter", "dragleave"])
+        let drops = try drops(p), drag = try target(p), point = try XCTUnwrap(p.views[1]).convert(below, to: nil)
+        var replacement: UInt32 = 6
+        let replace = { [unowned self] in
+            p.onClipboard = { [unowned self] id, kind, line in
+                heard.append("\(id):\(kind)")
+                guard kind == 55, id != replacement else { return }
+                p.apply(wireBatch([["op": "destroy", "id": Int(id)],
+                                   ["op": "create", "id": Int(replacement), "kind": "view", "handlers": ["drop", "dragenter", "dragleave"]],
+                                   ["op": "children", "id": Int(replacement), "ids": [2, 4]], ["op": "children", "id": 9, "ids": [Int(replacement)]],
+                                   ["op": "frame", "id": Int(replacement), "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0]]))
+            }
+        }
+        replace()
+        drops.dropInteraction(interaction, performDrop: Session([provider(["words" as NSString])], at: point))
+        until { drag.waiting.isEmpty }
+        XCTAssertEqual(heard, ["1:55"], "the drop's node is gone, and its replacement takes nothing")
+        heard = []
+        replacement = 7
+        let reply = drag.agentDrag(["drop": [String](), "text": "words", "at": [Double(below.x), Double(below.y)]], over: try XCTUnwrap(p.views[6]))
+        XCTAssertNotNil(reply["error"], "\(reply)")
+        XCTAssertEqual(heard, ["6:55"], "the agent's drop too")
     }
 
     /// A presenter moved to another window lets its drag go, since the old
@@ -313,6 +366,22 @@ final class DragInIOSTests: XCTestCase {
     /// VoiceOver offers a zone's drop point on it and on each element it
     /// focuses inside it, a paragraph, a checkbox or a progress bar; none
     /// while the zone is inert; with no drop above, UIKit's own.
+    /// A zone whose middle a nested zone takes offers a point where a drop
+    /// reaches the zone itself, and a drop there does.
+    func testAZonesDropPointReachesTheZoneBesideANestedOne() throws {
+        let p = presenter(column: ["drop"])
+        p.apply(wireBatch([["op": "create", "id": 30, "kind": "view", "handlers": ["drop"]],
+                           ["op": "children", "id": 1, "ids": [2, 4, 30]],
+                           ["op": "frame", "id": 30, "x": 100.0, "y": 100.0, "w": 200.0, "h": 200.0]]))
+        let zone = try XCTUnwrap(p.views[1]), descriptor = try XCTUnwrap(zone.accessibilityDropPointDescriptors?.first)
+        XCTAssertTrue(descriptor.view === zone)
+        let at = zone.convert(descriptor.point, to: nil)
+        XCTAssertFalse(try XCTUnwrap(p.views[30]).frame.contains(zone.convert(at, from: nil)), "not in the nested zone: \(descriptor.point)")
+        try drops(p).dropInteraction(interaction, performDrop: Session([provider(["words" as NSString])], at: at))
+        hear(1)
+        XCTAssertEqual(heard, [#"1:38:[[],"words",""]"#])
+    }
+
     func testAZoneAndTheElementsInsideItOfferTheZonesDropPoint() throws {
         let p = presenter(column: ["drop"])
         p.apply(wireBatch([["op": "create", "id": 20, "kind": "control", "props": ["type": "checkbox", "accessibilityLabel": "Seen"]],
@@ -361,7 +430,7 @@ final class DragInGroupedIOSTests: GroupedListFixture {
 /// A drop session at a window point, carrying `providers`.
 private final class Session: NSObject, UIDropSession {
     let items: [UIDragItem]
-    let point: CGPoint
+    var point: CGPoint
     init(_ providers: [NSItemProvider], at point: CGPoint) {
         items = providers.map(UIDragItem.init(itemProvider:))
         self.point = point

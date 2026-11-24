@@ -65,20 +65,38 @@ final class WindowDrops: NSObject, UIDropInteractionDelegate {
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) { follower(of: session)?.ended(session) }
 
-    /// The presenter under the drop is found again at its point, then takes it.
+    /// The presenter under the drop is found again at its point, with no
+    /// handler run first, and takes it.
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
-        guard let window, report(session) else { return }
-        follower(of: session)?.perform(session, at: session.location(in: window))
+        guard let window else { return }
+        let point = session.location(in: window), under = tracker(at: point)
+        handOff(session, to: under)
+        under?.perform(session, at: point)
     }
 
     /// The drag is over the window: the tracker of the presenter under it
     /// follows it, and one it left lets it go. Whether a node there takes it.
     func report(_ session: UIDropSession) -> Bool {
         guard let window else { return false }
-        let point = session.location(in: window), hit = window.hitTest(point, with: nil)
-        let under = hit.flatMap { hit in trackers.allObjects.first { $0.owns(hit) } }
-        if let follower = follower(of: session), follower !== under { follower.ended(session) }
+        let point = session.location(in: window), under = tracker(at: point)
+        handOff(session, to: under)
         return under?.moved(session, at: point, from: self) ?? false
+    }
+
+    /// A field's own text drop reports the drag to `tracker`, which follows
+    /// it alone, as a report through the window's interaction does.
+    func field(_ session: UIDropSession, to tracker: DropTarget, at point: CGPoint, from field: AnyObject) {
+        handOff(session, to: tracker)
+        _ = tracker.moved(session, at: point, from: field)
+    }
+
+    /// Every tracker but `tracker` that follows `session` lets it go.
+    private func handOff(_ session: UIDropSession, to tracker: DropTarget?) {
+        for other in trackers.allObjects where other !== tracker && other.follows(session) { other.ended(session) }
+    }
+
+    private func tracker(at point: CGPoint) -> DropTarget? {
+        window?.hitTest(point, with: nil).flatMap { hit in trackers.allObjects.first { $0.owns(hit) } }
     }
 
     private func follower(of session: UIDropSession) -> DropTarget? { trackers.allObjects.first { $0.follows(session) } }
@@ -169,10 +187,25 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
 
     func follows(_ session: UIDropSession) -> Bool { self.session == ObjectIdentifier(session) }
 
+    /// The zone's drop point is one where a drop reaches the zone itself:
+    /// its middle, else the middle of the first of a grid of its parts that
+    /// a nested zone, a field or another view does not take; none when every
+    /// part is taken.
     func dropPoints(of view: NodeView) -> [UIAccessibilityLocationDescriptor]? {
         guard let presenter, let node = presenter.authoredNodes(from: view).first(where: { $0.handlers.contains("drop") }) else { return nil }
         guard !node.inert, !node.formDisabled else { return [] }
-        return [UIAccessibilityLocationDescriptor(name: node.accessibleName, view: node)]
+        let box = node.bounds, parts = 4
+        let points = [CGPoint(x: box.midX, y: box.midY)] + (0..<parts * parts).map { i in
+            CGPoint(x: box.minX + box.width * (CGFloat(i % parts) + 0.5) / CGFloat(parts), y: box.minY + box.height * (CGFloat(i / parts) + 0.5) / CGFloat(parts))
+        }
+        guard let point = points.first(where: { reaches(node, at: node.convert($0, to: nil)) }) else { return [] }
+        return [UIAccessibilityLocationDescriptor(name: node.accessibleName, point: point, in: node)]
+    }
+
+    /// Whether a drop at window point `point` reaches `node` and no field takes it first.
+    private func reaches(_ node: NodeView, at point: CGPoint) -> Bool {
+        let found = nodes(at: point)
+        return found.target === node && (found.fieldOwner == nil || found.fieldOwner === node)
     }
 
     // MARK: Reports of the drag (the window's interaction, a field's text drop)
@@ -209,8 +242,12 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         finish()
     }
 
+    /// The drop of `session` at `point`, which this tracker follows, or takes
+    /// up as the drop lands here.
     func perform(_ session: UIDropSession, at point: CGPoint) {
-        guard self.session == ObjectIdentifier(session), let presenter, let release = release(at: point) else { return }
+        guard self.session == nil || self.session == ObjectIdentifier(session), let presenter else { return }
+        self.session = ObjectIdentifier(session)
+        guard let release = release(at: point) else { return }
         // Every item loads before the action runs (UIKit starts each load here)
         DropItems.read(session.items.map(\.itemProvider), log: { [weak presenter] in presenter?.session?.log($0) }) { [weak self] files, text, url, folder in
             guard let self else { return }
@@ -229,11 +266,15 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
     // MARK: A field's own text drop
 
     func textDroppableView(_ textDroppableView: UIView & UITextDroppable, dropSessionDidEnter session: UIDropSession) {
-        _ = moved(session, at: location(session), from: textDroppableView)
+        fieldMoved(session, textDroppableView)
     }
 
     func textDroppableView(_ textDroppableView: UIView & UITextDroppable, dropSessionDidUpdate session: UIDropSession) {
-        _ = moved(session, at: location(session), from: textDroppableView)
+        fieldMoved(session, textDroppableView)
+    }
+
+    private func fieldMoved(_ session: UIDropSession, _ field: UIView) {
+        if let drops { drops.field(session, to: self, at: location(session), from: field) } else { _ = moved(session, at: location(session), from: field) }
     }
 
     func textDroppableView(_ textDroppableView: UIView & UITextDroppable, dropSessionDidExit session: UIDropSession) {
@@ -282,16 +323,18 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         let found = nodes(at: point)
         session = agent
         turn &+= 1
-        update(found.chain, at: point)
-        if kind == "dragenter" { return ["tapped": Int(view.id), "dragenter": paths.count, "delivery": "presenter"] }
-        guard let target = found.target else {
-            finish()
-            return ["error": "view \(view.id) takes no drop: nothing under it declares `drop`"]
+        if kind == "dragenter" {
+            update(found.chain, at: point)
+            return ["tapped": Int(view.id), "dragenter": paths.count, "delivery": "presenter"]
         }
         // UIKit's field takes a drag's text and links itself, files or not, which the agent's drop does not
-        if !text.isEmpty || !url.isEmpty, let owner = found.fieldOwner, owner !== target {
+        let byField = (!text.isEmpty || !url.isEmpty) && found.fieldOwner.map { $0 !== found.target } == true
+        // A drop that reaches its target is resolved, its records taken, before any handler runs (`release`)
+        guard found.target != nil, !byField else {
+            update(found.chain, at: point)
             finish()
-            return ["error": "drop: the field under the point inserts the drag's text and links itself (LLP 1094.001 D2, D4), which the agent's drop does not: drop on the node's own box, or declare `drop` on the field"]
+            if byField { return ["error": "drop: the field under the point inserts the drag's text and links itself (LLP 1094.001 D2, D4), which the agent's drop does not: drop on the node's own box, or declare `drop` on the field"] }
+            return ["error": "view \(view.id) takes no drop: nothing under it declares `drop`"]
         }
         guard let release = release(at: point) else { return ["error": "view \(view.id) takes no drop: nothing under it declares `drop`"] }
         defer { lands(release.over) }
