@@ -424,7 +424,9 @@ impl Preloads {
         let mut cache = cache::Cache::new(grants.into());
         cache.clock = clock;
         let now = (cache.clock)();
-        for definition in definitions.into_iter().take(MAX_PRELOADS) {
+        for mut definition in definitions.into_iter().take(MAX_PRELOADS) {
+            // The manifest's preloads are the app's own requests.
+            definition.request.reach.origin = exact_runner::CallOrigin::App;
             let generation = cache.touch();
             cache
                 .preloads
