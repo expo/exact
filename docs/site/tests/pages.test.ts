@@ -161,3 +161,8 @@ test('Markdown, the worker and the files it does not see', async () => {
   const install = await fetch(`${origin}/.exact/install/`);
   expect([install.status, install.headers.get('X-Robots-Tag')]).toEqual([200, 'noindex']);
 });
+
+test("a font file has a cache lifetime, so the browser does not request it again when the runtime replaces the page's sheet", async () => {
+  const font = await fetch(`${origin}/assets/fonts/Inter-Regular.ttf`, { method: 'HEAD' });
+  expect([font.status, font.headers.get('Cache-Control')]).toEqual([200, 'public, max-age=604800']);
+});

@@ -184,6 +184,9 @@ writeFileSync(
     '  X-Llms-Txt: /llms.txt',
     '/*.md',
     '  Content-Type: text/markdown; charset=utf-8',
+    "# A font the browser must revalidate is requested again when the runtime replaces the page's sheet, and the text falls back when that answer is late.",
+    '/assets/fonts/*',
+    '  Cache-Control: public, max-age=604800',
     '# A page by its path only: a pattern matching every path would retype the scripts, styles and fonts too.',
     ...pages.flatMap(p => [p.path, '  Content-Type: text/html; charset=utf-8']),
   ].join('\n') + '\n'
