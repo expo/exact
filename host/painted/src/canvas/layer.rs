@@ -347,6 +347,69 @@ mod tests {
     }
 
     #[test]
+    fn android_plays_the_recorded_layer_tracks() {
+        use crate::presenter::{PainterChoice, Presenter};
+        use exact_motion::Property;
+        use exact_runner::Event;
+
+        let source = r##"component App
+  state squashed = false
+  action squash
+    squashed = true
+  view
+    column
+      box testId="squash" press=squash width=8 height=8
+      box width=32 height=16 margin=8 background-color="#0000ff" scale=(squashed ? "1 0.5" : "2 2") transition="scale 1s linear"
+"##;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (64., 64.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.host_mut().lowering = true;
+        p.host_mut()
+            .engine
+            .set_lowered_properties(&[Property::Scale]);
+        let key = p.host().kernel().find_by_test_id("squash")[0];
+        let id = p.host().kernel().node_by_key(key).unwrap().id;
+        assert!(p.host_mut().dispatch_at(id, Event::Press, 0.).is_none());
+        p.after_commit();
+        p.frame();
+        let mut ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        super::super::tracks::Tracks::default().send(&p, 0, &mut ops);
+        let (mut base, mut tracks) = (None, Vec::new());
+        let mut at = 0;
+        while at < ops.len() {
+            let next = end(&ops, at).unwrap();
+            let word = |k: usize| f32::from_bits(ops[at + 3 + k]);
+            match ops[at] {
+                LAYER_SET => base = Some((word(10), word(15), ops[at + 2 + HEADER_WORDS])),
+                // A track here is 21 words: its property, then its first
+                // and last values at words 16 and 19.
+                TRACKS => tracks.extend(
+                    ops[at + 3..next]
+                        .chunks(21)
+                        .map(|t| (t[0], f32::from_bits(t[16]), f32::from_bits(t[19]))),
+                ),
+                _ => {}
+            }
+            at = next;
+        }
+        assert_eq!(base, Some((1., 0.5, u32::MAX)));
+        assert_eq!(tracks, [(3, 2., 1.), (17, 2., 0.5)]);
+        let bytes: Vec<_> = ops.iter().flat_map(|word| word.to_le_bytes()).collect();
+        assert_eq!(
+            bytes,
+            include_bytes!("../../../android/canvas/src/test/resources/scaled-layer.ops")
+        );
+    }
+
+    #[test]
     fn native_views_are_kept_inside_their_animated_ancestors() {
         use crate::presenter::{PainterChoice, Presenter};
         use exact_kernel::motion::motion_node;
