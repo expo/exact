@@ -6185,7 +6185,7 @@ column dragenter=entered dragleave=left drop=took
 | --- | --- | --- |
 | Web (JS and wasm targets) | yes: Chromium's handles, else read-only copies; a folder's entry as a read-only folder; `text/plain` and `text/uri-list` | `clipboardData.files`, read-only copies |
 | macOS | yes: file URLs, promised files (Photos', an Exact app's), strings and links, a field forwarding a file drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
-| iOS | yes: files, text and links from another app or this one, each file a copy; a field keeps text, links and text files, as UIKit's text views do, unless the field declares `drop` | file URLs, else the pasteboard's image as `image.png` |
+| iOS | yes: files, text and links from another app or this one, each file a copy, no folders; a field keeps text, links, text files and the text of a drag that also carries files, as UIKit's text views do, unless the field declares `drop` | file URLs, else the pasteboard's image as `image.png` |
 | tvOS | none | empty: tvOS has no pasteboard |
 | Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
 | Linux, Android, terminal | none | empty (text only) |

@@ -80,9 +80,16 @@ final class DragInIOSTests: XCTestCase {
         return provider
     }
     /// Waits until `heard` has `count` events, running the main queue.
-    private func hear(_ count: Int, timeout: TimeInterval = 10) {
+    private func hear(_ count: Int, timeout: TimeInterval = 10) { until(timeout: timeout) { heard.count >= count } }
+    private func until(timeout: TimeInterval = 10, _ done: () -> Bool) {
         let deadline = Date().addingTimeInterval(timeout)
-        while heard.count < count, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+        while !done(), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    }
+    /// Runs what the main queue holds now, such as an exit's clear.
+    private func drain() {
+        let ran = expectation(description: "the main queue")
+        DispatchQueue.main.async { ran.fulfill() }
+        wait(for: [ran], timeout: 5)
     }
 
     func testAnItemIsWhatItsOwnTypesSay() throws {
@@ -130,7 +137,7 @@ final class DragInIOSTests: XCTestCase {
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { late.signal() }
         wait(for: [read], timeout: 10)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        drain()
         XCTAssertTrue(said.contains { $0.contains("did not arrive") } && said.contains { $0.contains("is a folder") }, "\(said)")
     }
 
@@ -149,24 +156,88 @@ final class DragInIOSTests: XCTestCase {
         XCTAssertEqual(heard, ["1:55", #"1:38:[[],"Mount Fuji","https:\/\/example.com\/fuji"]"#])
     }
 
-    /// The tracker follows one drag: another session's reports are ignored,
-    /// and an exit from a view the drag already left lets nothing go.
+    /// The tracker follows one drag: another session's reports and end are
+    /// ignored, and the first still drops; an exit from a view the drag
+    /// already left lets nothing go.
     func testAnotherSessionAndALateExitLetNothingGo() throws {
         let p = presenter(column: ["drop", "dragenter", "dragleave"])
         let drops = try drops(p), drag = try target(p), editor = try XCTUnwrap(p.views[2]?.textArea), point = try XCTUnwrap(p.views[1]).convert(below, to: nil)
         let session = Session([provider(["words" as NSString])], at: point), other = Session([provider(["other" as NSString])], at: point)
         drops.dropInteraction(interaction, sessionDidEnter: session)
         XCTAssertEqual(drops.dropInteraction(interaction, sessionDidUpdate: other).operation, .forbidden, "one drag at a time")
+        drops.dropInteraction(interaction, sessionDidExit: other)
         drops.dropInteraction(interaction, sessionDidEnd: other)
-        XCTAssertEqual(heard, ["1:55"], "another session's end lets nothing go")
+        drain()
+        XCTAssertEqual(heard, ["1:55"], "another session's exit and end let nothing go")
+        drops.dropInteraction(interaction, performDrop: session)
+        drops.dropInteraction(interaction, sessionDidEnd: session)
+        hear(2)
+        XCTAssertEqual(heard, ["1:55", #"1:38:[[],"words",""]"#], "and the first drag drops")
+        heard = []
         // Onto the field, whose text drop reports it, then the window's late exit
-        drag.textDroppableView(editor, dropSessionDidEnter: session)
-        drops.dropInteraction(interaction, sessionDidExit: session)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        let next = Session([provider(["next" as NSString])], at: point)
+        drops.dropInteraction(interaction, sessionDidEnter: next)
+        drag.textDroppableView(editor, dropSessionDidEnter: next)
+        drops.dropInteraction(interaction, sessionDidExit: next)
+        drain()
         XCTAssertEqual(heard, ["1:55"], "a late exit")
-        drag.textDroppableView(editor, dropSessionDidExit: session)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        drag.textDroppableView(editor, dropSessionDidExit: next)
+        drain()
         XCTAssertEqual(heard, ["1:55", "1:56"], "the exit from the view that reports it")
+    }
+
+    /// A presenter moved to another window lets its drag go, since the old
+    /// window's end no longer reaches it, and takes a drag in the new one.
+    func testAPresenterMovedToAnotherWindowLetsItsDragGo() throws {
+        let p = presenter(column: ["drop", "dragenter", "dragleave"])
+        let drag = try target(p), point = try XCTUnwrap(p.views[1]).convert(below, to: nil)
+        try drops(p).dropInteraction(interaction, sessionDidEnter: Session([provider(["words" as NSString])], at: point))
+        let other = UIWindow(frame: window.frame)
+        other.addSubview(p.viewport)
+        other.makeKeyAndVisible()
+        drag.sync() // as the session's view does when it moves to a window
+        XCTAssertEqual(heard, ["1:55", "1:56"])
+        let moved = try drops(p)
+        XCTAssertTrue(other.interactions.contains { ($0 as? UIDropInteraction)?.delegate === moved }, "the new window's interaction")
+        XCTAssertEqual(moved.dropInteraction(interaction, sessionDidUpdate: Session([provider(["next" as NSString])], at: point)).operation, .copy)
+        XCTAssertEqual(heard, ["1:55", "1:56", "1:55"])
+        other.isHidden = true
+    }
+
+    /// A row whose view the pool lends to the next row is another node: the
+    /// next row hears its own enter, and the drop, and the retired one
+    /// nothing more.
+    func testARowWhoseViewIsLentIsAnotherNode() throws {
+        let p = Presenter()
+        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        p.viewport.frame = window.bounds
+        window.addSubview(p.viewport)
+        window.makeKeyAndVisible()
+        p.onClipboard = { [unowned self] id, kind, line in heard.append("\(id):\(kind)" + (kind == 38 ? ":" + line.split(separator: "\n").last.map(String.init)! : "")) }
+        let collections = { (row: Int) -> [String: Any] in
+            ["op": "collections", "items": [["view": 1, "revision": 1, "scrollSequence": 0, "count": 50, "totalExtent": 2000,
+                "rows": [["view": row, "root": row, "epoch": 1]], "correction": NSNull()]]]
+        }
+        let row = { (base: Int) -> [[String: Any]] in
+            [["op": "create", "id": base, "kind": "view", "handlers": ["drop", "dragenter", "dragleave"]],
+             ["op": "create", "id": base + 1, "kind": "text", "props": ["text": "Row \(base)"]],
+             ["op": "children", "id": base, "ids": [base + 1]],
+             ["op": "frame", "id": base, "x": 0.0, "y": 0.0, "w": 300.0, "h": 60.0],
+             ["op": "frame", "id": base + 1, "x": 8.0, "y": 8.0, "w": 200.0, "h": 20.0]]
+        }
+        p.apply(wireBatch([collections(10), ["op": "create", "id": 1, "kind": "list", "style": ["overflow_y": "scroll"]], ["op": "create", "id": 9, "kind": "view"]]
+            + row(10) + [["op": "children", "id": 1, "ids": [10]], ["op": "children", "id": 9, "ids": [1]], ["op": "roots", "ids": [9]],
+                         ["op": "frame", "id": 9, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0],
+                         ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 600.0], ["op": "content", "id": 1, "w": 300.0, "h": 2000.0]]))
+        let view = try XCTUnwrap(p.views[10]), drops = try drops(p), point = view.convert(CGPoint(x: 250, y: 40), to: nil)
+        let session = Session([provider(["words" as NSString])], at: point)
+        drops.dropInteraction(interaction, sessionDidEnter: session)
+        p.apply(wireBatch([collections(20), ["op": "destroy", "id": 10], ["op": "destroy", "id": 11]] + row(20) + [["op": "children", "id": 1, "ids": [20]]]))
+        XCTAssertTrue(p.views[20] === view, "the same view, lent to the next row")
+        drops.dropInteraction(interaction, sessionDidUpdate: session)
+        drops.dropInteraction(interaction, performDrop: session)
+        hear(3)
+        XCTAssertEqual(heard, ["10:55", "20:55", #"20:38:[[],"words",""]"#])
     }
 
     /// A drag that carries nothing usable is forbidden over a drop.
@@ -199,9 +270,12 @@ final class DragInIOSTests: XCTestCase {
         let gone = Session([fileProvider(try fixture("b.pdf", "%PDF-1.4"), type: .pdf, gate: gate)], at: point)
         drops.dropInteraction(interaction, sessionDidEnter: gone)
         drops.dropInteraction(interaction, performDrop: gone)
+        let drag = try target(p)
+        XCTAssertFalse(drag.waiting.isEmpty)
         p.apply(wireBatch([["op": "destroy", "id": 1]]))
         gate.signal()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        until { drag.waiting.isEmpty } // the drop landed
+        XCTAssertTrue(drag.waiting.isEmpty)
         XCTAssertFalse(heard.contains { $0.hasPrefix("1:38") }, "\(heard)")
     }
 
@@ -224,8 +298,9 @@ final class DragInIOSTests: XCTestCase {
         XCTAssertEqual(reply["tapped"] as? Int, 1, "\(reply)")
         XCTAssertEqual(heard, ["1:55", #"1:38:[[],"Mount Fuji","https:\/\/example.com\/fuji"]"#])
         heard = []
-        let field = drag.agentDrag(["drop": [String](), "text": "words", "at": at(overField)], over: column)
-        XCTAssertTrue((field["error"] as? String)?.contains("inserts text and links itself") == true, "\(field)")
+        let photo = try fixture("photo.heic", "heic")
+        let field = drag.agentDrag(["drop": [photo.path], "text": "words", "at": at(overField)], over: column)
+        XCTAssertTrue((field["error"] as? String)?.contains("inserts the drag's text and links itself") == true, "a field takes a mixed drag's text: \(field)")
         XCTAssertEqual(heard, ["1:55", "1:56"], "the column hears the drag and its end")
         let folderDrop = drag.agentDrag(["drop": [folder.path], "at": at(below)], over: column)
         XCTAssertTrue((folderDrop["error"] as? String)?.contains("not a file") == true, "\(folderDrop)")
@@ -235,18 +310,53 @@ final class DragInIOSTests: XCTestCase {
         XCTAssertTrue((covered["error"] as? String)?.contains("covered") == true, "a point outside the paragraph reaches something else: \(covered)")
     }
 
-    /// VoiceOver offers a zone's drop point on it and on the paragraph it
-    /// focuses inside it; with no drop above, UIKit's own.
-    func testAZoneAndItsParagraphOfferTheZonesDropPoint() throws {
+    /// VoiceOver offers a zone's drop point on it and on each element it
+    /// focuses inside it, a paragraph, a checkbox or a progress bar; none
+    /// while the zone is inert; with no drop above, UIKit's own.
+    func testAZoneAndTheElementsInsideItOfferTheZonesDropPoint() throws {
         let p = presenter(column: ["drop"])
-        XCTAssertTrue(try XCTUnwrap(p.views[1]).accessibilityDropPointDescriptors?.first?.view === p.views[1])
-        XCTAssertTrue(try XCTUnwrap(p.views[4]).accessibilityDropPointDescriptors?.first?.view === p.views[1], "the paragraph's is its zone's")
+        p.apply(wireBatch([["op": "create", "id": 20, "kind": "control", "props": ["type": "checkbox", "accessibilityLabel": "Seen"]],
+                           ["op": "create", "id": 21, "kind": "control", "props": ["type": "progress", "accessibilityRole": "progressbar", "value": "0.5"], "handlers": []],
+                           ["op": "children", "id": 1, "ids": [2, 4, 20, 21]],
+                           ["op": "frame", "id": 20, "x": 8.0, "y": 340.0, "w": 24.0, "h": 24.0],
+                           ["op": "frame", "id": 21, "x": 8.0, "y": 370.0, "w": 160.0, "h": 16.0]]))
+        let zone = try XCTUnwrap(p.views[1])
+        XCTAssertTrue(zone.accessibilityDropPointDescriptors?.first?.view === zone)
+        XCTAssertTrue(try XCTUnwrap(p.views[4]).accessibilityDropPointDescriptors?.first?.view === zone, "the paragraph")
+        XCTAssertTrue(try XCTUnwrap(p.controls.controls[20]).accessibilityDropPointDescriptors?.first?.view === zone, "the checkbox")
+        let bar = try XCTUnwrap(p.controls.bars[21])
+        XCTAssertTrue(bar.accessibilityDropPointDescriptors?.first?.view === zone, "the bar")
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["inert": "true"]]]))
+        XCTAssertTrue(zone.inert)
+        XCTAssertEqual(bar.accessibilityDropPointDescriptors?.count, 0, "none while the zone is inert")
         let none = presenter(column: [])
         XCTAssertNil(try XCTUnwrap(none.views[4]).accessibilityDropPointDescriptors, "no drop above: UIKit's own")
     }
 }
 
 private final class Quiet: NSObject, UIDropInteractionDelegate {}
+
+/// A grouped list's custom row is carried into its cell: a drop on it
+/// reaches its section's `drop`, by the authored tree, not the cell's.
+final class DragInGroupedIOSTests: GroupedListFixture {
+    func testADropOnACarriedRowReachesItsSection() throws {
+        let p = presenter { self.model(custom: true) }
+        defer { window.isHidden = true }
+        var heard: [String] = []
+        p.onClipboard = { id, kind, _ in heard.append("\(id):\(kind)") }
+        // The fixture's sections hear nothing, and handlers come only with a create
+        try XCTUnwrap(p.views[3]).handlers = ["drop"]
+        let drag = try XCTUnwrap(p.dragIn as? DropTarget)
+        drag.sync()
+        let row = try XCTUnwrap(p.views[21])
+        _ = try cell(p, 21)
+        XCTAssertFalse(row.isDescendant(of: try XCTUnwrap(p.views[3])), "carried out of its section's view")
+        XCTAssertEqual(p.authoredNodes(from: row).map(\.id), [21, 5, 3, 1], "its authored ancestors")
+        let reply = drag.agentDrag(["drop": [String](), "text": "words"], over: row)
+        XCTAssertEqual(reply["tapped"] as? Int, 3, "\(reply)")
+        XCTAssertEqual(heard, ["3:38"])
+    }
+}
 
 /// A drop session at a window point, carrying `providers`.
 private final class Session: NSObject, UIDropSession {

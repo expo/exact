@@ -630,6 +630,11 @@ private final class ReaderAtomAccessibility: UIAccessibilityElement, InspectionO
         get { owner.flatMap { $0.presenter?.dragOut?.descriptors(of: $0, isElement: false) } }
         set { }
     }
+    // Its node's drop point (DragInLink.swift)
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
+        set { }
+    }
     #endif
 }
 #endif

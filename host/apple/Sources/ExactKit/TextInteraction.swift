@@ -335,6 +335,11 @@ private final class InlineAccessibility: UIAccessibilityElement, InspectionOwned
         get { owner.flatMap { $0.presenter?.dragOut?.descriptors(of: $0, isElement: false) } }
         set { }
     }
+    // Its node's drop point (DragInLink.swift)
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
+        set { }
+    }
     #endif
 }
 
@@ -346,6 +351,11 @@ private final class ParagraphAccessibility: UIAccessibilityElement {
     /// A draggable node's drag around the paragraph (D9)
     override var accessibilityDragSourceDescriptors: [UIAccessibilityLocationDescriptor]? {
         get { owner.flatMap { $0.presenter?.dragOut?.descriptors(of: $0, isElement: false) } }
+        set { }
+    }
+    // Its node's drop point (DragInLink.swift)
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
         set { }
     }
     #endif

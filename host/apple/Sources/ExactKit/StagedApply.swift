@@ -601,7 +601,7 @@ extension ExactSession {
     func admit(_ id: UInt32?, _ input: () -> Void) {
         if admits(id) { input() }
     }
-    func admits(_ id: UInt32?) -> Bool {
+    package func admits(_ id: UInt32?) -> Bool {
         guard let plan = stage, let id, plan.destroyed.contains(id) else { return true }
         log("host: input: #\(id) refused: a staged batch removed the node")
         return false

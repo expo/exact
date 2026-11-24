@@ -28,9 +28,28 @@ package protocol DragInTarget: AnyObject {
     func agentDrag(_ req: [String: Any], over view: NodeView) -> [String: Any]
 }
 
+/// UIKit offers an element only the drop interactions on it or in its
+/// subtree, and the one drop interaction is the window's: each element asks
+/// the tracker for its node's drop point. A control's view, a paragraph's
+/// words and a reader's atom ask beside their drag sources (DragOutLink.swift).
 extension NodeView {
     package override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
         get { super.accessibilityDropPointDescriptors ?? presenter?.dragIn?.dropPoints(of: self) }
+        set { super.accessibilityDropPointDescriptors = newValue }
+    }
+}
+
+extension NativeButtonIOS {
+    package override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDropPointDescriptors ?? owner.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
+        set { super.accessibilityDropPointDescriptors = newValue }
+    }
+}
+
+/// The button laid over a custom invoker is the element VoiceOver visits there.
+extension InvokerButton {
+    override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDropPointDescriptors ?? invoker.flatMap { $0.presenter?.dragIn?.dropPoints(of: $0) } }
         set { super.accessibilityDropPointDescriptors = newValue }
     }
 }
