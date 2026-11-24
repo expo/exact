@@ -309,8 +309,12 @@ extension Agent {
             }
         }
         // A segment or a header button's bar item UIKit draws in its place
-        // (r5 weather, mood journal): there.
+        // (r5 weather, mood journal): there. A search field collapsed into
+        // its bar button is reached as a finger reaches it, through the button.
         var barred = false, inBar = false
+        if flat == nil, target === v, let collapsed = presenter.navigation.collapsedSearch(v) {
+            target = collapsed.view; region = collapsed.box; barred = true
+        }
         if flat == nil, target === v, let place = drawnPlace(v) {
             switch place {
             case .failure(let refusal): return ["error": "tap #\(v.id): \(refusal.why)"]

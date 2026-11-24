@@ -379,6 +379,29 @@ extension NavigationHost: NavigationHosting {
         #endif
         return nil
     }
+
+    /// The control UIKit shows in place of a shown route's search field while the field is collapsed into it (iOS
+    /// 26 integrates a compact width's search into the toolbar as a button drawn over the field, centred on it): the
+    /// control a finger at the field's middle reaches, when it is centred on the field, and its box. Nil while the
+    /// finger reaches the field itself.
+    func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect)? {
+        #if os(iOS)
+        guard !ExactEnv.authoredChrome else { return nil }
+        for c in controllers.values {
+            guard let nav = c.navigationController, nav.topViewController === c, let window = c.viewIfLoaded?.window,
+                  let search = c.search, search.field === node else { continue }
+            let field = search.controller.searchBar.searchTextField, box = field.convert(field.bounds, to: nil)
+            guard field.window === window, !box.isEmpty,
+                  let hit = window.hitTest(CGPoint(x: box.midX, y: box.midY), with: nil),
+                  hit !== field, !hit.isDescendant(of: field),
+                  let control = sequence(first: hit, next: \.superview).first(where: { $0 is UIControl }) else { return nil }
+            let drawn = control.convert(control.bounds, to: nil)
+            guard abs(drawn.midX - box.midX) <= 1, abs(drawn.midY - box.midY) <= 1 else { return nil }
+            return (control, control.bounds)
+        }
+        #endif
+        return nil
+    }
     #endif
 }
 
