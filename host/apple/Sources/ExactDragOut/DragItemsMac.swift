@@ -1,9 +1,10 @@
 // What a Mac drag carries (LLP 1094.000 D5): the node's admitted
 // `dataTransferFiles`, `dataTransferUrl` and `dataTransferText`, read when the
 // drag begins. Each file is a promise (`NSFilePromiseProvider`), written
-// where a destination asks; the first also offers `url` and then `text`. With
-// no file one pasteboard item carries them. Each item's image is the node as
-// drawn when AppKit asks for it.
+// where a destination asks, and `url` and `text` are each a pasteboard item
+// of its own after them, since a destination usually reads one of an item's types;
+// with no file one pasteboard item carries both. Each item's image is the
+// node as drawn when AppKit asks for it.
 #if os(macOS)
 import AppKit
 import ExactCore
@@ -17,23 +18,28 @@ enum DragItemsMac {
         let url = node.props["dataTransferUrl"].flatMap { $0.isEmpty ? nil : $0 }
         let text = node.props["dataTransferText"].flatMap { $0.isEmpty ? nil : $0 }
         let journal = DragFiles.Journal(session: session)
-        var writers: [NSPasteboardWriting] = files.enumerated().map { index, entry in
+        var writers: [NSPasteboardWriting] = files.map { entry in
             let name = (entry as NSString).lastPathComponent
             let type = UTType(filenameExtension: (name as NSString).pathExtension) ?? .data
             let writer = PromiseWriter(entry: entry, name: name, resolver: session?.app.resolver, journal: journal)
             writer.open = open
-            let promise = Promise(fileType: type.identifier, delegate: writer)
+            let promise = NSFilePromiseProvider(fileType: type.identifier, delegate: writer)
             // The provider's delegate is weak: its `userInfo` holds the writer
             // as long as AppKit holds the provider.
             promise.userInfo = writer
-            if index == 0 { promise.alternatives = (url, text) }
             return promise
         }
-        if writers.isEmpty, url != nil || text != nil {
+        let words = [(url, NSPasteboard.PasteboardType.URL), (text, .string)].compactMap { word, type in word.map { ($0, type) } }
+        if writers.isEmpty, !words.isEmpty {
             let item = NSPasteboardItem()
-            if let url { item.setString(url, forType: .URL) }
-            if let text { item.setString(text, forType: .string) }
+            words.forEach { item.setString($0.0, forType: $0.1) }
             writers = [item]
+        } else {
+            writers += words.map { word, type in
+                let item = NSPasteboardItem()
+                item.setString(word, forType: type)
+                return item
+            }
         }
         return writers.map { writer in
             let item = NSDraggingItem(pasteboardWriter: writer)
@@ -59,24 +65,6 @@ enum DragItemsMac {
         let image = NSImage(size: view.bounds.size)
         image.addRepresentation(rep)
         return image
-    }
-
-    /// A file promise that also offers the drag's `url` and `text`, after the
-    /// promise's own types.
-    final class Promise: NSFilePromiseProvider {
-        var alternatives: (url: String?, text: String?) = (nil, nil)
-
-        override func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
-            super.writableTypes(for: pasteboard) + (alternatives.url != nil ? [.URL] : []) + (alternatives.text != nil ? [.string] : [])
-        }
-
-        override func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
-            switch type {
-            case .URL where alternatives.url != nil: return alternatives.url
-            case .string where alternatives.text != nil: return alternatives.text
-            default: return super.pasteboardPropertyList(forType: type)
-            }
-        }
     }
 
     /// Writes one promised file where a destination asks (`DragFiles.place`),

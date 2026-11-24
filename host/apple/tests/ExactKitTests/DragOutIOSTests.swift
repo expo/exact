@@ -257,21 +257,29 @@ final class DragOutIOSTests: XCTestCase {
         XCTAssertEqual(drag.name, "Share")
     }
 
-    func testTheItemsAreTheFilesThenTheURLAndTextOnTheFirst() throws {
+    /// With files, the URL and the text are items of their own (LLP 1094.000 D4).
+    func testTheItemsAreTheFilesThenTheURLThenTheText() throws {
         let p = page(["draggable": "true", "dataTransferFiles": "assets/apple/1016-thumb.jpg\napp:/data/notes.pdf",
                       "dataTransferUrl": "https://example.com/1016", "dataTransferText": "Mount Fuji"])
         let items = DragItems.items(of: try XCTUnwrap(p.views[10]), in: nil)
-        XCTAssertEqual(items.count, 2, "one item a file")
-        XCTAssertEqual(items.map { $0.itemProvider.suggestedName }, ["1016-thumb.jpg", "notes.pdf"])
-        let first = items[0].itemProvider.registeredTypeIdentifiers
-        XCTAssertEqual(first.first, UTType.jpeg.identifier, "the file first, its type its extension's")
-        XCTAssertTrue(first.contains(UTType.url.identifier) && first.contains(UTType.utf8PlainText.identifier), "\(first)")
-        XCTAssertLessThan(try XCTUnwrap(first.firstIndex(of: UTType.url.identifier)), try XCTUnwrap(first.firstIndex(of: UTType.utf8PlainText.identifier)))
+        XCTAssertEqual(items.count, 4, "one item a file, then the URL and the text")
+        guard items.count == 4 else { return }
+        XCTAssertEqual(items.prefix(2).map { $0.itemProvider.suggestedName }, ["1016-thumb.jpg", "notes.pdf"])
+        XCTAssertEqual(items[0].itemProvider.registeredTypeIdentifiers, [UTType.jpeg.identifier], "the file alone, its type its extension's")
         XCTAssertEqual(items[1].itemProvider.registeredTypeIdentifiers, [UTType.pdf.identifier])
-        XCTAssertEqual((items[0].localObject as? DragItems.Lifted)?.id, 10)
+        XCTAssertTrue(items[2].itemProvider.hasItemConformingToTypeIdentifier(UTType.url.identifier))
+        XCTAssertFalse(items[2].itemProvider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier))
+        XCTAssertTrue(items[3].itemProvider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier))
+        XCTAssertFalse(items[3].itemProvider.hasItemConformingToTypeIdentifier(UTType.url.identifier))
+        XCTAssertEqual(items.map { ($0.localObject as? DragItems.Lifted)?.id }, [10, 10, 10, 10])
     }
 
     func testWithNoFileOneItemCarriesTheURLAndText() throws {
+        let titled = DragItems.items(of: try XCTUnwrap(page(["draggable": "true", "dataTransferUrl": "https://example.com/1016",
+                                                             "dataTransferText": "Mount Fuji"]).views[10]), in: nil)
+        XCTAssertEqual(titled.count, 1, "a link keeps its title on its own item")
+        let types = try XCTUnwrap(titled.first).itemProvider.registeredTypeIdentifiers
+        XCTAssertLessThan(try XCTUnwrap(types.firstIndex(of: UTType.url.identifier)), try XCTUnwrap(types.firstIndex(of: UTType.utf8PlainText.identifier)))
         let p = page(["draggable": "true", "dataTransferUrl": "https://example.com/1016", "dataTransferText": ""])
         let items = DragItems.items(of: try XCTUnwrap(p.views[10]), in: nil)
         XCTAssertEqual(items.count, 1)
