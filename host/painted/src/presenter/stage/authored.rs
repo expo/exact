@@ -125,6 +125,11 @@ impl<D: DataSource> Presenter<D> {
             && beneath.is_some_and(|i| sheet_of(kinds, i).is_some());
         let seek = (self.stage.preview.take()).and_then(|p| p.progress_for(old));
         let ms = part.ms();
+        // The names the routes pair fly beside the part on the platform's
+        // spring, as Compose's fly beside NavHost's own (LLP 1013.004 D2).
+        if !self.motion_off() {
+            self.fly_routes(forward, (old, new), &bounds_spring());
+        }
         if self.motion_off() || ms <= 0.0 {
             self.stage.shift = None;
             return;

@@ -802,8 +802,12 @@ component App
 "##;
 
 fn paired() -> Presenter<()> {
+    paired_with(PAIRED)
+}
+
+fn paired_with(plan: &str) -> Presenter<()> {
     let (mut p, error) = Presenter::boot_with_fixture_fonts(
-        &crate::test_plan(PAIRED),
+        &crate::test_plan(plan),
         (),
         (412., 916.),
         1.,
@@ -922,4 +926,27 @@ fn a_pop_leaves_its_flying_source_out_of_the_routes_kept_drawing() {
         .unwrap();
     let hero = [400f32.to_bits(), 300f32.to_bits()];
     assert!(!ops.windows(2).any(|w| w == hero));
+}
+
+#[test]
+fn the_names_fly_beside_a_routes_authored_part() {
+    let faded = PAIRED
+        .replace(
+            "component App",
+            "keyframes fade\n  from opacity=0\nstyle Fades\n  ::view-transition-new\n    animation=\"fade 150ms both\"\n  ::view-transition-old\n    animation=\"fade 150ms reverse both\"\ncomponent App",
+        )
+        .replace(r#"testId="route-detail""#, r#"class=Fades testId="route-detail""#);
+    let mut p = paired_with(&faded);
+    let thumb = key(&p, "thumb");
+    tap(&mut p, "open");
+    after(&mut p, 0.0);
+    assert!(p.stage.shift.as_ref().unwrap().authored.is_some());
+    let hero = key(&p, "hero");
+    assert_eq!(flight(&p), (thumb, hero, 0.0));
+    after(&mut p, 1000.0);
+    assert!(p.system_back(p.host().now()));
+    p.run_commands(|| ());
+    after(&mut p, 0.0);
+    assert!(p.stage.shift.as_ref().unwrap().authored.is_some());
+    assert_eq!(flight(&p), (hero, thumb, 0.0));
 }

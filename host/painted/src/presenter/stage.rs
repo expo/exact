@@ -829,18 +829,23 @@ impl<D: DataSource> Presenter<D> {
         // The names both routes hold fly on the crossing's own timing,
         // whatever their authored curve (LLP 1013.004 D2, D4).
         if !through {
-            let pairs = match forward {
-                true => pair_routes(self.host.kernel(), *old, *new),
-                false if self.stage.pops.1 == Some(*old) => self.stage.pops.2.clone(),
-                false => Vec::new(),
-            };
             let curve = match container {
                 Some(_) => zoom::clock(forward),
                 None => bounds_spring(),
             };
-            for (from, to) in pairs {
-                self.host.fly(from, to, &curve, true);
-            }
+            self.fly_routes(forward, (*old, *new), &curve);
+        }
+    }
+
+    /// Fly the names a push from `old` to `new`, or a pop of `old`, pairs.
+    fn fly_routes(&mut self, forward: bool, (old, new): (NodeKey, NodeKey), curve: &Transition) {
+        let pairs = match forward {
+            true => pair_routes(self.host.kernel(), old, new),
+            false if self.stage.pops.1 == Some(old) => self.stage.pops.2.clone(),
+            false => Vec::new(),
+        };
+        for (from, to) in pairs {
+            self.host.fly(from, to, curve, true);
         }
     }
 
