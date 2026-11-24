@@ -331,6 +331,7 @@ impl<D: DataSource> Presenter<D> {
                         self.host.content_region(),
                         &n,
                         limits.get(&b.id).copied(),
+                        &|id| self.host.presented(id),
                     ));
                     witness.nodes.insert(
                         b.id,

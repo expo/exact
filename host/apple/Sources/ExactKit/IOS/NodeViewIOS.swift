@@ -853,6 +853,8 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // UIKit's conversion already carries a box in space through its
         // plane (LLP 1077 D8); a hidden back face is the host's to refuse.
         if placedAncestor?.placementHidden == true || hidesBack() { return nil }
+        let matrix = layer.transform
+        if CATransform3DIsAffine(matrix), matrix.m11 * matrix.m22 - matrix.m12 * matrix.m21 == 0 { return nil }
         if let clipPath, !clipPath.contains(point, using: clipRule) { return nil }
         if !fragmentHit(point) { return nil }
         if props["swipeIndicator"] == "true" { return nil }

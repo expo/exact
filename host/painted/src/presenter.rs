@@ -1194,6 +1194,7 @@ impl<D: DataSource> Presenter<D> {
                                 region,
                                 &n,
                                 collection_limits.get(id).copied(),
+                                &|id| self.host.presented(id),
                             )
                         })
                         .clamp(*off);
@@ -1256,6 +1257,7 @@ impl<D: DataSource> Presenter<D> {
                 self.host.content_region(),
                 &node,
                 collection_limits.get(&id).copied(),
+                &|id| self.host.presented(id),
             )
         });
         (bounds.max.0.max(0.), bounds.max.1.max(0.))

@@ -460,7 +460,7 @@ fn an_opacity_layer_composites_within_its_content() {
     let mut draw = |layer: bool| {
         ink.begin(640., 360., 3.);
         if layer {
-            let base = [0., 0., 1., 0., 0.5, 0., 0.];
+            let base = [0., 0., 1., 0., 0.5, 0., 0., 1.];
             assert!(ink.layer_begin(1, ts, (20., 20.), (0., 0.), base));
         } else {
             ink.push_opacity(0.5);

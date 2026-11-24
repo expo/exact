@@ -492,7 +492,9 @@ impl<D: DataSource> Host<D> {
         // identity is `0 0 0 0`. Rotation carries its angle and axis.
         let values = match property {
             Property::Layout => layout_presented(&self.engine, node, value),
-            Property::Translate | Property::Rotate => [value.x, value.y, value.z, value.w],
+            Property::Translate | Property::Rotate | Property::Scale => {
+                [value.x, value.y, value.z, value.w]
+            }
             _ => [value.x, 0.0, 0.0, 0.0],
         };
         let identity = match property.identity() {

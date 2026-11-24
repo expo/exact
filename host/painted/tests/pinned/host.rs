@@ -432,7 +432,7 @@ fn a_spring_arrives_as_presentation_values_frame_by_frame() {
     let mut rising = 0;
     for i in 1..=30 {
         p.tick(i as f64 * 16.0);
-        let s = p.host().presented(hello).scale;
+        let s = p.host().presented(hello).scale.0;
         if s > last {
             rising += 1;
         }
@@ -446,7 +446,7 @@ fn a_spring_arrives_as_presentation_values_frame_by_frame() {
     assert_eq!((landed, error), (20_000.0, None));
     assert!(!p.host().motion(), "settled");
     let after = p.host().presented(hello);
-    assert_eq!((after.scale, after.opacity), (1.5, 0.5));
+    assert_eq!((after.scale.0, after.opacity), (1.5, 0.5));
     let now = boxed(&mut p, "hello").rect;
     assert!(
         (now.2 - before.2 * 1.5).abs() < 0.5,

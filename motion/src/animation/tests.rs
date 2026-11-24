@@ -492,13 +492,17 @@ fn a_picture_takes_the_last_animation_of_each_property_over_its_identity() {
     // A quarter of the width and half of 10, from 50 % and 10 points.
     assert_eq!(p.translate, (50.0, 5.0));
     // Opacity is the later animation's, from 1 towards 0.5; the scale rests.
-    assert_eq!((p.opacity, p.scale, p.rotate), (0.75, 1.0, 45.0));
+    assert_eq!((p.opacity, p.scale, p.rotate), (0.75, (1.0, 1.0), 45.0));
 }
 
 #[test]
 fn scale_interpolates_each_axis_in_keyframes_transitions_and_springs() {
     use crate::{Change, Engine, Transitions};
     let a = anim("flip 1s linear both", "from{scale:1 1}to{scale:3 0}");
+    assert_eq!(
+        Animations(vec![a.clone()]).picture(0.5, (100., 100.)).scale,
+        (2., 0.5)
+    );
     assert_eq!(Property::Scale.components(), 2);
     assert_eq!(Property::Scale.identity(), Some(Value::new(1., 1.)));
     assert_eq!(

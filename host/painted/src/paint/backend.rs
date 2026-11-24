@@ -513,7 +513,7 @@ pub trait Backend {
         _ts: Transform,
         _pivot: (f32, f32),
         _reference: (f32, f32),
-        _base: [f32; 7],
+        _base: [f32; 8],
     ) -> bool {
         false
     }

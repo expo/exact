@@ -405,16 +405,19 @@ final class HeldStateTests: XCTestCase {
         waitForMainQueue()
         session.clock = start + 75
         session.apply(session.runtime.tick(now: session.now()))
-        XCTAssertEqual(view.scale, 1.1, accuracy: 0.001)
+        XCTAssertEqual(view.scale.x, 1.1, accuracy: 0.001)
+        XCTAssertEqual(view.scale.y, 1.1, accuracy: 0.001)
         XCTAssertEqual(view.layoutBounds, box)
         session.clock = start + 150
         session.apply(session.runtime.tick(now: session.now()))
-        XCTAssertEqual(view.scale, 1.2, accuracy: 0.001)
+        XCTAssertEqual(view.scale.x, 1.2, accuracy: 0.001)
+        XCTAssertEqual(view.scale.y, 1.2, accuracy: 0.001)
         view.lookState(hovered: false)
         waitForMainQueue()
         session.clock = start + 300
         session.apply(session.runtime.tick(now: session.now()))
-        XCTAssertEqual(view.scale, 1, accuracy: 0.001)
+        XCTAssertEqual(view.scale.x, 1, accuracy: 0.001)
+        XCTAssertEqual(view.scale.y, 1, accuracy: 0.001)
         XCTAssertEqual(view.layoutBounds, box)
     }
 

@@ -127,7 +127,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     package var arrangeShift = CGPoint.zero
     /// How far its scroller's scroll moves a sticky box (LLP 1083, `Sticky.swift`).
     package var stickyOffset = CGPoint.zero
-    package var scale: CGFloat = 1
+    package var scale = CGPoint(x: 1, y: 1)
     package var rotate: CGFloat = 0
     var rotationAxis: [Double] = [0, 0, 0]
     weak package var presenter: Presenter?

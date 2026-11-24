@@ -302,7 +302,7 @@ impl<D: DataSource> Host<D> {
                 Property::Layout => {
                     entry.layout = layout_presented(&self.engine, p.node, p.value).map(|v| v as f32)
                 }
-                Property::Scale => entry.scale = p.value.x as f32,
+                Property::Scale => entry.scale = (p.value.x as f32, p.value.y as f32),
                 Property::Rotate => {
                     entry.rotate = p.value.x as f32;
                     entry.rotate_axis = exact_kernel::style::space::RotateAxis(
@@ -335,7 +335,7 @@ impl<D: DataSource> Host<D> {
                 s.translate == (v.x as f32, v.y as f32)
                     && s.translate_percent == (v.z as f32, v.w as f32)
             }
-            Property::Scale => s.scale == v.x as f32,
+            Property::Scale => s.scale == (v.x as f32, v.y as f32),
             Property::Rotate => {
                 s.rotate == v.x as f32
                     && s.rotate_axis.0 == exact_motion::rotation::axis(v).map(|v| v as f32)

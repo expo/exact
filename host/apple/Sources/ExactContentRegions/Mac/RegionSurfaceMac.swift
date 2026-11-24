@@ -130,7 +130,7 @@ final class RegionSurfaceMac: NSView {
             guard !v.isHidden, v.alphaValue == 1,
                   v.layer?.animationKeys()?.isEmpty != false else { return nil }
             if let n = v as? NodeView {
-                guard n.translate == .zero, n.scale == 1, n.rotate == 0,
+                guard n.translate == .zero, n.scale == CGPoint(x: 1, y: 1), n.rotate == 0,
                       n.clipPath == nil, n.materialView == nil else { return nil }
                 if found == nil, let channels = n.channels("background_color", dark: n.drawsDark), channels.count == 4 {
                     if channels[3] == 255 { found = channels.map { CGFloat($0) / 255 } }

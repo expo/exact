@@ -153,7 +153,7 @@ fn invalid_live_samples_leave_host_and_engine_clocks_and_presentation_unchanged(
         assert!(h.hold_update(start.token, value, time).is_err());
         assert_eq!(h.now(), 10.);
         assert_eq!(h.engine().now(), 0.01);
-        assert_eq!(h.presented(row).scale, 1.);
+        assert_eq!(h.presented(row).scale.0, 1.);
         assert!(h.has_hold(start.token));
     }
 }
@@ -178,7 +178,7 @@ fn zero_distance_spring_keeps_release_velocity_and_no_transition_snaps() {
     h.hold_update(opacity.token, Value::new(0.5, 0.5), 10.)
         .unwrap();
     h.hold_end(opacity.token, HoldEnd::Cancel, 10.).unwrap();
-    assert_eq!(h.presented(row).scale, 1.);
+    assert_eq!(h.presented(row).scale.0, 1.);
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn overdue_timers_keep_runner_order_without_rewinding_held_or_unrelated_motion()
     assert!(h.advance(250.).is_none());
     assert!(h.agent("{\"op\":\"state\"}").contains("\"value\":3"));
     assert_eq!(h.presented(held).opacity, 0.8);
-    assert!(h.presented(other).scale > 1. && h.presented(other).scale < 3.);
+    assert!(h.presented(other).scale.0 > 1. && h.presented(other).scale.0 < 3.);
     assert_eq!(h.engine().now(), 0.25);
     h.hold_end(token, HoldEnd::Cancel, 250.).unwrap();
     h.tick(750.);

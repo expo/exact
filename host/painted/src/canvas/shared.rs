@@ -193,7 +193,7 @@ mod tests {
                     out.extend(sets(&ops[parents + 1 + ops[parents] as usize * 2..end]));
                 }
                 ROW_BEGIN => out.extend(sets(&ops[at + 6..end - 1])),
-                layer::LAYER_SET => out.extend(sets(&ops[at + 19..end])),
+                layer::LAYER_SET => out.extend(sets(&ops[at + 20..end])),
                 _ => (),
             }
             at = end;
@@ -260,7 +260,7 @@ mod tests {
                 Transform::identity(),
                 (0., 0.),
                 (0., 0.),
-                [0., 0., 1., 0., alpha, 0., 0.]
+                [0., 0., 1., 0., alpha, 0., 0., 1.]
             ));
         };
         r.row_begin(1, (0., 0.), None);

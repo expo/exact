@@ -87,7 +87,7 @@ fn holds_retire_reader_tracks_before_presentation() {
     assert_eq!(h.lowered_mask(binding.target), 0);
     assert!(h.lowered_changed[&node] > epoch);
     assert_eq!(h.presented(target).translate, (25., -10.));
-    assert_eq!(h.presented(target).scale, 1.5);
+    assert_eq!(h.presented(target).scale.0, 1.5);
 }
 
 #[test]
@@ -117,7 +117,7 @@ fn transform_drag_catches_reader_easing() {
             h.presented(target).translate,
             ((100. * progress) as f32, (-40. * progress) as f32)
         );
-        assert_eq!(h.presented(target).scale, (1. + 2. * progress) as f32);
+        assert_eq!(h.presented(target).scale.0, (1. + 2. * progress) as f32);
         assert!(!h.engine.is_played(node, Property::Translate));
         assert!(!h.engine.is_played(node, Property::Scale));
         assert!(!h.played.contains_key(&node));
@@ -162,7 +162,7 @@ fn snapping_a_played_transition_retires_its_reader_tracks() {
     assert_eq!(h.lowered_mask(binding.target), 0);
     assert!(h.lowered_changed[&node] > epoch);
     assert_eq!(h.presented(target).translate, (50., -20.));
-    assert_eq!(h.presented(target).scale, 2.);
+    assert_eq!(h.presented(target).scale.0, 2.);
 }
 
 /// A look naming opacity that arrives while the reader plays the node's
@@ -927,4 +927,52 @@ fn a_boots_play_waits_for_the_present_and_its_start_owes_a_picture() {
     assert!(paint, "the started play owes the reader its track");
     assert!(h.lowered_changed[&node] > epoch);
     assert_eq!((play(&h).pending, play(&h).start), (None, 0.3));
+}
+
+#[test]
+fn per_axis_scale_reader_tracks_keep_both_axes_and_underlying_values() {
+    for transition in [false, true] {
+        let motion = if transition {
+            r#"scale=(moving ? "3 0" : "1 0.5") transition="scale 1s linear""#
+        } else {
+            r#"scale="1 0.5" animation=(moving ? "flip 1s linear both" : "none")"#
+        };
+        let source = format!(
+            r#"keyframes flip
+  to scale="3 0"
+component App
+  state moving = false
+  action go
+    moving = true
+  view
+    column
+      box testId="target" width=100 height=100 {motion}
+      button testId="go" press=go
+        text "Go"
+"#
+        );
+        let (mut h, error) = Host::boot(
+            &crate::test_plan(&source),
+            (),
+            Box::new(MonospaceMeasurer::default()),
+            400.,
+            500.,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        h.lowering = true;
+        h.engine.set_lowered_properties(&LOWERED);
+        let go = h.kernel().find_by_test_id("go")[0];
+        let go = h.kernel().node_by_key(go).unwrap().id;
+        assert!(h.dispatch_at(go, Event::Press, 0.).is_none());
+        let key = h.kernel().find_by_test_id("target")[0];
+        let base = Presented {
+            scale: (1., 0.5),
+            ..Presented::IDENTITY
+        };
+        let tracks = read_tracks(&h.layer_tracks(key, &base, (100., 100.)));
+        let x = tracks.iter().find(|t| t.prop == SCALE).unwrap();
+        let y = tracks.iter().find(|t| t.prop == SCALE_Y).unwrap();
+        assert_eq!((sample(x, 0.5), sample(y, 0.5)), (2., 0.25));
+    }
 }

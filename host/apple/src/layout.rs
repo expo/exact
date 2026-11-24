@@ -8,8 +8,11 @@ pub(super) mod closed;
 #[cfg(test)]
 #[path = "inert_commit_tests.rs"]
 mod inert_commit_tests;
+#[path = "scroll_overflow.rs"]
+mod scroll_overflow;
 #[path = "separator.rs"]
 pub(super) mod separator;
+use scroll_overflow::scaled_content;
 
 /// The props `emit_layout` derives from a node's layout, not its author's.
 pub(super) const DERIVED_PROPS: [&str; 6] = [
@@ -825,7 +828,7 @@ pub(super) fn content_size(node: &NodeRef<'_>, kernel: &Kernel) -> (f32, f32) {
     // Floor with the direct children's extent plus the end padding, as the
     // last layout resolved it (a percentage is of the containing block).
     let (_, _, pad_right, pad_bottom) = kernel.layout_padding(node.key).unwrap_or_default();
-    let (mut w, mut h) = node.content;
+    let (mut w, mut h) = scaled_content(node, kernel, true).unwrap_or(node.content);
     for child in node.children() {
         // A child in a containing block of its own is in another space.
         let own = |c: &NodeRef<'_>| kernel.host_block(c.id).is_some();
@@ -851,9 +854,12 @@ pub(super) fn content_size(node: &NodeRef<'_>, kernel: &Kernel) -> (f32, f32) {
 /// root element's overflow (CSS Overflow 3 §2.2). The root's end padding is
 /// not added: the viewport is the scroll container, not the root. A box in
 /// another containing block, the top layer, an `svg`'s inside and the head
-/// are elsewhere. Boxes are where layout put them: a transform below the root
-/// is not projected (the presenter projects the root's own).
+/// are elsewhere. Scaled descendants include their transformed overflow and
+/// original border boxes. The presenter projects the root's own transform.
 pub(super) fn document_extent(root: &NodeRef<'_>, kernel: &Kernel) -> (f32, f32) {
+    if let Some(size) = scaled_content(root, kernel, false) {
+        return size;
+    }
     let (x0, y0) = (root.frame.x, root.frame.y);
     let (mut w, mut h) = (root.frame.width, root.frame.height);
     let mut below = root.children();

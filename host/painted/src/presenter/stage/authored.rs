@@ -36,7 +36,7 @@ impl Authored {
         Pose {
             dx: picture.translate.0 as f32,
             dy: picture.translate.1 as f32,
-            scale: picture.scale as f32,
+            scale_axes: (picture.scale.0 as f32, picture.scale.1 as f32),
             rotate: picture.rotate as f32,
             origin: (w / 2.0, h / 2.0),
             opacity: picture.opacity as f32,
@@ -168,5 +168,27 @@ impl<D: DataSource> Presenter<D> {
             self.stage.arriving = arriving;
             self.host.navigation.arriving = arriving;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_route_picture_keeps_its_scale_axes() {
+        exact_motion::link_animations();
+        let mut animations = Animations::parse("flip 1s linear both").unwrap();
+        let keys = exact_motion::Keyframes::parse("from{scale:1 1}to{scale:-1 0}").unwrap();
+        animations.resolve(|_| Some(&keys));
+        let route = Authored {
+            animations,
+            size: (100., 80.),
+        };
+        let pose = route.pose(500.);
+        let bounds = crate::paint::bbox(pose.transform((0., 0.)), (0., 0., 100., 80.));
+        assert_eq!(bounds, (50., 20., 0., 40.));
+        assert!(crate::paint::space::inverse_affine(pose.transform((0., 0.))).is_none());
+        assert_eq!(route.pose(1000.).scale_axes, (-1., 0.));
     }
 }

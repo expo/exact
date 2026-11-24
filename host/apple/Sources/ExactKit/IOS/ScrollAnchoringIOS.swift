@@ -14,7 +14,7 @@ extension ScrollAnchoring.Changes {
         case "translate":
             changed = view.translatePx != CGPoint(x: op.x, y: op.y)
                 || view.translatePercent != CGPoint(x: op.w, y: op.h)
-        case "scale": changed = view.scale != CGFloat(op.x)
+        case "scale": changed = view.scale != CGPoint(x: op.x, y: op.y)
         case "rotate": changed = view.rotate != CGFloat(op.x)
         default: return
         }

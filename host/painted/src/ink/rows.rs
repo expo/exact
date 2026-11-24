@@ -479,13 +479,13 @@ impl Ink {
         _key: u64,
         ts: Transform,
         pivot: (f32, f32),
-        base: [f32; 7],
+        base: [f32; 8],
     ) {
         let origin = self.rows.capture.last().map_or((0., 0.), |c| c.origin);
         let space = self.device_transform(self.record_transform(ts));
         let own = Transform::from_translate(pivot.0 + base[0], pivot.1 + base[1])
             .pre_rotate(base[3])
-            .pre_scale(base[2], base[2])
+            .pre_scale(base[2], base[7])
             .pre_translate(-pivot.0, -pivot.1);
         // Conjugating an identity would leave rounding error that keeps
         // its group from bounding its composite.

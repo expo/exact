@@ -210,6 +210,7 @@ impl<D: DataSource> Presenter<D> {
                 self.host.content_region(),
                 &node,
                 limits.get(&id).copied(),
+                &|id| self.host.presented(id),
             )
         }))
     }
@@ -601,9 +602,13 @@ impl<D: DataSource> Presenter<D> {
                 let kernel = self.host.kernel();
                 let node = kernel.node(id).unwrap();
                 let region = self.host.content_region();
-                let bounds =
-                    self.brush
-                        .scroll_bounds(kernel, region, &node, limits.get(&id).copied());
+                let bounds = self.brush.scroll_bounds(
+                    kernel,
+                    region,
+                    &node,
+                    limits.get(&id).copied(),
+                    &|id| self.host.presented(id),
+                );
                 self.stage_shown(id, key, bounds);
             }
             held.insert(id);

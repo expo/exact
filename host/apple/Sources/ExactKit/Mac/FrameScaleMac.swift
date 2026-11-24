@@ -20,8 +20,8 @@ final class FrameScaleHolder: NSView {
 extension NodeView {
     /// The part of the node's scale its web view takes by geometry: all of
     /// it for an iframe turned in no direction and not flying, else none.
-    var frameGeometryScale: CGFloat {
-        guard web != nil, rotate == 0, flightLook == nil, !standsInSpace, scale > 0 else { return 1 }
+    var frameGeometryScale: CGPoint {
+        guard web != nil, rotate == 0, flightLook == nil, !standsInSpace, scale.x > 0, scale.y > 0 else { return CGPoint(x: 1, y: 1) }
         return scale
     }
 
@@ -35,7 +35,7 @@ extension NodeView {
         }
         let s = frameGeometryScale
         var holder = web.superview as? FrameScaleHolder
-        if holder == nil, s != 1 {
+        if holder == nil, s != CGPoint(x: 1, y: 1) {
             // An empty holder stays from a web view a new partition replaced.
             let made = subviews.lazy.compactMap { $0 as? FrameScaleHolder }.first ?? FrameScaleHolder(frame: bounds)
             made.wantsLayer = true
@@ -45,8 +45,8 @@ extension NodeView {
         }
         guard let holder else { web.frame = bounds; return }
         let o = transformOriginPoint
-        holder.frame = NSRect(x: o.x - (o.x - bounds.minX) * s, y: o.y - (o.y - bounds.minY) * s,
-                              width: bounds.width * s, height: bounds.height * s)
+        holder.frame = NSRect(x: o.x - (o.x - bounds.minX) * s.x, y: o.y - (o.y - bounds.minY) * s.y,
+                              width: bounds.width * s.x, height: bounds.height * s.y)
         holder.bounds = NSRect(origin: .zero, size: bounds.size)
         web.frame = holder.bounds
     }

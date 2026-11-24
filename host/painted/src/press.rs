@@ -279,7 +279,13 @@ fn spring_distance(
                 + f64::from(style.press_translate_percent.y) / 100. * f64::from(node.frame.height);
             x.abs().max(y.abs())
         }
-        Property::Scale => (f64::from(shown.scale) * (f64::from(style.press_scale) - 1.)).abs(),
+        Property::Scale => {
+            let change = f64::from(style.press_scale) - 1.;
+            let (x, y) = shown.scale;
+            (f64::from(x) * change)
+                .abs()
+                .max((f64::from(y) * change).abs())
+        }
         _ => unreachable!(),
     }
 }

@@ -952,7 +952,7 @@ impl Backend for Recorder {
         ts: Transform,
         pivot: (f32, f32),
         reference: (f32, f32),
-        base: [f32; 7],
+        base: [f32; 8],
     ) -> bool {
         // Retained layers animate in page coordinates, outside any projective plane.
         if !self.planes.is_empty() {

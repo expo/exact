@@ -1126,7 +1126,7 @@ mod tests {
         );
         with_route(&source, |painter, scene, id, key| {
             let presented = |node| Presented {
-                scale: if node == id { 1.5 } else { 1. },
+                scale: if node == id { (1.5, 1.5) } else { (1., 1.) },
                 ..Presented::IDENTITY
             };
             let scene = Scene {

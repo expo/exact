@@ -63,7 +63,7 @@ final class TextSpecs {
 /// extent. Made on the first write that is not a default (`NodeView.aside`).
 final class NodeAside {
     var translatePx = CGPoint.zero, translatePercent = CGPoint.zero
-    var scale: CGFloat = 1
+    var scale = CGPoint(x: 1, y: 1)
     var rotate: CGFloat = 0
     var rotationAxis: [Double] = [0, 0, 0]
     var content = CGSize.zero
@@ -293,7 +293,7 @@ extension NodeView {
     /// `translate`: its lengths, and its percentages of the box (chess diary #4).
     var translatePx: CGPoint { get { aside?.translatePx ?? .zero } set { if newValue != .zero || aside != nil { asideMade.translatePx = newValue } } }
     var translatePercent: CGPoint { get { aside?.translatePercent ?? .zero } set { if newValue != .zero || aside != nil { asideMade.translatePercent = newValue } } }
-    package var scale: CGFloat { get { aside?.scale ?? 1 } set { if newValue != 1 || aside != nil { asideMade.scale = newValue } } }
+    package var scale: CGPoint { get { aside?.scale ?? CGPoint(x: 1, y: 1) } set { if newValue != CGPoint(x: 1, y: 1) || aside != nil { asideMade.scale = newValue } } }
     var rotationAxis: [Double] { get { aside?.rotationAxis ?? [0, 0, 0] } set { if newValue != [0, 0, 0] || aside != nil { asideMade.rotationAxis = newValue } } }
     package var rotate: CGFloat { get { aside?.rotate ?? 0 } set { if newValue != 0 || aside != nil { asideMade.rotate = newValue } } }
     /// A scroll container's content extent (the `content` op), before the

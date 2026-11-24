@@ -212,7 +212,7 @@ impl Painter {
         let turned_by_reader = |id| {
             let p = (walk.scene.presented)(id);
             p.lowered & crate::host::lower::LOWER_TRANSFORM != 0
-                && (p.rotate != 0.0 || p.scale * p.press <= 0.0)
+                && (p.rotate != 0.0 || p.scale.0 * p.press <= 0.0 || p.scale.1 * p.press <= 0.0)
         };
         let upright = transform.kx == 0.0
             && transform.ky == 0.0

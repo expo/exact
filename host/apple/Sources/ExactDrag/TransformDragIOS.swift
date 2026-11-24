@@ -6,7 +6,8 @@ import QuartzCore
 
 extension NodeView {
     func transformDragModel() -> TransformDragPosition? {
-        TransformDragPosition(x: Double(translate.x), y: Double(translate.y), scale: Double(scale))
+        guard scale.x == scale.y else { return nil }
+        return TransformDragPosition(x: Double(translate.x), y: Double(translate.y), scale: Double(scale.x))
     }
     func transformDragPresentation() -> TransformDragPosition? {
         guard rotate == 0, contextTransform.isIdentity else { return nil }

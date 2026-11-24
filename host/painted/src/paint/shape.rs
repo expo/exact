@@ -184,13 +184,11 @@ fn path_hits(
     let clip = HitClip {
         path: Rc::new(path),
         even_odd,
-        inverse: ts
-            .invert()
+        inverse: super::space::inverse_affine(ts)
             .map(|t| [t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0., 0., 1.]),
     };
     let mut hit_clip = clip.clone();
-    hit_clip.inverse = hit_ts
-        .invert()
+    hit_clip.inverse = super::space::inverse_affine(hit_ts)
         .map(|t| [t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0., 0., 1.]);
     for b in boxes {
         if let Some(hit) = &mut b.hit {
@@ -210,7 +208,7 @@ impl super::PaintedBox {
             .projective
             .map_or((x, y), |(inv, ..)| crate::placement::map(&inv, x, y));
         self.affine
-            .and_then(|(ts, _)| ts.invert())
+            .and_then(|(ts, _)| super::space::inverse_affine(ts))
             .is_some_and(|inverse| {
                 let mut point = tiny_skia::Point::from_xy(x, y);
                 inverse.map_point(&mut point);
@@ -228,7 +226,7 @@ impl super::PaintedBox {
             .projective
             .map_or((x, y), |(inv, ..)| crate::placement::map(&inv, x, y));
         let affine_hit = self.affine.is_none_or(|(ts, rect)| {
-            ts.invert().is_some_and(|inverse| {
+            super::space::inverse_affine(ts).is_some_and(|inverse| {
                 let mut point = tiny_skia::Point::from_xy(local_x, local_y);
                 inverse.map_point(&mut point);
                 point.x >= rect.0
@@ -277,9 +275,9 @@ impl super::PaintedBox {
             let Some(inv) = clip.inverse else {
                 return false;
             };
-            let Some(ts) =
-                Transform::from_row(inv[0], inv[3], inv[1], inv[4], inv[2], inv[5]).invert()
-            else {
+            let Some(ts) = super::space::inverse_affine(Transform::from_row(
+                inv[0], inv[3], inv[1], inv[4], inv[2], inv[5],
+            )) else {
                 return false;
             };
             let mut builder = PathBuilder::new();

@@ -12,7 +12,7 @@ use tiny_skia::Transform;
 /// `[29, id]`: draw layer `id` here (its reader's node, recorded from the
 /// last `LAYER_SET`).
 pub(super) const LAYER_REF: u32 = 29;
-/// `[30, id, len, m0..m5, px, py, tx, ty, scale, rotate, opacity, r, dash,
+/// `[30, id, len, m0..m5, px, py, tx, ty, scaleX, rotate, opacity, r, dash, scaleY,
 /// at, ops…]`: a layer's matrix (points → the stream's pixels), its pivot and
 /// base values in points before the matrix (`dash`: path units per dash
 /// offset unit), where its drawing's dash phase is (a word index into the
@@ -31,7 +31,7 @@ pub(crate) const CLOCK: u32 = 33;
 /// keyframes at the underlying value and percentages of the current transform box.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct Basis {
-    pub(super) base: [f32; 7],
+    pub(super) base: [f32; 8],
     pub(super) reference: (f32, f32),
 }
 
@@ -82,7 +82,7 @@ impl Layers {
     pub(super) fn needs_world(&self) -> bool {
         self.sent
             .values()
-            .any(|ops| super::stream::needs_world(&ops[16..]))
+            .any(|ops| super::stream::needs_world(&ops[17..]))
     }
 
     pub(super) fn unlayered(&self) -> bool {
@@ -148,7 +148,7 @@ impl Recorder {
         ts: Transform,
         pivot: (f32, f32),
         reference: (f32, f32),
-        base: [f32; 7],
+        base: [f32; 8],
     ) {
         // The clips around the layer stay where they are while the reader
         // moves it: written before it, never in its drawing, where the
@@ -279,7 +279,7 @@ mod tests {
             Transform::identity(),
             (10.0, 10.0),
             (0., 0.),
-            [0., 0., 1., 0., 1., 0., 0.]
+            [0., 0., 1., 0., 1., 0., 0., 1.]
         ));
         r.fill(
             &Shape::rect((0.0, 0.0, 20.0, 20.0)),
@@ -378,7 +378,7 @@ component App
         while at < first.len() {
             let next = end(&first, at).unwrap();
             if first[at] == LAYER_SET {
-                let body = &first[at + 19..next];
+                let body = &first[at + 20..next];
                 let mut i = 0;
                 while i < body.len() {
                     if body[i] == super::super::NATIVE {
@@ -428,7 +428,7 @@ component App
                 ROW_BEGIN => walk(&b[i + 6..j - 1], drawn, layers),
                 LAYER_SET => {
                     let mut body = Vec::new();
-                    walk(&b[i + 19..j], &mut body, layers);
+                    walk(&b[i + 20..j], &mut body, layers);
                     layers.push(body);
                 }
                 op => drawn.push(op),
@@ -513,7 +513,7 @@ component App
                     Transform::identity(),
                     (10.0, 9.0),
                     (0., 0.),
-                    [0., 0., 1., 0., 1., 0., 0.]
+                    [0., 0., 1., 0., 1., 0., 0., 1.]
                 ));
             }
             if inner_clip {

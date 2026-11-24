@@ -196,8 +196,10 @@ fn held() -> (Host<NoData>, Packet) {
     (host, p)
 }
 fn current(host: &Host<NoData>, node: u64) -> [MotionValue; 2] {
-    [Property::Translate, Property::Scale]
-        .map(|property| host.engine().value(node, property).unwrap())
+    let values = [Property::Translate, Property::Scale]
+        .map(|property| host.engine().value(node, property).unwrap());
+    assert_eq!(values[1].x, values[1].y, "a pinch keeps both axes uniform");
+    values
 }
 fn count(host: &Host<NoData>, slot: &str) -> f64 {
     let Some(Value::Number(value)) = host.runner().slot(slot) else {

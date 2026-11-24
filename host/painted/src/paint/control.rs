@@ -695,7 +695,7 @@ fn material_spinner(
         phase: c * crate::host::lower::SPINNER_REST as f32,
     };
     let layer = crate::host::lower::spinner_layer(key);
-    let base = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, c];
+    let base = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, c, 1.0];
     let layered = backend.layer_begin(layer, ts, (cx, cy), (0., 0.), base);
     backend.svg_path(&paint, ts);
     if layered {

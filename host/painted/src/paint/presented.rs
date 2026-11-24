@@ -19,8 +19,8 @@ pub struct Presented {
     /// `translate`'s percentages of the border box (chess diary #4),
     /// resolved where the box is painted ([`Presented::translate_at`]).
     pub translate_percent: (f32, f32),
-    /// Uniform.
-    pub scale: f32,
+    /// Factors, x then y.
+    pub scale: (f32, f32),
     /// Host feedback, multiplied into scale without entering the motion engine.
     pub press: f32,
     /// Host feedback: x px, x percent, y px, y percent.
@@ -57,7 +57,7 @@ impl Presented {
         dark: None,
         translate: (0.0, 0.0),
         translate_percent: (0.0, 0.0),
-        scale: 1.0,
+        scale: (1.0, 1.0),
         press: 1.0,
         press_translate: [0.; 4],
         press_background: 0.0,
@@ -82,7 +82,7 @@ impl Presented {
             dark: None,
             translate: (s.translate.x, s.translate.y),
             translate_percent: (s.translate_percent.x, s.translate_percent.y),
-            scale: s.scale.x, // #1384: temporary uniform fallback; native presentation is the next phase.
+            scale: (s.scale.x, s.scale.y),
             press: 1.0,
             press_translate: [0.; 4],
             press_background: 0.0,
@@ -123,13 +123,13 @@ impl Presented {
     }
 
     pub(super) fn changes_axes(&self) -> bool {
-        self.scale * self.press != 1.0 || self.rotate != 0.0
+        self.scale.0 * self.press != 1.0 || self.scale.1 * self.press != 1.0 || self.rotate != 0.0
     }
 
     pub(super) fn moves(&self) -> bool {
         self.translate != (0.0, 0.0)
             || self.translate_percent != (0.0, 0.0)
-            || self.scale != 1.0
+            || self.scale != (1.0, 1.0)
             || self.press != 1.0
             || self.press_translate != [0.; 4]
             || self.rotate != 0.0
@@ -150,7 +150,7 @@ impl Presented {
         let (tx, ty) = self.translate_at(w, h);
         Transform::from_translate(cx + dx + tx, cy + dy + ty)
             .pre_rotate(self.rotate)
-            .pre_scale(self.scale * self.press, self.scale * self.press)
+            .pre_scale(self.scale.0 * self.press, self.scale.1 * self.press)
             .pre_translate(-cx, -cy)
     }
 
@@ -240,11 +240,12 @@ impl super::PaintedBox {
             // Recompute only the former in the unscaled tracking geometry.
             if clips_self {
                 if let Some(clip) = self.shape_clips.first_mut() {
-                    clip.inverse = ts.pre_translate(rect.0, rect.1).invert().map(|t| {
-                        let inverse = [t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0., 0., 1.];
-                        self.projective
-                            .map_or(inverse, |(outer, ..)| super::space::mul3(&inverse, &outer))
-                    });
+                    clip.inverse = super::space::inverse_affine(ts.pre_translate(rect.0, rect.1))
+                        .map(|t| {
+                            let inverse = [t.sx, t.kx, t.tx, t.ky, t.sy, t.ty, 0., 0., 1.];
+                            self.projective
+                                .map_or(inverse, |(outer, ..)| super::space::mul3(&inverse, &outer))
+                        });
                 }
             }
             self.unpress = Transform::identity();
@@ -462,6 +463,30 @@ mod tests {
     use tiny_skia::Point;
 
     #[test]
+    fn per_axis_scale_composes_press_and_rejects_collapsed_hits() {
+        let shown = Presented {
+            scale: (-2.0, 0.5),
+            press: 0.5,
+            ..Presented::IDENTITY
+        };
+        let ts = shown.transform((0., 0., 100., 100.), (50., 50.));
+        assert_eq!(bbox(ts, (0., 0., 100., 100.)), (0., 37.5, 100., 25.));
+        assert!(shown.changes_axes());
+        let collapsed = Presented {
+            scale: (1., 0.),
+            ..Presented::IDENTITY
+        };
+        let ts = collapsed.transform((0., 0., 100., 100.), (50., 50.));
+        assert!(super::super::space::inverse_affine(ts).is_none());
+        assert_eq!(bbox(ts, (0., 0., 100., 100.)), (0., 50., 100., 0.));
+        assert!(Presented {
+            scale: (1., 0.5),
+            ..Presented::IDENTITY
+        }
+        .moves());
+    }
+
+    #[test]
     fn a_layout_springs_size_overshoot_is_clamped_to_zero() {
         let shown = Presented {
             layout: [5.0, -8.0, -150.0, -120.0],
@@ -493,7 +518,10 @@ mod tests {
             (10.0, 20.0, 100.0, 10.0)
         );
         // An authored scale stays about the center.
-        let both = Presented { scale: 0.5, ..grow };
+        let both = Presented {
+            scale: (0.5, 0.5),
+            ..grow
+        };
         assert_eq!(map(&both, 10.0, 20.0), (40.0, 22.0));
     }
 }

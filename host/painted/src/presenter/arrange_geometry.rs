@@ -40,7 +40,7 @@ impl<D: DataSource> Presenter<D> {
         let mut child = kernel.node_by_key(b.handle)?;
         while child.key != b.list {
             let p = self.host.presented(child.id);
-            if p.scale != 1.
+            if p.scale != (1., 1.)
                 || p.rotate != 0.
                 || [Property::Scale, Property::Rotate]
                     .into_iter()
@@ -114,7 +114,7 @@ impl<D: DataSource> Presenter<D> {
             let node = kernel.node(id)?;
             let p = self.host.presented(id);
             if (p.translate != (0., 0.) || p.translate_percent != (0., 0.))
-                || p.scale != 1.
+                || p.scale != (1., 1.)
                 || p.rotate != 0.
                 || [Property::Translate, Property::Scale, Property::Rotate]
                     .into_iter()

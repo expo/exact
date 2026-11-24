@@ -312,7 +312,7 @@ extension NodeView {
         // a press folds into the scale.
         // Outermost, a layout transition's offset; its size is the surface's
         // alone (`Surface.swift`, LLP 1063).
-        let o = transformOriginPoint, d = CGPoint(x: o.x - bounds.midX, y: o.y - bounds.midY), s = scale * pressModelFactor
+        let o = transformOriginPoint, d = CGPoint(x: o.x - bounds.midX, y: o.y - bounds.midY), s = CGPoint(x: scale.x * pressModelFactor, y: scale.y * pressModelFactor)
         followPressEase(about: d)
         let outer = hostPlacement
         if let space = spaceTransform(origin: d, scale: s) {
@@ -323,7 +323,7 @@ extension NodeView {
             layer.transform = CATransform3DConcat(space, CATransform3DMakeAffineTransform(outer))
             return
         }
-        let own = CGAffineTransform(translationX: translate.x + d.x, y: translate.y + d.y).rotated(by: rotate * .pi / 180).scaledBy(x: s, y: s).translatedBy(x: -d.x, y: -d.y)
+        let own = CGAffineTransform(translationX: translate.x + d.x, y: translate.y + d.y).rotated(by: rotate * .pi / 180).scaledBy(x: s.x, y: s.y).translatedBy(x: -d.x, y: -d.y)
         transform = own.concatenating(outer)
     }
     /// Where the host moves the box beyond its layout and its own CSS
@@ -418,14 +418,15 @@ extension NodeView {
         let anchor = layer?.anchorPoint ?? .zero
         let origin = transformOriginPoint
         let o = CGPoint(x: origin.x - bounds.width * anchor.x, y: origin.y - bounds.height * anchor.y)
-        let s = scale / frameGeometryScale * pressFactor
+        let geometry = frameGeometryScale
+        let s = CGPoint(x: scale.x / geometry.x * pressFactor, y: scale.y / geometry.y * pressFactor)
         if let space = spaceTransform(origin: o, scale: s, shift: lift) {
             // A 3D rotation or a z translation (LLP 1077 D8).
             layer?.transform = CATransform3DConcat(space, CATransform3DMakeTranslation(layoutOffset.x, layoutOffset.y, 0))
             return
         }
         var t = CGAffineTransform(translationX: translate.x - lift.x, y: translate.y - lift.y)
-        t = t.translatedBy(x: o.x, y: o.y).rotated(by: rotate * .pi / 180).scaledBy(x: s, y: s).translatedBy(x: -o.x, y: -o.y)
+        t = t.translatedBy(x: o.x, y: o.y).rotated(by: rotate * .pi / 180).scaledBy(x: s.x, y: s.y).translatedBy(x: -o.x, y: -o.y)
         // Outermost, a layout transition's offset; its size is the surface's
         // alone (`Surface.swift`, LLP 1063).
         // Written when it differs: this runs at every display of the view, and at every rebinding of a list's row.

@@ -1027,9 +1027,7 @@ impl Painter {
                 let mut base = hit_p;
                 base.press = 1.;
                 base.press_translate = [0.; 4];
-                hit_p
-                    .transform(rect, origin)
-                    .invert()
+                space::inverse_affine(hit_p.transform(rect, origin))
                     .map(|inverse| inverse.pre_concat(base.transform(rect, origin)))
                     .unwrap_or_default()
             },
@@ -1401,17 +1399,11 @@ pub use field::effective_overflow;
 /// containers do not always count it), never less than the box itself. A
 /// child in a block of its own (a popover's, the viewport) is elsewhere.
 pub fn content_size(node: &NodeRef<'_>, kernel: &Kernel) -> (f32, f32) {
-    // Read the end padding the engine laid out with, a bar's cover included
-    let (_, _, pad_right, pad_bottom) = kernel.layout_padding(node.key).unwrap_or_default();
-    let mut w = node.frame.width.max(node.content.0);
-    let mut h = node.frame.height.max(node.content.1);
-    for child in node.children() {
-        if let Some(c) = kernel.node_unblocked(child) {
-            w = w.max(c.frame.x - node.frame.x + c.frame.width + pad_right);
-            h = h.max(c.frame.y - node.frame.y + c.frame.height + pad_bottom);
-        }
-    }
-    (w, h)
+    space::content_size_with(node, kernel, &|id| {
+        kernel
+            .node(id)
+            .map_or(Presented::IDENTITY, |n| Presented::from_style(n.style))
+    })
 }
 
 /// The painting scope for `node` (`roles::authored_accent`): the roles drawn

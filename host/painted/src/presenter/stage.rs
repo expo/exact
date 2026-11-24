@@ -263,6 +263,7 @@ pub(super) struct Pose {
     dx: f32,
     dy: f32,
     scale: f32,
+    scale_axes: (f32, f32),
     /// Degrees clockwise, about `origin`.
     rotate: f32,
     /// The point it scales and turns about, in that drawing space.
@@ -279,6 +280,7 @@ impl Pose {
         dx: 0.0,
         dy: 0.0,
         scale: 1.0,
+        scale_axes: (1.0, 1.0),
         rotate: 0.0,
         origin: (0.0, 0.0),
         opacity: 1.0,
@@ -291,7 +293,10 @@ impl Pose {
         Transform::from_translate(at.0 + self.dx, at.1 + self.dy)
             .pre_translate(self.origin.0, self.origin.1)
             .pre_rotate(self.rotate)
-            .pre_scale(self.scale, self.scale)
+            .pre_scale(
+                self.scale * self.scale_axes.0,
+                self.scale * self.scale_axes.1,
+            )
             .pre_translate(-self.origin.0, -self.origin.1)
     }
 }

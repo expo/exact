@@ -11,7 +11,7 @@ import QuartzCore
 
 /// A route's part for its box: how long it plays, and its poses at even
 /// steps from its start to its end, each opacity, translation x and y
-/// (points, y down), scale and rotation (degrees clockwise), about the box's
+/// (points, y down), scale x and y, and rotation (degrees clockwise), about the box's
 /// centre. No pose is the author's cut (`animation="none"`).
 package struct RoutePart {
     package let seconds: Double
@@ -20,7 +20,7 @@ package struct RoutePart {
     init?(json: Data) {
         guard let object = try? JSONSerialization.jsonObject(with: json) as? [String: Any],
               let seconds = object["seconds"] as? Double,
-              let poses = object["poses"] as? [[Double]], poses.allSatisfy({ $0.count == 5 }) else { return nil }
+              let poses = object["poses"] as? [[Double]], poses.allSatisfy({ $0.count == 6 }) else { return nil }
         self.seconds = seconds
         self.poses = poses
     }
@@ -35,8 +35,8 @@ package struct RoutePart {
     /// origin (AppKit's).
     static func transform(_ pose: [Double], about centre: CGPoint = .zero) -> CATransform3D {
         var t = CATransform3DMakeTranslation(pose[1] + centre.x, pose[2] + centre.y, 0)
-        t = CATransform3DRotate(t, pose[4] * .pi / 180, 0, 0, 1)
-        t = CATransform3DScale(t, pose[3], pose[3], 1)
+        t = CATransform3DRotate(t, pose[5] * .pi / 180, 0, 0, 1)
+        t = CATransform3DScale(t, pose[3], pose[4], 1)
         return CATransform3DTranslate(t, -centre.x, -centre.y, 0)
     }
 

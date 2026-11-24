@@ -554,6 +554,7 @@ impl<D: DataSource> Presenter<D> {
                 self.host.content_region(),
                 &node,
                 None,
+                &|id| self.host.presented(id),
             );
             let end_port = tracks_end.then(|| {
                 let kernel = self.host.kernel();
@@ -797,7 +798,9 @@ impl<D: DataSource> Presenter<D> {
             let bounds = self.display.bounds(kernel, view).unwrap_or_else(|| {
                 let limit = self.collection_scroll_limits().get(&view).copied();
                 self.brush
-                    .scroll_bounds(kernel, self.host.content_region(), &node, limit)
+                    .scroll_bounds(kernel, self.host.content_region(), &node, limit, &|id| {
+                        self.host.presented(id)
+                    })
             });
             ((node.frame.width, node.frame.height), bounds.max)
         });

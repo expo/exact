@@ -15,6 +15,17 @@ final class CssAnimationFillIOSTests: XCTestCase {
     }
     private func spec(fill: Double, held: Double) -> CssAnimation { CssAnimation(dictionary(fill: fill, held: held))! }
 
+    func testScaleAxesHaveTheSameFillLifetime() throws {
+        for axis in ["x", "y"] {
+            for fill in [0.0, 3.0] {
+                var value = dictionary(fill: fill, held: 0.5)
+                value["id"] = axis; value["k"] = "transform.scale.\(axis)"
+                let spec = try XCTUnwrap(CssAnimation(value))
+                XCTAssertEqual(CssAnimations.make(spec, layer: CALayer(), clock: nil) != nil, fill == 3)
+            }
+        }
+    }
+
     func testAnEndedAnimationWithoutAForwardsFillHasNoEffect() {
         let layer = CALayer()
         for fill in [0.0, 2.0] {

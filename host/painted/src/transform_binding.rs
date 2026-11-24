@@ -108,7 +108,7 @@ impl<D: DataSource> Host<D> {
             }
             if n.key != binding.target
                 && ((p.translate != (0., 0.) || p.translate_percent != (0., 0.))
-                    || p.scale != 1.
+                    || p.scale != (1., 1.)
                     || self.engine.is_active(node, Property::Translate)
                     || self.engine.is_active(node, Property::Scale))
             {
@@ -167,7 +167,7 @@ impl<D: DataSource> Host<D> {
             self.played_value(node, Property::Translate, now_ms / 1000.)
                 .unwrap_or_else(|| Value::new(p.translate.0 as f64, p.translate.1 as f64)),
             self.played_value(node, Property::Scale, now_ms / 1000.)
-                .unwrap_or_else(|| Value::new(p.scale as f64, p.scale as f64)),
+                .unwrap_or_else(|| Value::new(p.scale.0 as f64, p.scale.1 as f64)),
         ];
         if !valid_values(values) || !now_ms.is_finite() || now_ms < self.now_ms {
             return Err("invalid transform presentation or clock".into());
