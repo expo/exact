@@ -185,7 +185,10 @@ final class AgentBarPointerIOSTests: XCTestCase {
             return controls.map { $0.convert($0.bounds, to: bar) }.min { $0.minX < $1.minX } ?? .zero
         }
         XCTAssertNotNil(bar.backItem, "the pushed route's bar shows Back")
-        for name in ["item-31", "Spare"] { try assertRefused(name, reporting: back, "reporting Back's frame") }
+        // A vertical bar holds Back, outside this one
+        if !bar.traitCollection.placesVerticalBar {
+            for name in ["item-31", "Spare"] { try assertRefused(name, reporting: back, "reporting Back's frame") }
+        }
         let numbered = try entry("item-31").item
         try assertRefused("Spare", reporting: { numbered.frame(in: bar) ?? .zero }, "reporting another item's frame")
 

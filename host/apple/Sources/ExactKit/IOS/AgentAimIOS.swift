@@ -57,6 +57,7 @@ extension Agent {
     /// same frame claims it, as does UIKit's name for it when that is not
     /// the item's. Back claims the control with none of the bar's on its
     /// leading side: no item sits there (`leftItemsSupplementBackButton`).
+    /// Where the system places a vertical bar, Back is in that one.
     private func ownsControl(_ item: UIBarButtonItem, of navigationItem: UINavigationItem, frame: CGRect, hit: UIView, in bar: UINavigationBar) -> Bool {
         let same = { (a: CGRect, b: CGRect) in abs(a.minX - b.minX) <= 0.5 && abs(a.minY - b.minY) <= 0.5 && abs(a.maxX - b.maxX) <= 0.5 && abs(a.maxY - b.maxY) <= 0.5 }
         let box = { (v: UIView) in v.convert(v.bounds, to: bar) }
@@ -73,7 +74,7 @@ extension Agent {
         if let named, named != item.accessibilityIdentifier { return false }
         let items = (navigationItem.leftBarButtonItems ?? []) + (navigationItem.rightBarButtonItems ?? [])
         if items.contains(where: { other in other !== item && other.frame(in: bar).map { same($0, frame) } == true }) { return false }
-        guard bar.backItem != nil, !navigationItem.hidesBackButton else { return true }
+        guard bar.backItem != nil, !navigationItem.hidesBackButton, !bar.traitCollection.placesVerticalBar else { return true }
         let rtl = bar.effectiveUserInterfaceLayoutDirection == .rightToLeft, own = box(control)
         return controls.contains { $0 !== control && (rtl ? box($0).maxX > own.maxX + 0.5 : box($0).minX < own.minX - 0.5) }
     }

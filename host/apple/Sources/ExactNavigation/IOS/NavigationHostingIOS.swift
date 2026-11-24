@@ -248,8 +248,10 @@ extension NavigationHost: NavigationHosting {
     /// its overflow menu.
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
         #if os(iOS)
-        guard let (bar, item, _) = barButtonItem(node) else { return nil }
-        guard let frame = item.frame(in: bar), frame.width > 0, frame.height > 0 else { return .failure(BarItemMissing()) }
+        guard let (bar, item, navigationItem) = barButtonItem(node) else { return nil }
+        // UIKit gives an item in the menu the button's frame, but none where it places a vertical bar (the iPhone Duo)
+        let places = [item.frame(in: bar), item.isHidden ? nil : navigationItem.overflowPresentationSource?.frame(in: bar)]
+        guard let frame = places.lazy.compactMap({ $0 }).first(where: { !$0.isEmpty }) else { return .failure(BarItemMissing()) }
         return .success((bar, frame))
         #else
         return nil
