@@ -3,10 +3,12 @@ import AppKit
 import XCTest
 @testable import ExactKit
 
-/// A drag of files from Finder over a window (FileDragMac.swift): a file
-/// drag over a textarea goes to the `drop` above it instead of inserting its
-/// path, `dragenter` and `dragleave` bracket it at the box that hears them,
-/// and a paste's files are claimed from the pasteboard (PastedFiles.swift).
+/// A drag from another app over a window (FileDragMac.swift): a file drag
+/// over a textarea goes to the `drop` above it instead of inserting its
+/// path, a text or link drag is the field's unless its own node declares
+/// `drop`, `dragenter` and `dragleave` bracket a drag at the box that hears
+/// them, and a paste's files are claimed from the pasteboard
+/// (PastedFiles.swift).
 final class FileDragMacTests: XCTestCase {
     private var window: NSWindow!
     private var heard: [String] = []
@@ -23,8 +25,9 @@ final class FileDragMacTests: XCTestCase {
     }
 
     /// A column (1) hearing `drop`, `dragenter` and `dragleave` when
-    /// `column` says so, holding a textarea (2), a box (3) and an input (4).
-    private func presenter(column: [String]) -> Presenter {
+    /// `column` says so, holding a textarea (2) hearing `editor`, a box (3)
+    /// and an input (4) hearing `line`.
+    private func presenter(column: [String], editor: [String] = ["input"], line: [String] = ["input"]) -> Presenter {
         _ = NSApplication.shared
         let p = Presenter()
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
@@ -33,9 +36,9 @@ final class FileDragMacTests: XCTestCase {
         p.onClipboard = { [unowned self] id, kind, line in heard.append("\(id):\(kind)") }
         p.apply(wireBatch([
             ["op": "create", "id": 1, "kind": "view", "handlers": column],
-            ["op": "create", "id": 2, "kind": "textarea", "props": ["id": "editor", "value": "hello"], "handlers": ["input"]],
+            ["op": "create", "id": 2, "kind": "textarea", "props": ["id": "editor", "value": "hello"], "handlers": editor],
             ["op": "create", "id": 3, "kind": "view", "handlers": [String]()],
-            ["op": "create", "id": 4, "kind": "input", "props": ["id": "line", "value": "hello"], "handlers": ["input"]],
+            ["op": "create", "id": 4, "kind": "input", "props": ["id": "line", "value": "hello"], "handlers": line],
             ["op": "children", "id": 1, "ids": [2, 3, 4]],
             ["op": "roots", "ids": [1]],
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 200.0],
@@ -49,13 +52,23 @@ final class FileDragMacTests: XCTestCase {
 
     private func middle(_ view: NSView) -> NSPoint { view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil) }
 
-    private func drag(_ urls: [URL], at point: NSPoint, text: String? = nil) -> DraggingInfo {
+    /// A drag of `urls`, then `text` as an item of its own, then `link` and
+    /// `title` as one item, as a browser's link and Exact's link card drag
+    /// them, from a source allowing `operations`.
+    private func drag(_ urls: [URL], at point: NSPoint, text: String? = nil, link: String? = nil, title: String? = nil,
+                      operations: NSDragOperation = .copy) -> DraggingInfo {
         let board = NSPasteboard(name: .init("exact-test-\(UUID().uuidString)"))
         board.clearContents()
         var items: [NSPasteboardWriting] = urls.map { $0 as NSURL }
         if let text { items.append(text as NSString) }
+        if link != nil || title != nil {
+            let item = NSPasteboardItem()
+            if let link { item.setString(link, forType: .URL) }
+            if let title { item.setString(title, forType: .string) }
+            items.append(item)
+        }
         board.writeObjects(items)
-        return DraggingInfo(board: board, location: point, window: window)
+        return DraggingInfo(board: board, location: point, window: window, operations: operations)
     }
 
     func testAFileDragOverATextareaIsTheColumnsDrop() throws {
@@ -86,6 +99,64 @@ final class FileDragMacTests: XCTestCase {
         XCTAssertFalse(FileDrag.takes(editor, text))
     }
 
+    func testATextOrLinkDragIsTheColumnsOverItsBoxAndTheFieldsOverAField() throws {
+        let p = presenter(column: ["drop", "dragenter", "dragleave"])
+        let column = try XCTUnwrap(p.views[1]), editor = try XCTUnwrap(p.views[2]?.textArea), box = try XCTUnwrap(p.views[3])
+        XCTAssertEqual(column.draggingEntered(drag([], at: middle(box), text: "words")), .copy)
+        XCTAssertEqual(column.draggingUpdated(drag([], at: middle(box), link: "https://example.com/fuji", title: "Mount Fuji")), .copy)
+        let text = drag([], at: middle(editor), text: "words")
+        XCTAssertNil(FileDrag.moved(editor, text), "the field inserts it")
+        XCTAssertFalse(FileDrag.takes(editor, text))
+        XCTAssertNil(FileDrag.moved(editor, drag([], at: middle(editor), link: "https://example.com/fuji", title: "Mount Fuji")), "and a link")
+        XCTAssertEqual(heard, ["1:55"], "the column hears the drag over its field too")
+    }
+
+    /// A drop the field takes is the column's leave, once.
+    func testATextDropAFieldTakesIsOneLeaveAtTheColumn() throws {
+        let p = presenter(column: ["drop", "dragenter", "dragleave"])
+        let editor = try XCTUnwrap(p.views[2]?.textArea)
+        let text = drag([], at: middle(editor), text: "words")
+        _ = editor.draggingEntered(text)
+        XCTAssertNil(FileDrag.perform(editor, text), "the field's own")
+        editor.draggingEnded(text)
+        XCTAssertEqual(heard, ["1:55", "1:56"])
+        // With a drop waiting at the column, its held enter is heard before the field's drop leaves it
+        heard = []
+        FileDrag.waits([try XCTUnwrap(p.views[1])])
+        _ = editor.draggingEntered(text)
+        XCTAssertEqual(heard, [], "held")
+        XCTAssertNil(FileDrag.perform(editor, text))
+        editor.draggingEnded(text)
+        XCTAssertEqual(heard, ["1:55", "1:56"])
+        FileDrag.lands([try XCTUnwrap(p.views[1])])
+        XCTAssertEqual(heard, ["1:55", "1:56"])
+    }
+
+    func testAFieldWhoseOwnNodeDeclaresDropGivesItEveryDrag() throws {
+        let p = presenter(column: ["drop"], editor: ["input", "drop"], line: ["input", "drop"])
+        let editor = try XCTUnwrap(p.views[2]?.textArea)
+        let text = drag([], at: middle(editor), text: "words")
+        XCTAssertEqual(FileDrag.moved(editor, text), .copy)
+        XCTAssertTrue(FileDrag.destination(editor, text) === p.views[2])
+        XCTAssertTrue(FileDrag.takes(editor, drag([file], at: middle(editor))))
+        // An input being edited takes the drag in the window's field editor, which AppKit places inside the input
+        // and whose delegate is the input
+        let input = try XCTUnwrap(p.views[4]?.field), fieldEditor = FieldEditor(frame: .zero)
+        input.addSubview(fieldEditor)
+        fieldEditor.delegate = try XCTUnwrap(input as Any as? NSTextViewDelegate, "an input is its field editor's delegate")
+        XCTAssertTrue(FileDrag.destination(fieldEditor, files: false) === p.views[4])
+        fieldEditor.delegate = nil
+        XCTAssertTrue(FileDrag.destination(fieldEditor, files: false) === p.views[4], "an editor no input delegates to is no field")
+        XCTAssertTrue(FileDrag.destination(fieldEditor, files: true) === p.views[4], "a drag with files goes to the nearest drop")
+    }
+
+    func testADragWhoseSourceAllowsNoCopyIsNotTaken() throws {
+        let p = presenter(column: ["drop"])
+        let column = try XCTUnwrap(p.views[1]), box = try XCTUnwrap(p.views[3])
+        XCTAssertEqual(column.draggingEntered(drag([file], at: middle(box), operations: .move)), [])
+        XCTAssertEqual(column.draggingEntered(drag([], at: middle(box), text: "words", operations: .move)), [])
+    }
+
     func testEnterAndLeaveAreTheColumnsBoxNotItsChildren() throws {
         let p = presenter(column: ["drop", "dragenter", "dragleave"])
         let column = try XCTUnwrap(p.views[1]), editor = try XCTUnwrap(p.views[2]?.textArea), box = try XCTUnwrap(p.views[3])
@@ -102,6 +173,31 @@ final class FileDragMacTests: XCTestCase {
         _ = column.draggingEntered(drag([file], at: middle(box)))
         _ = column.performDragOperation(drag([file], at: middle(box)))
         XCTAssertEqual(heard, ["1:55", "1:56"])
+    }
+
+    /// A node a drop still waiting for promised files was over holds a newer
+    /// drag's enter until that drop lands; a leave of the newer drag cancels
+    /// it. AppKit receives promised files only inside a real drag, so the
+    /// waiting drop is stood in for (`waits`).
+    func testANewerDragsEnterAtAWaitingDropsNodeWaitsForItToLand() throws {
+        let p = presenter(column: ["drop", "dragenter", "dragleave"])
+        let column = try XCTUnwrap(p.views[1]), box = try XCTUnwrap(p.views[3])
+        XCTAssertEqual(column.draggingEntered(drag([file], at: middle(box))), .copy)
+        FileDrag.ended(dropped: true)
+        FileDrag.waits([column])
+        _ = column.draggingEntered(drag([file], at: middle(box)))
+        XCTAssertEqual(heard, ["1:55"], "the newer drag's enter waits")
+        FileDrag.lands([column])
+        XCTAssertEqual(heard, ["1:55", "1:55"])
+        column.draggingExited(drag([file], at: NSPoint(x: -20, y: -20)))
+        heard = []
+        _ = column.draggingEntered(drag([file], at: middle(box)))
+        FileDrag.ended(dropped: true)
+        FileDrag.waits([column])
+        _ = column.draggingEntered(drag([file], at: middle(box)))
+        column.draggingExited(drag([file], at: NSPoint(x: -20, y: -20)))
+        FileDrag.lands([column])
+        XCTAssertEqual(heard, ["1:55"], "a newer drag that left was neither entered nor left")
     }
 
     /// An input that is not being edited takes the drag itself (`Field`).
@@ -174,6 +270,46 @@ final class FileDragMacTests: XCTestCase {
         XCTAssertFalse(log.contains("leave"), "a drop that lands is the drag's last event: \(log)")
     }
 
+    /// A link and its title dropped in a session, as one item, and a text
+    /// of its own: the action hears the title and the other text joined, the
+    /// link, and no file.
+    func testALinkAndTextThatLandAreTheColumnsActionWithNoFile() throws {
+        _ = NSApplication.shared
+        let source = """
+        component App
+          state log = ""
+          action entered
+            log = `${log}enter;`
+          action left
+            log = `${log}leave;`
+          action dropped(e: DragEvent)
+            log = `${log}drop:${e.text}|${e.url}|${e.files.length};`
+          view
+            column testId="column" width="100%" height="100%" dragenter=entered dragleave=left drop=dropped
+              textarea testId="field" value="hello" height=80
+
+        """
+        let session = ExactApp.shared.makeSession()
+        defer { session.destroy() }
+        let view = ExactView(session: session)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let mount = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        window.contentView = mount
+        view.frame = mount.bounds; mount.addSubview(view)
+        XCTAssertNil(session.boot(plan: try compile(source), size: CGSize(width: 400, height: 300)).error)
+        window.layoutIfNeeded()
+        let column = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "column" })
+        let below = column.convert(NSPoint(x: column.bounds.midX, y: column.isFlipped ? 200 : column.bounds.height - 200), to: nil)
+        let info = drag([], at: below, text: "Japan", link: "https://example.com/fuji", title: "Mount Fuji")
+        XCTAssertEqual(column.draggingEntered(info), .copy)
+        XCTAssertTrue(column.performDragOperation(info), "the column took the drop")
+        column.draggingEnded(info)
+        let state = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any])
+        let log = try XCTUnwrap((state["slots"] as? [String: Any])?["log"] as? String)
+        XCTAssertEqual(log, "enter;drop:Japan\nMount Fuji|https://example.com/fuji|0;")
+    }
+
     private func compile(_ source: String) throws -> Data {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -228,9 +364,12 @@ final class FileDragMacTests: XCTestCase {
 private final class DraggingInfo: NSObject, NSDraggingInfo {
     let board: NSPasteboard, location: NSPoint
     weak var window: NSWindow?
-    init(board: NSPasteboard, location: NSPoint, window: NSWindow) { self.board = board; self.location = location; self.window = window }
+    let operations: NSDragOperation
+    init(board: NSPasteboard, location: NSPoint, window: NSWindow, operations: NSDragOperation = .copy) {
+        self.board = board; self.location = location; self.window = window; self.operations = operations
+    }
     var draggingDestinationWindow: NSWindow? { window }
-    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingSourceOperationMask: NSDragOperation { operations }
     var draggingLocation: NSPoint { location }
     var draggedImageLocation: NSPoint { location }
     var draggedImage: NSImage? { nil }
@@ -241,7 +380,17 @@ private final class DraggingInfo: NSObject, NSDraggingInfo {
     var draggingFormation: NSDraggingFormation = .default
     var animatesToDestination = false
     var numberOfValidItemsForDrop = 1
-    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:], using block: @escaping (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+    /// Each item's file URL with its index, as AppKit enumerates a drag's
+    /// items: the only file these drags carry.
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions = [], for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any] = [:], using block: @escaping (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {
+        guard classArray.contains(where: { ObjectIdentifier($0) == ObjectIdentifier(NSURL.self) }) else { return }
+        var stop: ObjCBool = false
+        for (index, item) in (board.pasteboardItems ?? []).enumerated() {
+            guard let string = item.string(forType: .fileURL), let url = URL(string: string) else { continue }
+            block(NSDraggingItem(pasteboardWriter: url as NSURL), index, &stop)
+            if stop.boolValue { return }
+        }
+    }
     var springLoadingHighlight: NSSpringLoadingHighlight { .none }
     func resetSpringLoading() {}
 }

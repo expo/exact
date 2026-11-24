@@ -496,11 +496,19 @@ export function tapWords(args, held = false) {
     case 'pinch': return [first, { pinch: number(rest[0], 'pinch'), ...options(rest.slice(1), ['at']) }];
     // Several fingers tapped together, as a window's recognizers read them (the iOS dev menu's four).
     case 'fingers': return [first, { fingers: number(rest[0], 'fingers'), ...options(rest.slice(1), ['at']) }];
-    // Files dragged in from outside, each a path (studio diary R19).
-    case 'drop': if (!rest.length) refuse('drop takes one or more paths'); return [first, { drop: rest.map((path) => resolve(path)) }];
-    // A drag of those files from outside comes over the target and stays there (`dragenter`), until a `drop` there
-    // or a `dragleave`, which takes it away undropped.
-    case 'dragenter': if (!rest.length) refuse('dragenter takes the dragged paths'); return [first, { dragenter: rest.map((path) => resolve(path)) }];
+    // A drag from outside dropped on the target (LLP 1094.001 D6): files, each a path, plain text
+    // (`--text "…"`) and a link (`--url "…"`), alone or together. `dragenter` brings the same drag over the target
+    // and holds it there, until a `drop` there or a `dragleave`, which takes it away undropped.
+    case 'drop': case 'dragenter': {
+      const drag = { [form]: [] };
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] !== '--text' && rest[i] !== '--url') { drag[form].push(resolve(rest[i])); continue; }
+        if (rest[i + 1] === undefined) refuse(`${form} ${rest[i]} takes a value`);
+        drag[rest[i].slice(2)] = String(rest[++i]);
+      }
+      if (!drag[form].length && drag.text === undefined && drag.url === undefined) refuse(`${form} takes one or more paths, --text "…" or --url "…"`);
+      return [first, drag];
+    }
     case 'dragleave': if (rest.length) refuse('dragleave takes no more words'); return [first, { dragleave: true }];
     case 'into': {
       // tap <list> into <key> [block <v>] [inline <v>]
@@ -533,7 +541,7 @@ export function tapWords(args, held = false) {
       if (!['left', 'right'].includes(rest[0]) || !(rest.length === 3 || (rest.length === 5 && rest[3] === 'for'))) refuse('stick takes left or right, x and y in [-1, 1], and optionally for <ms>');
       return [first, { stick: rest[0], value: [number(rest[1], 'stick'), number(rest[2], 'stick')], ...(rest[3] === 'for' ? { for: number(rest[4], 'for') } : {}) }];
     // Most often a target of several words left unquoted (sb4 farm wave 4, 053: `tap Why are my…`).
-    default: refuse(`unknown word ${JSON.stringify(form)}; a target of several words is quoted inside the op (\`tap "${args.join(' ').replace(/["\\]/g, '\\$&')}"\`), and after a target come only: tap <target> [at <x> <y> [modifiers <M>] | modifiers <M> | down [at <x> <y>] [modifiers <M>] | wheel <dx> <dy> [gesture | fling | hold] [at <x> <y>] [modifiers <M>] | wheel 0 0 release | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers <M>]) | hover | drop <path…> | dragenter <path…> | dragleave | into <key> … | pinch <scale> [at <x> <y>] | fingers <2-5> [at <x> <y>] | history <n> | mediasession <action> [seconds] | pictureinpicture <control> | drag …]`);
+    default: refuse(`unknown word ${JSON.stringify(form)}; a target of several words is quoted inside the op (\`tap "${args.join(' ').replace(/["\\]/g, '\\$&')}"\`), and after a target come only: tap <target> [at <x> <y> [modifiers <M>] | modifiers <M> | down [at <x> <y>] [modifiers <M>] | wheel <dx> <dy> [gesture | fling | hold] [at <x> <y>] [modifiers <M>] | wheel 0 0 release | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers <M>]) | hover | drop [<path…>] [--text "…"] [--url "…"] | dragenter [<path…>] [--text "…"] [--url "…"] | dragleave | into <key> … | pinch <scale> [at <x> <y>] | fingers <2-5> [at <x> <y>] | history <n> | mediasession <action> [seconds] | pictureinpicture <control> | drag …]`);
   }
 }
 
@@ -560,6 +568,12 @@ export function tapArguments(opts) {
   if (opts.pinch !== undefined) pinchArguments(opts.pinch);
   if (opts.fingers !== undefined && ![2, 3, 4, 5].includes(opts.fingers)) throw new MalformedOperation('tap … fingers: 2 to 5 fingers');
   if (opts.into) intoArguments(opts.into);
+  // A drag in carries something, and a `file:` URL is a file, as each host reads a drop (LLP 1094.001 D1)
+  for (const kind of ['drop', 'dragenter']) {
+    if (opts[kind] === undefined) continue;
+    if (!opts[kind].length && !opts.text && !opts.url) throw new MalformedOperation(`${kind}: a drag carries a path, text or a link`);
+    if (/^file:/i.test(opts.url ?? '')) throw new MalformedOperation(`${kind}: the link ${opts.url} names a file: drop it by its path instead`);
+  }
   if (opts.seconds != null && !Number.isFinite(opts.seconds)) throw new MalformedOperation('mediasession: expected finite seconds');
   if (opts.mediaSession === 'seekto' && !(Number.isFinite(opts.seconds) && opts.seconds >= 0)) throw new MalformedOperation('mediasession: seekto needs finite nonnegative seconds');
   // The mouse's forms: one button form at a time, each at its middle or `at`, the modifiers held through it.

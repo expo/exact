@@ -614,19 +614,22 @@ fn calculated_scroll_padding_clamps_at_use_for_keyed_jumps() {
 #[test]
 fn a_request_uses_its_actions_computed_scroll_padding_immediately() {
     for (inset, ends) in [
-        ("(collapsed ? 0 : 100)", 0.0),
-        ("(collapsed ? \"4em\" : \"10em\")", 40.0),
+        (r#"scroll-padding-top=(collapsed ? 0 : 100)"#, 0.0),
+        ("class=Inset", 58.0),
+        (r#"scroll-padding-top=(collapsed ? "4em" : "10em")"#, 40.0),
     ] {
         let app = format!(
-            r#"component App
+            r#"style Inset
+  scroll-padding-top="var(--inset)"
+component App
   state collapsed = false
   resource rows = rows(100) as shape number[]
   action collapse(n: number)
     collapsed = true
     scrollIntoView("feed", n, block="start")
   view
-    column testId="root"
-      list id="feed" virtualized=true height=600 width=400 overflow-x="hidden" estimated-item-height=100 font-size=10 scroll-padding-top={inset}
+    column testId="root" --inset=(collapsed ? "10%" : "5%")
+      list id="feed" virtualized=true height=600 width=400 overflow-x="hidden" estimated-item-height=100 font-size=10 box-sizing="border-box" border-width="8px 0 12px" border-style="solid" {inset}
         for x in rows key=x
           text `${{x}}` height=100 width="100%"
 "#
@@ -644,6 +647,43 @@ fn a_request_uses_its_actions_computed_scroll_padding_immediately() {
         assert_eq!(top, 50.0 * ROW - ends, "{inset}: within the new one");
         assert!(exact_runner::agent::state(&r).contains("\"status\":\"done\""));
     }
+}
+
+#[test]
+fn a_keyed_jump_uses_the_browsers_measured_scrollport() {
+    let source = APP
+        .replace(
+            r#"column testId="root""#,
+            r#"column testId="root" --inset="10%""#,
+        )
+        .replace("padding-top=92", r#"scroll-padding-top="var(--inset)""#);
+    let mut r = Runner::boot(
+        contract::compile(&source).unwrap(),
+        boxed(Data),
+        Kernel::with_monospace_on_demand(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    // A kernel measurement must not supersede the dimensions reported by the browser.
+    layout(&mut r);
+    let c = list(&r);
+    r.collection_feedback(CollectionFeedback {
+        view: c.view,
+        revision: c.revision,
+        scroll_sequence: 1,
+        offset: 0.,
+        port_main: 280.,
+        port_cross: 400.,
+        cross: 400.,
+        padding: [0.; 2],
+        measurements: Vec::new(),
+        focus_view: None,
+        interaction_view: None,
+    })
+    .unwrap();
+    r.act("go", vec![Value::Number(50.)]).unwrap();
+    assert_eq!(list(&r).correction.unwrap().offset, 4972.);
 }
 
 #[test]

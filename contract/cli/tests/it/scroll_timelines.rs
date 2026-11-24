@@ -216,3 +216,89 @@ component App
     app.scroll("inner", 0.0, 75.0);
     assert!((app.shown("inside", Property::Opacity).x - 0.25).abs() < 1e-9);
 }
+
+#[test]
+fn view_timeline_percentages_exclude_the_borders_and_scrollbar_gutter() {
+    for inset in ["auto", "10% 6px"] {
+        let source = format!(
+            r#"keyframes fade
+  from opacity=0
+  to opacity=1
+component App
+  view
+    scroll testId="port" box-sizing="border-box" width=300 height=300 overflow="scroll" direction="rtl" border-style="solid" border-width="8px 0 12px" scroll-padding-top="10%" scroll-padding-bottom=6
+      box height=388
+      box testId="subject" height=80 animation="fade 1s linear both" animation-timeline="view(y {inset})"
+      box height=500
+"#
+        );
+        let mut app = Laid::boot(&source, 400., 600.);
+        let kernel = app.runner.kernel_mut();
+        let id = kernel
+            .node_by_key(kernel.find_by_test_id("port")[0])
+            .unwrap()
+            .id;
+        kernel
+            .set_host_cover(id, Some(exact_kernel::HostCover::Gutter([15., 20.])))
+            .unwrap();
+        app.layout(400., 600.);
+        app.place();
+        let k = app.runner.kernel();
+        let scroller = k.find_by_test_id("port")[0];
+        let port = k.laid_out_scrollport(scroller).unwrap();
+        assert_eq!(
+            (
+                port.x - k.arena().frame(scroller.index).x,
+                port.width,
+                port.height
+            ),
+            (15., 285., 260.)
+        );
+        assert_eq!(
+            k.arena().frame(k.find_by_test_id("subject")[0].index).y - port.y,
+            388.
+        );
+        // The 260px port brings the subject into view at 388 - (260 - 6)
+        // and takes it out of view at 468 - 26.
+        app.scroll("port", 0., (134. + 442.) / 2.);
+        assert!(
+            (app.shown("subject", Property::Opacity).x - 0.5).abs() < 1e-9,
+            "{inset}"
+        );
+    }
+}
+
+#[test]
+fn a_horizontal_scroll_timeline_ends_at_the_guttered_ports_limit() {
+    for direction in ["ltr", "rtl"] {
+        let source = format!(
+            r#"keyframes fade
+  from opacity=0
+  to opacity=1
+component App
+  view
+    column
+      scroll testId="port" direction="{direction}" width=300 height=300 box-sizing="border-box" overflow="scroll" border-style="solid" border-width="0 12px 0 8px" scroll-timeline="--p x"
+        box testId="track" width=600 height=500 animation="fade 1s linear both" animation-timeline="--p"
+"#
+        );
+        let mut app = Laid::boot(&source, 400., 600.);
+        let k = app.runner.kernel_mut();
+        let view = k.node_by_key(k.find_by_test_id("port")[0]).unwrap().id;
+        for gutter in [0., 15.] {
+            app.runner
+                .kernel_mut()
+                .set_host_cover(view, Some(exact_kernel::HostCover::Gutter([gutter, 0.])))
+                .unwrap();
+            app.layout(400., 600.);
+            app.place();
+            // Native hosts report x from the left (LLP 1057.003). Halfway along
+            // the 600px track is halfway through the animation in either direction.
+            app.scroll("port", (600. - 280. + f64::from(gutter)) / 2., 0.);
+            assert!(
+                (app.shown("track", Property::Opacity).x - 0.5).abs() < 1e-9,
+                "{direction}, {gutter}"
+            );
+        }
+    }
+}

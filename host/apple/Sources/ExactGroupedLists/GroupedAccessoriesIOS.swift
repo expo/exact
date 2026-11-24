@@ -103,8 +103,14 @@ extension GroupedListView {
         cell.layoutIfNeeded()
         let content = cell.contentView, frame = content.convert(content.bounds, to: cell)
         let margin = content.layoutMargins, outer = cell.layoutMargins
-        let room = HostCover.Edges(top: 0, right: max(0, cell.bounds.maxX - frame.maxX + margin.right - outer.right),
-                                   bottom: 0, left: max(0, frame.minX + margin.left - outer.left))
+        // Beside an accessory UIKit's own content keeps its configuration's trailing margin, which a content view with
+        // no configuration need not have: 8 points on iOS 27.0 and none on the iPhone Duo (iOS 27.1)
+        let least = cell.defaultContentConfiguration().directionalLayoutMargins.trailing
+        func kept(_ gap: CGFloat, _ margin: CGFloat, _ outer: CGFloat) -> CGFloat {
+            max(0, gap + (gap > 0.5 ? max(margin, least) : margin) - outer)
+        }
+        let room = HostCover.Edges(top: 0, right: kept(cell.bounds.maxX - frame.maxX, margin.right, outer.right),
+                                   bottom: 0, left: kept(frame.minX, margin.left, outer.left))
         rooms[slot(row)] = room
         // The row was carried before this layout, which may have moved the content view it is in.
         if let node = host.presenter.views[row.view], node.superview === content, let place = carried[row.view] {

@@ -71,6 +71,31 @@ fn a_test_block_parses_to_the_eight_operations_and_expects() {
 }
 
 #[test]
+fn a_test_drops_files_text_and_a_link() {
+    let src = "test \"drop\"\n  tap \"zone\" drop text \"Mount Fuji\" url \"https://example.com/fuji\"\n  tap \"zone\" drop file \"a.png\" file \"b.txt\"\n";
+    let tests = contract::tests(src).unwrap();
+    assert!(matches!(
+        &tests[0].steps[0],
+        Step::Tap { form: TapForm::Drop { files, text: Some(t), url: Some(u) }, .. }
+            if files.is_empty() && t == "Mount Fuji" && u == "https://example.com/fuji"
+    ));
+    let json = contract::tests_json(&tests);
+    assert!(
+        json.contains(r#"{"op":"tap","target":"zone","form":"drop","files":[],"text":"Mount Fuji","url":"https://example.com/fuji","line":2}"#),
+        "{json}"
+    );
+    assert!(
+        json.contains(r#""form":"drop","files":["a.png","b.txt"],"line":3"#),
+        "{json}"
+    );
+    let empty = contract::tests("test \"drop\"\n  tap \"zone\" drop\n").unwrap_err();
+    assert!(
+        format!("{empty:?}").contains("`drop` takes what the drag carries"),
+        "{empty:?}"
+    );
+}
+
+#[test]
 fn a_test_traverses_browser_history() {
     let tests =
         contract::tests("test \"history\"\n  tap \"root\" history -1\n  tap \"root\" history 2\n")

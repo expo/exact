@@ -1,6 +1,6 @@
 // Drag and drop: each card carries one kind of data out of the app, so a drop into another app shows what that
-// app takes, and the drop zone lists the files another app drops in (LLP 1094.000; reference.md, "Files dropped
-// or pasted")
+// app takes, and the drop zone shows the files, text and link another app drops in (LLP 1094.000, LLP 1094.001;
+// reference.md, "Files dropped or pasted")
 style DragHeading
   font-size=16
   font-weight=700
@@ -74,6 +74,8 @@ component DragDrop
   derive drops = host == "macos" or host == "web" or host == "windows"
   state over = false
   state dropped: string[] = []
+  state droppedText = ""
+  state droppedLink = ""
   state dropCount = 0
   state taps = 0
   state picked = ""
@@ -86,6 +88,8 @@ component DragDrop
     over = false
     dropCount = dropCount + 1
     dropped = e.files
+    droppedText = e.text
+    droppedLink = e.url
   action tapped()
     taps = taps + 1
   action pick(choice: string)
@@ -138,11 +142,15 @@ component DragDrop
           text (dragOn ? "Dragging is on." : "Dragging is off.") class=DragCaption testId="drag-switch-state"
         button (dragOn ? "Turn off" : "Turn on") buttonStyle="bordered" press=toggleDrag testId="drag-switch"
 
-      text "File drops" class=DragHeading
+      text "Drops" class=DragHeading
       column dragenter=entered dragleave=left drop=took testId="drop-zone" min-height=120 padding=16 row-gap=6 border-radius=14 border-width=2 border-style="dashed" border-color=(over ? "AccentColor" : "-exact-separator") background-color=(over ? "-exact-secondary-background" : "transparent") align-items="center" justify-content="center"
         image "symbol:download" font-size=28 color="-exact-secondary-label" aria-hidden=true
-        text (not drops ? "You can't drop files into UI Gallery on this device yet." : over ? "Let go to drop" : "Drop a file from another app here") class=DragTitle text-align="center" testId="drop-prompt"
+        text (not drops ? "You can't drop into UI Gallery on this device yet." : over ? "Let go to drop" : "Drop a file, text or a link from another app here") class=DragTitle text-align="center" testId="drop-prompt"
         if dropCount > 0
           text `Got ${dropped.length} ${dropped.length == 1 ? "file" : "files"}` class=DragCaption testId="drop-count"
           for f in dropped key=f
             text f class=DragCaption font-family="monospace" max-width="100%" overflow-wrap="anywhere"
+          if droppedText != ""
+            text `Text: ${droppedText}` class=DragCaption max-width="100%" overflow-wrap="anywhere" testId="drop-text"
+          if droppedLink != ""
+            text `Link: ${droppedLink}` class=DragCaption max-width="100%" overflow-wrap="anywhere" testId="drop-link"

@@ -239,9 +239,9 @@ final class NodeExtras {
     var reachGiven = false
     /// The bottom inset a keyboard toolbar gives its scroll view (`KeyboardToolbarIOS.swift`).
     var keyboardInset: CGFloat = 0
-    /// A control bar over a scroller's content (LLP 1131 D3, D4): the scroller's paint rank, which it is placed
-    /// above, and UIKit's edge effect.
-    var bandOver: Int64?
+    /// A control bar over a scroller's content (LLP 1131 D3, D4): its sibling that holds the scroller, which
+    /// it is placed above, and UIKit's edge effect.
+    weak var bandOver: NodeView?
     var navigationPaint = NavigationPaintRole.sibling
     var edgeInteraction: AnyObject?
     var scrollWritten: String?
@@ -354,7 +354,7 @@ extension NodeView {
     package var stickyOffset: CGPoint { get { extras?.stickyOffset ?? .zero } set { if newValue != .zero || extras != nil { more.stickyOffset = newValue } } }
     var zoomFactor: CGFloat { get { extras?.zoomFactor ?? 1 } set { if newValue != 1 || extras != nil { more.zoomFactor = newValue } } }
     var zoomShift: CGPoint { get { extras?.zoomShift ?? .zero } set { if newValue != .zero || extras != nil { more.zoomShift = newValue } } }
-    var authoredAccentTint: UIColor? { get { extras?.authoredAccentTint } set { if newValue != nil || extras != nil { more.authoredAccentTint = newValue } } }
+    package var authoredAccentTint: UIColor? { get { extras?.authoredAccentTint } set { if newValue != nil || extras != nil { more.authoredAccentTint = newValue } } }
     /// How far a keyboard toolbar rides up with the keyboard (KeyboardToolbarIOS).
     var keyboardLift: CGFloat { get { extras?.keyboardLift ?? 0 } set { if newValue != 0 || extras != nil { more.keyboardLift = newValue } } }
     var layoutResize: CGSize { get { extras?.layoutResize ?? .zero } set { if newValue != .zero || extras != nil { more.layoutResize = newValue } } }
@@ -571,7 +571,7 @@ extension NodeView {
         sv.contentInsetAdjustmentBehavior != .never ? sv.adjustedContentInset.left : extras?.nativeScrollContentInsets.left ?? 0
     }
     package var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
-    var bandOver: Int64? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
+    var bandOver: NodeView? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
     /// Whether a touch at `point` can reach this box's children. Overflow
     /// that is not visible clips them at the padding edge (CSS Overflow 3

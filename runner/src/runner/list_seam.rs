@@ -500,7 +500,8 @@ impl<D: DataSource> Runner<D> {
         let result = {
             let cell_margins = |view| super::render::cell_margins(&self.kernel, view);
             let scroll_margin = |view| super::render::scroll_margin(&self.kernel, view);
-            let scroll_padding = |view| super::render::scroll_padding(&self.kernel, view);
+            let scroll_padding =
+                |view, port| super::render::scroll_padding(&self.kernel, view, port);
             let mut update = self.instance_update(&mut ids);
             update.reuse = self.reuse;
             update.scroll_padding = Some(&scroll_padding);

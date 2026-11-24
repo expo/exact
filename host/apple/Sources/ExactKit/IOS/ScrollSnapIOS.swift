@@ -138,12 +138,10 @@ extension NodeView {
         // content, which starts at the border box: an offset plus `shift`.
         let size = vertical ? scrollView.bounds.height : scrollView.bounds.width
         let inset = scrollView.adjustedContentInset
-        let padding = { (side: String) in self.style["scroll_padding_\(side)"]?.length(basis: size) ?? 0 }
-        let border = { (side: String) in self.number("border_width_\(side)", self.number("border_width")) }
-        let (first, last) = vertical ? ("top", "bottom") : ("left", "right")
+        let (before, after) = snapportInsets(size, vertical: vertical)
         let lead = (vertical ? inset.top : inset.left), trail = (vertical ? inset.bottom : inset.right)
-        let shift = lead + border(first) + padding(first)
-        let port = size - lead - trail - border(first) - border(last) - padding(first) - padding(last)
+        let shift = lead + before
+        let port = size - lead - trail - before - after
         guard port > 0 else { return nil }
         let content = vertical ? scrollView.contentSize.height : scrollView.contentSize.width
         let range = (-lead + shift)...max(-lead, content + trail - size) + shift
@@ -186,7 +184,7 @@ extension NodeView {
         /// (`box`, in `scrollView`) grown by `scroll-margin` (§4.3).
         func area(_ id: UInt32, _ style: NodeStyle, _ box: @autoclosure () -> CGRect) -> ScrollSnap.Area? {
             guard let align = ScrollSnap.align(style["scroll_snap_align"]?.string, vertical: vertical) else { return nil }
-            let rect = IntoView.inset(box(), style: style, family: "scroll_margin", outward: true)
+            let rect = IntoView.area(box(), style: style)
             let area = ScrollSnap.area(lo: vertical ? rect.minY : rect.minX, hi: vertical ? rect.maxY : rect.maxX, align: align,
                                        stop: style["scroll_snap_stop"]?.string == "always", port: port, range: range, id: id)
             areas.append(area)

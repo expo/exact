@@ -274,7 +274,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
         val events = candidateEvents.toList()
         candidateEvents.clear(); candidate = null
         hold(null)
-        if (offer && module.begin(v, events.first(), originX, originY)) {
+        if (offer && module.begin(v, events.first(), originX, originY, place = view.natives?.placesFrame(v) != true)) {
             scrolling.hosted()
             // Android starts its long-click timer on down. Keep Exact's contact until movement chooses an axis,
             // so a native button can recognize a hold without taking the surrounding row's swipe.

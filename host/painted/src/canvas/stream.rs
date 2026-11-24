@@ -121,7 +121,7 @@ pub(super) fn needs_world(b: &[u32]) -> bool {
             NATIVE if b[i + 2] & 255 == 3 => return true,
             ROW_BEGIN if needs_world(&b[i + 6..j - 1]) => return true,
             SLOT_SET if needs_world(&b[i + 3..j]) => return true,
-            LAYER_SET if needs_world(&b[i + 20..j]) => return true,
+            LAYER_SET if needs_world(&b[i + 3 + layer::HEADER_WORDS..j]) => return true,
             shared::SET | shared::DRAW => return true,
             _ => (),
         }

@@ -109,6 +109,22 @@ fn step_json(step: &Step, s: &mut String) {
                 TapForm::Wheel { dx, dy } => {
                     s.push_str(&format!("\"wheel\",\"wheel\":[{dx},{dy}]"))
                 }
+                TapForm::Drop { files, text, url } => {
+                    s.push_str("\"drop\",\"files\":[");
+                    for (i, file) in files.iter().enumerate() {
+                        if i > 0 {
+                            s.push(',');
+                        }
+                        q(file, s);
+                    }
+                    s.push(']');
+                    for (key, value) in [("text", text), ("url", url)] {
+                        if let Some(value) = value {
+                            s.push_str(&format!(",\"{key}\":"));
+                            q(value, s);
+                        }
+                    }
+                }
                 // @ref LLP 1098 D10 — the platform's action, never a press.
                 TapForm::MediaSession { action, seconds } => {
                     s.push_str("\"mediasession\",\"action\":");

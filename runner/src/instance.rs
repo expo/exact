@@ -488,7 +488,7 @@ pub struct Update<'a> {
     /// Empty lexical-frame buffers, reused within this update only.
     frame_buffers: Vec<Vec<Frame>>,
     /// Resolved CSS alignment insets, top/right/bottom/left (LLP 1010 §6.9).
-    pub scroll_padding: Option<&'a dyn Fn(ViewId) -> [f64; 4]>,
+    pub scroll_padding: Option<&'a dyn Fn(ViewId, [f64; 2]) -> [f64; 4]>,
     /// Resolved CSS target outsets, top/right/bottom/left.
     pub scroll_margin: Option<&'a dyn Fn(ViewId) -> [f64; 4]>,
     /// Row margins as the kernel lays them out, under a terminal's rule.

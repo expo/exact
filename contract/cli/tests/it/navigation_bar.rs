@@ -776,6 +776,7 @@ fn an_element_the_ios_bar_has_no_place_for_is_refused() {
         ("switch", format!("{heading}            input type=\"checkbox\" role=\"switch\" checked=true aria-label=\"Live\"\n"), "this `input`"),
         ("dot", format!("{heading}            button press=go aria-label=\"Live\"\n              column width=6 height=6 background-color=\"#0a0\"\n              text \"Live\"\n"), "this button, whose face holds more than one symbol and one text"),
         ("ink", format!("{heading}            button press=go\n              text \"Stop\" color=\"-exact-system-red\"\n"), "this button, whose face writes on its text more than where it sits"),
+        ("symbol ink", format!("{heading}            button press=go aria-label=\"Stop\"\n              image \"symbol:stop\" color=\"-exact-system-red\"\n"), "this button, whose face writes on its symbol more than where it sits, `font-size` and `font-weight` (write `color` on the button)"),
         ("bordered", format!("{heading}            button press=go aria-label=\"Me\"\n              column width=32 height=32 background-color=\"#e3e3fe\" border=\"1px solid #000\"\n                text \"AB\"\n"), "this button, whose face is a badge whose box writes more"),
         ("pressing", format!("{heading}            row role=\"status\" aria-label=\"Offline\"\n              text \"Offline\"\n              button press=go\n                text \"Retry\"\n"), "a button in a readout"),
         ("third", format!("{heading}            text \"On time\"\n            text \"Platform 2\"\n"), "this text"),
@@ -785,6 +786,17 @@ fn an_element_the_ios_bar_has_no_place_for_is_refused() {
         assert_eq!(said.len(), 1, "{name}: {said:?}");
         assert!(said[0].starts_with(what) && said[0].contains("has no place in the iOS navigation bar") && said[0].contains("below the `header`"), "{name}: {}", said[0]);
     }
+    // The `color` repair is named for a symbol's `color`, whatever is written before it, and only for it
+    let both = format!("{heading}            button press=go aria-label=\"Stop\"\n              image \"symbol:stop\" opacity=0.5 color=\"-exact-system-red\"\n");
+    let said = refused("faded red symbol", ios, &both);
+    assert!(said[0].contains("write `color` on the button"), "{said:?}");
+    let faded = format!("{heading}            button press=go aria-label=\"Stop\"\n              image \"symbol:stop\" opacity=0.5\n");
+    let said = refused("faded symbol", ios, &faded);
+    assert!(
+        said[0].starts_with("this button, whose face writes on its symbol more than where it sits")
+            && !said[0].contains("write `color`"),
+        "{said:?}"
+    );
     // Refused in an app that ships iOS and Android, an element is not also
     // named as one Android leaves out.
     let dir = crate::scratch::Scratch::new(format!("exact2-refused-both-{}", std::process::id()));

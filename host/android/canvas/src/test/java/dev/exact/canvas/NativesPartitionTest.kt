@@ -128,6 +128,111 @@ class NativesPartitionTest {
         .put("src", "https://example.com/").put("partition", partition ?: JSONObject.NULL)
         .put("sandbox", sandbox ?: JSONObject.NULL).toString()
 
+    @Test fun aFrameFollowsItsPaintedRowBetweenContacts() {
+        val natives = natives()
+        val graph = PaintedOrigins()
+        natives.origins = graph
+        natives.ensure(1, 1, 300, 200, props(null), 0)
+        val web = natives.getChildAt(0) as WebView
+        val row = android.graphics.RenderNode("row")
+        graph.record(row, listOf(PaintedOrigins.Placement(natives.node(1)!!, 12f, 140f)))
+        graph.record(null, listOf(PaintedOrigins.Placement(row, 0f, 15f)))
+        natives.placeFrames()
+        assertEquals(155f, origin(web)[1], 0f)
+        graph.publishing = true
+        graph.translate(row, 0f, -81f)
+        natives.placeFrames()
+        assertEquals(155f, origin(web)[1], 0f)
+        graph.publishing = false
+        natives.placeFrames()
+        assertEquals(74f, origin(web)[1], 0f)
+        val sibling = android.graphics.RenderNode("unrelated")
+        graph.record(null, listOf(PaintedOrigins.Placement(row, 0f, 15f), PaintedOrigins.Placement(sibling, 0f, 0f)))
+        natives.placeFrames()
+        val version = graph.version
+        repeat(120) {
+            graph.translate(row, 0f, -81f)
+            graph.translate(sibling, 0f, it.toFloat())
+            natives.placeFrames()
+        }
+        assertEquals(version, graph.version)
+        assertEquals(12f, origin(web)[0], 0f)
+    }
+
+    @Test fun aFrameUsesItsPaintedScaleAndClipAndLeavesTheWindowWhenPooled() {
+        val natives = natives()
+        val graph = PaintedOrigins()
+        natives.origins = graph
+        natives.ensure(1, 1, 200, 100, props(null), 0)
+        natives.layoutDirection = android.view.View.LAYOUT_DIRECTION_RTL
+        val exactSize = android.view.View.MeasureSpec.makeMeasureSpec(400, android.view.View.MeasureSpec.EXACTLY)
+        natives.measure(exactSize, exactSize)
+        natives.layout(0, 0, 400, 400)
+        val web = natives.getChildAt(0) as WebView
+        val row = android.graphics.RenderNode("clip").apply {
+            setPosition(0, 0, 160, 40); setClipToBounds(true)
+            pivotX = 0f; pivotY = 0f; scaleX = 2f; scaleY = 2f
+        }
+        graph.record(row, listOf(PaintedOrigins.Placement(natives.node(1)!!, 10f, 5f)))
+        graph.record(null, listOf(PaintedOrigins.Placement(row, 20f, 10f)))
+        natives.placeFrames()
+        val point = floatArrayOf(0f, 0f, 200f, 100f)
+        web.matrix.mapPoints(point)
+        assertEquals(0, web.left)
+        assertEquals(0, web.top)
+        assertArrayEquals(floatArrayOf(40f, 20f, 440f, 220f), point, 0.01f)
+        val visible = android.graphics.Rect(0, 0, 200, 100)
+        assertTrue(natives.getChildVisibleRect(web, visible, null))
+        assertEquals(android.graphics.Rect(40, 20, 340, 90), visible)
+        row.scaleX = 0f
+        graph.moved(row)
+        natives.placeFrames()
+        assertEquals(0f, web.scaleX, 0f)
+        assertEquals(2f, web.scaleY, 0f)
+        assertEquals(20f, web.translationX, 0f)
+        natives.unrowed(emptySet())
+        assertSame(natives, web.parent)
+        assertFalse(natives.getChildVisibleRect(web, android.graphics.Rect(0, 0, 200, 100), null))
+    }
+
+    @Test fun aSmallBoxInARotatedFrameCanFallOutsideThePaintClip() {
+        val natives = natives()
+        val graph = PaintedOrigins()
+        natives.origins = graph
+        natives.ensure(1, 1, 100, 100, props(null), 0)
+        val frame = natives.node(1)!!
+        val row = android.graphics.RenderNode("rotated").apply {
+            setClipToBounds(false); pivotX = 0f; pivotY = 0f; rotationZ = 45f
+        }
+        graph.record(row, listOf(PaintedOrigins.Placement(frame, 0f, 0f)))
+        val band = android.graphics.Rect(0, 100, 300, 120)
+        graph.record(null, listOf(PaintedOrigins.Placement(row, 100f, 100f, band)))
+        natives.placeFrames()
+        val web = natives.getChildAt(0)
+        assertFalse(natives.getChildVisibleRect(web, android.graphics.Rect(39, 39, 41, 41), null))
+        assertTrue(natives.getChildVisibleRect(web, android.graphics.Rect(4, 4, 6, 6), null))
+    }
+
+    @Test fun aKeptRoutePlacesAFrameOnlyWhenItsLiveRowHasGone() {
+        val graph = PaintedOrigins()
+        val frame = android.graphics.RenderNode("frame").apply { setClipToBounds(false) }
+        val kept = android.graphics.Matrix().apply { setScale(0.5f, 0.5f); postTranslate(100f, 100f) }
+        val copy = PaintedOrigins.Placement(frame, 0f, 0f, kept = kept)
+        val live = PaintedOrigins.Placement(frame, 20f, 10f)
+        val matrix = android.graphics.Matrix()
+        val bounds = android.graphics.RectF(0f, 0f, 80f, 60f)
+        graph.record(null, listOf(copy, live))
+        assertTrue(graph.transform(frame, matrix, bounds))
+        assertEquals(android.graphics.RectF(20f, 10f, 100f, 70f), bounds)
+        graph.record(null, listOf(copy))
+        assertFalse(graph.transform(frame, matrix))
+        bounds.set(0f, 0f, 80f, 60f)
+        assertTrue(graph.transform(frame, matrix, bounds))
+        assertEquals(android.graphics.RectF(100f, 100f, 140f, 130f), bounds)
+    }
+
+    private fun origin(web: WebView) = floatArrayOf(0f, 0f).also { web.matrix.mapPoints(it) }
+
     private fun settle() = shadowOf(Looper.getMainLooper()).idle()
 
     @Before fun clear() { Host.sent.clear(); Host.loads.clear(); Compat.profiles.clear(); Compat.pageWorld.clear(); Features.profiles = false; Features.navigation = true }

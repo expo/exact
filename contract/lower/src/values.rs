@@ -4,6 +4,7 @@
 // @ref LLP 1123 D5 — length tokens written as their values where nothing binds one
 #[path = "length_tokens.rs"]
 mod length_tokens;
+mod templates;
 use crate::style_names::press_refusal;
 use crate::{edits, err, media, symbols, tags, vocab, FontUse, LowerError};
 use contract_syntax::{Attr, Expr, Span, TemplatePart, UnOp};
@@ -12,6 +13,10 @@ use exact_kernel::style::sides as box_sides;
 use exact_kernel::{PropId, StyleId, StyleProps, StyleValue, StyleValueError};
 pub(crate) use length_tokens::{call_tokens, fallback_tokens, grid_tokens};
 use std::{cell::Cell, rc::Rc};
+use templates::numeric_template_error;
+pub(super) use templates::{
+    check_numeric_prop, fold_attr_template, fold_attr_templates, name_template_holes, number_holes,
+};
 
 /// The host's names a value reads (LLP 1123 D9, D16), as a refusal lists them.
 pub(crate) const HOST_NAMES: &str = "the observations `var(--exact-<family>-inset-<edge>)`, the edge `top`, `right`, `bottom` or `left`, or `start` or `end` for any family but `safe-area`, the family `safe-area`, `keyboard`, `keyboard-undocked`, `safe-area-corners`, `layout-margins`, `layout-margins-corners`, `readable-content`, `readable-content-corners`, `readable-content-guide` or `system-minimum-layout-margins`, and a native target's raw safe area `var(--exact-<target>-safe-area-inset-<edge>)`, any of the six edges, the target `native-<n>` for the nth chain entry, from 1 to 255, `owner`, `parent`, `navigation`, `tab`, `split`, `column`, `presenter`, `session`, `root`, `window`, `tab-content`, `window-content`, `screen` or `target-<name>` for one native code registered, a name of lowercase letters, digits and inner hyphens, and a field of the owner's segment `var(--exact-viewport-segment-<field>-<x>-<y>)`, the field `width`, `height`, `top`, `left`, `bottom` or `right`, each index 0 to 15";
@@ -23,21 +28,6 @@ fn literal_text(e: &Expr) -> String {
         Expr::Str(s, _) => format!("\"{s}\""),
         Expr::Bool(b, _) => format!("{b}"),
         _ => "…".into(),
-    }
-}
-/// A string literal's text, or a template's whose every part is literal, as
-/// a component's prop can leave one: what the attribute says, whatever the app does.
-fn constant_text(e: &Expr) -> Option<String> {
-    match e {
-        Expr::Str(s, _) => Some(s.clone()),
-        Expr::Template(parts, _) => parts
-            .iter()
-            .map(|part| match part {
-                TemplatePart::Text(t) | TemplatePart::Expr(Expr::Str(t, _)) => Some(t.as_str()),
-                TemplatePart::Expr(_) => None,
-            })
-            .collect(),
-        _ => None,
     }
 }
 /// `navigationSplit`'s column width written as a number: its text, as the
@@ -371,6 +361,17 @@ pub(crate) fn check_style_value(
             style_value(&literal, rows, ty, fonts, scope, shapes)?;
         }
     }
+    if let Some(error) = numeric_template_error(a, scope, shapes, || {
+        // A nonzero integer distinguishes a bare numeric string from CSS's unitless zero.
+        let accepts = |value: StyleValue| {
+            rows.iter()
+                .all(|row| StyleProps::default().set_dynamic(*row, &value).is_ok())
+        };
+        (accepts(StyleValue::Number(1.0)) && !accepts(StyleValue::Text("1".into())))
+            .then(|| accepts(StyleValue::Text("1px".into())))
+    }) {
+        return Err(error);
+    }
     // A pin names the design's axes, which the runner resolves (LLP 1121 D5).
     if rows == [StyleId::Mode] {
         return crate::theme::mode_pins(a);
@@ -445,11 +446,7 @@ fn style_value(
             // metric's name is the compiler's alone (LLP 1115.002 D6).
             Expr::Str(..) => crate::metrics::refuse_authored(a, value, span)?,
             other if builds_platform_color(other) => {
-                return err(
-                    "lower-platform-color-literal",
-                    format!("`{}`: write `-exact-platform-color(…)` whole, as a string literal (a branch of `?:` or `match` may be one); it is never built from a template, a concatenation or data, so the platform colours a plan names are fixed when it compiles (LLP 1095 D3)", a.name),
-                    span,
-                );
+                return err("lower-platform-color-literal", format!("`{}`: write `-exact-platform-color(…)` whole, as a string literal (a branch of `?:` or `match` may be one); it is never built from a template, a concatenation or data, so the platform colours a plan names are fixed when it compiles (LLP 1095 D3)", a.name), span);
             }
             _ => {}
         }
@@ -847,20 +844,23 @@ struct Bound<'a> {
     name: &'a str,
     value: Option<&'a Expr>,
     scope: Scope,
-    checked: Rc<Cell<Option<Option<Span>>>>,
+    visited: Rc<Cell<bool>>,
 }
-fn computed_string_arm<'a>(
+
+/// The first refused result, with each match or shared let typed in its own scope.
+fn find_arm<'a, T>(
     e: &'a Expr,
     scope: &Scope,
     shapes: &Shapes,
-    rows: &[StyleId],
+    check: &impl Fn(&Expr, &Scope) -> Option<T>,
+    mixed: fn(Span) -> Option<T>,
     bound: &[Bound<'a>],
-) -> Option<Span> {
+) -> Option<T> {
     #[cfg(test)]
     tests::record_string_arm_visit();
     match e {
-        Expr::Ternary(_, yes, no, _) => computed_string_arm(yes, scope, shapes, rows, bound)
-            .or_else(|| computed_string_arm(no, scope, shapes, rows, bound)),
+        Expr::Ternary(_, yes, no, _) => find_arm(yes, scope, shapes, check, mixed, bound)
+            .or_else(|| find_arm(no, scope, shapes, check, mixed, bound)),
         Expr::Match {
             subject,
             var,
@@ -870,7 +870,7 @@ fn computed_string_arm<'a>(
         } => {
             let ty = match contract_types::infer(subject, scope, shapes) {
                 Ok(Ty::Option(inner)) => *inner,
-                Err(e) if e.id == "type-branches" => return Some(e.span),
+                Err(e) if e.id == "type-branches" => return mixed(e.span),
                 _ => Ty::Unknown,
             };
             let mut inner = scope.clone();
@@ -880,10 +880,10 @@ fn computed_string_arm<'a>(
                 name: var,
                 value: None,
                 scope: scope.clone(),
-                checked: Rc::new(Cell::new(None)),
+                visited: Rc::new(Cell::new(false)),
             });
-            computed_string_arm(some, &inner, shapes, rows, &bound_some)
-                .or_else(|| computed_string_arm(none, scope, shapes, rows, bound))
+            find_arm(some, &inner, shapes, check, mixed, &bound_some)
+                .or_else(|| find_arm(none, scope, shapes, check, mixed, bound))
         }
         Expr::Let {
             name, value, body, ..
@@ -896,44 +896,55 @@ fn computed_string_arm<'a>(
                 name,
                 value: Some(value),
                 scope: scope.clone(),
-                checked: Rc::new(Cell::new(None)),
+                visited: Rc::new(Cell::new(false)),
             });
-            computed_string_arm(body, &inner, shapes, rows, &bound_body)
+            find_arm(body, &inner, shapes, check, mixed, &bound_body)
         }
         Expr::Ident(name, _) => {
             if let Some(index) = bound.iter().rposition(|binding| binding.name == name) {
                 let binding = &bound[index];
                 if let Some(value) = binding.value {
-                    if let Some(result) = binding.checked.get() {
-                        return result;
+                    if binding.visited.replace(true) {
+                        return None;
                     }
-                    let result =
-                        computed_string_arm(value, &binding.scope, shapes, rows, &bound[..index]);
-                    binding.checked.set(Some(result));
-                    return result;
+                    return find_arm(value, &binding.scope, shapes, check, mixed, &bound[..index]);
                 }
             }
-            matches!(
-                contract_types::infer(e, scope, shapes),
-                Ok(Ty::String | Ty::Enum(_))
-            )
-            .then_some(e.span())
+            check(e, scope)
         }
-        Expr::Typed(inner, _, _) => computed_string_arm(inner, scope, shapes, rows, bound),
-        Expr::Str(s, _)
-            if rows
-                .iter()
-                .all(|row| StyleValue::Text(s.as_str().into()).unsets(*row)) =>
-        {
-            None
-        }
-        _ => match contract_types::infer(e, scope, shapes) {
-            Ok(Ty::String | Ty::Enum(_)) => Some(e.span()),
-            Err(error) if error.id == "type-branches" => Some(error.span),
-            _ => None,
-        },
+        Expr::Typed(inner, ..) => find_arm(inner, scope, shapes, check, mixed, bound),
+        _ => check(e, scope),
     }
 }
+
+fn computed_string_arm<'a>(
+    e: &'a Expr,
+    scope: &Scope,
+    shapes: &Shapes,
+    rows: &[StyleId],
+    bound: &[Bound<'a>],
+) -> Option<Span> {
+    find_arm(
+        e,
+        scope,
+        shapes,
+        &|leaf, scope| {
+            if let Expr::Str(s, _) = leaf {
+                if rows.iter().all(|row| StyleValue::text_unsets(s, *row)) {
+                    return None;
+                }
+            }
+            match contract_types::infer(leaf, scope, shapes) {
+                Ok(Ty::String | Ty::Enum(_)) => Some(leaf.span()),
+                Err(error) if error.id == "type-branches" => Some(error.span),
+                _ => None,
+            }
+        },
+        Some,
+        bound,
+    )
+}
+
 /// HTML's enumerated attributes whose IDL attributes are bools, as the words
 /// a bool is written: `spellcheck`'s `true`/`false`, `autocorrect`'s
 /// `on`/`off`.
@@ -1083,7 +1094,7 @@ pub(crate) fn check_prop_value(
     // which never sends new words, says one for every line. The literal's
     // place is the error's: through a component's prop, the caller's.
     if prop == PropId::ParagraphDirs {
-        if let Some(s) = constant_text(value) {
+        if let Expr::Str(s, _) = value {
             let span = value.span();
             if let Some(word) = s
                 .split_ascii_whitespace()

@@ -8,7 +8,37 @@ use crate::id::{AxisOffer, Frame, NodeFlags, NodeKey, Offer};
 use crate::layout::{LayoutMirror, LayoutTree};
 use crate::style::taffy_style;
 
+impl crate::arena::NodeArena {
+    /// The last layout's scrollport in root coordinates, inside the borders and classic scrollbars.
+    pub(crate) fn scrollport(&self, slot: u32) -> Option<Frame> {
+        let inset = self.inset(slot)?;
+        let frame = self.frame(slot);
+        let [left, top, right, bottom] = inset.border;
+        let [vertical, horizontal] = inset.scrollbar;
+        let left_gutter = vertical > 0.0
+            && self
+                .computed_source(slot, crate::StyleId::Direction)
+                .direction
+                == crate::Direction::Rtl;
+        Some(Frame {
+            x: frame.x + left + if left_gutter { vertical } else { 0.0 },
+            y: frame.y + top,
+            width: (frame.width - left - right - vertical).max(0.0),
+            height: (frame.height - top - bottom - horizontal).max(0.0),
+        })
+    }
+}
+
 impl Kernel {
+    /// The CSS scrollport from the last layout. The browser owns its scrollports
+    /// even if it has asked the kernel for a measurement.
+    pub fn laid_out_scrollport(&self, key: NodeKey) -> Option<Frame> {
+        if self.on_demand {
+            return None;
+        }
+        self.arena.scrollport(self.arena.resolve(key)?)
+    }
+
     /// Where layout put a node, as last laid out: its published border box in
     /// its root's space, free of transforms and scrolling, and whether it is
     /// provisional (text in its subtree is estimated, or an image or video

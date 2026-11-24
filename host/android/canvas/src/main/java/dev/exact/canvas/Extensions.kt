@@ -212,6 +212,8 @@ class Cause internal constructor(
         /** A request's cause, as the runner writes it (`modules/bound.rs`); one that names no origin is [none]. */
         internal fun of(request: JSONObject): Cause {
             val origin = request.optString("origin").ifEmpty { return none }
+            // Only an admitted capture call carries a press grant. A view hears the commit's ordinary origin.
+            if (origin == "press" && request.has("view")) return Cause("action")
             return Cause(origin, request.optString("authority"), request.optBoolean("userActivation"),
                 if (request.has("press")) request.getLong("press") else null,
                 if (request.has("request")) request.getInt("request") else null)

@@ -98,6 +98,36 @@ fn a_scroller_tells_the_offsets_its_areas_rest_at_on_each_axis_it_snaps() {
     );
 }
 
+#[test]
+fn percentage_scroll_padding_rests_at_the_browsers_offsets() {
+    for (axis, main, flow, first, last) in [
+        ("x", "width", "row", "left", "right"),
+        ("y", "height", "column", "top", "bottom"),
+    ] {
+        for (trail, center, end) in [("10%", 288., 516.), ("6px", 277., 494.)] {
+            let mut p = boot(&format!(
+                r#"component App
+  view
+    scroll testId="port" width=300 height=300 box-sizing="border-box" border-style="solid" overflow-{axis}="scroll" scroll-snap-type="{axis} mandatory" border-{first}-width=8 border-{last}-width=12 scroll-padding-{first}="10%" scroll-padding-{last}="{trail}"
+      {flow} {main}=1200
+        view {main}=88
+        view {main}=80 scroll-snap-align="start"
+        view {main}=220
+        view {main}=80 scroll-snap-align="center"
+        view {main}=220
+        view {main}=80 scroll-snap-align="end"
+"#
+            ));
+            let port = id(&p, "port");
+            assert_eq!(
+                rests(&p.snap(port, axis == "y").unwrap()),
+                [60., center, end].map(|v| (v, v, false)),
+                "{axis} {trail}"
+            );
+        }
+    }
+}
+
 /// LLP 1123 D9: a scroll padding and a scroll margin that read the safe area
 /// where the box is take its owner's inset, not the document's 0: the same
 /// rests as `scroll-padding-top=20` and a 10-point margin.

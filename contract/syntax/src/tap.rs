@@ -36,6 +36,18 @@ pub enum TapForm {
         /// Down, positive toward the content's end.
         dy: f64,
     },
+    /// `drop [file "path"]… [text "…"] [url "…"]`: a drag from outside the
+    /// app dropped at the node's middle, as the driver's `tap <t> drop`
+    /// (LLP 1094.001 D6), carrying at least one of these. A file's path is
+    /// from the test file's folder.
+    Drop {
+        /// The dropped files' paths, in their order.
+        files: Vec<String>,
+        /// The drag's plain text.
+        text: Option<String>,
+        /// The drag's link.
+        url: Option<String>,
+    },
     /// `mediasession "action" [seconds]`: the media element's session
     /// action, as the platform's handler would call it (LLP 1098 D10);
     /// never a press.

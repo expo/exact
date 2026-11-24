@@ -19,7 +19,7 @@ import ExactKit
 
 /// What holds a hosted element's view, at the kernel's frames: the block's
 /// own space.
-final class HostedStand: UIView, HoldsLiftedNodes {
+final class HostedStand: UIView, HoldsBarReadout {
     /// The element's parent in the authored tree.
     weak var parent: NodeView?
 }
@@ -41,6 +41,9 @@ final class HostedItemView: UIView {
         stand.parent = parent
         addSubview(stand)
         if let presenter = node.presenter { relay = MountRelay(presenter, mount: self) }
+        // A bar item stays bar-sized at the accessibility text sizes, where a long press shows it
+        // larger (LLP 1141.004 D3); UIKit shows the viewer only at those sizes.
+        addInteraction(UILargeContentViewerInteraction())
     }
     required init?(coder: NSCoder) { nil }
 
@@ -61,6 +64,7 @@ final class HostedItemView: UIView {
     private func updateReadout(hidden: Bool) {
         guard !hidden, !node.cssVisibilityHidden, node.props["accessibilityRole"] == "status" else {
             readout = nil
+            largeContent(nil)
             return
         }
         let authoredLabel = node.authoredLabel
@@ -68,6 +72,7 @@ final class HostedItemView: UIView {
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             readout = nil
+            largeContent(nil)
             return
         }
         let element = readout ?? UIAccessibilityElement(accessibilityContainer: self)
@@ -75,11 +80,19 @@ final class HostedItemView: UIView {
         let text = authoredLabel == nil ? "" : node.exposedText.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = text.isEmpty || text == trimmed ? nil : text
         if element.accessibilityValue != value { element.accessibilityValue = value }
+        // The viewer shows what VoiceOver says: the name, then the words where they differ.
+        largeContent(value.map { "\(label), \($0)" } ?? label)
         if readout == nil {
             element.accessibilityTraits = .staticText
             element.accessibilityFrameInContainerSpace = bounds
             readout = element
         }
+    }
+
+    /// The Large Content Viewer's title, or nil for none.
+    private func largeContent(_ title: String?) {
+        if showsLargeContentViewer != (title != nil) { showsLargeContentViewer = title != nil }
+        if largeContentTitle != title { largeContentTitle = title }
     }
 
     override var accessibilityElements: [Any]? {

@@ -1,4 +1,4 @@
-import { viewChildren, viewParent, inertAncestor } from './navigation.js';
+import { viewChildren, viewParent, inertAncestor, scrollPadding } from './navigation.js';
 import { After, PropHooks, Resources, carryRouter, clock, data, inflight, journal, late, launchLocation, res, settled, sig } from './rt.js';
 import { offerAll, restartAutofocus } from './focus.js';
 
@@ -135,9 +135,7 @@ function find(record) {
   for (const at of record.path) el = children(el)[at];
   return el?.getAttribute('data-carry-type') === record.type ? el : null;
 }
-const port = el => ({ left: 0, top: 0,
-  right: el === document.scrollingElement ? innerWidth : el.clientWidth,
-  bottom: el === document.scrollingElement ? innerHeight : el.clientHeight });
+const port = el => ({ left: 0, top: 0, right: el.clientWidth, bottom: el.clientHeight });
 function paddingAndBorder(css, axis) {
   return (axis ? ['Top', 'Bottom'] : ['Left', 'Right']).reduce((sum, side) =>
     sum + (parseFloat(css[`padding${side}`]) || 0) + (parseFloat(css[`border${side}Width`]) || 0), 0);
@@ -261,8 +259,11 @@ const scrollContainer = n => {
 // cannot supply an anchor. A nested scroller supplies its box, not its content.
 function anchor(el) {
   const p = port(el), css = getComputedStyle(el);
-  p.top += parseFloat(css.scrollPaddingTop) || 0;
-  p.bottom -= parseFloat(css.scrollPaddingBottom) || 0;
+  const width = p.right, height = p.bottom;
+  p.left += scrollPadding(css.scrollPaddingLeft, width);
+  p.right -= scrollPadding(css.scrollPaddingRight, width);
+  p.top += scrollPadding(css.scrollPaddingTop, height);
+  p.bottom -= scrollPadding(css.scrollPaddingBottom, height);
   const excluded = n => {
     const s = getComputedStyle(n);
     return s.display === 'none' || s.overflowAnchor === 'none' || ['fixed', 'sticky'].includes(s.position)

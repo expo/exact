@@ -766,3 +766,268 @@ fn a_blocks_root_fits_its_content_at_the_blocks_width() {
     k.compute_layout(1, OFFER).unwrap();
     assert_eq!(fit(&mut k), 30.0, "the author's maximum still applies");
 }
+
+/// A page written at 30 px in red, serif, italic, uppercase, spaced and at
+/// twice its line height; a header 2 holding readout 3 (`role="status"`), its
+/// text 4, "Updating", and text 6 at `2em`. The readout is the bar's item
+/// once `hosted` gives it a block and says so.
+fn readout_page() -> Kernel {
+    let mut ops = Vec::new();
+    ops.extend(view(
+        1,
+        NodeType::View,
+        &[
+            (StyleId::FontSize, n(30.0)),
+            (StyleId::TextColor, t("#ff0000")),
+            (StyleId::FontFamily, n(3.0)),
+            (StyleId::FontStyle, t("italic")),
+            (StyleId::TextTransform, t("uppercase")),
+            (StyleId::LetterSpacing, n(2.0)),
+            (StyleId::LineHeight, n(2.0)),
+        ],
+    ));
+    ops.extend(view(2, NodeType::View, &[]));
+    ops.extend(view(3, NodeType::View, &[]));
+    ops.push(Op::SetProp {
+        id: 3,
+        prop: PropId::AccessibilityRole,
+        value: "status".into(),
+    });
+    ops.extend(text(4, "Updating"));
+    ops.extend(text(6, "now"));
+    ops.push(style(6, &[(StyleId::FontSize, t("2em"))]));
+    ops.extend([
+        children(3, [4, 6]),
+        children(2, [3]),
+        children(1, [2]),
+        Op::AttachRoot { id: 1 },
+    ]);
+    laid_out(ops)
+}
+fn bar_font(k: &mut Kernel, size: f32, weight: u16) {
+    let mut env = k.arena.env().clone();
+    env.bar_item_font = Some(crate::ControlFont {
+        family: "system-ui".into(),
+        family_id: 0,
+        size,
+        weight,
+        style: crate::FontStyle::Normal,
+    });
+    k.set_env(env).unwrap();
+}
+/// The header covered by the bar, and readout 3 its item.
+fn hosted(k: &mut Kernel) {
+    k.set_host_cover(2, Some(HostCover::Bar)).unwrap();
+    k.set_host_block(3, at_most(300.0, 44.0)).unwrap();
+    k.set_bar_item(3, true).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+}
+fn computed(k: &Kernel, id: ViewId) -> StyleProps {
+    let rows = crate::arena::bar_text::rows();
+    k.arena.computed_style(k.arena.slot_of(id).unwrap(), rows)
+}
+
+/// LLP 1141.004 D3: what a readout the bar hosts leaves unsaid is the bar's,
+/// a plain bar item title's face, size, weight and style, its own line
+/// height, no added spacing or case, and the label colour, not the page's;
+/// what is written on it or inside it, an `inherit` included, wins; Bold Text
+/// steps the weight once; a new font measures its text and the lengths that
+/// read it again; and the host is told which readout to send again.
+#[test]
+fn a_hosted_readout_takes_the_bars_type_for_what_it_leaves_unsaid() {
+    let mut k = readout_page();
+    let page = computed(&k, 4);
+    assert_eq!(computed(&k, 6).font_size, 60.0, "2em of the page's 30");
+    bar_font(&mut k, 17.0, 500);
+    hosted(&mut k);
+    let label = crate::ColorValue::Role(crate::style::roles::role("-exact-label").unwrap());
+    let s = computed(&k, 4);
+    assert_eq!((s.font_size, s.font_weight, s.font_family), (17.0, 500, 0));
+    assert_ne!(page.font_family, 0, "the page's family is another");
+    assert_eq!(s.font_style, crate::FontStyle::Normal);
+    assert_eq!(s.line_height, crate::LineHeight::Normal);
+    assert_eq!(s.letter_spacing, 0.0);
+    assert_eq!(s.text_transform, crate::TextTransform::None);
+    assert_eq!(s.text_color, label, "the label's, not the page's red");
+    for id in [
+        StyleId::FontFamily,
+        StyleId::FontSize,
+        StyleId::FontWeight,
+        StyleId::FontStyle,
+        StyleId::LineHeight,
+        StyleId::LetterSpacing,
+        StyleId::TextTransform,
+        StyleId::TextColor,
+    ] {
+        assert!(s.mask.has(id), "{id:?} said, for the hosts");
+    }
+    assert_eq!(computed(&k, 6).font_size, 34.0, "2em of the bar's 17");
+    assert_eq!(
+        k.take_bar_text_flips(),
+        [3],
+        "the host sends the readout again"
+    );
+    assert!(k.take_bar_text_flips().is_empty());
+    let at17 = k.node(4).unwrap().frame.width;
+    bar_font(&mut k, 20.0, 500);
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 20.0);
+    assert_eq!(computed(&k, 6).font_size, 40.0);
+    assert!(
+        k.node(4).unwrap().frame.width > at17,
+        "measured again at the new size"
+    );
+    k.apply(
+        0,
+        2,
+        &[
+            style(3, &[(StyleId::FontSize, n(13.0))]),
+            style(4, &[(StyleId::TextColor, t("#0000ff"))]),
+        ],
+    )
+    .unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    let s = computed(&k, 4);
+    assert_eq!(s.font_size, 13.0, "a size written on the readout");
+    assert_ne!(s.text_color, label, "a colour written inside it");
+    assert_eq!(
+        s.font_weight, 500,
+        "a row it does not write is still the bar's"
+    );
+    let symbol = Op::SetProp {
+        id: 5,
+        prop: PropId::ImageSource,
+        value: "symbol:checkmark".into(),
+    };
+    let ops = [
+        Op::CreateView {
+            id: 5,
+            node_type: NodeType::Image,
+        },
+        symbol,
+        children(3, [4, 5, 6]),
+    ];
+    k.apply(0, 3, &ops).unwrap();
+    assert!(
+        k.node(5).unwrap().symbol_color_said(),
+        "a symbol draws in the label colour the bar gives, not the tint"
+    );
+    let inherit = Op::ClearStyle {
+        id: 3,
+        mask: crate::StyleMask::of(StyleId::FontSize),
+        written: true,
+    };
+    k.apply(0, 4, &[inherit]).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(
+        computed(&k, 4).font_size,
+        30.0,
+        "an `inherit` written on the readout keeps the page's"
+    );
+    assert!(k.set_bold_text(true));
+    k.apply(0, 5, &[]).unwrap();
+    assert_eq!(
+        computed(&k, 4).font_weight,
+        700,
+        "Bold Text steps the bar's weight once"
+    );
+}
+
+/// Only a readout its host calls a bar item takes the bar's type: none
+/// without the host's font, once the host says it no longer is, or once its
+/// block is taken back; each change measures it again and is reported. A
+/// readout that is itself a symbol is measured again too. No view is an item
+/// without a block.
+#[test]
+fn only_a_hosted_readout_takes_the_bars_type() {
+    let mut k = readout_page();
+    hosted(&mut k);
+    assert_eq!(
+        computed(&k, 4).font_size,
+        30.0,
+        "a host that gives no font: the page's"
+    );
+    bar_font(&mut k, 17.0, 400);
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 17.0);
+    let hosted_width = k.node(4).unwrap().frame.width;
+    k.take_bar_text_flips();
+    k.set_bar_item(3, false).unwrap();
+    assert_eq!(k.take_bar_text_flips(), [3]);
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 30.0, "no item");
+    assert_eq!(computed(&k, 6).font_size, 60.0);
+    assert!(
+        k.node(4).unwrap().frame.width > hosted_width,
+        "measured again in the page's type"
+    );
+    k.set_bar_item(3, true).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 17.0);
+    assert_eq!(
+        k.node(4).unwrap().frame.width,
+        hosted_width,
+        "measured again in the bar's"
+    );
+    k.take_bar_text_flips();
+    k.set_host_block(3, None).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 30.0, "its block taken back");
+    assert_eq!(k.take_bar_text_flips(), [3]);
+    k.set_host_cover(2, None).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert!(
+        k.node(4).unwrap().frame.width > hosted_width,
+        "measured again in the page"
+    );
+    assert!(
+        k.set_bar_item(3, true).is_err(),
+        "a bar item is a block its host gives"
+    );
+    let ops = [
+        Op::CreateView {
+            id: 7,
+            node_type: NodeType::Image,
+        },
+        Op::SetProp {
+            id: 7,
+            prop: PropId::ImageSource,
+            value: "symbol:wifi".into(),
+        },
+        Op::SetProp {
+            id: 7,
+            prop: PropId::AccessibilityRole,
+            value: "status".into(),
+        },
+        children(2, [3, 7]),
+    ];
+    k.apply(0, 2, &ops).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    k.set_host_block(7, at_most(44.0, 44.0)).unwrap();
+    let slot = k.arena.slot_of(7).unwrap();
+    k.arena.symbols_owed.remove(slot);
+    k.set_bar_item(7, true).unwrap();
+    assert!(
+        k.arena.symbols_owed.contains(slot),
+        "a symbol readout is measured again in the bar's size"
+    );
+}
+
+/// LLP 1141.004 D3: an `em` size written on a hosted readout reads the bar's
+/// size, as one on a control reads its own type's, and follows the bar's font
+/// and whether the readout is an item.
+#[test]
+fn an_em_size_on_a_hosted_readout_reads_the_bars() {
+    let mut k = readout_page();
+    bar_font(&mut k, 17.0, 500);
+    hosted(&mut k);
+    let half = style(3, &[(StyleId::FontSize, t("0.5em"))]);
+    k.apply(0, 2, &[half]).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 8.5, "not the page's 30");
+    bar_font(&mut k, 20.0, 500);
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 10.0, "a new bar font");
+    k.set_bar_item(3, false).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 15.0, "no item: the page's");
+}

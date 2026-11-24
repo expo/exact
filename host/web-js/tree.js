@@ -287,6 +287,25 @@ function watchViews() {
 }
 export const mapped = (v, map, clear) =>
   typeof v === 'string' && !v.trim() ? (clear === undefined ? map(null) : clear) : map(v);
+// Both line-height and its inheritance marker read this binding. Journal a refused value once per change.
+export function lineHeight(e, value) {
+  const t = typeof value === 'string' && value.trim();
+  // Theme and metric names are resolved by the next projection. A CSS value
+  // the browser accepts still has to fit the kernel's line-height grammar.
+  const length = t && /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)(px|rem|em|ch|lh|[sld]?v[wh]|vmin|vmax)$/i.exec(t);
+  const accepted = length && Number(length[1]) >= 0 && Number.isFinite(Math.fround(Number(length[1]))) &&
+    (length[2].toLowerCase() !== 'px' || length[2] === 'px');
+  if (t && (!Number.isNaN(Number(t)) || (CSS.supports('line-height', t) && !accepted && !/^(?:normal|unset|inherit)$/i.test(t) && !t.startsWith('var(')))) {
+    if (value !== e.$badLeading) invalidStyle(e, 'line-height', value);
+    e.$badLeading = value;
+    return 'unset';
+  }
+  delete e.$badLeading;
+  return value;
+}
+export function invalidStyle(e, prop, v) {
+  say(`view ${viewId(e)}: invalid ${prop} value ${JSON.stringify(v)}; unset`);
+}
 export function S(e, prop, unit, f) {
   Probes?.bind(e, prop, unit, f);
   let rendered = Adopt;
@@ -347,6 +366,8 @@ export function css(e, prop, unit, v, rendered) {
     for (const p of ['animation-timeline', 'animation-range', 'animation-play-state']) delete last[p];
   // An adopted node's inline style is the renderer's: a value it already shows is not written again (a write
   // restyles and repaints the node). (`transparent` is the color the renderer writes as rgba(0, 0, 0, 0).)
+  const valid = t == null || prop.startsWith('--') || t === 'unset' || normal(prop, t);
+  if (!valid) invalidStyle(e, prop, v);
   if (rendered) {
     const now = e.style.getPropertyValue(prop);
     if (t == null ? !now : same(now) === (normal(prop, t) || 'unset')) return;
@@ -360,9 +381,7 @@ export function css(e, prop, unit, v, rendered) {
     // A value not yet seen is probed on the detached style `normal` keeps, so the live node gets only the final
     // write (LLP 1071.001 A8). Every property takes `unset`: one that reads back empty is a property this browser
     // does not have (Chrome's `-moz-osx-font-smoothing`), not a refusal.
-    const valid = prop.startsWith('--') || t === 'unset' || normal(prop, t);
     e.style.setProperty(prop, valid ? t : 'unset');
-    if (!valid) say(`unset ${prop}: ${JSON.stringify(v)} is not a value it takes`);
   }
   placement?.afterStyle(e);
 }

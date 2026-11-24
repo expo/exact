@@ -118,7 +118,7 @@ impl<D: DataSource> Runner<D> {
         let result = {
             let cell_margins = |view| cell_margins(&self.kernel, view);
             let scroll_margin = |view| scroll_margin(&self.kernel, view);
-            let scroll_padding = |view| scroll_padding(&self.kernel, view);
+            let scroll_padding = |view, port| scroll_padding(&self.kernel, view, port);
             let mut u = self.instance_update(&mut ids);
             u.scroll_padding = Some(&scroll_padding);
             u.scroll_margin = Some(&scroll_margin);
@@ -202,7 +202,11 @@ impl<D: DataSource> Runner<D> {
 /// `view`'s `scroll-padding`, top, right, bottom, left, in points, as its
 /// committed style resolves it now ([`Update::scroll_padding`]): `env()` and a
 /// computed value resolved.
-pub(super) fn scroll_padding(kernel: &exact_kernel::Kernel, view: ViewId) -> [f64; 4] {
+pub(super) fn scroll_padding(
+    kernel: &exact_kernel::Kernel,
+    view: ViewId,
+    measured: [f64; 2],
+) -> [f64; 4] {
     let Some(node) = kernel.node(view) else {
         return [0.0; 4];
     };
@@ -214,10 +218,13 @@ pub(super) fn scroll_padding(kernel: &exact_kernel::Kernel, view: ViewId) -> [f6
         r.scroll_padding_bottom.clone(),
         r.scroll_padding_left.clone(),
     ];
-    std::array::from_fn(|i| match sides[i].resolve(env) {
-        exact_kernel::Dimension::Points(n) => f64::from(on_grid(env, n, CELLS[i])),
-        _ => 0.0,
-    })
+    // The browser supplies its measured port when it owns layout. A native
+    // collection's reported viewport may include the node's borders.
+    let [width, height] = kernel
+        .laid_out_scrollport(node.key)
+        .map_or_else(|| measured.map(|n| n as f32), |p| [p.width, p.height]);
+    let basis = [height, width, height, width];
+    std::array::from_fn(|i| f64::from(on_grid(env, sides[i].at_basis(env, basis[i]), CELLS[i])))
 }
 
 /// Each side's cell, top, right, bottom, left.

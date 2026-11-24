@@ -305,7 +305,8 @@ with no `accept` (or `accept="*/*"`) may pick any file, with no trade.
 T3 Code's composer, whose drop, paste and Attach files are one path, `drop`
 takes files and folders of any type, and a paste carries its files
 (`ClipboardEvent.files`, pasted image data as a PNG), each a `doc:` handle
-(LLP 1069.010, "Files dropped or pasted").
+(LLP 1069.010, "Files dropped or pasted"); a drop's text and link are
+LLP 1094.001's (the gesture arena entry, below).
 Specific `accept` types remain bounded as above. `capture` stays refused
 (the camera is the `@exact/camera` package, §Components, 2026-10-23). Linux editing is v2
 (Charlie, 2026-09-21): web, iOS and macOS first; Linux reads.
@@ -1982,8 +1983,9 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   `PointerEvent`'s `clientX`/`clientY`. Consumers: the two kanban builds
   (F4). Unblocks moving cards on a board without a hand-built drag. Take:
   none offered. Still out: reorder on row and nested lists (LLP 1094 §7),
-  drags into the app, multi-item drags, grids, a gesture arena; drags out
-  of the app are LLP 1094.000's, below.
+  a drag that gathers several items at its source, grids, a gesture arena;
+  drags out of the app are LLP 1094.000's, and drags into it, a drag of
+  several items included, LLP 1094.001's, below.
   **Expanded (LLP 1094.000; Charlie's waiver, no take; James Ide,
   2026-11-20: "Drags across apps are needed" and "We have a waiver"):** a
   node as a drag source to the system, `draggable` with
@@ -1992,10 +1994,17 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   Android. Consumer: the Landscapes template, whose cards
   Apple's Landmarks sample marks `.draggable`. Unblocks dropping a
   landmark's picture into another app or the other pane of a split screen.
-  Take: none offered. Still out: drags into the app beyond the file `drop`,
-  the `dragstart` and `dragend` events, an element's picture in a drag, a
-  drag that gathers several nodes, drags from a grouped list's rows, and a
-  gesture arena.
+  Take: none offered. Still out: the `dragstart` and `dragend` events, an
+  element's picture in a drag, a drag that gathers several nodes, drags from
+  a grouped list's rows, and a gesture arena; drags into the app are
+  LLP 1094.001's, next.
+  **Expanded (LLP 1094.001; the waiver that covers LLP 1094.000, no take;
+  James Ide, 2026-11-23: "Yes, we have a waiver"):** drags into the app:
+  `drop`'s `DragEvent` carries the drag's `text` and `url` beside its
+  `files`, on the web, macOS and Windows, then iOS and iPadOS, then Android.
+  Consumer: UI Gallery's drop zone. Unblocks a link or a sentence dragged
+  from another app into an Exact app. Still out: rich text, and a picture
+  given only as data where the host hands over no file.
   **Expanded (Charlie's panel on expo/exact#666, unanimous, 2026-11-15; LLP
   1057.001.000):** a zoomable scroll container, `-exact-min-zoom` and
   `-exact-max-zoom` on a scroller with one child and its `scrollZoom`, zoomed

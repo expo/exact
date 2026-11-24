@@ -248,7 +248,7 @@ class AttachmentTest {
         val camera = exact.camera.CameraModule(ExtensionContext(RuntimeEnvironment.getApplication(), "camera"))
         val view = camera.view("exact-camera", "1", "finder", module.context.application,
             JSONObject().put("srcObject", "scan")) { _, _ -> } as android.widget.ImageView
-        camera.bound("1", "finder", "srcObject", Cause("app"))
+        camera.bound("1", "finder", "srcObject", "scan", Cause("app"))
         camera.displayed("1", "finder", true, Cause("app"))
         fun bitmap() = (view.drawable as android.graphics.drawable.BitmapDrawable).bitmap
         try {

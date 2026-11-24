@@ -154,6 +154,24 @@ class PlayerTest {
         assertEquals(Color.BLUE, tip(10f))
     }
 
+    @Test fun anIframeKeepsItsFilterOriginAndItsOwnPaintClip() {
+        val graph = PaintedOrigins().apply { tracksFrames = true }
+        val frame = RenderNode("frame").apply { setPosition(0, 0, 200, 100) }
+        val root = RenderNode("root")
+        val player = Player(emptyMap()).apply { origins = graph; native = { frame } }
+        val blur = intArrayOf(53, 8, 0, f(200), f(300), f(180), 1, 0, f(4), f(4))
+        val half = 0.5f.toRawBits()
+        val transform = intArrayOf(1, half, 0, 0, half, 0, f(225))
+        val draw = intArrayOf(28, 1, 1, 0, 0, f(200), f(100)) + IntArray(9)
+        val ops = identity + blur + transform + draw + intArrayOf(54)
+        player.replay(root.beginRecording(400, 600), IntBuffer.wrap(ops), 0, ops.size)
+        root.endRecording()
+        val matrix = android.graphics.Matrix()
+        val clip = RectF(0f, 0f, 200f, 100f)
+        assertTrue(graph.transform(frame, matrix, clip))
+        assertEquals(RectF(0f, 225f, 100f, 275f), clip)
+    }
+
     /** A box's CSS filter (ops 53 and 54): its drawing goes into a node at the region's device bounds, which carries
      * the chain as a RenderEffect, and the walkers step over both ops. */
     @Test fun aFilterDrawsItsBoxIntoAnEffectNode() {

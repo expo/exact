@@ -125,21 +125,27 @@ impl<D: DataSource> Runner<D> {
                 viewed.shown_by = was.shown_by;
                 viewed.bound = std::mem::take(&mut was.bound);
             }
+            let first_report = said.len();
+            for prop in plan.str(row.binds).split_whitespace() {
+                if props[prop].is_null() {
+                    if viewed.bound.remove(prop).is_none() {
+                        continue;
+                    }
+                } else {
+                    let value = props[prop].to_string();
+                    if viewed.bound.get(prop).is_some_and(|(v, _)| *v == value) {
+                        continue;
+                    }
+                    viewed.bound.insert(prop.to_owned(), (value, cause));
+                }
+                said.push(json!({ "extension": viewed.extension, "view": id.to_string(), "tag": tag, "bound": prop, "value": props[prop], "origin": origin.word() }));
+            }
             if row.displayed && viewed.shown != shown {
                 viewed.shown = shown;
                 viewed.shown_by = cause;
-                said.push(json!({ "extension": viewed.extension, "view": id.to_string(), "tag": tag, "displayed": shown, "origin": origin.word() }));
-            }
-            for prop in plan.str(row.binds).split_whitespace() {
-                let value = match &props[prop] {
-                    Json::Null => continue,
-                    v => v.to_string(),
-                };
-                if viewed.bound.get(prop).is_some_and(|(v, _)| *v == value) {
-                    continue;
-                }
-                viewed.bound.insert(prop.to_owned(), (value, cause));
-                said.push(json!({ "extension": viewed.extension, "view": id.to_string(), "tag": tag, "bound": prop, "value": props[prop], "origin": origin.word() }));
+                // Hide before rebinding. On reveal the new bindings must already be in place.
+                let at = if shown { said.len() } else { first_report };
+                said.insert(at, json!({ "extension": viewed.extension, "view": id.to_string(), "tag": tag, "displayed": shown, "origin": origin.word() }));
             }
             now.insert(id, viewed);
         }

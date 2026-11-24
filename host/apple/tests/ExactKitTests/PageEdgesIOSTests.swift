@@ -601,6 +601,138 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(ControlBars(p).bars(of: list, in: route.node, top: true)?.isEmpty, false)
     }
 
+    /// LLP 1131 D3: rows of buttons above and below a column holding a row and the list are lifted over that
+    /// column, and the inner row over the list, whatever the ranks, so each draws over the list and keeps its
+    /// touches, and the band beside each is the list's. A lifted row follows its sibling's rank as the parent
+    /// is ranked. A `z-index` written on the column that ranks it over the rows refuses the band; one written
+    /// on the list ranks it only within the column.
+    func testABarIsLiftedOverTheBoxHoldingItsScroller() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        p.press(try node(session, "pick-nested").id)
+        let top = try node(session, "nested-bar"), foot = try node(session, "nested-foot"), inner = try node(session, "nested-inner"),
+            wrap = try node(session, "nested-wrap"), list = try node(session, "nested-list")
+        let rows = [(top, wrap, try node(session, "nested-all")), (foot, wrap, try node(session, "nested-foot-all")),
+                    (inner, list, try node(session, "nested-inner-mine"))]
+        let pickers = try node(session, "pickers")
+        until("the rows are bars over the list") { list.pageBand.top > 0 && list.pageBand.bottom > 0 }
+        let window = try XCTUnwrap(top.window), scroller = try XCTUnwrap(list.scrollView)
+        // The list at the origin; at the pickers' rank (as authored); at one no sibling of the outer rows has (a
+        // `z-index: 1`'s); and the column ranked as a positioned box, the pickers' rank.
+        for (wrapRank, listRank) in [(Int64(0), Int64(0)), (Int64(0), Int64(1)), (Int64(0), Int64(2)), (Int64(1), Int64(0))] {
+            let ranks = "column \(wrapRank), list \(listRank)"
+            wrap.setRank(wrapRank)
+            list.setRank(listRank)
+            XCTAssertGreaterThan(top.layer.zPosition, wrap.layer.zPosition, "\(ranks): the top row follows the column's rank at once")
+            p.reachPageEdges()
+            if listRank == 2 {
+                XCTAssertFalse(try XCTUnwrap(top.superview).subviews.contains { ($0 as? NodeView)?.paintRank == 2 }, "no sibling of the outer rows has the list's rank")
+            }
+            XCTAssertGreaterThan(list.pageBand.top, 0, "\(ranks): the list still runs under the top rows")
+            XCTAssertGreaterThan(list.pageBand.bottom, 0, "\(ranks): and under the foot's")
+            for (row, over, button) in rows {
+                let which = "\(ranks), \(button.props["testId"] ?? "")"
+                XCTAssertGreaterThan(row.layer.zPosition, over.layer.zPosition, "\(which): the row draws over its sibling holding the list")
+                if over === wrap, row.paintRank < pickers.paintRank {
+                    XCTAssertLessThan(row.layer.zPosition, pickers.layer.zPosition, "\(which): and stays under a sibling that painted over the column")
+                }
+                let hit = try XCTUnwrap(window.hitTest(button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil), with: nil))
+                XCTAssertTrue(hit.isDescendant(of: button), "\(which): a tap on the row's button is the button's, not \(type(of: hit))")
+                let beside = try XCTUnwrap(window.hitTest(row.convert(CGPoint(x: -8, y: row.bounds.midY), to: nil), with: nil))
+                XCTAssertTrue(beside.isDescendant(of: scroller), "\(which): the band beside the row is the list's scroll view's, not \(type(of: beside))")
+            }
+        }
+        wrap.setRank(0)
+        list.setRank(0)
+        let wrapStyle = wrap.style
+        wrap.style["written"] = .array([.string("z_index")])
+        wrap.style["z_index"] = .number(5)
+        wrap.setRank(10)
+        p.reachPageEdges()
+        XCTAssertEqual(list.pageBand, .zero, "a column its author ranks over its rows takes no band")
+        // The column positioned, over the top row's rank by no `z-index`, and the list ranked under it by its own
+        wrap.style = wrapStyle
+        wrap.setRank(1)
+        list.style["written"] = .array([.string("z_index")])
+        list.style["z_index"] = .number(-1)
+        list.setRank(-2)
+        p.reachPageEdges()
+        XCTAssertGreaterThan(list.pageBand.top, 0, "a list's own z-index ranks it only within its column")
+        XCTAssertGreaterThan(top.layer.zPosition, wrap.layer.zPosition)
+    }
+
+    /// LLP 1131 D1: a control that scrolls or holds a shown scroller is content, not a bar. A pressable column
+    /// holding a list, scrolling itself, or in a box with a button and a spacer drawn as a layer is no bar over
+    /// the list below it, so that list takes no band through it; the preview's own scroller takes one through
+    /// the row of buttons above, and the row keeps its touches. A list the column hides leaves it a bar, and a
+    /// dialog up in its sheet is no longer the box's.
+    func testAControlHoldingAScrollerIsNoBar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        func shown(_ shape: String, _ scroller: String) throws -> (lower: NodeView, preview: NodeView) {
+            p.press(try node(session, "pick-\(shape)").id)
+            until("\(shape) is laid out") {
+                [scroller, "lower-list"].allSatisfy { id in (try? node(session, id)).map { $0.frame.height > 0 && $0.scrollView != nil } == true }
+            }
+            p.reachPageEdges()
+            return (try node(session, "lower-list"), try node(session, scroller))
+        }
+        for (shape, scroller) in [("preview", "preview-list"), ("preview-scrolls", "preview"), ("preview-wrapped", "preview-list")] {
+            let (lower, preview) = try shown(shape, scroller)
+            XCTAssertEqual(lower.pageBand.top, 0, "\(shape): no band through the pressable column above it")
+            XCTAssertGreaterThan(preview.pageBand.top, 0, "\(shape): the preview's scroller is banded through the row")
+            let all = try node(session, "preview-all"), window = try XCTUnwrap(all.window)
+            let hit = try XCTUnwrap(window.hitTest(all.convert(CGPoint(x: all.bounds.midX, y: all.bounds.midY), to: nil), with: nil))
+            XCTAssertTrue(hit.isDescendant(of: all), "\(shape): a tap on the row's button is the button's, not \(type(of: hit))")
+        }
+        p.press(try node(session, "pick-preview-hidden").id)
+        let lower = try node(session, "lower-list"), column = try node(session, "preview")
+        until("the hidden list's preview is laid out") { column.frame.height > 0 && lower.frame.height > 0 && lower.scrollView != nil }
+        p.reachPageEdges()
+        XCTAssertGreaterThan(lower.pageBand.top, column.frame.height, "a list the column hides leaves it a bar: the band runs through it and the row")
+        // A dialog up in its sheet is no longer the row's: a row beside it, read through a spacer drawn as a layer,
+        // stays a bar.
+        p.press(try node(session, "pick-sheet-opener").id)
+        until("the opener is laid out") { (try? node(session, "lower-list")).map { $0.frame.height > 0 && $0.scrollView != nil } == true }
+        let opener = try node(session, "lower-list"), sheet = try node(session, "opener-sheet")
+        p.reachPageEdges()
+        let band = opener.pageBand.top
+        XCTAssertGreaterThan(band, 0, "the row is a bar over the list")
+        p.press(try node(session, "opener-open").id)
+        until("the dialog is up in its sheet") { p.dialogs.isOpen(sheet) && !p.dialogs.inTransition }
+        p.reachPageEdges()
+        XCTAssertEqual(opener.pageBand.top, band, "the row stays a bar while its dialog is up")
+        p.dialogs.close(sheet, animated: false)
+        until("the sheet is gone") { !p.dialogs.owns(sheet) && !p.dialogs.inTransition }
+        p.reachPageEdges()
+        XCTAssertEqual(opener.pageBand.top, band, "and once the dialog is back in the row")
+    }
+
+    /// LLP 1131 D1: a scroll view that scrolls nothing makes no control content. A tablist UIKit draws as its
+    /// segmented control, written `overflow-x: auto`, and a button whose label truncates (`overflow-x: hidden`
+    /// gives the text a scroll view) are bars over the list.
+    func testAScrollViewThatScrollsNothingLeavesItsControlABar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        for shape in ["tabs-scroll", "truncating"] {
+            p.press(try node(session, "pick-\(shape)").id)
+            // The scroll view that would have made the row no bar: the tablist's, behind UIKit's control, or the label's
+            until("\(shape) is laid out with its scroll view") {
+                guard let filter = try? node(session, "filter"), filter.frame.height > 0 else { return false }
+                return shape == "tabs-scroll" ? filter.scrollView != nil && p.segments.projects(filter.id)
+                    : (try? node(session, "filter-label"))?.scrollView != nil
+            }
+            p.reachPageEdges()
+            XCTAssertGreaterThan(try node(session, "list").pageBand.top, 0, "\(shape): the list runs under the bar")
+        }
+    }
+
     func testLargeTitleRidersRequireBothEdgesAndTheBarsPaintOrder() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the title belongs to a scene window") }
         guard #available(iOS 26.0, *) else { throw XCTSkip("control bars require iOS 26") }

@@ -112,6 +112,24 @@ final class ScrollSnapIOSTests: XCTestCase {
         }
     }
 
+    func testPercentagePaddingRestsAtTheBrowsersOffsetsOnBothAxes() throws {
+        for vertical in [false, true] {
+            let (node, scroll) = try strip([("start", 96, 80), ("center", 396, 80), ("end", 696, 80)], vertical: vertical)
+            let (first, last) = vertical ? ("top", "bottom") : ("left", "right")
+            node.style["border_width_\(first)"] = 8
+            node.style["border_width_\(last)"] = 12
+            node.style["scroll_padding_\(first)"] = .object(["pct": 10])
+            for (trailing, center, end): (BatchValue, CGFloat, CGFloat) in [(.object(["pct": 10]), 288, 516), (6, 277, 494)] {
+                node.style["scroll_padding_\(last)"] = trailing
+                for (proposal, expected): (CGFloat, CGFloat) in [(50, 60), (300, center), (510, end)] {
+                    let at = CGPoint(x: proposal, y: proposal)
+                    let rest = node.snappedOffset(at, in: scroll)
+                    XCTAssertEqual(vertical ? rest.y : rest.x, expected, accuracy: 0.01)
+                }
+            }
+        }
+    }
+
     func testNestedOverflowOwnsItsDescendantsExceptForClip() throws {
         for vertical in [false, true] {
             for overflow in ["scroll", "auto", "hidden", "clip"] {

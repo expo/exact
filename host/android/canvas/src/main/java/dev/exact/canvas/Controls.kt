@@ -61,9 +61,11 @@ abstract class ControlTile(
             // From API 34 starting the app asks the person to unlock first, as any activity a tile starts on the Lock
             // Screen does. Before it the `Intent` overload starts the activity at once, behind a keyguard that holds a
             // credential and with nothing asking for it: the app opens from [ControlPress] once the person unlocks.
-            "open" ->
-                if (locked && Build.VERSION.SDK_INT < 34) launch(ControlPress.intent(this, kind, digest, url = url))
-                else launch(Controls.location(this, url))
+            "open" -> when {
+                url.isNullOrEmpty() -> Controls.refuse(kind, "the control has no location")
+                locked && Build.VERSION.SDK_INT < 34 -> launch(ControlPress.intent(this, kind, digest, url = url))
+                else -> launch(Controls.location(this, url))
+            }
             "foreground" -> when {
                 locked && authentication == "always" -> Controls.refuse(kind, "the app records only in front, and the phone is locked")
                 locked && Build.VERSION.SDK_INT < 34 -> launch(ControlPress.intent(this, kind, digest, opens = true))
@@ -110,18 +112,31 @@ internal object Controls {
     /** How long a press may take to reach an app ready to run it: the host's boot bound. */
     private const val BOUND_MS = 20_000L
 
-    /** A press's record: its control, when the tile was pressed ([SystemClock.elapsedRealtime], which counts the
-     * phone's sleep), and whether its process had no host then. */
-    /** [opens]: the press opens the app ([handoff]); [url]: it opens the app there. */
-    private class Record(
+    /** A tile click, bound to its deadline and superseded by the next click. */
+    class Record(
         val token: String, val kind: String, val digest: String, val at: Long, val cold: Boolean,
-        val opens: Boolean = false, val url: String? = null,
+        private val opens: Boolean = false, private val url: String? = null,
     ) {
-        fun late() = SystemClock.elapsedRealtime() - at > BOUND_MS
+        private val turn = pressed
+        val remaining get() = at + BOUND_MS - SystemClock.elapsedRealtime()
+        fun late() = remaining <= 0
+        fun current() = turn == pressed && !late()
+        val opensApp get() = opens || url != null
+
+        fun unlocked(activity: android.app.Activity) {
+            if (!interactive(activity)) return
+            when {
+                url != null -> activity.startActivity(location(activity, url))
+                opens -> activity.startActivity(handoff(activity, kind, digest, at))
+                else -> press(activity.applicationContext, kind, digest, at, unlocked = true, cold = cold)
+            }
+        }
     }
     private fun record(
-        kind: String, digest: String, at: Long = SystemClock.elapsedRealtime(), opens: Boolean = false, url: String? = null,
-    ) = Record(java.util.UUID.randomUUID().toString(), kind, digest, at, !Exact.live, opens, url)
+        context: Context, kind: String, digest: String, at: Long = SystemClock.elapsedRealtime(), opens: Boolean = false, url: String? = null,
+    ) = Record(java.util.UUID.randomUUID().toString(), kind, digest, at, !Exact.live, opens, url).also { click ->
+        watchScreenOff(context, click.remaining) { if (click.current()) superseded("the screen turned off") }
+    }
 
     /** The intent a URL control starts: the app at [url], through the notification alias. */
     fun location(context: Context, url: String?): Intent =
@@ -133,15 +148,16 @@ internal object Controls {
     private var receiver: java.lang.ref.WeakReference<ExactActivity>? = null
     /** The record whose data module [ready] is waiting for. */
     private var asking: Record? = null
-    /** The locked tool presses [ControlPress] has yet to run, by token. */
-    private val unlocking = HashMap<String, Record>()
+    /** The locked press waiting for its activity to take it. */
+    private var unlocking: Record? = null
+    private var unlockActivity: java.lang.ref.WeakReference<ControlPress>? = null
     private val main = Handler(Looper.getMainLooper())
 
     /** The intent a tile starts to press [kind] from the app in front, superseding any press waiting: its record's
      * token, also the intent's identifier, so no `PendingIntent` another press made matches it. Starting it asks the
      * person to unlock first. [at] is when the tile was pressed. */
     fun handoff(context: Context, kind: String, digest: String, at: Long = SystemClock.elapsedRealtime()): Intent {
-        val record = record(kind, digest, at).also { issued = it }
+        val record = record(context, kind, digest, at).also { issued = it }
         return Intent().setComponent(ComponentName(context.packageName, ALIAS)).setIdentifier(record.token)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra(TOKEN, record.token)
@@ -149,23 +165,16 @@ internal object Controls {
 
     /** The one-use token [ControlPress] runs a locked press by; one that [opens] the app hands it off from there, and
      * one with a [url] opens the app there. */
-    fun unlockPress(kind: String, digest: String, opens: Boolean, url: String?): String {
-        val now = SystemClock.elapsedRealtime()
-        unlocking.values.removeAll { now - it.at > BOUND_MS }
-        return record(kind, digest, opens = opens, url = url).also { unlocking[it.token] = it }.token
+    fun unlockPress(context: Context, kind: String, digest: String, opens: Boolean, url: String?): String {
+        return record(context, kind, digest, opens = opens, url = url).also { unlocking = it }.token
     }
 
-    /** The locked press [token] names, run once the person has unlocked, from the [activity] that waited: taken from
-     * the records only then, so a later click, which clears them, or the bound supersedes it while it waits. */
-    fun unlocked(token: String): (android.app.Activity) -> Unit = { activity ->
-        val record = unlocking.remove(token)?.takeUnless { it.late() }
-        when {
-            record == null -> journal("control: a locked press already taken, superseded or late was dropped")
-            record.url != null -> activity.startActivity(location(activity, record.url))
-            record.opens -> activity.startActivity(handoff(activity, record.kind, record.digest, record.at))
-            else -> press(activity.applicationContext, record.kind, record.digest, record.at, unlocked = true, cold = record.cold)
+    /** Take the record on receipt. Only this activity can finish it, until its deadline or the next click. */
+    fun takeLocked(token: String, activity: ControlPress): Record? =
+        unlocking?.takeIf { it.token == token }?.also {
+            unlocking = null
+            unlockActivity = java.lang.ref.WeakReference(activity)
         }
-    }
 
     /** The runner's call of the press now running, and the activity a press that opened the app reached; null for
      * none. Whatever ends the press ends this call ([end]). */
@@ -187,25 +196,31 @@ internal object Controls {
     private fun began(context: Context, id: Long?, activity: ExactActivity?) {
         running = id ?: return
         runningIn = activity?.let { java.lang.ref.WeakReference(it) }
+        watchScreenOff(context, BOUND_MS) { if (running == id) end("the screen turned off") }
+    }
+
+    private fun watchScreenOff(context: Context, duration: Long, lost: () -> Unit) {
         val app = context.applicationContext
         val off = object : android.content.BroadcastReceiver() {
-            override fun onReceive(c: Context, i: Intent) { if (running == id) end("the screen turned off") }
+            override fun onReceive(c: Context, i: Intent) = lost()
         }
         val screen = android.content.IntentFilter(Intent.ACTION_SCREEN_OFF)
         if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(off, screen, Context.RECEIVER_NOT_EXPORTED) else app.registerReceiver(off, screen)
-        main.postDelayed({ app.unregisterReceiver(off) }, BOUND_MS)
+        main.postDelayed({ app.unregisterReceiver(off) }, duration.coerceAtLeast(0))
     }
 
     /** Counts tile presses, so a press still waiting for its session knows a later one superseded it. */
     private var pressed = 0
 
     /** A tile was pressed: the press before it ends, and one still waiting for the app is dropped. */
-    fun superseded() {
+    fun superseded(why: String = "another tile was pressed") {
         pressed += 1
-        end("another tile was pressed")
-        drop("superseded by another press before the app was ready")
-        unlocking.values.forEach { journal("control:${it.kind}: superseded by another press before the unlock") }
-        unlocking.clear()
+        end(why)
+        drop(why)
+        unlocking?.let { journal("control:${it.kind}: $why") }
+        unlocking = null
+        unlockActivity?.get()?.takeUnless { it.isFinishing || it.isDestroyed }?.finish()
+        unlockActivity = null
     }
 
     /** Drop the press waiting, if any, saying [why]. */
@@ -248,7 +263,9 @@ internal object Controls {
 
     /** Whether [activity] can run a handoff now: resumed, drawn since its start, and unlocked. */
     private fun eligible(activity: ExactActivity) =
-        activity.resumedAndDrawn() && activity.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true
+        activity.resumedAndDrawn() && interactive(activity) && activity.getSystemService(KeyguardManager::class.java)?.isKeyguardLocked != true
+
+    private fun interactive(context: Context) = context.getSystemService(android.os.PowerManager::class.java)?.isInteractive == true
 
     /** The activity may now be ready for a handoff: [eligible], its data module active. Checked again when the data
      * answers, and the bound with it. */
@@ -278,11 +295,14 @@ internal object Controls {
     /** A tile's press of a tool that runs where it is pressed: in the host that runs, or one booted for it. A session
      * not ready within [BOUND_MS] of the click at [at] ([SystemClock.elapsedRealtime]), a later tile press, or, with
      * [unlocked], a phone locked again meanwhile, drops it. */
-    fun press(context: Context, kind: String, digest: String, at: Long, unlocked: Boolean, cold: Boolean = !Exact.live) {
+    fun press(context: Context, kind: String, digest: String, at: Long, unlocked: Boolean, cold: Boolean = !Exact.live,
+              session: (Context, () -> Boolean, (Boolean) -> Unit) -> Unit = Headless::session) {
         val turn = pressed
-        val live = { SystemClock.elapsedRealtime() - at <= BOUND_MS && pressed == turn }
-        Headless.session(context, live) { ok ->
-            if (!ok || pressed != turn) {
+        var screenOff = false
+        watchScreenOff(context, at + BOUND_MS - SystemClock.elapsedRealtime()) { screenOff = true }
+        val live = { !screenOff && interactive(context) && SystemClock.elapsedRealtime() - at < BOUND_MS && pressed == turn }
+        session(context, live) { ok ->
+            if (!ok || !live()) {
                 android.util.Log.w("exact", "control:$kind: no session ready for the press, or it lapsed or was superseded")
                 return@session
             }
@@ -316,37 +336,52 @@ class ControlPress : android.app.Activity() {
     override fun onCreate(state: android.os.Bundle?) {
         super.onCreate(state)
         val token = intent.getStringExtra(TOKEN)
-        if (state != null || token == null) return finish()
-        val press = Controls.unlocked(token)
+        val press = token?.let { Controls.takeLocked(it, this) } ?: return finish()
+        if (state != null) return finish()
         val keyguard = getSystemService(KeyguardManager::class.java) ?: return finish()
         // A recreated instance finishes at once (above); the one it replaced is destroyed, and its poll and callbacks
         // do nothing, so the press is dropped rather than run from it.
-        val pressed = { if (!isDestroyed && !isFinishing) { press(this); finish() } }
+        fun pressed(lockPolls: Int = 0) {
+            if (isDestroyed || isFinishing || isChangingConfigurations) return
+            when {
+                !press.current() -> finish()
+                keyguard.isDeviceLocked && lockPolls > 0 -> main.postDelayed({ pressed(lockPolls - 1) }, 100)
+                keyguard.isDeviceLocked -> finish()
+                press.opensApp && keyguard.isKeyguardLocked -> main.postDelayed({ pressed() }, 100)
+                else -> { press.unlocked(this); finish() }
+            }
+        }
         // The device reads locked for a moment after the unlock that started this activity: watched for a while before
         // asking for a dismissal the keyguard, already going, would never answer.
         fun unlocked(left: Int) {
             when {
-                isDestroyed || isFinishing -> return
+                isDestroyed || isFinishing || isChangingConfigurations -> return
+                !press.current() -> finish()
                 !keyguard.isDeviceLocked -> pressed()
                 left > 0 -> main.postDelayed({ unlocked(left - 1) }, 100)
                 else -> {
                     keyguard.requestDismissKeyguard(this, object : KeyguardManager.KeyguardDismissCallback() {
-                        override fun onDismissSucceeded() = pressed()
-                        override fun onDismissCancelled() = finish()
-                        override fun onDismissError() = finish()
+                        override fun onDismissSucceeded() = pressed(20)
+                        override fun onDismissCancelled() { if (!isDestroyed) finish() }
+                        override fun onDismissError() { if (!isDestroyed) finish() }
                     })
-                    main.postDelayed({ if (!isFinishing) finish() }, 20_000)
                 }
             }
         }
+        main.postDelayed({ if (!isFinishing) finish() }, press.remaining.coerceAtLeast(0))
         unlocked(20)
+    }
+
+    override fun onDestroy() {
+        main.removeCallbacksAndMessages(null)
+        super.onDestroy()
     }
 
     internal companion object {
         private const val TOKEN = "dev.exact.control.token"
 
         fun intent(context: Context, kind: String, digest: String, opens: Boolean = false, url: String? = null): Intent {
-            val token = Controls.unlockPress(kind, digest, opens, url)
+            val token = Controls.unlockPress(context, kind, digest, opens, url)
             return Intent(context, ControlPress::class.java).setIdentifier(token)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
                 .putExtra(TOKEN, token)

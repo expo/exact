@@ -135,12 +135,18 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         val path = pathFor(args.optString("path"), type) ?: return error("NotSupportedError")
         val file = context.file(path) ?: return error("NotSupportedError")
         next += 1
-        val r = Recorder("recorder-${context.session}-$next", type, form, path, file, args.optDouble("audioBitsPerSecond", 0.0), args.optDouble("maxDuration", 0.0))
+        val admit: (() -> Unit)? = if (cause.origin == "press") ({
+            if (!context.visible || !cause.pressLive()) throw TrackError("NotAllowedError")
+        }) else null
+        val r = Recorder("recorder-${context.session}-$next", type, form, path, file, args.optDouble("audioBitsPerSecond", 0.0),
+            args.optDouble("maxDuration", 0.0), admit)
         try {
             r.leave = context.tracks.subscribe(track, r, true, cause)
+            r.begin()
             r.arm()
-        } catch (e: TrackError) {
-            return error(e.code)
+        } catch (e: Exception) {
+            r.refused()
+            return error((e as? TrackError)?.code ?: "NotReadableError")
         }
         recorders[r.id] = r
         context.log("recording: ${r.id} recording ${args.optString("stream")} to $path")
@@ -211,6 +217,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         props.optString("tint").takeIf { it.isNotEmpty() }?.let { c -> runCatching { Color.parseColor(c) }.getOrNull()?.let { w.paint.color = it } }
         val track = props.optString("track")
         if (track == w.track) return
+        if (w.track == boundBy[w.id]?.first) boundBy.remove(w.id)
         w.track = track
         listen(w)
         w.bars = WaveformBars(this.context.now())
@@ -221,7 +228,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
     private fun listen(w: Waveform) {
         val bound = boundBy[w.id]?.takeIf { it.first == w.track }?.second
         val cause = shownBy[w.id]?.let { bound?.lower(it) }
-        if (w.listened == w.track && w.cause?.origin == cause?.origin && (w.meter != null) == (cause != null && w.track.isNotEmpty())) return
+        if (w.listened == w.track && w.cause === cause && (w.meter != null) == (cause != null && w.track.isNotEmpty())) return
         val old = w.meter
         w.meter = null
         w.cause = cause
@@ -289,7 +296,8 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     /** One recorder: a consumer of its track, encoding on a thread of its own. */
-    private inner class Recorder(override val id: String, val type: String, val form: Form, val path: String, val file: File, val bitRate: Double, val maxDuration: Double) : TrackConsumer, MediaTake {
+    private inner class Recorder(override val id: String, val type: String, val form: Form, val path: String, val file: File,
+                                 val bitRate: Double, val maxDuration: Double, private var admitPress: (() -> Unit)?) : TrackConsumer, MediaTake {
         override var state = "recording"
         var reason: String? = null
         var error: String? = null
@@ -312,6 +320,8 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         private val writer = Handler(thread.looper)
         private var encoder: Encoder? = null
         private var untap: (() -> Unit)? = null
+        private var initialSource: AudioSource? = null
+        private var subscribed = false
         private val pending = AtomicInteger(0)
         @Volatile private var taking = true
         private val waiting = mutableListOf<(JSONObject) -> Unit>()
@@ -345,19 +355,55 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
         }
 
         override fun live(source: AudioSource?) {
-            if (source == null || untap != null || state == "inactive") return
-            val limit = source.sampleRate * 2
-            try {
-                encoder = Encoder(file, form, source.sampleRate, bitRate, if (outlives) context.application else null)
-            } catch (e: Exception) {
-                return finish("error", "the file did not open: $e") {}
+            admitPress?.let { admit ->
+                if (source == null) admit() else listen(source, admit)
+                admitPress = null
+                return
             }
-            untap = source.tap { samples, n ->
-                if (!taking) return@tap
+            if (source == null || untap != null || state == "inactive") return
+            if (!subscribed) {
+                initialSource = source
+                return
+            }
+            try {
+                listen(source, null)
+            } catch (e: Exception) {
+                finish("error", "the file did not open: $e") {}
+            }
+        }
+
+        /** A track may call live before its owner accepts the subscription. Only an accepted recorder writes. */
+        fun begin() {
+            if (admitPress != null) throw TrackError("NotReadableError")
+            subscribed = true
+            val source = initialSource
+            initialSource = null
+            if (source != null) listen(source, null)
+        }
+
+        fun refused() {
+            untap?.invoke()
+            leave?.invoke()
+            thread.quitSafely()
+        }
+
+        private fun listen(source: AudioSource, admit: (() -> Unit)?) {
+            val limit = source.sampleRate * 2
+            val ready = java.util.concurrent.atomic.AtomicBoolean(false)
+            val remove = source.tap { samples, n ->
+                if (!ready.get() || !taking) return@tap
                 // Nothing waits here: a writer two seconds behind stops the recorder (D6).
                 if (pending.addAndGet(n) > limit) { main.post { finish("error", "the writer fell behind") {} }; return@tap }
                 val copy = samples.copyOf(n)
                 writer.post { encoder?.write(copy); pending.addAndGet(-n) }
+            }
+            try {
+                encoder = Encoder(file, form, source.sampleRate, bitRate, if (outlives) context.application else null, admit)
+                untap = remove
+                ready.set(true)
+            } catch (e: Exception) {
+                remove()
+                throw e
             }
         }
 
@@ -390,7 +436,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
                 } catch (e: java.io.IOException) { "the file was not written: $e" }
                 // A failure here still answers the stop and lets the track and the thread go.
                 val encoded = try { encoder?.finish(); null } catch (e: Exception) { "the file was not written: $e" }
-                val unwritten = toned ?: encoded
+                val unwritten = failure ?: toned ?: encoded
                 main.post {
                     leave?.invoke(); leave = null
                     val out = if (unwritten != null) {
@@ -413,7 +459,7 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
 
     /** A file being written: AAC in MP4, Opus in Ogg or WebM, or 16-bit PCM WAV. On the recorder's thread. With
      * [parts], AAC in MP4 goes to an ADTS part first (Parts.kt). */
-    internal class Encoder(val file: File, form: Form, capture: Int, bitRate: Double, parts: Context?) {
+    internal class Encoder(val file: File, form: Form, capture: Int, bitRate: Double, parts: Context?, admit: (() -> Unit)? = null) {
         /** Opus takes 8, 12, 16, 24 or 48 kHz; the capture's other rates are resampled to 48 kHz. */
         private val resample = form.codec == MediaFormat.MIMETYPE_AUDIO_OPUS && capture !in OPUS_RATES
         val rate = if (resample) 48000 else capture
@@ -430,21 +476,27 @@ class RecordingModule(context: ExtensionContext) : ExactExtension(context) {
 
         init {
             file.parentFile?.mkdirs()
-            file.delete()
             if (form == Form.WAV) {
-                wav = RandomAccessFile(file, "rw").also { it.write(header(0, rate)) }
+                wav = openRecordingFile(file, admit, { target ->
+                    RandomAccessFile(target, "rw").also { it.write(header(0, rate)) }
+                }, RandomAccessFile::close)
                 codec = null; muxer = null; part = null
             } else {
                 wav = null
                 val format = MediaFormat.createAudioFormat(form.codec, rate, 1)
                 form.profile?.let { format.setInteger(MediaFormat.KEY_AAC_PROFILE, it) }
                 format.setInteger(MediaFormat.KEY_BIT_RATE, if (bitRate > 0) bitRate.toInt() else if (form.profile != null) 96000 else 64000)
-                codec = MediaCodec.createEncoderByType(form.codec).also {
-                    it.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                    it.start()
+                codec = MediaCodec.createEncoderByType(form.codec)
+                try {
+                    codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                    codec.start()
+                    part = if (form.container == MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4) parts?.let { PartWriter(it, file, admit) } else null
+                    muxer = if (part == null) openRecordingFile(file, admit, { MediaMuxer(it.path, form.container) }, MediaMuxer::release)
+                        else { file.delete(); null }
+                } catch (e: Exception) {
+                    codec.release()
+                    throw e
                 }
-                part = if (form.container == MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4) parts?.let { PartWriter(it, file) } else null
-                muxer = if (part == null) MediaMuxer(file.path, form.container) else null
             }
         }
 

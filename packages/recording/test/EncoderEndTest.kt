@@ -17,6 +17,22 @@ import org.robolectric.util.ReflectionHelpers
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE)
 class EncoderEndTest {
+    @Test fun aPressExpiringWhileTheOutputOpensLeavesThePriorFile() {
+        val directory = File(RuntimeEnvironment.getApplication().filesDir, "takes").apply { mkdirs() }
+        val file = File(directory, "previous.wav").apply { writeText("previous") }
+        assertThrows(dev.exact.canvas.TrackError::class.java) {
+            RecordingModule.Encoder(file, Form.WAV, 48000, 0.0, null) {
+                throw dev.exact.canvas.TrackError("NotAllowedError")
+            }
+        }
+        assertEquals("previous", file.readText())
+        assertEquals(listOf(file), directory.listFiles()!!.toList())
+        val encoder = RecordingModule.Encoder(file, Form.WAV, 48000, 0.0, null) {}
+        encoder.write(shortArrayOf(12))
+        encoder.finish()
+        assertEquals(46L, file.length())
+    }
+
     @Test fun aStopWithEveryInputBufferFullStillEndsTheStream() {
         val file = File(RuntimeEnvironment.getApplication().filesDir, "takes/full.m4a")
         val form = Form(MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4, MediaFormat.MIMETYPE_AUDIO_AAC, null)

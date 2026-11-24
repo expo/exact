@@ -335,25 +335,36 @@ fn box_reached(arena: &NodeArena, slot: u32) -> [bool; 4] {
     {
         return [false; 4];
     }
-    match style.rare.safe_area_reach == SafeAreaReach::Auto {
+    // An edge it extends on has its strip drawn by the extension's mirror (D13)
+    let extended = extended(arena, slot);
+    let named = match style.rare.safe_area_reach == SafeAreaReach::Auto {
         true => [plain_fill(arena, slot); 4],
         false => reached(arena, slot),
-    }
+    };
+    std::array::from_fn(|e| named[e] && !extended[e])
 }
 
-/// Whether `slot` paints a plain colour fill (D13): a background colour not wholly transparent
-/// filling a rectangle undecorated by a background image, a border, a radius, a shadow or a
-/// material, as a SwiftUI colour's background ignores the safe area and a UIKit view's background
-/// colour fills its bounds.
+/// Whether `slot` paints a plain colour fill (D13): a background colour that paints in either
+/// appearance and fills a rectangle undecorated by a background image, a border, a radius, a
+/// shadow or a material, as a SwiftUI colour's background ignores the safe area and a UIKit view's
+/// background colour fills its bounds.
 fn plain_fill(arena: &NodeArena, slot: u32) -> bool {
     use crate::style::ColorValue;
     let s = arena.style(slot);
-    // `currentColor`, a role, a platform colour or one of a wide space paints
+    // A colour paints in either appearance, which the host picks: `currentColor`, a role and a
+    // platform colour do
     let coloured = match s.background_color {
         Some(ColorValue::Fixed(c)) => c.a() > 0,
-        Some(ColorValue::LightDark(a, b)) => a.a() > 0 || b.a() > 0,
+        Some(ColorValue::LightDark(a, b)) => a.a() > 0 && b.a() > 0,
+        Some(ColorValue::Wide(id)) => crate::style::wide::wide(id)
+            .is_some_and(|w| w.half(false).alpha > 0.0 && w.half(true).alpha > 0.0),
         _ => true,
     };
+    // It fills the border box, which has no border here, unless clipped to the content or text
+    let fills = matches!(
+        s.background_clip,
+        crate::BackgroundClip::BorderBox | crate::BackgroundClip::PaddingBox
+    );
     let radius = [
         &s.border_radius_top_left,
         &s.border_radius_top_right,
@@ -365,6 +376,7 @@ fn plain_fill(arena: &NodeArena, slot: u32) -> bool {
         .str(crate::PropId::BackgroundMaterial)
         .is_some();
     coloured
+        && fills
         && !material
         && s.border_widths().iter().all(|&w| w == 0.0)
         && radius

@@ -1,11 +1,13 @@
 // The driver's held key (agent-keys.mjs `typeFor`): it repeats while held, as
 // a keyboard does, each repeat a keydown whose `repeat` is true.
 import { test, expect } from 'bun:test';
+import { resolve } from 'node:path';
 import { chordKeys } from './agent-playwright.mjs';
 import { KEY_REPEAT, validateKey, typeFor, cdpKey, withHeldModifiers, browserKey, nativeKey, typeArguments, typeCommand, tapWords, tapArguments, pointerGap, intoArguments, MalformedOperation, clockSlices, padOp, postCommand, postInto, resizeArguments } from './agent-keys.mjs';
 import { open } from './agent.mjs';
 import { helpText } from './help.mjs';
 import { launchFacts } from './agent-launch.mjs';
+import { dragInWords } from './agent-drag.mjs';
 
 test('a hover wheel accepts its point and modifiers; a plain hover refuses them', () => {
   for (const extra of [{ at: [30, 40] }, { modifiers: 'Control' }]) {
@@ -23,6 +25,17 @@ test('tap midi is a MIDI input\'s message, its bytes two hex digits each; a test
   expect(tapWords(['midi', '"clk"', 'fa'])).toEqual([null, { midi: { input: 'clk', data: [0xfa] } }]);
   expect(() => tapWords(['midi', 'clk', 'clock', '0', '100'])).toThrow('a tempo above 0');
   expect(clockSlices({ bpm: 125, ms: 110 })).toEqual([{ to: 50, ticks: [20, 40] }, { to: 100, ticks: [60, 80, 100] }, { to: 110, ticks: [] }]);
+});
+
+test('a drag in carries its paths, quoted text and link whole, and refuses an empty drag and a file URL as a link', () => {
+  const words = dragInWords(`--text "Mount Fuji" --url https://example.com/fuji '/tmp/a b.txt' notes.txt`);
+  expect(tapWords(['zone', 'drop', ...words])).toEqual(['zone', { drop: ['/tmp/a b.txt', resolve('notes.txt')], text: 'Mount Fuji', url: 'https://example.com/fuji' }]);
+  expect(tapWords(['zone', 'dragenter', ...dragInWords(`--text 'it\\'s here'`)])).toEqual(['zone', { dragenter: [], text: "it's here" }]);
+  expect(() => tapWords(['zone', 'drop'])).toThrow('drop takes one or more paths, --text "…" or --url "…"');
+  expect(() => tapWords(['zone', 'drop', '--text'])).toThrow('drop --text takes a value');
+  expect(() => tapArguments({ drop: [], url: 'file:///tmp/a' })).toThrow('names a file: drop it by its path instead');
+  expect(() => tapArguments({ drop: [], text: '' })).toThrow('drop: a drag carries a path, text or a link');
+  expect(() => tapArguments({ dragenter: [], url: 'https://example.com/' })).not.toThrow();
 });
 
 test('a press point before drag is refused with the drag from a point and the held contact\'s phases (#1332)', () => {

@@ -207,10 +207,13 @@ internal class Layers(
     /** Not a function type: `(Int) -> Boolean` boxes the row and the answer at every call. */
     fun interface RowShows { fun shows(row: Int): Boolean }
     var rowShows: RowShows? = null
+    var origins: PaintedOrigins? = null
 
     /** Layer [id]'s node over [r] (the stream's pixels), clipped to it, or (null) over everything, unclipped. */
     fun place(id: Int, r: android.graphics.Rect?) {
         val l = layers[id] ?: return
+        if ((r != null) != l.bounded || r != null && (r.left != l.node.left || r.top != l.node.top ||
+            r.right != l.node.right || r.bottom != l.node.bottom)) origins?.moved(l.node)
         if (r == null) { l.node.setPosition(0, 0, 1 shl 14, 1 shl 14); l.node.setClipToBounds(false); l.ox = 0f; l.oy = 0f }
         else { l.node.setPosition(r); l.node.setClipToBounds(true); l.ox = r.left.toFloat(); l.oy = r.top.toFloat() }
         l.bounded = r != null
@@ -238,7 +241,7 @@ internal class Layers(
     private var snapshot: Map<Int, RenderNode>? = null
     fun nodes(): Map<Int, RenderNode> = snapshot ?: layers.mapValues { it.value.node }.also { snapshot = it }
 
-    /** Op 30 at [at] (after id and len, [len] words): the header, then the drawing 17 words on. */
+    /** Op 30 at [at] (after id and len, [len] words): the header, then the drawing. */
     fun set(id: Int, b: IntBuffer, at: Int, len: Int) {
         node(id)
         val l = layers[id]!!
@@ -252,9 +255,9 @@ internal class Layers(
         val dash = b.get(at + 16)
         val recolored = dash == -2
         l.dashAt = if (dash == -1 || recolored) -1 else dash
-        contents(l, b, at + 17, at + len)
+        contents(l, b, at + HEADER_WORDS, at + len)
         l.recordedScale = 1f
-        l.ops = IntArray(len - 17) { b.get(at + 17 + it) }
+        l.ops = IntArray(len - HEADER_WORDS) { b.get(at + HEADER_WORDS + it) }
         l.glyphColors = null; l.backgroundAt = -1; l.runs = null
         if (recolored) colors(l)
         l.memo = PathMemo()
@@ -442,6 +445,7 @@ internal class Layers(
                 val dy = v[1] + (if (v[8].isNaN()) 0f else v[8] - l.py)
                 val tx = m[0] * dx + m[1] * dy
                 val ty = m[3] * dx + m[4] * dy
+                if (px != l.pivX || py != l.pivY || tx != l.tx || ty != l.ty || v[3] != l.rot || s != l.sc || sy != l.scY) origins?.moved(l.node)
                 if (px != l.pivX || py != l.pivY) { l.pivX = px; l.pivY = py; l.node.pivotX = px - l.ox; l.node.pivotY = py - l.oy }
                 if (tx != l.tx || ty != l.ty) { l.tx = tx; l.ty = ty; l.node.translationX = tx; l.node.translationY = ty }
                 if (v[3] != l.rot) { l.rot = v[3]; l.node.rotationZ = v[3] }
@@ -465,6 +469,8 @@ internal class Layers(
     fun playing() = layers.values.any { it.tracks.isNotEmpty() }
 
     companion object {
+        const val HEADER_WORDS = 17
+
         private fun progress(e: Easing?, input: Double): Double {
             val x = input.coerceIn(0.0, 1.0)
             e ?: return x

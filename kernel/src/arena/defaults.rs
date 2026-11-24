@@ -336,21 +336,22 @@ impl NodeArena {
     }
 
     pub(crate) fn style_starts(&self, slot: u32) -> impl Iterator<Item = &StyleProps> {
-        self.style_starts_for(slot, [true; 3])
+        self.style_starts_for(slot, [true; 4])
     }
 
     fn style_starts_for(
         &self,
         slot: u32,
-        [structural, shorthand, control]: [bool; 3],
+        [structural, shorthand, control, bar]: [bool; 4],
     ) -> impl Iterator<Item = &StyleProps> {
-        // A style the author names beats a control's own type.
+        // A style the author names beats a control's own type, and a hosted readout's bar's.
         structural
             .then(|| self.structural_starts(slot))
             .into_iter()
             .flatten()
             .chain(shorthand.then(|| self.text_style_start(slot)).flatten())
             .chain(control.then(|| self.control_text_start(slot)).flatten())
+            .chain(bar.then(|| self.bar_text_start(slot)).flatten())
     }
 
     /// Effective own rows never alter stored ownership. Inherited text is
@@ -431,18 +432,19 @@ impl NodeArena {
         // without building their styles or consulting the session's theme.
         let inherited = id.inherited();
         let starts = if inherited {
-            static STARTS: std::sync::LazyLock<[StyleMask; 3]> = std::sync::LazyLock::new(|| {
+            static STARTS: std::sync::LazyLock<[StyleMask; 4]> = std::sync::LazyLock::new(|| {
                 [
                     inherited_structural_rows(),
                     super::text_style::start_rows(),
                     super::control_text::start_rows(),
+                    super::bar_text::rows(),
                 ]
             });
             STARTS.map(|mask| mask.has(id))
         } else {
-            [true; 3]
+            [true; 4]
         };
-        let check_starts = starts != [false; 3];
+        let check_starts = starts != [false; 4];
         let mut cur = Some(slot);
         while let Some(s) = cur {
             let own = &self.styles[s as usize];

@@ -193,7 +193,7 @@ mod tests {
                     out.extend(sets(&ops[parents + 1 + ops[parents] as usize * 2..end]));
                 }
                 ROW_BEGIN => out.extend(sets(&ops[at + 6..end - 1])),
-                layer::LAYER_SET => out.extend(sets(&ops[at + 20..end])),
+                layer::LAYER_SET => out.extend(sets(&ops[at + 3 + layer::HEADER_WORDS..end])),
                 _ => (),
             }
             at = end;

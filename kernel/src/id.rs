@@ -181,6 +181,7 @@ pub(crate) struct BoxInset {
     pub(crate) padding: [f32; 4],
     pub(crate) border: [f32; 4],
     pub(crate) cover: [f32; 4],
+    pub(crate) scrollbar: [f32; 2],
     pub(crate) text_offset: f32,
     pub(crate) text_item: Option<Frame>,
 }
@@ -188,10 +189,11 @@ pub(crate) struct BoxInset {
 impl BoxInset {
     pub(crate) fn is_zero(self) -> bool {
         // Bitwise, so a -0 comes back as it went in.
-        let zero = |v: &[f32; 4]| v.iter().all(|x| x.to_bits() == 0);
+        let zero = |v: &[f32]| v.iter().all(|x| x.to_bits() == 0);
         zero(&self.padding)
             && zero(&self.border)
             && zero(&self.cover)
+            && zero(&self.scrollbar)
             && self.text_offset.to_bits() == 0
             && self.text_item.is_none()
     }
@@ -210,6 +212,12 @@ impl BoxInset {
         BoxInset {
             padding: std::array::from_fn(|i| (engine[i] - cover[i]).max(0.0)),
             border: ltrb(l.border),
+            // The host measures each scrollbar. Taffy reserves one thickness for both
+            // and also uses that space for UIKit bars, which are not scrollbars.
+            scrollbar: match arena.cover(slot) {
+                Some(crate::HostCover::Gutter(sizes)) => sizes,
+                _ => [0.; 2],
+            },
             cover,
             text_offset: text_item.map_or_else(
                 || crate::layout::text_item::from_layout(arena, slot, l),

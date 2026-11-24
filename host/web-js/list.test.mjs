@@ -332,11 +332,14 @@ test('element jumps use Chrome scroll padding and margins and settle once', asyn
   expect(result).toEqual({nearest:268, start:368, still:368, ends:2});
 }, 60_000);
 
-test('a keyed row jump includes the same scroll margin as Chrome element alignment', async () => {
+test.each([['24px', 2468], ['var(--inset)', 2472]])
+('a keyed row jump includes scroll margin and %s scroll padding', async (padding, start) => {
   const result = await evaluate(`(async () => {
     const root = document.getElementById('exact-root');
     const port = document.createElement('div'); port.id = 'margin-feed';
     port.style.cssText = 'height:200px;width:200px;overflow:auto;scroll-padding:24px 0 12px';
+    port.style.setProperty('--inset', 'max(10%, 8px)');
+    port.style.scrollPaddingTop = ${JSON.stringify(padding)};
     root.append(port);
     const own = rt.scope(() => list.vl(port, () => Array.from({length:100}, (_, i) => i), i => i(), (w, i) => {
       const row = document.createElement('div'); row.textContent = String(i());
@@ -352,7 +355,7 @@ test('a keyed row jump includes the same scroll margin as Chrome element alignme
     rt.end(own); port.remove(); rt.settled();
     return {start, end};
   })()`);
-  expect(result).toEqual({start:2468, end:2368});
+  expect(result).toEqual({start, end:2368});
 }, 60_000);
 
 test('nested smooth element jumps align both ports at their destinations', async () => {
@@ -414,6 +417,43 @@ test('bordered element scrollports resolve percentage padding inside the border'
   expect(result.start).toEqual([right, Math.round(400 - height * 0.25)]);
   expect(result.end).toEqual([right, Math.round(450 - height * 0.75)]);
 }, 60_000);
+
+test('bordered snap and element alignment use the same scrollport on either axis', async () => {
+  const rows = await evaluate(`(() => {
+    const rows = [];
+    for (const vertical of [false, true]) {
+      const port = document.createElement('div'), axis = vertical ? 'y' : 'x', side = vertical ? 'top' : 'left';
+      const last = vertical ? 'bottom' : 'right', size = vertical ? 'height' : 'width', offset = vertical ? 'scrollTop' : 'scrollLeft';
+      port.style.cssText = 'position:relative;width:300px;height:300px;box-sizing:border-box;overflow:hidden;border:0 solid';
+      port.style.setProperty('border-' + side + '-width', '8px');
+      port.style.setProperty('border-' + last + '-width', '12px');
+      const track = document.createElement('div');
+      track.style[size] = '1200px'; port.append(track);
+      for (const [i, align] of ['start', 'center', 'end'].entries()) {
+        const marker = document.createElement('div');
+        marker.style.cssText = 'position:absolute;width:80px;height:80px;scroll-snap-align:' + align;
+        marker.style[side] = (88 + 300 * i) + 'px'; track.append(marker);
+      }
+      document.body.append(port);
+      for (const trailing of ['10%', '6px']) {
+        port.style.setProperty('scroll-padding-' + side, '10%');
+        port.style.setProperty('scroll-padding-' + last, trailing);
+        port.style.scrollSnapType = axis + ' mandatory';
+        const snaps = [50, 300, 510].map(n => { port[offset] = n; return port[offset]; });
+        port.style.scrollSnapType = 'none';
+        const jumps = ['start', 'end'].map(align => {
+          track.children[1].scrollIntoView({block:align, inline:align, behavior:'instant'});
+          return port[offset];
+        });
+        rows.push([...snaps, ...jumps]);
+      }
+      port.remove();
+    }
+    return rows;
+  })()`);
+  const pure = [60, 288, 516, 360, 216], mixed = [60, 277, 494, 360, 194];
+  expect(rows).toEqual([pure, mixed, pure, mixed]);
+});
 
 test('a horizontal wheel leaves a vertical Chrome jump running to one scrollend', async () => {
   const point = await evaluate(`(async () => {

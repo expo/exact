@@ -72,11 +72,10 @@ class MediaCaptureModule internal constructor(
         var readyState = "live"
         val consumers = LinkedHashMap<TrackConsumer, Cause>()
         var active = false
+        var suspended = false
         var used = false
         var leased = false
         var platformMute: String? = null
-        /** The call whose consumer opened the capture, which the capture's background claim names. */
-        var cause = Cause.none
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -115,7 +114,9 @@ class MediaCaptureModule internal constructor(
                 if (t == null) return reply(error("NotFoundError"))
                 t.enabled = args.optBoolean("enabled", true)
                 // Turning a track back on is a start: it reopens an idle one that has consumers (D6).
-                if (t.enabled && !t.active && t.consumers.isNotEmpty() && t.readyState == "live") activate(t, cause)
+                if (t.enabled && (!t.active || t.suspended) && t.readyState == "live" && cause.app && context.foreground) {
+                    t.consumers.values.firstOrNull(::starts)?.let { activate(t, it.lower(cause)) }
+                }
                 announce()
                 reply(shape(t))
             }
@@ -193,6 +194,8 @@ class MediaCaptureModule internal constructor(
 
     override fun subscribe(id: String, consumer: TrackConsumer, start: Boolean, cause: Cause): () -> Unit {
         val t = tracks[id] ?: throw TrackError("NotFoundError")
+        val pressStart = start && cause.origin == "press"
+        if (pressStart && (!starts(cause) || t.readyState == "ended")) throw TrackError("NotAllowedError")
         if (t.readyState == "ended") { consumer.ended(); return {} }
         val leave = {
             if (t.consumers.remove(consumer) != null && t.consumers.isEmpty() && t.active) deactivate(t)
@@ -200,15 +203,23 @@ class MediaCaptureModule internal constructor(
         val active = t.active
         val used = t.used
         val platformMute = t.platformMute
-        t.consumers[consumer] = cause
+        val consumerCause = if (cause.origin == "press" && !start) Cause.none else cause
         try {
+            if (pressStart) {
+                // Complete device and service acquisition before the recorder commits its file. A refusal
+                // from live() still rolls back the lease this subscription took.
+                if (!t.active && t.enabled) activate(t, cause)
+                if (!starts(cause)) throw TrackError("NotAllowedError")
+                if (!leased(id)) throw TrackError("NotReadableError")
+            }
+            t.consumers[consumer] = consumerCause
             when {
-                t.active -> {
+                t.active && !t.suspended -> {
                     consumer.live(t.audio)
                     if (t.muted) consumer.muted(t.muteReason ?: "idle")
                 }
                 // While a recognizer holds the microphone exclusively, a track stays idle (LLP 1133.012 D8).
-                starts(cause) && t.enabled && (!t.used || start) && !context.tracks.held("audio") -> activate(t, cause)
+                starts(consumerCause) && t.enabled && (!t.used || start) && !context.tracks.held("audio") -> activate(t, consumerCause)
                 else -> consumer.muted(t.muteReason ?: "idle")
             }
         } catch (e: Throwable) {
@@ -226,7 +237,7 @@ class MediaCaptureModule internal constructor(
         return leave
     }
 
-    override fun leased(id: String) = tracks[id]?.active == true
+    override fun leased(id: String) = tracks[id]?.let { it.leased || (context.agent && it.active && !it.suspended) } == true
 
     private fun each(t: Track, f: (TrackConsumer) -> Unit) = t.consumers.keys.toList().forEach(f)
 
@@ -251,13 +262,16 @@ class MediaCaptureModule internal constructor(
      * capture (`press`, LLP 1126.004 D4) while it still runs and an activity shows the app, which Android needs to hand
      * it the microphone (D5).
      */
-    private fun starts(cause: Cause) = cause.app || (cause.origin == "press" && context.visible && cause.pressLive())
+    private fun starts(cause: Cause) = (cause.app && context.foreground) || (cause.origin == "press" && context.visible && cause.pressLive())
 
     /** The microphone for [t] under [cause], which [starts] admits at every acquisition, a return to the front's
      * included: a track a press opened stays idle once the press has ended. */
     private fun activate(t: Track, cause: Cause) {
-        if (!starts(cause)) return
-        t.active = true; t.used = true; t.cause = cause
+        if (!starts(cause) || context.tracks.held("audio")) {
+            if (t.suspended) deactivate(t)
+            return
+        }
+        t.active = true; t.used = true
         if (!context.agent && !t.leased) {
             try {
                 Capture.lease(app, t.options)
@@ -265,8 +279,19 @@ class MediaCaptureModule internal constructor(
             } catch (e: Exception) {
                 context.log("media-capture: ${t.id} did not open: $e")
                 t.platformMute = "interrupted"
+                t.suspended = true
+                mute(t, "interrupted")
+                if (cause.origin == "press") throw TrackError("NotReadableError")
+                return
             }
         }
+        if (t.suspended && t.platformMute == "interrupted") t.platformMute = overlay
+        t.suspended = false
+        if (cause.origin == "press") {
+            if (!starts(cause)) throw TrackError("NotAllowedError")
+            if (!leased(t.id)) throw TrackError("NotReadableError")
+        }
+        t.audio?.capturing = t.leased || context.agent
         each(t) { it.live(t.audio) }
         settle(t)
         if (t.leased || context.agent) claimBackground(cause)
@@ -297,6 +322,7 @@ class MediaCaptureModule internal constructor(
     }
 
     private fun release(t: Track) {
+        t.audio?.capturing = false
         if (!t.leased) return
         t.leased = false
         Capture.unlease()
@@ -331,13 +357,23 @@ class MediaCaptureModule internal constructor(
         cameras.foreground(shown)
         if (background != null) return
         for (t in tracks.values) {
-            if (t.readyState != "live" || !t.active) continue
+            if (t.readyState != "live") continue
+            if (shown && t.suspended) t.platformMute = overlay
+            if (!t.active) {
+                if (shown) t.suspended = false
+                continue
+            }
             if (shown) {
                 // Under a consumer still there: one that left authorizes nothing.
-                val cause = t.consumers.values.firstOrNull(::starts) ?: continue
-                t.platformMute = overlay
-                activate(t, cause)
+                if (!t.suspended) continue
+                val cause = t.consumers.values.firstOrNull(::starts)
+                if (cause == null || context.tracks.held("audio")) {
+                    deactivate(t)
+                    continue
+                }
+                try { activate(t, cause) } catch (_: TrackError) { deactivate(t) }
             } else {
+                t.suspended = true
                 t.platformMute = "background"
                 release(t)
                 settle(t)
@@ -518,6 +554,7 @@ class MediaCaptureModule internal constructor(
 
 /** Disabled audio is silence with the input's sample count; the shared microphone stays unchanged (LLP 1133.033 D8). */
 internal class TrackAudioSource(private val source: AudioSource) : AudioSource {
+    @Volatile var capturing = false
     @Volatile var enabled = true
     override val sampleRate get() = source.sampleRate
     override val channels get() = source.channels
@@ -528,7 +565,7 @@ internal class TrackAudioSource(private val source: AudioSource) : AudioSource {
         // Only this tap's capture callback accesses its reusable silence.
         var silence = ShortArray(4096)
         val upstream = source.tap { samples, n ->
-            if (active.get()) {
+            if (active.get() && capturing) {
                 if (enabled) block(samples, n)
                 else {
                     if (silence.size < n) silence = ShortArray(n)

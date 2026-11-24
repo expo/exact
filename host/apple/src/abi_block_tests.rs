@@ -199,3 +199,62 @@ fn a_split_says_how_each_block_shows_against_its_stacks_top() {
     send(&mut bridge, vec![loose, 23, size(1.0), 0, 0, 0]);
     assert_eq!(shown(&bridge, loose), BlockShown::InStack);
 }
+
+/// LLP 1141.004 D3: a block the host says is a navigation bar's item
+/// (record kind 27) is a readout in the bar's type, and the host sends its
+/// subtree's rows again when that changes, outside any commit.
+#[test]
+fn a_bar_item_is_sent_again_in_the_bars_type() {
+    let plan = contract::compile(
+        "component Page\n  view\n    column font-size=30\n      header testId=\"head\"\n        row role=\"status\" testId=\"readout\"\n          text \"Updating\" testId=\"word\"\n",
+    )
+    .unwrap()
+    .encode();
+    let mut bridge = Bridge::new();
+    bridge.boot(&plan, StorageModule::default(), Hooks::none(), 400.0, 600.0);
+    let host = bridge.host.as_mut().unwrap();
+    let mut env = host.runner().kernel().env();
+    env.bar_item_font = Some(exact_kernel::ControlFont {
+        family: "system-ui".into(),
+        family_id: 0,
+        size: 17.0,
+        weight: 500,
+        style: exact_kernel::FontStyle::Normal,
+    });
+    host.runner_mut().kernel_mut().set_env(env).unwrap();
+    let k = host.runner().kernel();
+    let id = |test_id: &str| k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
+    let (head, readout, word) = (id("head"), id("readout"), id("word"));
+    let send = |bridge: &mut Bridge<StorageModule>, words: Vec<u32>| -> String {
+        let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        bridge.input_write(&bytes);
+        let len = bridge.covers(bytes.len());
+        let batch = std::str::from_utf8(bridge.output_bytes(len as usize))
+            .unwrap()
+            .to_owned();
+        assert!(batch.contains("\"error\":null"), "{batch}");
+        batch
+    };
+    let f = |v: f32| v.to_bits();
+    let block = vec![readout, 4, f(300.0), f(44.0), f(1.0), f(1.0), 228];
+    let given = send(&mut bridge, [vec![head, 26, 0, 0, 0, 0], block].concat());
+    assert!(
+        !given.contains("\"font_size\":17"),
+        "a block alone is no bar item: {given}"
+    );
+    let item = send(&mut bridge, vec![readout, 27, f(1.0), 0, 0, 0]);
+    let sent = |batch: &str, size: &str| {
+        batch.split("{\"op\"").any(|op| {
+            op.contains(&format!("\"id\":{word},")) && op.contains(&format!("\"font_size\":{size}"))
+        })
+    };
+    assert!(
+        sent(&item, "17"),
+        "the word is sent in the bar's size: {item}"
+    );
+    let page = send(&mut bridge, vec![readout, 27, f(0.0), 0, 0, 0]);
+    assert!(
+        sent(&page, "30"),
+        "and in the page's once it is no item: {page}"
+    );
+}

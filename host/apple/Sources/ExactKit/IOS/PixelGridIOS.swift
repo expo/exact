@@ -169,8 +169,10 @@ extension Presenter {
         // A frame is set untransformed (UIKit's `frame` is undefined
         // under a transform); the presentation goes back on after.
         v.transform = .identity
-        v.frame = groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn
-        if v.reach != .zero, v.scrollView == nil { v.outsetByReach() }
+        // A box that does not scroll is drawn past its frame by its reach (LLP 1123 D13)
+        let reached = v.reached(place)
+        v.frame = reached?.frame ?? (groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn)
+        if let origin = reached?.origin ?? (v.reach != .zero && v.scrollView == nil ? .zero : nil), v.bounds.origin != origin { v.bounds.origin = origin }
         v.textRasterGeometryChanged()
         v.scroll?.frame = v.scrollFrame
         if v.fieldWaits, rect.width > 0 || rect.height > 0 { v.makeWaitingField() } // its box laid out (MenuHost.waitingFields)

@@ -484,17 +484,15 @@ fn family_arms(e: &Expr, visit: &mut dyn FnMut(&str, Span)) -> Result<(), LowerE
     Ok(())
 }
 
+pub(super) fn literal_template(value: &Expr) -> bool {
+    matches!(value, Expr::Template(parts, _) if parts.iter().all(|part| matches!(part,
+        contract_syntax::TemplatePart::Text(_) | contract_syntax::TemplatePart::Expr(Expr::Str(..)))))
+}
+
 fn fold_constant_families(value: &mut Expr, normalized: bool) {
+    let literal = literal_template(value);
     match value {
-        Expr::Template(parts, span)
-            if parts.iter().all(|part| {
-                matches!(
-                    part,
-                    contract_syntax::TemplatePart::Text(_)
-                        | contract_syntax::TemplatePart::Expr(Expr::Str(..))
-                )
-            }) =>
-        {
+        Expr::Template(parts, span) if literal => {
             let text = parts
                 .iter()
                 .map(|part| match part {

@@ -45,9 +45,10 @@ package final class ControlBars {
 
     /// D1: a shown, in-flow box with only its bar ride as a transform, with no
     /// background of the author's, holding at least one control and nothing
-    /// else but wrappers and captions. A control is taken whole; an image, a
-    /// picture, a native view, a scroller or a painted wrapper outside one
-    /// makes it no bar.
+    /// else but wrappers and captions. A control is taken whole, unless it
+    /// scrolls or holds a shown scroller; that control, or an image, a picture,
+    /// a native view, a scroller or a painted wrapper outside a control, makes
+    /// the box no bar.
     func isBar(_ box: NodeView) -> Bool {
         if let known = bars[ObjectIdentifier(box)] { return known }
         let placed = !box.isHidden && RouteGeometry.inFlow(box) && Self.onlyRide(box)
@@ -73,20 +74,38 @@ package final class ControlBars {
                 if painted(l.style) { return nil }
                 return (presenter.flats.children(of: id) ?? []).reduce(0) { sum, id in sum.flatMap { s in leaf(id).map { s + $0 } } }
             }
-            return presenter.views[id].flatMap(contents) ?? 0
+            // A child no longer here (a dialog in its sheet) is not the box's.
+            guard let view = presenter.views[id], view.isDescendant(of: n.container) else { return 0 }
+            return contents(view)
         }
         let answer: Int?
-        if n.isHidden || n.style["display"]?.string == "none" { answer = 0 }
-        else if isControl(n) { answer = 1 }
+        if Self.hidden(n) { answer = 0 }
+        // A control that scrolls or holds a shown scroller is content scrolled on its own, not a bar's control.
+        // UIKit's segmented control or tab bar is one control, whatever the tablist behind it says.
+        else if isControl(n) { answer = !presenter.segments.projects(n.id) && (Self.scrolls(n) || holdsScroller(n)) ? nil : 1 }
         // A wrapper is a plain box with no paint of its own: a text, an image, a picture, a canvas, a native
         // view or a scroller is not.
-        else if n.wrote("background_color") || n.scrollView != nil { answer = nil }
+        else if n.wrote("background_color") || Self.scrolls(n) { answer = nil }
         else if n.isParagraph { answer = 0 }
         else if n.kind != "view" { answer = nil }
         else if let ids = presenter.flats.children(of: n.id) { answer = ids.reduce(0) { sum, id in sum.flatMap { s in leaf(id).map { s + $0 } } } }
         else { answer = n.container.subviews.reduce(0) { sum, v in sum.flatMap { s in (v as? NodeView).map { contents($0).map { s + $0 } } ?? s } } }
         held[ObjectIdentifier(n)] = answer
         return answer
+    }
+
+    private static func hidden(_ n: NodeView) -> Bool { n.isHidden || n.style["display"]?.string == "none" }
+
+    /// Whether `n` is a scroller. A text's scroll view with nothing to scroll is its text, as a touch on it
+    /// is (`ScrollView.hitTest`): CSS makes one beside every `overflow-x: hidden`, so a truncating label
+    /// has one.
+    private static func scrolls(_ n: NodeView) -> Bool {
+        guard let sv = n.scrollView else { return false }
+        return !(n.isParagraph && (sv as? ScrollView)?.hasRange == false)
+    }
+
+    private func holdsScroller(_ n: NodeView) -> Bool {
+        NodeView.structural(n.container.subviews).contains { !Self.hidden($0) && (Self.scrolls($0) || holdsScroller($0)) }
     }
 
     /// A button, a link, a field, a `select`, a switch or a checkbox, a tab,
@@ -106,9 +125,17 @@ package final class ControlBars {
     /// when nothing is between them; nil when anything else is, or when `s` hides its
     /// edge effect on that side, as content must not run sharp under a bar there
     /// (LLP 1123 D14, `edgeEffectHidden`).
-    func bars(of s: NodeView, in c: NodeView, top: Bool) -> [NodeView]? {
+    func bars(of s: NodeView, in c: NodeView, top: Bool) -> [NodeView]? { lifts(of: s, in: c, top: top)?.map(\.bar) }
+
+    /// A bar and the sibling it is lifted over (D3).
+    package typealias Lift = (bar: NodeView, over: NodeView)
+
+    /// Those bars, each with the sibling it is lifted over (D3): `s`, or, for a
+    /// bar found a level up, the box at that level holding `s`. `s`'s own rank
+    /// means nothing in the bar's parent, so it cannot place the bar there.
+    func lifts(of s: NodeView, in c: NodeView, top: Bool) -> [Lift]? {
         if s.edgeEffectHidden(top ? .top : .bottom) { return nil }
-        var x = s, found: [NodeView] = []
+        var x = s, found: [Lift] = []
         while x !== c {
             var up = x.superview
             // Between nodes, a host view that clips (a clip box) or scrolls cuts the band off.
@@ -134,7 +161,7 @@ package final class ControlBars {
                 // floating button, over a composer).
                 guard abs(x.frame.minX - room.minX) <= 0.5, abs(x.frame.maxX - room.maxX) <= 0.5, x.props["flexGrows"] == "true" else { return nil }
             }
-            found += side
+            found += side.map { ($0, x) }
             // A box between the scroller and the container has no padding or border at that edge: a gap.
             if p !== c {
                 let content = p.contentBox()
@@ -172,17 +199,17 @@ package final class ControlBars {
         top ? x.frame.minY - x.number("margin_top") - room.minY <= 0.5 : room.maxY - x.frame.maxY - x.number("margin_bottom") <= 0.5
     }
 
-    /// Lift the bars above their scrollers' content and give each UIKit's edge
-    /// effect over its scroller (D3, D4); a bar no longer one, removed from
-    /// the tree included, goes back. A bar an authored `edge-effect` registers
+    /// Lift each bar over its sibling that holds its scroller (`lifts`) and give
+    /// it UIKit's edge effect over the scroller (D3, D4); a bar no longer one,
+    /// removed from the tree included, goes back. A bar an authored `edge-effect` registers
     /// (LLP 1123 D12) takes that registration instead, one with no scroller too.
-    static func sync(_ wanted: [(bar: NodeView, scroller: NodeView, edge: UIRectEdge)], in presenter: Presenter) {
+    static func sync(_ wanted: [(bar: NodeView, scroller: NodeView, over: NodeView, edge: UIRectEdge)], in presenter: Presenter) {
         guard let viewport = presenter.viewport as? Viewport else { return }
         var kept = Set<ObjectIdentifier>(), edges: [ObjectIdentifier: Edge] = [:]
         for w in wanted {
             kept.insert(ObjectIdentifier(w.bar))
             viewport.controlBars[ObjectIdentifier(w.bar)] = Weak(w.bar)
-            if w.bar.bandOver != w.scroller.paintRank { w.bar.bandOver = w.scroller.paintRank; if let p = w.bar.superview { PaintOrder.changed(p) } }
+            if w.bar.bandOver !== w.over { w.bar.bandOver = w.over; if let p = w.bar.superview { PaintOrder.changed(p) } }
             edges[ObjectIdentifier(w.bar)] = Edge(bar: w.bar, scrollView: w.scroller.scrollView, edge: w.edge)
         }
         for (key, held) in viewport.controlBars where !kept.contains(key) {

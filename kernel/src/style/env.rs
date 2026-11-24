@@ -396,6 +396,10 @@ pub struct Env {
     /// Optional per-size button fonts. Separate from `ControlTextStyles` so
     /// existing hosts' control-font struct literals remain source compatible.
     pub button_fonts: Option<crate::ButtonFonts>,
+    /// The font of a plain text bar item's title, which a readout the bar
+    /// hosts takes for what it leaves unsaid (LLP 1141.004 D3). None, on a
+    /// host that hosts no readout: page inheritance.
+    pub bar_item_font: Option<crate::ControlFont>,
     /// The window's own size, whatever is presented in it, on a host that
     /// lays the page out in a smaller viewport while a sheet is up (iOS,
     /// LLP 1075.003 §9.11): every viewport unit resolves against it
@@ -550,6 +554,7 @@ impl Env {
             cell_spaces: false,
             control_text_styles: None,
             button_fonts: None,
+            bar_item_font: None,
             screen: None,
             container: None,
             regions: None,
@@ -688,6 +693,10 @@ impl Env {
                 .control_text_styles
                 .as_ref()
                 .is_none_or(crate::ControlTextStyles::is_valid)
+            && self
+                .bar_item_font
+                .as_ref()
+                .is_none_or(|f| f.size.is_finite() && f.size > 0.0)
     }
 
     /// Whether the grid is well formed: both counts at least 1, and exactly

@@ -91,8 +91,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     private class ViewState {
         var view: View? = null
         var src: String? = null
-        var changes = 0
-        var reports = 0
+        var boundSrc: String? = null
         var shown = false
         /** The commits that last showed it and bound its `srcObject`, in whatever order their reports come: it
          * consumes under the less privileged of the two. */
@@ -219,8 +218,9 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             }
         }
         val v = state(id)
-        if (!props.has("srcObject")) v.src = ""
-        else props.optString("srcObject").let { if (it != v.src) { v.src = it; v.changes += 1 } }
+        val src = props.opt("srcObject") as? String
+        if (src != v.src && v.boundSrc == v.src) v.boundSrc = null
+        v.src = src
         reconcile(id)
     }
 
@@ -241,10 +241,10 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         reconcile(id)
     }
 
-    override fun bound(session: String, id: String, prop: String, cause: Cause) {
+    override fun bound(session: String, id: String, prop: String, value: Any?, cause: Cause) {
         if (prop != "srcObject") return
         val v = state(id)
-        v.reports += 1
+        v.boundSrc = value as? String
         v.boundBy = cause
         reconcile(id)
     }
@@ -254,9 +254,12 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     private fun reconcile(id: String) {
         val v = views[id] ?: return
         val src = v.src ?: ""
-        val want = v.view != null && v.shown && src.isNotEmpty() && v.reports >= v.changes && context.tracks.lookup(src)?.kind == "video"
-        v.sub?.let { if (!want || it.track != src) { blank(v); it.leave(); v.sub = null } }
-        v.sub?.let { if (want && !it.live && v.madeBy.app && !it.cause.app) { it.leave(); v.sub = null } }
+        val want = v.view != null && v.shown && src.isNotEmpty() && src == v.boundSrc && context.tracks.lookup(src)?.kind == "video"
+        v.sub?.let {
+            if (!want || it.track != src || it.cause.origin != v.madeBy.origin) {
+                blank(v); it.leave(); v.sub = null
+            }
+        }
         if (!want || v.sub != null) return
         val sub = Sub(src, v.madeBy)
         sub.onLive = { source -> show(v, sub, source) }

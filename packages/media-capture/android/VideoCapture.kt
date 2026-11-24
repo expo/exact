@@ -150,7 +150,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
         val t = tracks.getValue(id)
         t.enabled = enabled
         if (!enabled && t.leased) { release(t); mute(t, "idle") }
-        if (enabled && !t.leased && t.consumers.isNotEmpty() && t.readyState == "live") lease(t, cause)
+        if (enabled && !t.leased && cause.app) t.consumers.values.firstOrNull { it.app }?.let { lease(t, it) }
         announce()
         return shape(t)
     }
@@ -195,13 +195,22 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
 
     /** The activity stopped or started again: the capture's lifecycle follows, and its tracks mute `background`. */
     fun foreground(shown: Boolean) {
-        if (!context.agent) CameraCapture.foreground(shown)
+        if (context.agent) {
+            if (shown) tracks.values.forEach(::checkHolder)
+        } else CameraCapture.foreground(shown)
         for (t in tracks.values) {
             if (t.readyState != "live" || (!shown && !t.leased)) continue
             t.platformMute = if (shown) overlay else "background"
             // A recreated viewfinder can subscribe before the foreground request reaches this extension.
             if (shown && !t.leased && t.enabled) t.consumers.values.firstOrNull { it.app }?.let { lease(t, it) }
             if (t.leased) settle(t)
+        }
+    }
+
+    fun checkHolder(t: Track) {
+        if (t.leased && t.consumers.values.none { it.app }) {
+            release(t)
+            mute(t, "idle")
         }
     }
 
@@ -297,7 +306,7 @@ internal class VideoTracks(private val context: ExtensionContext, private val ne
 
     /** The camera for [t], under [cause]: only the app's own opens it (§14), here as at every other start. */
     private fun lease(t: Track, cause: Cause) {
-        if (t.leased || t.readyState != "live" || !cause.app) return
+        if (t.leased || t.readyState != "live" || !cause.app || !context.foreground) return
         if (!context.agent && !CameraCapture.lease(context.application, t, this)) {
             t.waiting = cause
             CameraCapture.wait(t, this)
@@ -462,7 +471,12 @@ internal object CameraCapture : VideoSource {
 
     fun rebind(next: String, rate: Double?) { selected = next; requestedFrameRate = rate; bind() }
 
-    fun foreground(shown: Boolean) { inFront = shown; started() }
+    fun foreground(shown: Boolean) {
+        // Every holder shares this CameraX lifecycle, including tracks from other owners.
+        if (shown) holders.toList().forEach { (track, owner) -> owner.checkHolder(track) }
+        inFront = shown
+        started()
+    }
 
     private fun started() {
         owner.registry.currentState = if (holders.isNotEmpty() && inFront) Lifecycle.State.STARTED else Lifecycle.State.CREATED

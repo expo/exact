@@ -421,7 +421,8 @@ typedef struct {
     const uint8_t *family; size_t family_len;
     uint16_t family_id; float size; uint16_t weight; uint8_t italic;
 } ExactControlFont;
-/* kind: 0 field/textarea, 1 mini, 2 small, 3 medium/default, 4 large button. */
+/* kind: 0 field/textarea, 1 mini, 2 small, 3 medium/default, 4 large button,
+ * 5 a plain bar item's title (LLP 1141.004 D3; size 0 where the host has none). */
 typedef ExactControlFont (*ExactControlTextFn)(void *ctx, uint8_t kind);
 /* kind: 0 field, 1 secure, 2 search, 3 textarea; plus 4 for a field in a
  * grouped list's row (LLP 1116.005 D2), borderless in its cell on iOS. */
@@ -1066,7 +1067,9 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
  * its detail), 2 under a pane over it, not live (the detail under the list
  * that overlays it, the columns under a sheet), 0 in its stack; then three
  * unused. Kind 24 gives a column header its track width in the first float.
- * NaN restores automatic sizing. */
+ * NaN restores automatic sizing. Kind 27 says whether a given block is a
+ * navigation bar's item (LLP 1141.004 D3): float 1 for one, 0 for none; then
+ * three unused. */
 uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as

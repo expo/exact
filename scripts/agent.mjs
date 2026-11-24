@@ -8,7 +8,8 @@
 //     from camera [over <ms> every <ms>] (a world's look frame, LLP 1127.000) | state <canvas> draws | look · state
 //     <canvas>:<entity> visible
 //   tap <target> [at <x> <y> (a press at a point; plain, it presses what it names) | wheel <dx> <dy> [gesture | fling |
-//     hold] [at <x> <y>] [modifiers <Control…>] | wheel 0 0 release | drop <path…> | dragenter <path…> | dragleave |
+//     hold] [at <x> <y>] [modifiers <Control…>] | wheel 0 0 release | drop [<path…>] [--text "…"] [--url "…"] |
+//     dragenter [<path…>] [--text "…"] [--url "…"] | dragleave |
 //     into <key> [block <v>] [inline <v>] | hover | hold-state active|hover|focus-visible|none | history <n> |
 //     {"history":n} | mouse | dblclick [touch] | contextmenu | auxclick | clicks <1-3> (each [at <x> <y>] [modifiers
 //     <Shift+Meta…>]) | modifiers <Shift+Meta…> | fingers <2-5> [at <x> <y>] |
@@ -84,7 +85,7 @@ import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkOp } from './agent-check.mjs';
 import { compareScreenshot, referenceNote, samplePoints } from './agent-compare.mjs';
-import { parseDrag, heldRead } from './agent-drag.mjs';
+import { dragInWords, parseDrag, heldRead } from './agent-drag.mjs';
 import { driveNotes, runTests, reloadWeb, fetchOrigins, loopbackOrigins, faultRequest } from './agent-test.mjs';
 import { phone } from '../host/apple/devices.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
@@ -305,8 +306,8 @@ export async function main(argv, injected = {}) {
             'fling',
             'hold] [at <x> <y>] [modifiers <Control…>]',
             'wheel 0 0 release',
-            'drop <path…> (files and folders)',
-            'dragenter <path…> (a drag of them held over it)',
+            'drop [<path…>] [--text "…"] [--url "…"] (files, folders, text and a link, at least one)',
+            'dragenter [<path…>] [--text "…"] [--url "…"] (that drag held over it)',
             'dragleave (it leaves undropped)',
             'hover',
             'hold-state active|hover|focus-visible|none (held by the host as the real state, until real input on it or none)',
@@ -551,6 +552,10 @@ export async function main(argv, injected = {}) {
           const tail = named ? named[3] : trimmed.replace(/^\S+\s+\S+\s+/, '');
           const drag = parseDrag(s, tail.replace(/^drag(?:\s+|$)/, ''));
           r = await s.tap(args[0], { drag });
+        } else if (['drop', 'dragenter'].includes(args[1]) && !s.contact) {
+          const tail = (named ? named[3] : trimmed.replace(/^\S+\s+\S+\s+/, '')).replace(/^\S+\s*/, '');
+          const [target, opts] = tapWords([args[0], args[1], ...dragInWords(tail)]);
+          r = await s.tap(target, opts);
         }
         // Every other form, strictly: the contact's phases (LLP 1035.003 D1) read as `tap move …`, `tap hold`,
         // `tap up`, `tap cancel` only while a contact is down; with none down those words are targets like any other.

@@ -4,7 +4,7 @@
 // those statements, the same maps and `cssText`, with `css`'s refusal read-back (A8), into one rule of
 // `<style id="exact-arms">` at three ids and a class: over every static class, under every `!important` rule.
 // That DOM work is once a site an arm, never an instance; after it the node's write is its class alone, cached.
-import { adopting, css, cssText, effect, normal, say, GPU_PLACEMENT } from "./rt.js";
+import { adopting, css, cssText, effect, normal, invalidStyle, GPU_PLACEMENT } from "./rt.js";
 
 let Arms = null;
 // What builds a rule's text besides the recipe: a host whose runtime changed (a reload under a kept document) starts the
@@ -16,7 +16,7 @@ const RUNTIME = "exact-runtime-unstamped";
 const HOST = RUNTIME !== "exact-runtime-unstamped" ? RUNTIME : `unstamped ${Math.random()} ${Date.now()}`;
 /** The rule `name` (`xa<digest>-<arm>`), built once: the arms sheet keeps what it holds across module reloads of the
  * same host. A test page (`__exactArmsCheck`) also checks that a name already built stood for the same content. */
-function rule(name, recipe, b) {
+function rule(name, recipe, b, e) {
   if (!Arms) {
     Arms = document.getElementById("exact-arms");
     if (!Arms) { Arms = document.createElement("style"); Arms.id = "exact-arms"; document.head.append(Arms); }
@@ -32,7 +32,7 @@ function rule(name, recipe, b) {
     const v = f(), t = cssText(prop, unit, v);
     if (t == null) return st.removeProperty(prop);
     if (prop.startsWith("--") || normal(prop, t)) return st.setProperty(prop, t);
-    st.setProperty(prop, "unset"); say(`unset ${prop}: ${JSON.stringify(v)} is not a value it takes`);
+    st.setProperty(prop, "unset"); invalidStyle(e, prop, v);
   }, b);
   // Only once its declarations are in: a recipe that throws leaves nothing cached.
   built.set(name, check ? `${recipe}\0${JSON.stringify(b)}` : true);
@@ -53,7 +53,7 @@ export function Pc(e, key, statics, name, values, props, recipe) {
       for (const p of props) { const w = now.get(p); css(e, p, w ? w[0] : "", w ? w[1] : null); }
       return;
     }
-    rule(`${name}-${k}`, recipe, values[k]);
+    rule(`${name}-${k}`, recipe, values[k], e);
     const placement = GPU_PLACEMENT && e.exactPlaced && props.includes("position") ? globalThis.exact?.gpu : null;
     placement?.beforeStyle(e);
     e.className = `${statics}${name}-${k}`;

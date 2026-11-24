@@ -4,6 +4,7 @@ import dev.exact.canvas.AudioSource
 import dev.exact.canvas.Cause
 import dev.exact.canvas.ExtensionContext
 import dev.exact.canvas.Native
+import dev.exact.canvas.TrackError
 import dev.exact.canvas.TrackConsumer
 import dev.exact.canvas.VideoSource
 import org.json.JSONObject
@@ -86,7 +87,7 @@ class MediaCaptureTest {
                 exact.camera.CameraModule.useCasesHatch = { hatches++; throw IllegalStateException("hatch refused") }
                 val view = camera.view("exact-camera", "1", id, context.application, JSONObject().put("srcObject", id)) { _, _ -> }
                 try {
-                    camera.bound("1", id, "srcObject", Cause("app"))
+                    camera.bound("1", id, "srcObject", id, Cause("app"))
                     camera.displayed("1", id, true, Cause("app"))
                     assertEquals(1, hatches)
                     assertEquals(if (alreadyLeased) 1 else 0, track.consumers.size)
@@ -357,7 +358,7 @@ class MediaCaptureTest {
         }
     }
 
-    @Test fun enablingAnUnleasedTrackBeforeForegroundDoesNotBlankItsNewVideo() {
+    @Test fun enablingAnUnleasedTrackWaitsForForeground() {
         val id = open()
         val consumer = Consumer()
         subscribe(id, consumer)
@@ -365,6 +366,7 @@ class MediaCaptureTest {
         foreground(false)
         consumer.events.clear()
         call("setTrackEnabled", JSONObject().put("track", id).put("enabled", true))
+        assertTrue(consumer.events.isEmpty())
         foreground(true)
         assertEquals(listOf("video", "unmuted"), consumer.events)
         assertFalse(state(id).getBoolean("muted"))
@@ -396,6 +398,92 @@ class MediaCaptureTest {
             videos.endAll("test ended")
             CameraCapture.foreground(true)
         }
+    }
+
+    @Test fun aPressThatExpiredAtTheTrackOwnerLeavesNoRecorderSubscribed() {
+        val id = open("audio")
+        val recorder = Consumer()
+        assertThrows(TrackError::class.java) {
+            context.tracks.subscribe(id, recorder, true, Cause("press", press = 7))
+        }
+        val level = Consumer()
+        context.tracks.subscribe(id, level, false, Cause("press", press = 7))
+        assertEquals(listOf("idle"), level.events)
+        val leave = subscribe(id, Consumer(), start = true)
+        assertTrue(recorder.events.isEmpty())
+        assertEquals("audio", level.events[1])
+        leave()
+    }
+
+    @Test fun aSuspendedMicrophoneRespectsTheRecognizersHold() {
+        val id = open("audio")
+        val leave = subscribe(id, Consumer(), start = true)
+        foreground(false)
+        val release = context.tracks.hold("audio")
+        foreground(true)
+        val enable = JSONObject().put("track", id).put("enabled", true)
+        call("setTrackEnabled", enable)
+        assertFalse(module.leased(id))
+        release()
+        call("setTrackEnabled", enable)
+        assertTrue(module.leased(id))
+        leave()
+    }
+
+    @Test
+    @Config(shadows = [dev.exact.canvas.ExtensionInvokeTest.Host::class])
+    fun returningOneOwnerChecksTheOtherOwnersCameraBeforeRestartingCameraX() {
+        val first = VideoTracks(context) { 1 }
+        val other = VideoTracks(context) { 2 }
+        val track = VideoTracks.Track("camera", "stream")
+        val tracks = org.robolectric.util.ReflectionHelpers.getField<MutableMap<String, VideoTracks.Track>>(other, "tracks")
+        tracks[track.id] = track
+        try {
+            val leaveApp = other.subscribe(track.id, Consumer(CameraCapture), false, Cause("app"))
+            other.subscribe(track.id, Consumer(CameraCapture), false, Cause("action"))
+            assertTrue(CameraCapture.holders.containsKey(track))
+            other.foreground(false)
+            leaveApp()
+            first.foreground(true)
+            assertFalse(CameraCapture.holders.containsKey(track))
+            assertFalse(track.leased)
+        } finally {
+            other.endAll("test ended")
+            CameraCapture.foreground(true)
+        }
+    }
+
+    @Test fun explicitEnableNeedsAConsumerThatMayOpenTheDevice() {
+        for (kind in listOf("audio", "video")) {
+            val id = open(kind)
+            val enable = JSONObject().put("track", id).put("enabled", true)
+            val leave = subscribe(id, Consumer(), "action")
+            call("setTrackEnabled", enable)
+            assertEquals("idle", state(id).getString("muteReason"))
+            if (kind == "audio") {
+                subscribe(id, Consumer(), start = true)()
+                leave()
+                val leaveLevel = subscribe(id, Consumer())
+                assertTrue(state(id).getBoolean("muted"))
+                call("setTrackEnabled", enable)
+                assertFalse(state(id).getBoolean("muted"))
+                leaveLevel()
+            } else leave()
+        }
+    }
+
+    @Test fun aCameraHeldBeforeBackgroundRequiresACurrentAppConsumerToResume() {
+        val id = open()
+        val leaveApp = subscribe(id, Consumer())
+        val leaveReader = subscribe(id, Consumer(), "action")
+        foreground(false)
+        leaveApp()
+        foreground(true)
+        assertEquals("idle", state(id).getString("muteReason"))
+        val leaveNewApp = subscribe(id, Consumer())
+        assertFalse(state(id).getBoolean("muted"))
+        leaveNewApp()
+        leaveReader()
     }
 
     @Test fun anExistingLeaseIsNotAcquiredTwice() {

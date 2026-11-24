@@ -417,6 +417,15 @@ package protocol LiftedNodes: AnyObject {
 /// A view that holds lifted nodes, which the focus search skips.
 package protocol HoldsLiftedNodes: UIView {}
 
+/// The view that holds a readout the navigation bar hosts (LLP 1141.004 D3).
+package protocol HoldsBarReadout: HoldsLiftedNodes {}
+
+extension NodeView {
+    /// The readout a navigation bar hosts that holds this node, itself
+    /// included; nil outside one.
+    package var barReadout: NodeView? { authoredLine.first { $0.superview is HoldsBarReadout } }
+}
+
 extension Presenter {
     /// The view above `view` in a pass over the layout: a lifted node's
     /// parent (LLP 1083.000 D4), else its superview.

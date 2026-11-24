@@ -45,6 +45,15 @@ final class BoxReachIOSTests: XCTestCase {
         p.setReach(2, .zero)
         XCTAssertEqual(box.frame, CGRect(x: 0, y: 100, width: 300, height: 120))
         XCTAssertEqual(box.bounds.origin, .zero)
+        // A fractional reach is drawn on the pixel grid, its laid-out box, its content box and its child
+        // where the grid drew them
+        p.setReach(2, UIEdgeInsets(top: 0.2, left: 0, bottom: 0, right: 0))
+        XCTAssertEqual(box.laidOutBox, CGRect(x: 0, y: 0, width: 300, height: 120))
+        XCTAssertEqual(box.layoutBounds.origin, .zero, "the content box pointers read from")
+        let moved = child.convert(child.bounds, to: window)
+        XCTAssertEqual(moved.minY, resting.minY, accuracy: 0.001, "its child where layout put it")
+        XCTAssertEqual(moved.height, resting.height, accuracy: 0.001)
+        p.setReach(2, .zero)
         // A box that starts to scroll keeps no reach of its own: its scroll view reaches instead
         p.setReach(2, UIEdgeInsets(top: 47, left: 0, bottom: 0, right: 0))
         p.apply(wireBatch([["op": "style", "id": 2, "style": ["overflow_y": "auto", "background_color": [51, 102, 153, 255]]]]))

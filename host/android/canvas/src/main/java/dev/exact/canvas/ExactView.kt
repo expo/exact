@@ -85,7 +85,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val stale = HashSet<Int>()
     /** Each scroller's rows, one RenderNode, moved (translated) on frames exact2 did not paint. */
     private val groups = HashMap<Int, android.graphics.RenderNode>()
-    private val nativeOrigins = PaintedOrigins()
+    internal val nativeOrigins = PaintedOrigins()
     /** The copies of [images], [animated] and [slots] a row recorded on the worker reads: shared by the rows a stream
      * records until the map changes (a fast fling records many rows a frame; a copy each cost the main thread ~5%). */
     private var picturesCopy: Map<Int, Bitmap>? = null
@@ -99,7 +99,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         relayer.memo = memo; relayer.layerScale = scale
         try { relayer.replayAt(c, IntBuffer.wrap(ops), 0, ops.size, ox, oy, node) } finally { relayer.memo = null; relayer.layerScale = 1f }
         node.endRecording()
-    }) { fonts[it] }.also { if (skipOffscreen) it.rowShows = Layers.RowShows { row -> rowShows(row) } }
+    }) { fonts[it] }.also { it.origins = nativeOrigins; if (skipOffscreen) it.rowShows = Layers.RowShows { row -> rowShows(row) } }
     /** layerbounds=0: layers' nodes cover everything, unclipped (each move or fade damages the window), to compare. */
     private val layerBounds = (context as Activity).intent.getStringExtra("layerbounds") != "0"
     private val bounds = Bounds().also { it.row = { id -> rows[id] } }
@@ -421,7 +421,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val owned = owner != null
         if (owned) takeOwned() else if (taken) taken = false else take()
         android.os.Trace.beginSection("exact replay")
-        ops?.let { main.replay(canvas, it, 0, it.limit()) }
+        ops?.let { main.replay(canvas, it, 0, it.limit()); nativeOrigins.publishing = false; natives?.placeFrames() }
         shared.draw(canvas)
         textSelection.draw(canvas)
         android.os.Trace.endSection()
@@ -604,8 +604,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private fun placeFeed() {
         nearNatives()
         val g = groups[feed] ?: return
-        g.translationX = feedBaseX
-        g.translationY = feedY()
+        nativeOrigins.translate(g, feedBaseX, feedY())
         // cover=1: how far the view reaches past the feed's drawn rows (px, either side), a trace counter.
         if (coverTrace && reach()) {
             val y = feedY()
@@ -964,7 +963,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private fun applyMove(stream: IntBuffer) {
         for (k in 0 until stream.get(1)) {
             val at = 2 + 3 * k
-            groups[stream.get(at)]?.let { it.translationX = f(stream, at + 1); it.translationY = f(stream, at + 2) }
+            groups[stream.get(at)]?.let { nativeOrigins.translate(it, f(stream, at + 1), f(stream, at + 2)) }
         }
     }
 
@@ -983,9 +982,9 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** A new paint: what it announces made, then replayed by [onDraw]. */
     private fun applyStream(stream: IntBuffer) {
-        shared.begin(stream)
-        streamFrame = true
-        for (g in groups.values) { g.translationX = 0f; g.translationY = 0f }
+        nativeOrigins.publishing = true
+        shared.begin(stream); streamFrame = true
+        for (g in groups.values) nativeOrigins.translate(g, 0f, 0f)
         ops = stream
         tookAt = System.nanoTime()
         android.os.Trace.beginSection("exact ingest")
@@ -1221,24 +1220,24 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     i += 2
                 }
                 30 -> {
-                    // A layer's drawing, after its matrix, pivot, base and dash phase index (16 words).
                     val id = b.get(i + 1); val len = b.get(i + 2)
                     if (!skipDefs) laterLayers[id]?.let { makeOne(it) }
+                    val body = i + 3 + Layers.HEADER_WORDS
                     layers.set(id, b, i + 3, len)
                     if (!skipDefs) layerDefs(b, i, len)
                     val node = layers.node(id)
                     // Its node only as big as its drawing (clipped to that): what HWUI damages as it moves and fades.
-                    if (layerBounds && bounds.measure(b, i + 20, i + 3 + len, measured)) {
+                    if (layerBounds && bounds.measure(b, body, i + 3 + len, measured)) {
                         measured.roundOut(placed); layers.place(id, placed)
                     } else layers.place(id, null)
                     // One shape has no text to rasterize again at each scale: it is scaled as it is drawn (a chart's
                     // pulse ring, in every row in view; flatalpha=0 to compare). The node's overlapping-rendering flag
                     // is left alone: a RenderNode's is off natively, and turning it on gave every fading layer an
                     // offscreen surface its own size (xheavy: 10 GB of graphics memory in bursts).
-                    layers.flat(id, flatAlpha && main.singleShape(b, i + 20, i + 3 + len))
+                    layers.flat(id, flatAlpha && main.singleShape(b, body, i + 3 + len))
                     slots.refill(Slots.layer(id))
                     val c = node.beginRecording()
-                    main.replayAt(c, b, i + 20, i + 3 + len, layers.originX(id), layers.originY(id), node)
+                    main.replayAt(c, b, body, i + 3 + len, layers.originX(id), layers.originY(id), node)
                     node.endRecording()
                     i += 3 + len
                 }
@@ -1287,8 +1286,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                 !pending.containsValue(previous)) rows.remove(previous) else null
             val into = again ?: node
             if (again != null) {
-                into.setPosition(0, 0, Math.ceil(f(b, i + 3).toDouble()).toInt(), Math.ceil(f(b, i + 4).toDouble()).toInt())
-                into.setClipToBounds(clip)
+                val resized = into.setPosition(0, 0, node.width, node.height)
+                if (into.setClipToBounds(clip) || resized) nativeOrigins.moved(into)
                 tokens[id] = tokens.remove(previous) ?: nextToken++
             } else tokens[id] = nextToken++
             val c = into.beginRecording()
@@ -1492,7 +1491,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val outerRow = ingestRow
         slotOwner = Slots.layer(id)
         ingestRow = layers.row(id)
-        val walk = { slots.again(slotOwner) { ingest(b, at + 20, at + 3 + len) } }
+        val walk = { slots.again(slotOwner) { ingest(b, at + 3 + Layers.HEADER_WORDS, at + 3 + len) } }
         natives?.layerAgain(id, walk) ?: walk()
         slotOwner = outer
         ingestRow = outerRow

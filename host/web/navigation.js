@@ -1,7 +1,7 @@
 export { liveById, sheetLeaves, panelsOf, overPage, pushingList, splitOf, unselected, unselectedForHead, routeFlags, historyURL, markBars, routeTitle, pageTitle, navigation, focusStack, shownStacks, holdRoutes } from "./navigation/routes.js";
 export { listRow, viewChildren, viewParent, listOwner, listItem, syncListItemRoles, unwrapListItem } from "./navigation/lists.js";
 export { afterPaint, afterPaintPieces, presenceLoader, animationClock, animationClocks } from "./navigation/motion.js";
-export { scrollFollowers, scrollDrag } from "./navigation/scroll.js";
+export { scrollFollowers, scrollDrag, scrollPadding } from "./navigation/scroll.js";
 export { declaredScheme, navigableURL, navigates, opaqueSandbox, dataURL, frameURL, pageGivenFiles, refuseURL, commitGuestOrigin, guestMessageAuthorized } from "./navigation/urls.js";
 export { renderMarkup } from "./navigation/markup.js";
 export { releaseAssets, devFirst } from "./navigation/assets.js";
