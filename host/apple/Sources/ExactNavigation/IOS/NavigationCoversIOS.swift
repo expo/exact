@@ -547,7 +547,8 @@ extension NavigationHost {
             else { wanted[c.node.id] = [safe.top, sides.right, safe.bottom, sides.left] }
         }
         if wantsWholeView, let view = presenter.session?.view, view.window != nil {
-            let safe = view.safeAreaInsets
+            // The agent's explicit size is drawn inside the view's safe area
+            let safe = ExactView.agentSize == nil ? view.safeAreaInsets : .zero
             wanted[nil] = [safe.top, safe.right, safe.bottom, safe.left]
         }
         defer { localInsets.wanted = wanted }

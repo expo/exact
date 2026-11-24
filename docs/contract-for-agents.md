@@ -227,8 +227,9 @@ another viewport, and a test's first step `size <w>x<h>` does the same for that 
 dragging the window's edge would: the browser's viewport, a macOS window, the
 Linux presenter (the driver's op also takes `resize <w> <h>`; a test step takes only
 `<w>x<h>`). iOS refuses a mid-drive `resize`; a size given at launch (`--size`, a
-test's `size` line) is laid out at that viewport with no safe-area insets, scaled to fit
-the app's frame (the safe area, unless the root covers the whole screen).
+test's `size` line) is laid out at that viewport, scaled to fit inside the device's safe
+area, so no safe-area inset, layout region or route's clearance is the device's, only
+what UIKit's bars cover. A fold is read where it crosses the viewport.
 `close`, an operation and a test step, presses the window's close button as ⌘W
 or the red button would (the agent's window is never key, so a typed ⌘W reaches
 nothing): the window asks its `beforeunload` first, and the reply says

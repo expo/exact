@@ -142,6 +142,44 @@ final class NavigationCollapseIOSTests: XCTestCase {
         }
     }
 
+    /// The agent's explicit size (`--size`) is drawn inside the device's safe area, so none of it is the page's: its
+    /// document has no inset and its route its bars' alone, at any scale. Without one they are the device's.
+    @MainActor
+    func testTheAgentsExplicitSizeHasNoneOfTheDevicesSafeArea() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a screen's safe area") }
+        defer { ExactView.agentSize = nil }
+        for size in [nil, CGSize(width: 390, height: 844), CGSize(width: 1180, height: 800), CGSize(width: 320, height: 480)] {
+            ExactView.agentSize = size
+            let session = try booted("EXACT_FIXTURE_PLAN", label: "agent-size")
+            let window = try XCTUnwrap(window), view = try XCTUnwrap(session.view), p = session.presenter
+            window.frame = scene.coordinateSpace.bounds
+            view.frame = try XCTUnwrap(window.rootViewController).view.bounds
+            view.layoutIfNeeded()
+            waitFor("the layout settles") { !Agent(session: session).nativeInFlight() }
+            let safe = view.safeAreaInsets, route = try XCTUnwrap(p.navigationHost.activeRoute), surface = route.surface
+            XCTAssertGreaterThan(safe.top + safe.bottom + safe.right, 0, "the device has a safe area")
+            p.navigationHost.reportCovers()
+            let document = p.navigationHost.localInsets.wanted[nil]
+            guard let size else {
+                XCTAssertEqual(document, [safe.top, safe.right, safe.bottom, safe.left], "the device's, at its own size")
+                window.isHidden = true
+                continue
+            }
+            XCTAssertEqual(p.insets, .zero, "\(size)")
+            XCTAssertEqual(document, [0, 0, 0, 0], "\(size)")
+            XCTAssertEqual(p.viewport.bounds.size, size)
+            XCTAssertTrue(view.bounds.inset(by: safe).insetBy(dx: -0.5, dy: -0.5).contains(p.viewport.frame), "\(size): \(p.viewport.frame) inside \(safe)")
+            XCTAssertEqual(p.documentHost.safeAreaInsets, .zero, "\(size): nothing of the device's reaches the document")
+            let bar = try XCTUnwrap(route.navigationController).navigationBar
+            XCTAssertEqual(surface.safeAreaInsets.top, bar.convert(bar.bounds, to: surface).maxY, accuracy: 0.5, "\(size): the bar's alone")
+            // UIKit can place a vertical bar of its own there (the iPhone Duo's, iOS 27.1 24A94232)
+            if !surface.traitCollection.placesVerticalBar {
+                XCTAssertEqual([surface.safeAreaInsets.left, surface.safeAreaInsets.right], [0, 0], "\(size)")
+            }
+            window.isHidden = true
+        }
+    }
+
     func testTopScrollerFollowsOnlyLaidOutNeutralWrappers() throws {
         let p = Presenter()
         let wrapper = NodeView(id: 1, kind: "view", presenter: p)

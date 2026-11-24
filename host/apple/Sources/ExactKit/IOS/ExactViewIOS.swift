@@ -366,6 +366,15 @@ public final class ExactView: UIView {
         return refused
     }
 
+    /// The agent's explicit viewport size (`--size`), shared with web/macOS/Linux
+    package static var agentSize: CGSize? = {
+        let env = ExactEnv.environment
+        guard env["EXACT_AGENT"] == "1", let width = Double(env["EXACT_WINDOW_WIDTH"] ?? ""),
+              let height = Double(env["EXACT_WINDOW_HEIGHT"] ?? ""),
+              width.isFinite, height.isFinite, width > 0, height > 0 else { return nil }
+        return CGSize(width: width, height: height)
+    }()
+
     /// Native routes keep the window's division regions. An ordinary page clips
     /// them to its layout viewport, or only the last row under visual resizing.
     private func underKeyboard(_ fold: ViewportFold, size: CGSize) -> ViewportFold {
@@ -465,9 +474,11 @@ public final class ExactView: UIView {
         // or not, as UIKit's do: a bar's material reaches under the status
         // bar. Its routes keep their content inside its safe area through
         // covers (LLP 1075.003 §3.5); `env()` stays what the page authored.
-        let whole = cover || presenter.navigation.wantsWholeView
+        // The agent's explicit size is drawn inside the safe area, where nothing of the device's overlaps the page.
+        let explicit = Self.agentSize
+        let whole = explicit == nil && (cover || presenter.navigation.wantsWholeView)
         var frame = whole ? bounds : bounds.inset(by: safe)
-        var insets = cover ? safe : .zero
+        var insets = whole && cover ? safe : .zero
         let keyboard = fitKeyboard(in: frame)
         if presenter.keyboardPolicy == "resizes-content", !presenter.navigation.wantsWholeView,
            let top = keyboard.top, top < frame.maxY, presenter.dialogs.top == nil {
@@ -500,21 +511,19 @@ public final class ExactView: UIView {
         // tops and lefts read
         let screenFrame = whole ? bounds : bounds.inset(by: safe)
         var screen: CGSize? = screenFrame.size
-        // The agent's explicit viewport size is shared with web/macOS/Linux.
-        // Fit those logical points into the device window; hit testing and
-        // captures still use the viewport's own coordinate system.
-        let env = ExactEnv.environment
+        // Fit the explicit size's logical points into the device window; hit
+        // testing and captures still use the viewport's own coordinate system.
         var regions: [CGFloat]? = nil
-        if env["EXACT_AGENT"] == "1", let width = Double(env["EXACT_WINDOW_WIDTH"] ?? ""),
-           let height = Double(env["EXACT_WINDOW_HEIGHT"] ?? ""),
-           width.isFinite, height.isFinite, width > 0, height > 0 {
-            size = CGSize(width: width, height: height)
+        // Where the window the kernel lays out in is drawn, which the fold is read against
+        var drawn = screenFrame
+        if let explicit {
+            size = explicit
             screen = size
             let scale = min(frame.width / size.width, frame.height / size.height)
             presenter.viewport.transform = CGAffineTransform(scaleX: scale, y: scale)
             presenter.viewport.bounds = CGRect(origin: .zero, size: size)
             presenter.viewport.center = CGPoint(x: frame.midX, y: frame.midY)
-            insets = .zero
+            drawn = presenter.viewport.frame
             setPageMargins(.zero)
         } else {
             presenter.viewport.transform = .identity
@@ -541,7 +550,7 @@ public final class ExactView: UIView {
         let bent = hingeStatus == 2
         // The window's, not a sheet's (LLP 1075.003 §9.11), or the agent's
         // on a device with none, under the keyboard.
-        let fold = Self.fold(of: self, viewport: screenFrame, size: screen ?? size, hingeBent: bent)
+        let fold = Self.fold(of: self, viewport: drawn, size: screen ?? size, hingeBent: bent)
         if fold.hasFold { presenter.hasFold = true }
         // Discard an override accepted before UIKit first reported the hardware fold
         if presenter.hasFold { agentFold = nil }
