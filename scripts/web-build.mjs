@@ -76,12 +76,12 @@ export function privateNativeBuild(app, kind) {
           }
         }
         if (checkInDrive) {
-          // Let buildFirst check the copied inputs after preparation. A cache for another backend would be refused
-          // there, so leave it out and start with an empty build directory.
+          // Let buildFirst check the copied inputs after preparation. For a backend mismatch, keep a fresh or
+          // plan-only stale build for buildFirst to refuse, and drop a native stale build so it can rebuild.
           const path = receiptPath(host, app), receipt = path && JSON.parse(readFileSync(path, 'utf8'));
           if (!Array.isArray(receipt?.build?.binary?.inputs)) throw new Error('native artifact has no input receipt');
-          try { refuseBackendOrigin(receipt.build, app); } catch { throw new Error('native artifact has another backend'); }
-          stale = true;
+          try { refuseBackendOrigin(receipt.build, app); }
+          catch { if (!apple().reusable) throw new Error('native artifact has another backend'); }
         } else {
           // Keep a stale build so the drive can name what changed and build over it.
           const status = host === 'windows' ? { kept: reusable() } : apple();
@@ -104,8 +104,8 @@ export function privateNativeBuild(app, kind) {
         rmSync(current, { recursive: true, force: true }); renameSync(stage, current);
       } finally { rmSync(stage, { recursive: true, force: true }); }
     }));
-  // A build over a kept stale one that failed (in signing, say) can leave a receipt that matches its sources: only a
-  // command that succeeded publishes it. `code` is the process's exit code (app-cli.mjs closes on 'exit').
+  // Apple drives publish with a successful build check. Other callers need a successful command to publish over a
+  // stale seed, since a failed build can leave a receipt that matches its sources.
   }, close(code = 0, checked) { if (!existsSync(directory)) return; try { if (!(stale && code)) keep(checked); } finally { rmSync(directory, { recursive: true, force: true }); } } };
 }
 

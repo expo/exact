@@ -24,6 +24,92 @@ function run(script, dir) {
   assert.equal(r.status, 0, r.stdout + r.stderr + (r.error ?? ''));
 }
 
+function withPlanBuild(script) {
+  const dir = fixture();
+  try { run(`
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import { createHash } from 'node:crypto';
+    import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+    import { dirname, resolve } from 'node:path';
+    import * as builds from './host/apple/build.mjs';
+    import * as devices from './host/apple/devices.mjs';
+    import { buildFirst, nativeBuild, planOverride } from './scripts/agent-build.mjs';
+    import { resolveApp } from './scripts/app.mjs';
+    import { linkedBakeDir } from './scripts/linked-plan.mjs';
+    const dir = process.env.EXACT_APP_DIR, app = resolveApp(dir);
+    const check = process.env.EXACT_BUILD_CHECK_OUT = resolve(dir, '.exact/checked');
+    process.env.EXACT_BAKE_OUTPUT = resolve(app.target, 'bake');
+    process.env.EXACT_UPDATE_TRUST = 'development';
+    const source = resolve(dir, 'source.swift'), contract = resolve(dir, 'app.contract');
+    const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+    const module = JSON.stringify({ appId: app.id, abi: 1, bytecodeVersion: 96 });
+    const write = (path, bytes) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes); };
+    const unexpected = () => assert.fail('the drive reached the native build or carrier');
+    mock.module('./host/apple/devices.mjs', () => ({ ...devices, simulator: unexpected }));
+    mock.module('./host/apple/build.mjs', () => ({ ...builds, assertAppleIdentity: unexpected }));
+    const setup = host => {
+      const paths = builds.appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
+      const linked = linkedBakeDir(process.env, host, paths.target);
+      write(source, 'before');
+      write(resolve(linked, 'app.plan'), 'original plan');
+      write(resolve(linked, 'app.module.json'), module);
+      if (host === 'macos') write(builds.appleRunBinary(app), 'executable');
+      const time = new Date(Date.now() + 60_000);
+      const receipt = { target: paths.target, started: time.toISOString(), build: { trust: 'development',
+        compat: { inputs: { platform: host }, embedded: { plan: { sha256: hash('original plan') } } },
+        binary: { inputs: [{ path: source, name: 'source.swift', sha256: hash('before') }], missing: [], directories: [] } } };
+      const receiptPath = resolve(paths.bundle, host === 'ios' ? 'receipt.json' : 'Contents/Resources/receipt.json');
+      write(receiptPath, JSON.stringify(receipt)); utimesSync(receiptPath, time, time);
+      utimesSync(contract, new Date(time.getTime() + 10_000), new Date(time.getTime() + 10_000));
+      const bake = async (app, into) => {
+        write(resolve(into, 'app.plan'), 'new plan');
+        write(resolve(into, 'app.module.json'), module);
+        write(resolve(into, 'app.hbc'), 'bytecode');
+        return { code: 0 };
+      };
+      return callback => buildFirst(host, app, { wait() {}, say() {}, build: unexpected,
+        bake: async (...args) => { const result = await bake(...args); callback?.(); return result; } });
+    };
+    ${script}
+  `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('a native edit during a plan bake prevents the startup check', () => withPlanBuild(`
+  const drive = setup('ios');
+  await assert.rejects(drive(() => write(source, 'changed during the bake')), /ios build is stale: .*source\\.swift/);
+  assert.ok(!existsSync(check));
+`));
+
+test.each(['ios', 'macos'])('%s refuses an explicit plan that displaces the checked override', host => withPlanBuild(`
+  const host = ${JSON.stringify(host)};
+  const open = host === 'ios' ? (await import('./scripts/agent-ios.mjs')).openIOS
+    : (await import('./scripts/agent-stdio.mjs')).openStdio;
+  const plan = resolve(dir, 'fixture.plan');
+  write(plan, 'bare plan');
+  utimesSync(plan, 1, 1);
+  assert.equal(await setup(host)(), 0);
+  process.env.EXACT_BUILD_CHECKED = readFileSync(check, 'utf8');
+  for (const options of [{ plan }, { env: { EXACT_PLAN: plan } }]) {
+    await assert.rejects(open({ host, app: dir, ...options }), error =>
+      error.stale === true && error.message.includes('the checked sources require the baked plan override'));
+  }
+`));
+
+test.each(['app.module.json', 'app.hbc', 'app.plan'])('a checked override requires %s as a file', name => withPlanBuild(`
+  assert.equal(await setup('ios')(), 0);
+  const checked = readFileSync(check, 'utf8'), plan = JSON.parse(checked).plan;
+  const state = () => nativeBuild('ios', app, { checked });
+  assert.equal(state().checked, true);
+  const name = ${JSON.stringify(name)}, file = resolve(dirname(plan), name);
+  rmSync(file);
+  if (name === 'app.plan') mkdirSync(file);
+  const missing = state();
+  assert.equal(missing.checked, undefined);
+  assert.ok(missing.changed.some(path => path.endsWith('app.contract')));
+  assert.equal(planOverride('ios', app, missing), null);
+`));
+
 test('test and agent carry one native startup check to every test file on iOS and macOS', () => {
   const dir = fixture();
   for (const name of ['one', 'two']) writeFileSync(resolve(dir, `${name}.test.contract`), 'test "opens"\n');
@@ -64,7 +150,7 @@ test('test and agent carry one native startup check to every test file on iOS an
   `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.skipIf(process.platform === 'win32')('a warm test ios run checks the seeded build once', () => {
+test.skipIf(process.platform === 'win32')('test ios checks a warm seed once, keeps a checked bake after test failure, and refuses a reusable seed for another backend', () => {
   const dir = fixture();
   try { run(`
     import assert from 'node:assert/strict';
@@ -74,42 +160,66 @@ test.skipIf(process.platform === 'win32')('a warm test ios run checks the seeded
     import * as shells from './scripts/app-shells.mjs';
     import * as launch from './scripts/agent-launch.mjs';
     import * as sweep from './scripts/sweep.mjs';
+    import { createHash } from 'node:crypto';
     import { appleArtifacts } from './host/apple/build.mjs';
     import { resolveApp } from './scripts/app.mjs';
-    import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+    import { linkedBakeDir } from './scripts/linked-plan.mjs';
+    import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
     import { basename, resolve } from 'node:path';
     const dir = process.env.EXACT_APP_DIR;
     process.env.CARGO_TARGET_DIR = resolve(dir, 'target');
+    process.env.EXACT_UPDATE_TRUST = 'development';
     const app = resolveApp(dir);
-    let checks = 0, launches = 0, builds = 0;
+    const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+    const origin = 'http://127.0.0.1:4400', other = 'http://127.0.0.1:4401';
+    const source = resolve(dir, 'source.swift'), contract = resolve(dir, 'app.contract');
+    const module = JSON.stringify({ appId: app.id, abi: 1, bytecodeVersion: 96 });
+    writeFileSync(resolve(dir, 'app.ts'), "export const origin = '" + origin + "';\\n");
+    writeFileSync(source, 'original native source');
+    let checks = 0, launches = 0, builds = 0, bakes = 0, testCode = 0;
     mock.module('./scripts/app-shells.mjs', () => ({ ...shells, platformOf: () => null }));
     mock.module('./scripts/sweep.mjs', () => ({ ...sweep, startSweep() {} }));
     const receiptChanges = launch.receiptChanges;
     mock.module('./scripts/agent-launch.mjs', () => ({ ...launch,
       receiptChanges(...args) { checks++; return receiptChanges(...args); },
     }));
-    const { buildFirst, nativeBuild, refuseBuild } = await import('./scripts/agent-build.mjs');
+    const { buildFirst, nativeBuild, planOverride, refuseBuild } = await import('./scripts/agent-build.mjs');
     const build = () => {
       builds++;
       const paths = appleArtifacts(app, { destination: 'ios-simulator' });
       const receipt = resolve(paths.bundle, 'receipt.json'), time = new Date(Date.now() + 60_000);
+      const linked = linkedBakeDir(process.env, 'ios', paths.target);
+      mkdirSync(linked, { recursive: true });
+      writeFileSync(resolve(linked, 'app.plan'), 'original plan');
+      writeFileSync(resolve(linked, 'app.module.json'), module);
       mkdirSync(paths.bundle, { recursive: true });
       writeFileSync(receipt, JSON.stringify({ target: paths.target, started: time.toISOString(),
-        build: { trust: 'development', binary: { inputs: [], missing: [], directories: [] } } }));
+        build: { trust: 'development', backendOrigin: process.env.EXACT_BACKEND_ORIGIN ?? origin,
+          compat: { inputs: { platform: 'ios' }, embedded: { plan: { sha256: hash('original plan') } } },
+          binary: { inputs: [{ path: source, name: 'source.swift', sha256: hash(readFileSync(source)) }], missing: [], directories: [] } } }));
       utimesSync(receipt, time, time);
+      return { code: 0, output: '' };
+    };
+    const bake = (app, into) => {
+      bakes++;
+      mkdirSync(into, { recursive: true });
+      writeFileSync(resolve(into, 'app.plan'), 'updated plan');
+      writeFileSync(resolve(into, 'app.module.json'), module);
+      writeFileSync(resolve(into, 'app.hbc'), 'bytecode');
       return { code: 0, output: '' };
     };
     mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
       const child = new EventEmitter();
       Promise.resolve().then(async () => {
         switch (basename(args[0])) {
-          case 'agent-build.mjs': return buildFirst('ios', app, { say() {}, wait() {}, build });
+          case 'agent-build.mjs': return buildFirst('ios', app, { say() {}, wait() {}, build, bake });
           case 'agent.mjs': {
             launches++;
             const state = nativeBuild('ios', app, { checked: options.env.EXACT_BUILD_CHECKED });
             assert.equal(state.checked, true);
-            refuseBuild('ios', state, app);
-            return 0;
+            if (state.plan) assert.equal(planOverride('ios', app, state)?.plan, state.plan);
+            else refuseBuild('ios', state, app);
+            return testCode;
           }
           default: assert.fail('unexpected subprocess: ' + args);
         }
@@ -117,20 +227,48 @@ test.skipIf(process.platform === 'win32')('a warm test ios run checks the seeded
       return child;
     } }));
     const { run } = await import('./scripts/app-cli.mjs');
-    const drive = async () => {
+    const drive = async (expected = 0, ...args) => {
       const listeners = process.listeners('exit');
-      const code = await run({ dir, name: app.name, exact2: process.cwd(), args: ['test', 'ios'] });
+      const code = await run({ dir, name: app.name, exact2: process.cwd(), args: ['test', 'ios', ...args] });
       for (const fn of process.listeners('exit').filter(fn => !listeners.includes(fn))) {
         process.off('exit', fn);
         fn(code);
       }
-      assert.equal(code, 0);
+      assert.equal(code, expected);
     };
     await drive();
     assert.equal(builds, 1);
     checks = launches = 0;
     await drive();
     assert.deepEqual({ checks, launches, builds }, { checks: 1, launches: 1, builds: 1 });
+
+    const cache = resolve(app.target, 'native-reuse', hash(app.dir).slice(0, 16), 'ios/development/current/artifact.json');
+    const before = readFileSync(cache, 'utf8');
+    await drive(1, '--backend', other);
+    assert.equal(readFileSync(cache, 'utf8'), before);
+    assert.equal(launches, 1);
+    writeFileSync(contract, 'component App\\n  text "changed"\\n');
+    const later = new Date(Date.now() + 120_000);
+    utimesSync(contract, later, later);
+    await drive(1, '--backend', other);
+    assert.equal(readFileSync(cache, 'utf8'), before);
+    assert.deepEqual({ launches, builds, bakes }, { launches: 1, builds: 1, bakes: 0 });
+
+    delete process.env.EXACT_BACKEND_ORIGIN;
+    testCode = 1;
+    await drive(1);
+    await drive(1);
+    assert.deepEqual({ launches, builds, bakes }, { launches: 3, builds: 1, bakes: 1 });
+    assert.notEqual(readFileSync(cache, 'utf8'), before);
+
+    const override = readFileSync(cache, 'utf8');
+    utimesSync(contract, 1, 1);
+    writeFileSync(source, 'changed native source');
+    await drive(1, '--backend', other);
+    assert.notEqual(readFileSync(cache, 'utf8'), override);
+    testCode = 0;
+    await drive(0, '--backend', other);
+    assert.deepEqual({ launches, builds, bakes }, { launches: 5, builds: 2, bakes: 1 });
   `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -164,7 +302,7 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     const counts = { check: 0, list: 0, boot: 0, keyboard: {}, container: {} }, settings = { A: '1', B: '0' }, assets = [];
     const states = { A: 'Shutdown', B: 'Booted' };
     let reinstall = false, failRestore = false, generation = 1, now = Date.now();
-    let failingBoot, replacement = 'A';
+    let failingBoot, transientBoot = false, failInstall = false, replacement = 'A';
     Date.now = () => now;
     const container = udid => resolve(dir, udid + '-' + generation + '.app');
     for (const udid of ['A', 'B']) mkdirSync(container(udid));
@@ -185,6 +323,9 @@ test('two iOS launches check once and look up each device once; reinstalls refre
         })) } }));
       }
       if (args[1] === failingBoot && args[2] === replacement) return { status: 1, stderr: 'device became unavailable' };
+      if (args[1] === 'boot' && transientBoot) {
+        transientBoot = false; return { status: 1, stderr: 'temporary boot failure' };
+      }
       if (args[1] === 'boot') { counts.boot++; states[args[2]] = 'Booted'; return result(); }
       if (args[1] === 'bootstatus' || args[1] === 'shutdown') return result();
       if (args[1] === 'get_app_container') {
@@ -240,6 +381,7 @@ test('two iOS launches check once and look up each device once; reinstalls refre
         : { install: reinstall },
     }));
     mock.module('./host/apple/build.mjs', () => ({ ...builds, install() {
+      if (failInstall) throw new Error('simctl install failed');
       generation++; mkdirSync(container(process.env.EXACT_SIM)); reinstall = false;
     } }));
     mock.module('./host/apple/touches.mjs', () => ({ ...touches, withAccessibilityRuntime: (udid, enabled, open) => open() }));
@@ -299,12 +441,27 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     assert.match(recovery.results[1].failures[0], /simulator launch exited/);
     assert.equal(settings.A, '1');
     const nextLaunch = await openIOS({ app: dir }); await nextLaunch.close();
-    assert.equal(counts.list, 3);
+    assert.equal(counts.list, 4);
     assert.equal(counts.boot, 2);
     assert.equal(counts.container.A, 4);
     assert.deepEqual(counts.keyboard.A, { read: 4, delete: 2, write: 2 });
     assert.equal(counts.check, 1);
     assert.ok(nativeBuild('ios', app).changed.some(path => path.endsWith('app.contract')), 'the next run sees the edit');
+
+    devices.forgetSimulator('A');
+    failInstall = reinstall = true;
+    const completed = [];
+    await assert.rejects(runTests({ host: 'ios', app: dir, file, atResult: test => completed.push(test.name) }), /simctl install failed/);
+    assert.deepEqual(completed, []);
+    failInstall = reinstall = false;
+
+    authored.push({ ...authored[0], name: 'after boot' });
+    const bootRecovery = await runTests({ host: 'ios', app: dir, file, atResult(test) {
+      if (test.name === 'first') { states.A = 'Shutdown'; transientBoot = true; }
+    } });
+    assert.deepEqual(bootRecovery.results.map(test => test.failures.length), [0, 1, 1, 0], JSON.stringify(bootRecovery.results));
+    assert.match(bootRecovery.results[2].failures[0], /simctl boot: temporary boot failure/);
+
     const dev = { udid: 'A', bootedHere: true }, record = resolve(records, 'A.json');
     const open = callback => withSoftwareKeyboard(dev, callback, { records });
     await assert.rejects(open(() => { throw new Error('open failed'); }), /open failed/);

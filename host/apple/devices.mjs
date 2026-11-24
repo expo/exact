@@ -373,8 +373,9 @@ export function simulators(set) {
 const saidSimulator = new Set(); // a verify opens a dozen sessions: the choice is said once
 export function simulator(pick = process.env.EXACT_SIM, options = {}) {
   const dev = chooseSimulator(pick, options);
+  const retryBoot = options.cached && evictedBoots.delete(dev.udid);
   try {
-    const booted = bootSimulator(dev);
+    const booted = bootSimulator(dev, retryBoot);
     if (options.cached) dev.state = 'Booted';
     return { ...booted };
   } catch (error) {
@@ -383,9 +384,11 @@ export function simulator(pick = process.env.EXACT_SIM, options = {}) {
   }
 }
 const driveSimulators = new Map();
+const evictedBoots = new Set();
 /** A failed launch may mean the device shut down. The next launch must ask simctl again. */
-export function forgetSimulator(udid) {
+export function forgetSimulator(udid, { retryBoot = false } = {}) {
   for (const [key, dev] of driveSimulators) if (dev.udid === udid) driveSimulators.delete(key);
+  if (retryBoot) evictedBoots.add(udid);
   chosenFrom = null;
   for (const record of keyboardNotes.keys()) if (basename(record) === `${udid}.json`) keyboardNotes.delete(record);
   saidKeyboard.delete(udid);
@@ -407,7 +410,7 @@ export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint
   const kept = cached && driveSimulators.get(key(pick));
   if (kept) {
     if (pick) remember(kept, lastUsed());
-    return kept;
+    return kept.state === 'Booted' ? { ...kept, cachedBooted: true } : kept;
   }
   const all = recentSimulators();
   const version = (d) => Number(/(?:iOS|tvOS)-(\d+)-(\d+)/.exec(d.runtime)?.slice(1).join('.') ?? 0);
@@ -439,12 +442,16 @@ export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint
   return dev;
 }
 /** `dev` booted and waited for; `bootedHere` when this call booted it, not when another process had just done so. */
-function bootSimulator(dev) {
+function bootSimulator(dev, retryBoot) {
   // Booted is a boot finished (Booting is its own state): only another waits, which costs a booted one 0.2–0.5 s.
   if (dev.state === 'Booted') return dev;
   chosenFrom = null;
   const b = read('xcrun', ['simctl', 'boot', dev.udid]);
-  if (b.status !== 0 && !/current state: Booted/.test(b.stderr)) throw new Error('simctl boot: ' + b.stderr);
+  if (b.status !== 0 && !/current state: Booted/.test(b.stderr)) {
+    const error = new Error('simctl boot: ' + b.stderr);
+    if (retryBoot) error.retrySimulator = true;
+    throw error;
+  }
   const s = read('xcrun', ['simctl', 'bootstatus', dev.udid, '-b']);
   // A simulator this call booted is not left running when its boot does not finish.
   if (s.status !== 0) { if (b.status === 0) read('xcrun', ['simctl', 'shutdown', dev.udid]); throw new Error('simctl bootstatus: ' + s.stderr); }

@@ -15,7 +15,7 @@
 // second), its plan, module and source map are kept beside the build, and the
 // driver launches the build with them as its launch generation (EXACT_PLAN),
 // the first boot a build that baked them would make. A run keeps its selected
-// plan while the checked receipt matches and the plan is still present.
+// plan while the checked receipt matches and the plan and module are present.
 //
 //   bun scripts/agent-build.mjs <ios|macos|windows> --app <name>
 
@@ -27,7 +27,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { slashRelative, within } from './paths.mjs';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
-import { compilerError, compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale } from './agent-launch.mjs';
+import { compilerError, compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale, staleError } from './agent-launch.mjs';
 import { CONFIG_JSON, DECLARATIONS, moduleGraph } from './module-graph.mjs';
 import { bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName, resolveApp, shaderWatchRoots } from './app.mjs';
 import { bakeTool, linkedBakeDir } from './linked-plan.mjs';
@@ -60,7 +60,7 @@ export function nativeBuild(host, app, { sample = false, checked = null, hashed 
   try { prior = checked ? JSON.parse(checked) : null; } catch { /* a malformed check requires a full check */ }
   const digest = receipt && (prior || hashed) ? digestOf(receipt) : null;
   const same = typeof prior?.receipt === 'string' && prior.receipt === digest
-    && (prior.plan === null || (typeof prior.plan === 'string' && existsSync(prior.plan)));
+    && (prior.plan === null || (typeof prior.plan === 'string' && overrideFilesPresent(prior.plan)));
   const changed = same ? [] : receiptChanges(receipt, app, { hashed: !!hashed && hashed === digest, launch });
   if (!ios && !sample && receipt) {
     const bundled = resolve(appleArtifacts(app).bundle, 'Contents/Resources/receipt.json');
@@ -128,6 +128,9 @@ export function refuseBuild(host, state, app, { sample = false } = {}) {
   const command = sample ? `bun host/apple/build.mjs${ios ? ' --ios' : ''} ${app.crate('apple')} --host` : rebuildCommand(app, ios ? 'ios' : 'mac');
   if (state.missing) throw new Error(`run ${command} first`);
   refuseBackendOrigin(state, app, command);
+  if (state.checked && state.plan && !state.changed.length) {
+    throw staleError(`${host} build is stale: the checked sources require the baked plan override; run ${command} before supplying another plan`);
+  }
   refuseStale(ios ? 'ios' : sample ? 'sample host' : 'macos', state.receipt, state.changed, command);
 }
 
@@ -257,6 +260,13 @@ export function planSources(app, graph = graphOf(app)) {
 /** Where a plan-only edit's bake is kept: beside the build it runs on. */
 export const overrideDir = (host, app) => resolve(appleArtifacts(app, host === 'ios' ? { destination: 'ios-simulator' } : {}).namespace, 'plan');
 
+function overrideFilesPresent(plan) {
+  const dir = dirname(plan);
+  try {
+    return [plan, resolve(dir, 'app.module.json'), resolve(dir, 'app.hbc')].every(file => statSync(file).isFile());
+  } catch { return false; }
+}
+
 /** The run's checked plan, or, for an unchecked build, an override whose receipt
  * and sources still match a plan-only edit. Returns null without an override. */
 export function planOverride(host, app, state, graph) {
@@ -267,8 +277,8 @@ export function planOverride(host, app, state, graph) {
   let record; try { record = JSON.parse(readFileSync(resolve(dir, 'override.json'), 'utf8')); } catch { return null; }
   if (record.version !== 1 || record.receipt !== digestOf(state.receipt)) return null;
   if (JSON.stringify(record.sources) !== JSON.stringify(planSources(app, graph))) return null;
-  if (!['app.plan', 'app.module.json', 'app.hbc'].every(file => existsSync(resolve(dir, file)))) return null;
-  return { plan: resolve(dir, 'app.plan'), dir };
+  const plan = resolve(dir, 'app.plan');
+  return overrideFilesPresent(plan) ? { plan, dir } : null;
 }
 
 /** The module receipt the build baked, found by the plan its receipt names:
@@ -321,7 +331,12 @@ async function bakePlan(app, out, log, host) {
  * `{ made }`; `{ failed }`, what the bake said (a build would fail on it too);
  * or `{ refusal }`, why the build needs a rebuild after all. */
 export async function makeOverride(host, app, state, { bake = bakePlan, log } = {}) {
-  let receipt; try { receipt = JSON.parse(readFileSync(state.receipt, 'utf8')); } catch { return { refusal: 'its receipt is unreadable' }; }
+  let receipt, digest;
+  try {
+    const bytes = readFileSync(state.receipt);
+    receipt = JSON.parse(bytes.toString('utf8'));
+    digest = createHash('sha256').update(bytes).digest('hex');
+  } catch { return { refusal: 'its receipt is unreadable' }; }
   const refused = buildRefusal(app, receipt);
   if (refused) return { refusal: refused };
   const dir = overrideDir(host, app), stage = `${dir}.${process.pid}.tmp`, sources = planSources(app);
@@ -334,7 +349,7 @@ export async function makeOverride(host, app, state, { bake = bakePlan, log } = 
     const why = moduleRefusal(builtModule(app, receipt), JSON.parse(readFileSync(resolve(stage, 'app.module.json'), 'utf8')));
     if (why) return { refusal: why };
     if (JSON.stringify(planSources(app)) !== JSON.stringify(sources)) return { refusal: 'the sources changed while the plan baked' };
-    writeFileSync(resolve(stage, 'override.json'), JSON.stringify({ version: 1, receipt: digestOf(state.receipt), sources, changed: state.changed }, null, 2) + '\n');
+    writeFileSync(resolve(stage, 'override.json'), JSON.stringify({ version: 1, receipt: digest, sources, changed: state.changed }, null, 2) + '\n');
     rmSync(dir, { recursive: true, force: true });
     renameSync(stage, dir);
     return { made: true, output };
@@ -434,10 +449,16 @@ export async function buildFirst(host, app, { say = line => console.error(line),
     if (override) return checked(override.plan);
     const log = resolve(app.dir, '.exact', `${host}-plan.log`), made = await makeOverride(host, app, state, { bake, log }), what = named(app, state.changed);
     if (made.made) {
+      const baked = nativeBuild(host, app), override = planOverride(host, app, baked);
+      if (!override) {
+        refuseBuild(host, baked, app);
+        return checked(null, baked.receipt);
+      }
+      refuseBackendOrigin(baked, app);
       // The euxy port timed four variants with `simctl launch`, each the installed plan.
       say(`${label(host)}: ${what} changed; running the new plan on the existing build (no native rebuild). Only the agent's drives run it: a launch outside them (\`simctl launch\`, the home screen) runs the installed plan, so \`bun exact.mjs ${host === 'ios' ? 'ios' : 'mac'}\` before timing one`);
       for (const line of warningLines(app.dir, host, compilerWarnings(made.output))) say(line);
-      return checked(resolve(overrideDir(host, app), 'app.plan'));
+      return checked(override.plan, baked.receipt);
     }
     if (made.failed) {
       say(`${made.failed}\nthe ${label(host)} plan did not bake (${what} changed), so nothing was driven; its whole log: ${shown(log)}`);

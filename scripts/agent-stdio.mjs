@@ -106,7 +106,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const childEnv = { ...process.env, ...extra };
   const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED, launch: childEnv }) : null;
   if (macBuild && !macBuild.missing) refuseBackendOrigin(macBuild, a);
-  const macPlan = macBuild && !plan && !sample ? planOverride('macos', a, macBuild) : null;
+  const macPlan = macBuild && !plan && !Object.hasOwn(extra, 'EXACT_PLAN') && !sample ? planOverride('macos', a, macBuild) : null;
   if (macPlan) plan = macPlan.plan; else if (macBuild) refuseBuild('macos', macBuild, a, { sample });
   const windowsRebuild = () => ownVerb(a, 'windows') ?? `bun host/windows/build.mjs ${a.crate('windows')}`;
   const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, reader) : linux ? linuxRebuild(a) : null;

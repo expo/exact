@@ -17,6 +17,7 @@ import {
   keepInstalledRelease,
   showSimulator,
   simulator,
+  simulators,
   forgetSimulator,
   displayAsIs,
   withDisplay,
@@ -59,7 +60,7 @@ export async function openIOS({
   const id = hostFixture ? `${a.id}.host` : a.id;
   // An app's exact.mjs builds first instead, or bakes a plan-only edit to run on this build (agent-build.mjs,
   // LLP 1116.003).
-  const override = plan || hostFixture ? null : planOverride('ios', a, built);
+  const override = plan || Object.hasOwn(extra, 'EXACT_PLAN') || hostFixture ? null : planOverride('ios', a, built);
   if (override) plan = override.plan;
   else refuseBuild('ios', built, a, { sample: hostFixture });
   const dev = simulator(undefined, { app: id, dir: a.dir, cached: true, hint: '--sim <udid|name> (or EXACT_SIM)' });
@@ -68,14 +69,20 @@ export async function openIOS({
       exclusiveIOS(dev.udid, id, () =>
         // An AX drive turns UIKit's accessibility runtime on for its launch (`withAccessibilityRuntime`).
         withAccessibilityRuntime(dev.udid, touch === 'agent' && ax, () => // `ax`, not a bool of it: verify's is 'try'
-          openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess }),
+          openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess }).catch(error => {
+            if (dev.cachedBooted) {
+              try {
+                if (simulators().find(d => d.udid === dev.udid)?.state !== 'Booted') error.retrySimulator = true;
+              } catch { /* preserve the launch error */ }
+            }
+            throw error;
+          }),
         ),
       ),
     );
   } catch (error) {
-    forgetSimulator(dev.udid);
+    forgetSimulator(dev.udid, { retryBoot: error.retrySimulator });
     for (const key of appContainers.keys()) if (JSON.parse(key)[0] === dev.udid) appContainers.delete(key);
-    error.retrySimulator = true;
     throw error;
   }
 }
