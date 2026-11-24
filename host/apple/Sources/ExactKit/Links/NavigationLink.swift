@@ -545,6 +545,8 @@ package protocol NavigationHosting: AnyObject {
     func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox]
     func backButtonBar(_ node: NodeView) -> UINavigationBar?
     func drawnSearch(_ node: NodeView) -> UITextField?
+    /// The control a shown route's search field is collapsed into, and its box; nil while the field itself shows.
+    func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect)?
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)?
     #if os(iOS)
     func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)?
@@ -851,6 +853,7 @@ package final class NoNavigation: NavigationHosting {
     package func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox] { [:] }
     package func backButtonBar(_ node: NodeView) -> UINavigationBar? { nil }
     package func drawnSearch(_ node: NodeView) -> UITextField? { nil }
+    package func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect)? { nil }
     package func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
     #if os(iOS)
     package func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)? { nil }
