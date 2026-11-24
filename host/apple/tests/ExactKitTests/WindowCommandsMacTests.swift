@@ -34,6 +34,63 @@ final class WindowCommandsMacTests: XCTestCase {
         XCTAssertFalse(ExactWindowCommands.perform("close", [], on: window) { said.append($0) }, "not a window command of these")
     }
 
+    func testBoundsPlaceAnEmbeddingAppsWindow() throws {
+        let window = NSWindow(contentRect: NSRect(x: 100, y: 120, width: 480, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let top = try XCTUnwrap(NSScreen.screens.first).frame.maxY
+        XCTAssertTrue(ExactWindowCommands.perform("setBounds", [[96, 140, 510, 302]], on: window) { XCTFail($0) })
+        waitForMainQueue()
+        XCTAssertEqual(window.frame, NSRect(x: 96, y: top - 442, width: 510, height: 302))
+    }
+
+    func testFloatingAndClickThroughChangeIndependently() {
+        let window = shown()
+        let spaces = window.collectionBehavior
+        func set(_ command: String, _ flag: Bool) {
+            XCTAssertTrue(ExactWindowCommands.perform(command, [flag], on: window) { XCTFail($0) })
+        }
+        set("setWindowAlwaysOnTop", true)
+        XCTAssertEqual(window.level, AgentLink.windowsBehind ? .agentBehind : .floating)
+        set("setWindowIgnoreMouseEvents", true)
+        set("setWindowAlwaysOnTop", false)
+        XCTAssertEqual(window.collectionBehavior, spaces)
+        XCTAssertTrue(window.ignoresMouseEvents)
+        XCTAssertEqual(window.level, AgentLink.windowsBehind ? .agentBehind : .normal)
+        set("setWindowIgnoreMouseEvents", false)
+        XCTAssertFalse(window.ignoresMouseEvents)
+    }
+
+    func testTimedOpacityTakesMillisecondsAndCanBeReplaced() {
+        let window = shown()
+        func fade(_ a: CGFloat, _ ms: Double) {
+            XCTAssertTrue(ExactWindowCommands.perform("setWindowOpacity", [a, ms], on: window) { XCTFail($0) })
+        }
+        fade(0.2, 500)
+        if ExactEnv.agentFreezes || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            XCTAssertEqual(window.alphaValue, 0.2, accuracy: 0.001)
+        } else {
+            waitFor("opacity animates") { window.alphaValue < 1 }
+            XCTAssertGreaterThan(window.alphaValue, 0.2)
+        }
+        fade(0.8, 0)
+        XCTAssertEqual(window.alphaValue, 0.8, accuracy: 0.001)
+    }
+
+    func testAspectRatioConstrainsContentAndZeroClearsIt() {
+        let window = shown()
+        XCTAssertTrue(ExactWindowCommands.perform("setAspectRatio", [16.0 / 9.0], on: window) { XCTFail($0) })
+        let ratio = window.contentAspectRatio
+        XCTAssertEqual(ratio.width / ratio.height, 16 / 9, accuracy: 0.00001)
+        var refusal = ""
+        XCTAssertTrue(ExactWindowCommands.perform("setAspectRatio", [-1], on: window) { refusal = $0 })
+        XCTAssertTrue(refusal.contains("setAspectRatio refused"))
+        XCTAssertEqual(window.contentAspectRatio, ratio)
+        XCTAssertTrue(ExactWindowCommands.perform("setAspectRatio", [0], on: window) { XCTFail($0) })
+        XCTAssertEqual(window.contentResizeIncrements, NSSize(width: 1, height: 1))
+        XCTAssertEqual(window.contentAspectRatio, .zero)
+    }
+
     /// LLP 1133.025 D4: `hideWindow()` puts away the window of an app that
     /// keeps running, as the person's close does (`PageFactsMacTests` holds
     /// what the page then reads), and showing it again is a restore. Where

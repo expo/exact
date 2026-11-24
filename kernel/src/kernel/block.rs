@@ -182,7 +182,14 @@ fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
     let band = std::array::from_fn(|e| if taken[e] { 0.0 } else { band[e] });
     let cover = super::keyboard::cover(arena, held.slot);
     match reservation::reserved(arena, held.slot) {
-        Some(r) => r.inside_covered(band, cover),
+        // Its additional insets as UIKit applied them where its host wrote and measured them, which a
+        // child controller's floor can hold short of a negative one, as the incoming band does (D11)
+        Some(mut r) => {
+            if let Some(effect) = arena.observations.root_effects.get(&held.slot) {
+                r.added = *effect;
+            }
+            r.inside_covered(band, cover)
+        }
         None => std::array::from_fn(|e| band[e].max(cover[e])),
     }
 }

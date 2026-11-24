@@ -234,6 +234,10 @@ pub const HOST_COMMANDS: &[&str] = &[
     // drawn at that opacity, 0 to 1, as Electron's `BrowserWindow.setOpacity`.
     // The Mac's; the web refuses it (a page has no window to fade).
     "setWindowOpacity",
+    "setWindowAlwaysOnTop",
+    "setWindowIgnoreMouseEvents",
+    "setBounds",
+    "setAspectRatio",
     // @ref LLP 1133.025 D4 — `hideWindow()`: the session's window is put
     // away as a person's close puts it away under `keepRunning` or a placed
     // status item, the app still running, as Electron's `BrowserWindow.hide`.

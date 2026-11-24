@@ -116,7 +116,7 @@ pub use lint::{lint, lint_unused};
 use lint::{unknown_attr, unknown_tag};
 pub use native::{is_module_tag, module_tags, CONTROL_PROPS};
 pub use native_typed::{DeclaredView, DeclaredViews, EVENT_MARKER};
-pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, Written};
+pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, SourceOutput, Written};
 pub use states::PRESS_OPACITY_TO;
 pub use swipe_rows::expand_row_deletes;
 pub use theme::vocab as forma_vocab;
@@ -234,7 +234,7 @@ pub(crate) fn prop_row(id: exact_kernel::PropId, expr: Code, written: bool) -> B
 
 pub(crate) struct Lowerer<'a> {
     pub b: PlanBuilder,
-    each_steps: &'a BTreeMap<u32, u32>,
+    source_places: Option<&'a contract_syntax::Expanded>,
     /// The app's theme, resolved (LLP 1095 D4).
     pub theme: Vec<theme::ThemeEntry>,
     sites: Option<Sites>,
@@ -374,12 +374,13 @@ pub fn lower_all(
     checked: &Checked<'_>,
     analysis: &Analysis,
     asset_root: Option<&Path>,
-    mapped: bool,
+    output: impl Into<SourceOutput>,
     profile: Profile,
     warned: Option<(&WarningSelection, &mut Vec<LowerError>)>,
 ) -> Result<(Plan, Option<Sites>), Vec<LowerError>> {
     exact_kernel::style::link_all();
-    if mapped && checked.expanded.instances.is_empty() {
+    let output = output.into();
+    if output == SourceOutput::Mapped && checked.expanded.instances.is_empty() {
         return Err(vec![LowerError {
             id: "lower-source-sites",
             message: "mapped lowering needs source provenance from `check_all(file, true)`".into(),
@@ -399,7 +400,7 @@ pub fn lower_all(
         checked,
         analysis,
         asset_root,
-        mapped,
+        output,
         profile,
         warned.as_ref().map(|_| &mut text_styles),
     );
@@ -431,14 +432,13 @@ fn lower_with_sites(
     checked: &Checked<'_>,
     _analysis: &Analysis,
     asset_root: Option<&Path>,
-    capture_sites: bool,
+    output: SourceOutput,
     profile: Profile,
     text_styles: Option<&mut warnings::TextStyles>,
 ) -> Result<(Plan, Option<Sites>), Vec<LowerError>> {
     // An earlier compile's targets and roles go first: lowering may stop
     // before the design is read, and the warnings still run.
     control_roles::unlowered();
-    // Keep the exact expansion whose root and row slots inference checked.
     let Checked {
         file,
         types,
@@ -451,11 +451,12 @@ fn lower_with_sites(
         .iter()
         .map(|f| contract_syntax::share_calls(&f.body, &is_fn))
         .collect();
+    let source_places = (output != SourceOutput::Comparison).then_some(ex);
     let mut l = Lowerer {
-        b: nodes::builder(ex),
-        each_steps: &ex.each_steps,
+        b: nodes::builder(source_places),
+        source_places,
         theme: Vec::new(),
-        sites: capture_sites.then(|| Sites::declared(ex)),
+        sites: (output == SourceOutput::Mapped).then(|| Sites::declared(ex)),
         text_styles,
         types,
         sharing: sharing::Sharing::new(ex),
@@ -1083,7 +1084,7 @@ impl<'a> Lowerer<'a> {
                 let (region, arms) =
                     self.b
                         .region(RegionKind::Each, parent, arm, order, subject, key, 1);
-                if let Some(&step) = self.each_steps.get(tag) {
+                if let Some(&step) = self.source_places.and_then(|ex| ex.each_steps.get(tag)) {
                     self.b
                         .set_region_place(region, exact_plan::PlaceStepsId(step));
                 }

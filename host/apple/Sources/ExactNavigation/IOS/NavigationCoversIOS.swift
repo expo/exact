@@ -58,7 +58,9 @@ extension NavigationHost {
         if let accessory = tabAccessory, let node = accessory.node, accessory.holds { owned.insert(node.id) }
         #endif
         let area = holder.convert(holder.bounds, to: root)
-        let before = besideOwner === owner ? besideInsets : .zero
+        let id = ContributionsIOS.Identity(node: root.id, operation: .containerClearance)
+        // What Exact's part did to the container's safe area, as measured, which UIKit's floor can hold
+        let before = besideOwner === owner && besideIdentity == id ? ContributionsIOS.existing(on: owner)?.effect(of: id) ?? .zero : .zero
         var changed = false, reach = UIEdgeInsets.zero, above: [NodeView] = []
         siblings.place(in: ownerMount(root))
         var walk = panelSiblings(in: area, routes: routes, drawn: drawn, skipping: owned, hidden: tabBarHidden)
@@ -111,14 +113,20 @@ extension NavigationHost {
         reach.right = max(0, reach.right - max(0, own.right - before.right))
         reach.bottom = max(0, bottom - max(0, own.bottom - before.bottom))
         if changed { PaintOrder.changed(ownerMount(root)) }
-        // Exact's part only: what an app's hatch set on its container stays
-        let now = owner.additionalSafeAreaInsets
-        let wanted = UIEdgeInsets(top: now.top - before.top + reach.top, left: now.left - before.left + reach.left,
-                                  bottom: now.bottom - before.bottom + reach.bottom, right: now.right - before.right + reach.right)
+        // Exact's part, on the container's ledger, what an app's hatch set there staying (LLP 1123 D11); a container
+        // or root replaced gives its part up under the identity it was written with
+        retireBeside(unless: owner, id)
         besideInsets = reach
-        besideOwner = owner
-        if now != wanted { owner.additionalSafeAreaInsets = wanted }
+        (besideOwner, besideIdentity) = (owner, id)
+        ContributionsIOS.of(owner).write(id, reach)
         return above
+    }
+
+    /// Takes Exact's part beside the routes off the container it was written to, unless that is `owner` under `id`.
+    func retireBeside(unless owner: UIViewController? = nil, _ id: ContributionsIOS.Identity? = nil) {
+        guard let old = besideOwner, let was = besideIdentity, old !== owner || was != id else { return }
+        ContributionsIOS.existing(on: old)?.write(was, .zero)
+        (besideOwner, besideIdentity, besideInsets) = (nil, nil, .zero)
     }
 
     /// The edges of the session's view that `node`, page content outside the routes, reaches where the page did not ask
@@ -353,12 +361,12 @@ extension NavigationHost {
         #if os(iOS)
         if #available(iOS 27.1, *) {
             // Keep the cover of a pane UIKit hid since the arrangement's last pass, as it owns no edge, until the next pass
-            for id in presenter.arrangements.hiddenPanes { wanted[id] = covers[id] }
+            for id in presenter.arrangements.hiddenPanes where presenter.uncovers(id) { wanted[id] = covers[id] }
         }
         wanted.merge(arrangedCovers) { _, whole in whole }
         #endif
         for (id, cover) in wanted where covers[id] != cover { changes.append((id, cover)) }
-        for id in covers.keys where wanted[id] == nil && presenter.draws(id) { changes.append((id, nil)) }
+        for id in covers.keys where wanted[id] == nil && presenter.uncovers(id) { changes.append((id, nil)) }
         covers = wanted
         let locals = reportLocalInsets()
         guard !changes.isEmpty || locals else { return writeCarriedScrollsWhenAnswered() }
@@ -380,7 +388,7 @@ extension NavigationHost {
     /// The panes a native arrangement hides: each takes no room.
     var arrangedCovers: [UInt32: HostCover] {
         guard #available(iOS 27.1, *) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: presenter.arrangements.hidden.filter { presenter.views[$0] != nil }.map { ($0, HostCover.whole) })
+        return Dictionary(uniqueKeysWithValues: presenter.arrangements.covered.map { ($0, HostCover.whole) })
     }
     #endif
 
@@ -476,7 +484,7 @@ extension NavigationHost {
     private func untoldCovers() -> [(UInt32, HostCover?)] {
         var changes: [(UInt32, HostCover?)] = []
         for (id, cover) in covers where delivered[id] != cover { changes.append((id, cover)) }
-        for id in delivered.keys where covers[id] == nil && presenter.draws(id) { changes.append((id, nil)) }
+        for id in delivered.keys where covers[id] == nil && presenter.uncovers(id) { changes.append((id, nil)) }
         return changes
     }
 
@@ -547,7 +555,8 @@ extension NavigationHost {
             else { wanted[c.node.id] = [safe.top, sides.right, safe.bottom, sides.left] }
         }
         if wantsWholeView, let view = presenter.session?.view, view.window != nil {
-            let safe = view.safeAreaInsets
+            // The agent's explicit size is drawn inside the view's safe area
+            let safe = ExactView.agentSize == nil ? view.safeAreaInsets : .zero
             wanted[nil] = [safe.top, safe.right, safe.bottom, safe.left]
         }
         defer { localInsets.wanted = wanted }

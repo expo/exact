@@ -227,6 +227,7 @@ impl<D: DataSource> Presenter<D> {
                     floats.extend(c.args.first().and_then(exact_plan::Value::as_str).map(str::to_owned));
                 }
                 // A window that fades or leaves full screen is the Mac's so far (LLP 1069.010).
+                name @ ("setBounds" | "setAspectRatio" | "setWindowAlwaysOnTop" | "setWindowIgnoreMouseEvents") => self.host.log(format!("{name} refused: supported on macOS only")),
                 name @ ("exitFullscreen" | "setWindowOpacity") => self
                     .host
                     .log(format!("{name} refused: the window's full screen and opacity are on the Mac host only")),

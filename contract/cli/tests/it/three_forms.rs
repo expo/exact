@@ -1,9 +1,13 @@
 //! LLP 1116.017: the three forms the compiler accepts, each compiled to the
-//! plan of the form it means, byte for byte.
+//! plan of the form it means, byte for byte with source places omitted.
+
+use contract::{compile_for_comparison, ComparisonInput::Text as ComparisonText};
 
 fn same(written: &str, means: &str) {
-    let a = contract::compile(written).unwrap_or_else(|e| panic!("{e}\n{written}"));
-    let b = contract::compile(means).unwrap_or_else(|e| panic!("{e}\n{means}"));
+    let a = compile_for_comparison(ComparisonText(written))
+        .unwrap_or_else(|e| panic!("{e}\n{written}"));
+    let b =
+        compile_for_comparison(ComparisonText(means)).unwrap_or_else(|e| panic!("{e}\n{means}"));
     assert_eq!(a.encode(), b.encode(), "\n{written}\nis not\n{means}");
 }
 

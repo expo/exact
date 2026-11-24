@@ -58,6 +58,12 @@
     "WindowManagementStatus": {
       "available": "bool",
       "state": "enum<granted|prompt|denied>"
+    },
+    "WindowBounds": {
+      "screenX": "number",
+      "screenY": "number",
+      "outerWidth": "number",
+      "outerHeight": "number"
     }
   },
   "names": [
@@ -143,6 +149,29 @@
           "ios",
           "android",
           "tvos",
+          "terminal"
+        ]
+      }
+    },
+    {
+      "send": "getWindowBounds",
+      "answers": "WindowBounds",
+      "substitute": {
+        "from": "getWindowBounds",
+        "default": {
+          "screenX": 0,
+          "screenY": 0,
+          "outerWidth": 420,
+          "outerHeight": 860
+        },
+        "unsupported": [
+          "linux",
+          "windows",
+          "ios",
+          "android",
+          "tvos",
+          "watchos",
+          "visionos",
           "terminal"
         ]
       }

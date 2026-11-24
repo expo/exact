@@ -1192,7 +1192,7 @@ fn leaving_with(arena: &NodeArena, slot: u32) -> Option<&exact_motion::Animation
 
 /// Push the arena's child list for `parent` into the layout engine. A `Text`
 /// parent's children are inline runs: they are measured with it, not laid out.
-fn sync_children(arena: &NodeArena, layout: &mut dyn LayoutMirror, parent: u32) {
+pub(crate) fn sync_children(arena: &NodeArena, layout: &mut dyn LayoutMirror, parent: u32) {
     let Some(node) = arena.taffy(parent) else {
         return;
     };

@@ -32,6 +32,12 @@ public final class WindowManagementModule: ExactPackage {
             case "getScreenDetails":
                 watch()
                 reply(details())
+            case "getWindowBounds":
+                guard let window else {
+                    return reply(["error": "InvalidStateError", "message": "getWindowBounds needs a session window"])
+                }
+                let rect = flipped(window.frame)
+                reply(["screenX": rect[0], "screenY": rect[1], "outerWidth": rect[2], "outerHeight": rect[3]])
             case "getPointerPosition":
                 reply(pointer())
             case "windowManagementStatus":

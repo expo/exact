@@ -755,6 +755,7 @@ function inputFixture() {
     removeEventListener(kind, fn) { windowListeners.set(kind, (windowListeners.get(kind) ?? []).filter(g => g !== fn)); },
   });
   f.host = f;
+  f.window = f;
   el.ownerDocument = f.document;
   inputScript.runInContext(f);
   expect(typeof f.exact.backButton).toBe('function');

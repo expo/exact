@@ -6,7 +6,22 @@
 //! `openURL`'s answer, the element that hears whether the URL opened.
 
 use crate::json::{error, field_str};
-use crate::{DataSource, Runner};
+use crate::local_network::Reach;
+use crate::{DataSource, Runner, Value};
+use exact_kernel::ViewId;
+
+/// A host-facing effect an action asked for; executed after commit, in order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Command {
+    /// A bare `focus()` carries the issuing work's reach to the window host.
+    pub window_reach: Option<Reach>,
+    /// The capability name.
+    pub name: String,
+    /// Its arguments.
+    pub args: Vec<Value>,
+    /// The node whose input ran the action, when a host event did: where a command that shows system UI anchors it (LLP 1069.003 D3). `None` for a timer, an answer, or anything else no input dispatched.
+    pub source: Option<ViewId>,
+}
 
 /// `{"command":"share"|"saveFile",…}`: the named command's ruling, as its
 /// module's `request` writes it.

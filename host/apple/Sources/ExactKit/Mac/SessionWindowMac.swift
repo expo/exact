@@ -15,13 +15,16 @@ import ExactCore
 /// any means, wins. A window that is not on screen shows no steps and takes
 /// its frame at once.
 open class ExactSessionWindow: NSWindow {
+    /// The requested level while a test drive keeps every window behind other apps.
+    public internal(set) var requestedFloating = false
+
     open override func setFrame(_ frameRect: NSRect, display flag: Bool, animate animateFlag: Bool) {
         guard animateFlag, isVisible, Owner.shared.isServingMain else {
             return super.setFrame(frameRect, display: flag, animate: animateFlag)
         }
-        let asked = frame
+        let asked = frame, ticket = placement.begin(on: self)
         DispatchQueue.main.async { [weak self] in
-            guard let self, frame == asked else { return }
+            guard let self, placement.isCurrent(ticket), frame == asked else { return }
             setFrame(frameRect, display: flag, animate: true)
         }
     }

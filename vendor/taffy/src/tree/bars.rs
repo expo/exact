@@ -69,6 +69,10 @@ where
         let known = inputs.known_dimensions;
         let (bars, taken, mut contribution, held) =
             self.measure_bars(key, known, inputs.available_space, border, inset, rtl);
+        // A scroller's bars lie on its scrollport and do not scroll: its content keeps its own
+        // padding and extent, and the bars are its inset, not its content's (LLP 1123 D12)
+        let scrollport = placed_style.rare.bar_scrollport;
+        let taken = if scrollport { Rect::ZERO } else { taken };
 
         // In flow, the bars reserve as padding
         let mut barred = (*placed_style).clone();
@@ -139,9 +143,10 @@ where
         if inputs.run_mode == RunMode::PerformLayout {
             let scroller = placed_style.overflow.x.is_scroll_container() || placed_style.overflow.y.is_scroll_container();
             let _overflow = self.place_bars(&bars, output.size, border, inset, rtl, scroller);
-            // The absolute pass leaves the bars out of the overflow; each adds its own at its slot
+            // The absolute pass leaves the bars out of the overflow; each adds its own at its slot,
+            // but a scroller's, which do not scroll
             #[cfg(feature = "content_size")]
-            {
+            if !scrollport {
                 output.scrollable_overflow_rect = output.scrollable_overflow_rect.union(_overflow);
             }
         }

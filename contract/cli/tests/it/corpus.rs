@@ -1171,6 +1171,11 @@ fn css_line_height_literals_and_dynamic_lengths_use_the_existing_value_grammar()
 
 #[test]
 fn inlined_literal_string_templates_cost_the_same_as_literal_text() {
+    let bytes = |src: &str| {
+        contract::compile_for_comparison(contract::ComparisonInput::Text(src))
+            .unwrap()
+            .encode()
+    };
     let source = |body: &str| format!("component App\n  view\n    {body}\n");
     for (template, literal) in [
         (r#"`hello ${"世界"}!`"#, r#""hello 世界!""#),
@@ -1178,12 +1183,8 @@ fn inlined_literal_string_templates_cost_the_same_as_literal_text() {
         (r#"``"#, r#""""#),
     ] {
         assert_eq!(
-            contract::compile(&source(&format!("text {template}")))
-                .unwrap()
-                .encode(),
-            contract::compile(&source(&format!("text {literal}")))
-                .unwrap()
-                .encode()
+            bytes(&source(&format!("text {template}"))),
+            bytes(&source(&format!("text {literal}")))
         );
     }
     let reused = r#"component App
@@ -1196,10 +1197,7 @@ component Label
     text "dot" testId=`${prefix}-dot-0`
 "#;
     let literal = source(r#"text "dot" testId="reply-typing-dot-0""#);
-    assert_eq!(
-        contract::compile(reused).unwrap().encode(),
-        contract::compile(&literal).unwrap().encode()
-    );
+    assert_eq!(bytes(reused), bytes(&literal));
 }
 
 #[test]

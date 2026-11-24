@@ -193,16 +193,7 @@ pub use router::{launch_matches, routing, RouterChange, Routing};
 pub use split::{press_writes_router, RouteInspector, StackSplit};
 pub use uploads::{UploadEnd, UploadMark};
 
-/// A host-facing effect an action asked for; executed after commit, in order.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Command {
-    /// The capability name.
-    pub name: String,
-    /// Its arguments.
-    pub args: Vec<Value>,
-    /// The node whose input ran the action, when a host event did: where a command that shows system UI anchors it (LLP 1069.003 D3). `None` for a timer, an answer, or anything else no input dispatched.
-    pub source: Option<ViewId>,
-}
+pub use crate::commands::Command;
 
 #[derive(Clone)]
 #[cfg_attr(test, derive(Debug))]

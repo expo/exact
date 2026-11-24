@@ -592,6 +592,8 @@ impl<D: DataSource> Runner<D> {
         }
         for (name, args) in outcome.commands {
             self.commands.push(Command {
+                window_reach: (name == "focus" && args.is_empty())
+                    .then(|| self.reach_of(self.cause())),
                 name,
                 args,
                 source: self.input_source,

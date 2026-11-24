@@ -7,7 +7,7 @@
 //! converts their frame into each owner's coordinates (D7, "What the host
 //! reports"), so nothing here is a measurement of the kernel's: a frame, a
 //! docked state and a policy, each as reported.
-use super::area::{scroll_axes, scroll_view, Space};
+use super::area::{scroll_axes, Space};
 use super::block::BlockAxis;
 use super::{ignore, Kernel};
 use crate::arena::NodeArena;
@@ -166,10 +166,13 @@ fn past_scrollers(arena: &NodeArena, slot: u32, space: &Space, depth: f32) -> bo
     let mut above = (space.root != Some(slot))
         .then(|| arena.parent(slot))
         .flatten();
+    let mut via = slot;
     while let Some(s) = above {
-        if scroll_view(arena, s) && !passes(arena, s, space, depth) {
+        // A scroller's bar lies on its scrollport, on the incoming side of what it takes (D12)
+        if super::area::takes_from(arena, s, via) && !passes(arena, s, space, depth) {
             return false;
         }
+        via = s;
         above = (space.root != Some(s)).then(|| arena.parent(s)).flatten();
     }
     true

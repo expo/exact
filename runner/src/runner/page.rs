@@ -84,10 +84,9 @@ impl<D: DataSource> Runner<D> {
         self.as_person(|r| r.set_presented(presented))
     }
 
-    /// Run `f`, a host's report of what the person sees, as the app's while
-    /// the page shows (LLP 1133.023 D7a), until each report takes the cause
-    /// of the commit that made what it observes; else under the cause
-    /// installed, so a wake's hidden boot is not the person's.
+    /// A host observation runs as the app's while the page shows (LLP 1133.023
+    /// D7a). A hidden page keeps the installed cause, such as its booting wake's.
+    /// Outside other work a hidden observation has no cause or grant.
     pub(in crate::runner) fn as_shown<T>(
         &mut self,
         shown: bool,

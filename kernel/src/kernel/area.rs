@@ -84,12 +84,22 @@ pub(super) fn area_holding(
     while let Some(s) = above {
         let r =
             (observations.held_reservation(s)).unwrap_or_else(|| reservation::reserved(arena, s));
+        // On its bars' edges a scroller's inset clears all that lies outside its innermost slot,
+        // its bars and its own reservations included, so its content observes none of it there;
+        // one of its bars lies on the incoming side of its cutoff, observing the earlier ones
+        // (D12, D9)
+        let cuts = takes_from(arena, s, via);
+        let barred = match cuts {
+            true => super::bar::edges(arena, s),
+            false => [false; 4],
+        };
         let bars = super::bar::reserved(arena, s, Some(via));
         if r.is_some() || bars != [0.0; 4] {
-            reserving.push((s, r.unwrap_or_default(), bars, open));
+            let at: [bool; 4] = std::array::from_fn(|e| open[e] && !barred[e]);
+            reserving.push((s, r.unwrap_or_default(), bars, at));
         }
         via = s;
-        if scroll_view(arena, s) {
+        if cuts {
             open = scrolled(arena, s, space, band, open);
             if !open.contains(&true) {
                 break;
@@ -182,6 +192,19 @@ impl Space {
         let ((width, height), f) = (self.size, arena.frame(slot));
         let (x, y) = (f.x + self.origin.0, f.y + self.origin.1);
         [y, width - x - f.width, height - y - f.height, x]
+    }
+
+    /// How far in from this space's edge `e` the inner side of a bar's slot lies, its rectangle
+    /// `rect` x, y, width and height in the layout's space (`bar::Slot`).
+    pub(super) fn slot_inner(&self, rect: [f32; 4], e: usize) -> f32 {
+        let ((width, height), (ox, oy)) = (self.size, self.origin);
+        let [x, y, w, h] = [rect[0] + ox, rect[1] + oy, rect[2], rect[3]];
+        match e {
+            0 => y + h,
+            1 => width - x,
+            2 => height - y,
+            _ => x + w,
+        }
     }
 
     /// [`Self::edges`] for `slot`'s padding edges, inside its border.
@@ -277,9 +300,9 @@ pub(super) fn open_edges(arena: &NodeArena, slot: u32, space: &Space, band: [f32
     if space.root == Some(slot) {
         return open;
     }
-    let mut at = arena.parent(slot);
+    let (mut at, mut via) = (arena.parent(slot), slot);
     while let Some(s) = at {
-        if scroll_view(arena, s) {
+        if takes_from(arena, s, via) {
             open = scrolled(arena, s, space, band, open);
             if !open.contains(&true) {
                 break;
@@ -288,9 +311,15 @@ pub(super) fn open_edges(arena: &NodeArena, slot: u32, space: &Space, band: [f32
         if space.root == Some(s) {
             break;
         }
-        at = arena.parent(s);
+        (at, via) = (arena.parent(s), s);
     }
     open
+}
+
+/// Whether `slot` is a scroller that takes the area from its child `via`: `via` is in its
+/// scrolling content, not one of its bars, which lie on its scrollport (D12).
+pub(super) fn takes_from(arena: &NodeArena, slot: u32, via: u32) -> bool {
+    scroll_view(arena, slot) && super::bar::edge(arena, via).is_none()
 }
 
 /// `open` less the edges the scroller `slot` takes the area on (D9).
@@ -307,15 +336,17 @@ pub(super) fn scrolled(
 
 /// The edges on which the scroller `slot` passes the area to its content:
 /// those it ignores where its box reaches the area that reaches it, so that
-/// what scrolls past an edge clear of the area does not reach it.
+/// what scrolls past an edge clear of the area does not reach it, and that
+/// it has no bars on, since its inset clears all that lies outside its
+/// innermost slot there (D12).
 pub(super) fn passed(arena: &NodeArena, slot: u32, space: &Space, band: [f32; 4]) -> [bool; 4] {
     let ignored = ignore::edges(arena, slot, crate::generated::SafeAreaIgnore::Container);
     if !ignored.contains(&true) {
         return [false; 4];
     }
     let (sides, edges) = (area(arena, slot, space, band), space.edges(arena, slot));
-    let tolerance = tolerance(arena);
-    std::array::from_fn(|e| ignored[e] && edges[e] <= sides[e][1] + tolerance)
+    let (tolerance, barred) = (tolerance(arena), super::bar::edges(arena, slot));
+    std::array::from_fn(|e| ignored[e] && !barred[e] && edges[e] <= sides[e][1] + tolerance)
 }
 
 /// D9's tolerance: half a device pixel at the display scale, within which an edge meets the area,
@@ -340,6 +371,13 @@ pub(crate) fn scroll_axes(arena: &NodeArena, slot: u32) -> (bool, bool) {
     let (x, y) = overflow(arena, slot);
     let scrolls = |o| matches!(o, Overflow::Auto | Overflow::Scroll);
     (scrolls(x), scrolls(y))
+}
+
+impl NodeArena {
+    /// [`overflow`], for a host or runner that clips as the kernel does.
+    pub fn overflow(&self, slot: u32) -> (Overflow, Overflow) {
+        overflow(self, slot)
+    }
 }
 
 /// `slot`'s effective overflow, x then y: `auto` on the block axis of a node

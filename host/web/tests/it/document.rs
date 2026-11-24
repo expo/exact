@@ -773,12 +773,10 @@ component App
     }
 }
 
-// A header of buttons alone is the bar when it places all of them: a button
-// that shows a dialog by its command, pressing nothing, is one of its items
-// (#387), and one whose command only closes the dialog is not.
+// LLP 1141.004 D6 gives route and sheet headers one rule for command-only buttons.
 #[test]
-fn a_button_that_shows_a_dialog_by_its_command_is_a_bar_item() {
-    let src = |command: &str| {
+fn a_route_bar_accepts_dialog_commands_and_leaves_out_a_popover_hide() {
+    let src = |command: &str, target: &str| {
         format!(
             r#"
 routes nav
@@ -789,8 +787,10 @@ component App
       for e in stack(nav) key=e.id
         column navigationKey=`${{e.id}}`
           header testId="header"
-            button commandfor="clear" command="{command}" aria-label="Clear"
+            button commandfor="{target}" command="{command}" aria-label="Clear"
               text "Clear"
+          view id="more" popover="auto"
+            text "More"
           dialog id="clear" role="alertdialog" aria-label="Clear History?"
             text "Every conversation will be deleted."
             button commandfor="clear" command="close"
@@ -798,8 +798,15 @@ component App
 "#
         )
     };
-    for (command, bar) in [("show-modal", true), ("close", false)] {
-        let doc = host(&src(command), Says(""), "/").document().unwrap().root;
+    for (command, target, bar) in [
+        ("show-modal", "clear", true),
+        ("close", "clear", true),
+        ("hide-popover", "more", false),
+    ] {
+        let doc = host(&src(command, target), Says(""), "/")
+            .document()
+            .unwrap()
+            .root;
         let at = doc.find("data-testid=\"header\"").unwrap();
         let start = doc[..at].rfind('<').unwrap();
         let tag = &doc[start..at + doc[at..].find('>').unwrap() + 1];

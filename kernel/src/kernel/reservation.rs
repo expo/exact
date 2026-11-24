@@ -97,12 +97,19 @@ pub(crate) fn lay_out(
         return Reserved::default();
     };
     let added = r.inside([0.0; 4]).map(|reserved| reserved.max(0.0));
+    // A scroller's bars lie on its scrollport past what it reserves, so on their edges its inset
+    // clears that and its content does not pad by it (D12)
+    let barred = match crate::kernel::area::scroll_view(arena, slot) {
+        true => crate::kernel::bar::edges(arena, slot),
+        false => [false; 4],
+    };
     let p = &mut s.padding;
-    for (side, reserved) in [&mut p.top, &mut p.right, &mut p.bottom, &mut p.left]
+    for ((side, reserved), barred) in [&mut p.top, &mut p.right, &mut p.bottom, &mut p.left]
         .into_iter()
         .zip(added)
+        .zip(barred)
     {
-        if reserved > 0.0 {
+        if reserved > 0.0 && !barred {
             *side = crate::style::plus(*side, reserved);
         }
     }

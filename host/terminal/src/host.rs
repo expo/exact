@@ -490,6 +490,16 @@ impl<D: DataSource> Host<D> {
                         .unwrap_or(0.0);
                     layer_ops.push(ById::ScrollBy(id, y as f32));
                 }
+                (
+                    name @ ("setBounds"
+                    | "setAspectRatio"
+                    | "setWindowAlwaysOnTop"
+                    | "setWindowIgnoreMouseEvents"
+                    | "setWindowOpacity"),
+                    _,
+                ) => self.runner.log(format!(
+                    "{name} refused: the terminal has no application window"
+                )),
                 ("preventDefault", _) => self.prevented = true,
                 ("openURL", Some(url)) => {
                     let opened = self.open_url(&url);

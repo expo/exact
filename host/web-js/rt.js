@@ -21,7 +21,7 @@ export { fontFamily } from './font-family.js';
 export { cssNames } from './regions.js';
 import { Head, markDocument, projectRoots, Tabs, unopened, tp } from './document.js';
 export { Head, unopened, tp };
-export { canSetStatus, statusSubject } from './document.js';
+export { canSetStatus, statusSubject, fitViewport } from './document.js';
 import { conforms, eq, equal, Refusal, Failed } from './shape.js';
 import { autofocus } from './focus.js';
 // The compiler installs `Paint` only when a plan can layer boxes.

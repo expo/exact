@@ -388,6 +388,10 @@ public final class ExactView: NSView {
                     self.session.presenter.menus.pointer(event)
                     // A click on the window behind a `closedby="any"` sheet is the sheet's.
                     if self.session.presenter.dialogs.pointer(event) { return nil }
+                    if event.type == .leftMouseDown, let window = event.window,
+                       let frame = window.contentView?.superview ?? window.contentView,
+                       let hit = TableRowCell.whatIsThere({ frame.hitTest(frame.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow) }),
+                       hit.isDescendant(of: self), TitleBarAreaMac.press(event, on: hit, titleGround: false) { return nil }
                     // A press in an editor: its `pointerdown` before NSWindow focuses it (LLP 1005).
                     // Prevented there, the window does not get the down: the focus stays where it is.
                     if self.session.presenter.pressEditorFirst(event) { return nil }

@@ -63,6 +63,7 @@ fn owner_with(
         }
     }
     let mut k = owner(390.0, 844.0, ops);
+    k.set_scrollport_bars(true);
     k.set_owner_band(2, band, &[]).unwrap();
     if let Some((policy, top)) = keyboard {
         k.set_keyboard_policy(Some(policy));
@@ -777,6 +778,82 @@ fn an_extensions_bound_reads_the_boxs_own_containers() {
         None,
     );
     assert_eq!(extension(&k, 2).map(|e| e[0]), Some(0.0));
+}
+
+#[test]
+fn a_scrollers_own_bar_is_its_reserved_term_from_the_reached_edge() {
+    // 4 fills the content root and scrolls; its 50-point bar lies on its scrollport's top, its
+    // content keeping its place: it reaches the band and reserves the band and the bar, 97, and
+    // with no band the bar alone, 50
+    let held = |band| {
+        owner_with(
+            Some(band),
+            &[],
+            &[(4, scroller(&[]))],
+            &[
+                (4, 5, bar("top", "50")),
+                (4, 6, vec![(StyleId::Height, "2000")]),
+            ],
+            &[],
+            None,
+        )
+    };
+    let k = held(BAND);
+    assert_eq!(frame(&k, 5), (0.0, 47.0, 390.0, 50.0));
+    assert_eq!(frame(&k, 6).1, 47.0, "the content is not moved");
+    let t = terms(&k, 4);
+    assert_eq!(
+        (t.reach[0], t.reserved[0], t.container[0]),
+        (47.0, Some(97.0), true)
+    );
+    assert_eq!(t.reserved[2], None);
+    let none = held([0.0; 4]);
+    assert_eq!(terms(&none, 4).reserved[0], Some(50.0));
+}
+
+#[test]
+fn a_scroller_in_a_scrollers_bar_lies_on_the_incoming_side_of_what_that_scroller_takes() {
+    // The root scrolls and takes the band from its content, but its bars lie on its scrollport:
+    // the chips scrolling sideways in its top bar have the top band reach them, and under
+    // `resizes-visual` those in its bottom bar take the keyboard
+    let chips = || vec![(StyleId::OverflowX, "scroll"), (StyleId::Height, "40")];
+    let k = owner_with(
+        Some(BAND),
+        &[(StyleId::OverflowY, "scroll")],
+        &[
+            (3, bar("top", "40")),
+            (4, vec![(StyleId::Height, "2000")]),
+            (5, bar("bottom", "40")),
+        ],
+        &[(3, 6, chips()), (5, 7, chips())],
+        &[],
+        Some((KeyboardPolicy::ResizesVisual, UP)),
+    );
+    assert!(terms(&k, 6).band_reaches[0], "{:?}", terms(&k, 6));
+    assert!(terms(&k, 7).keyboard[2] > 0.0, "{:?}", terms(&k, 7));
+}
+
+#[test]
+fn a_scrollers_scrolling_bar_takes_what_is_reserved_outside_that_scroller() {
+    // The root reserves 20; 4 lies clear of it, at its inner side, and its bar 5 scrolls
+    // sideways: the reservation lies in 5's area, past 4, which takes the area only from its
+    // content, though 4's clip stops 5's reach at its own top
+    let chips = vec![
+        (StyleId::SafeAreaBar, "top"),
+        (StyleId::Height, "40"),
+        (StyleId::OverflowX, "scroll"),
+    ];
+    let k = owner_with(
+        Some(BAND),
+        &[(StyleId::AdditionalSafeAreaTop, "20")],
+        &[(4, scroller(&[]))],
+        &[(4, 5, chips), (4, 6, vec![(StyleId::Height, "2000")])],
+        &[],
+        None,
+    );
+    assert_eq!((frame(&k, 4).1, frame(&k, 5).1), (67.0, 67.0));
+    let t = terms(&k, 5);
+    assert_eq!((t.reach[0], t.reserved[0]), (0.0, Some(0.0)));
 }
 
 // An edge-effect bar registers with the first scroller beneath its slot (D12)

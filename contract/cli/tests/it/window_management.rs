@@ -9,11 +9,15 @@ use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-const APP: &str = r#"use getScreenDetails, getPointerPosition, windowManagementStatus, ScreenDetails, PointerPosition, WindowManagementStatus from "@exact/window-management"
+const APP: &str = r#"use getWindowBounds, WindowBounds, getScreenDetails, getPointerPosition, windowManagementStatus, ScreenDetails, PointerPosition, WindowManagementStatus from "@exact/window-management"
 
 component App
   resource details = getScreenDetails() as shape ScreenDetails
   resource status = windowManagementStatus() as shape WindowManagementStatus
+  mutation bounds as shape WindowBounds
+  derive rectangle = match bounds { case some(b) => `${b.screenX},${b.screenY} ${b.outerWidth}x${b.outerHeight}`, case none => "" }
+  action readFrame
+    send bounds = getWindowBounds()
   mutation at as shape PointerPosition
   action ask
     send at = getPointerPosition()
@@ -238,6 +242,32 @@ fn a_windows_app_reads_what_its_build_binds() {
             "windowManagementStatus"
         ]
     );
+}
+
+#[test]
+fn a_window_bounds_read_is_supported_on_mac_and_web() {
+    let app = App::new("bounds");
+    for target in [
+        "macos", "web", "ios", "tvos", "watchos", "visionos", "android", "linux", "windows",
+        "terminal",
+    ] {
+        let mut r = boot(&app, target);
+        r.act("readFrame", Vec::new()).unwrap();
+        settle(&mut r);
+        if matches!(target, "macos" | "web") {
+            assert_eq!(
+                r.derive("rectangle").and_then(|v| v.as_str()),
+                Some("0,0 420x860"),
+                "{target}"
+            );
+        } else {
+            let logs = agent::handle(&r, r#"{"op":"logs"}"#);
+            assert!(
+                logs.contains("getWindowBounds: NotSupportedError"),
+                "{target}: {logs}"
+            );
+        }
+    }
 }
 
 /// D6: under the agent, with no implementation bound, the declaration

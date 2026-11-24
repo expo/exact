@@ -81,6 +81,7 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("field-sizing", "css CSS Form Control Styling 1", AttrTarget::Styles(&[StyleId::FieldSizing])),
     ("scroll-snap-type", "css CSS Scroll Snap 1", AttrTarget::Styles(&[StyleId::ScrollSnapType])),
     ("scrollbar-width", "css CSS Scrollbars 1", AttrTarget::Styles(&[StyleId::ScrollbarWidth])),
+    ("app-region", "css Chromium", AttrTarget::Styles(&[StyleId::AppRegion])),
     ("touch-action", "css Compat Standard", AttrTarget::Styles(&[StyleId::TouchAction])),
     ("clip-path", "css CSS Masking 1", AttrTarget::Styles(&[StyleId::ClipPath])),
     // @ref LLP 1043.000 §3 D1

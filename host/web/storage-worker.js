@@ -1,6 +1,6 @@
 // @ref LLP 1027 D10 — SQLite runs off the presentation thread.
 import sqlite3InitModule from './sqlite3.mjs';
-import { createFileStore, lockPaths, normalizePath } from './storage-fs.js';
+import { createFileStore, lockPaths, normalizePath, holdLock, holdTimed, databaseLock, pathLock, poolLock, mutationLock } from './storage-fs.js';
 
 const ready = sqlite3InitModule({ locateFile: file => file === 'sqlite3.wasm'
   ? new URL('./sqlite3.wasm', import.meta.url).href : new URL(file, import.meta.url).href });
@@ -211,20 +211,27 @@ async function close(databases, id) {
   await releaseSession(session);
 }
 async function releaseSession(session) {
+  session.reader?.close();
   try { session.db?.close(); }
   finally {
     session.files.close();
-    try { session.pool?.pauseVfs(); }
-    catch (error) {
-      // Termination releases this worker's handles and Web Locks together.
-      postMessage({ fatal: 'SQLite worker could not release the OPFS pool' });
-      self.close();
-      throw error;
-    }
+    pausePool(session.pool);
+    await session.releasePool?.();
+    await session.releaseOpen?.();
     await session.release();
   }
 }
 
+function pausePool(pool) {
+  try { pool?.pauseVfs(); }
+  catch (error) {
+    // Termination releases this worker's handles and Web Locks together.
+    postMessage({ fatal: 'SQLite worker could not release the OPFS pool' });
+    self.close();
+    throw error;
+  }
+}
+const busy = path => Object.assign(new Error(`SQLite is busy after 10000 ms: ${path}`), { code: 'EBUSY' });
 async function probeOpfs() {
   if (!globalThis.FileSystemFileHandle?.prototype.createSyncAccessHandle || !navigator.storage?.getDirectory) return false;
   const name = `.exact-sqlite-probe-${crypto.randomUUID()}`;
@@ -255,6 +262,71 @@ async function openPool(sqlite, name) {
   return pool;
 }
 const mainFile = '/main.sqlite';
+function snapshot(sqlite, db, pool, sizeOnly, maxBytes) {
+  if (sizeOnly || Number.isFinite(maxBytes)) {
+    const info = inspectFile(sqlite, db);
+    if (sizeOnly) return info;
+    if (info.size > maxBytes) return info.size;
+  }
+  return pool.exportFile(mainFile).buffer;
+}
+// A reader queues for the pool lock in case the owner closes or its tab goes away.
+// While the owner is live it can export between SQL calls. A newly opened owner
+// announces itself to readers that queued during initialization.
+function serveImages(sqlite, session, id) {
+  const key = poolLock(id), channel = session.reader = new BroadcastChannel(key);
+  channel.onmessage = ({ data }) => {
+    if (typeof data?.read !== 'string') return;
+    const reply = new BroadcastChannel(key + ':' + data.read);
+    try { reply.postMessage({ value: snapshot(sqlite, session.db, session.pool, data.sizeOnly, data.maxBytes) }); }
+    catch (error) { reply.postMessage({ error: String(error.message || error) }); }
+    finally { reply.close(); }
+  };
+  channel.postMessage({ ready: true });
+}
+
+async function readImage(sqlite, appId, path, id, sizeOnly, maxBytes) {
+  const key = poolLock(id), channel = new BroadcastChannel(key), read = crypto.randomUUID();
+  const reply = new BroadcastChannel(key + ':' + read), abort = new AbortController();
+  let timer;
+  try {
+    const request = () => channel.postMessage({ read, sizeOnly, maxBytes });
+    const live = new Promise((resolve, reject) => {
+      channel.onmessage = ({ data }) => { if (data?.ready) request(); };
+      reply.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.value);
+      timer = setTimeout(() => reject(busy(path)), 10000);
+    });
+    const readClosed = async () => {
+      const release = await holdLock(key, { signal: abort.signal });
+      let pool;
+      try {
+        const root = await navigator.storage.getDirectory();
+        await (await root.getDirectoryHandle('exact-sqlite-sahpool')).getDirectoryHandle(id);
+        pool = await openPool(sqlite, id);
+        clearTimeout(timer);
+        const journal = pool.getFileNames().includes(mainFile + '-journal');
+        if (!journal && !sizeOnly && !Number.isFinite(maxBytes)) return pool.exportFile(mainFile).buffer;
+        const db = new pool.OpfsSAHPoolDb(mainFile, 'w');
+        try {
+          if (journal) db.selectValue('PRAGMA schema_version'); // Recover a hot journal before exporting.
+          return snapshot(sqlite, db, pool, sizeOnly, maxBytes);
+        } finally { db.close(); }
+      } finally { pausePool(pool); await release(); }
+    };
+    const closed = readClosed().catch(async error => {
+      // A worker from before filesystem snapshots holds only the path lock.
+      // Let its connection close, then try the same pool under its lock.
+      const { held } = await navigator.locks.query();
+      if (!['NoModificationAllowedError', 'InvalidStateError'].includes(error.name)
+          || !held.some(lock => lock.name === pathLock(appId, path))
+          || held.some(lock => lock.name === databaseLock(appId, path))) throw error;
+      await navigator.locks.request(pathLock(appId, path), { mode: 'shared', signal: abort.signal }, () => {});
+      return readClosed();
+    });
+    request();
+    return await Promise.race([live, closed]);
+  } finally { clearTimeout(timer); abort.abort(); reply.close(); channel.close(); }
+}
 // Read through the remounted VFS. importDb normalizes the two journal-format
 // bytes to DELETE. Every other byte must match, including application payload.
 function inspectFile({ capi: c, wasm: w }, db, source) {
@@ -279,7 +351,12 @@ function inspectFile({ capi: c, wasm: w }, db, source) {
           }
         }
       }
-      return size;
+      let counter = 0;
+      if (size >= 100) {
+        db.checkRc(w.functionEntry(methods.$xRead)(file.pointer, out, 4, 24n));
+        counter = new DataView(w.heap8u().buffer).getUint32(out);
+      }
+      return { size, counter };
     } finally { methods.dispose(); file.dispose(); }
   } finally { w.scopedAllocPop(scope); }
 }
@@ -322,17 +399,22 @@ async function persist(sqlite, databases, id, session) {
 async function dispatch(owner, { appId, op, args }) {
   const { databases } = owner;
   const sqlite = await ready;
+  if (op === 'image') return readImage(sqlite, appId, ...args);
   if (op === 'open') {
+    const deadline = performance.now() + 10000;
     const path = normalizePath(args[0]), release = await lockPaths(appId, [path], undefined, undefined, owner.gone.signal);
     const files = createFileStore(appId);
     const session = { path, release, files, statements: new Map(), internal: false };
     try {
+      session.releaseOpen = await holdTimed(databaseLock(appId, path), path, { timeout: deadline - performance.now(), signal: owner.gone.signal });
       const useOpfs = await hasOpfs();
       const { entry, pending } = await files.databaseEntry(path, useOpfs);
       let imported;
       if (entry?.pool || pending) {
         if (!useOpfs) fail(`OPFS is unavailable for ${path}`);
-        session.pool = await openPool(sqlite, entry?.pool ?? pending);
+        const pool = session.poolId = entry?.pool ?? pending;
+        session.releasePool = await holdTimed(poolLock(pool), path, { timeout: deadline - performance.now(), signal: owner.gone.signal });
+        session.pool = await openPool(sqlite, pool);
         if (pending && entry) {
           imported = await copyDatabase(session.pool, entry.contents);
           session.db = new session.pool.OpfsSAHPoolDb(mainFile, 'w');
@@ -352,12 +434,13 @@ async function dispatch(owner, { appId, op, args }) {
       }
       configure(sqlite, session);
       if (imported !== undefined) {
-        if (inspectFile(sqlite, session.db, imported) !== imported.byteLength) fail(`SQLite import size mismatch for ${path}`);
+        if (inspectFile(sqlite, session.db, imported).size !== imported.byteLength) fail(`SQLite import size mismatch for ${path}`);
         const rows = session.db.selectValues('PRAGMA integrity_check');
         if (rows.length !== 1 || rows[0] !== 'ok') fail(`SQLite import integrity check failed for ${path}: ${rows[0]}`);
       }
       if (pending) await files.publishDatabase(path, pending, entry);
       else if (!entry) await files.atomicWriteOwnedFile(path, new ArrayBuffer(0), true);
+      if (session.pool) serveImages(sqlite, session, entry?.pool ?? pending);
       const id = ++owner.nextDatabase;
       databases.set(id, session);
       return id;
@@ -374,10 +457,19 @@ async function dispatch(owner, { appId, op, args }) {
     session.statements.set(statement, rest[0]);
     return statement;
   }
+  const mutating = op === 'execute' || op === 'statementExecute' || op === 'transaction';
+  const release = session.pool && mutating && await holdTimed(mutationLock(session.poolId), session.path, { signal: owner.gone.signal });
+  try { return await operate(sqlite, databases, id, session, op, rest); }
+  finally { if (release) await release(); }
+}
+
+async function operate(sqlite, databases, id, session, op, rest) {
   if (op === 'transaction') {
     const [commands, check] = rest;
     if (!Array.isArray(commands) || commands.length > 10000) fail('transaction exceeds 10000 commands or is not an array');
     if (typeof check !== 'boolean') fail('invalid SQLite foreign key mode');
+    // Refuse a failed metadata update before SQLite can commit the caller's changes.
+    if (session.pool) await session.files.touchDatabase(session.path, inspectFile(sqlite, session.db).counter);
     // SQLite ignores a change to enforcement inside a transaction, so it goes
     // off before BEGIN (https://sqlite.org/lang_altertable.html#otheralter).
     if (check) enforcement(sqlite, session, 0);
@@ -425,6 +517,7 @@ async function dispatch(owner, { appId, op, args }) {
   }
   const query = op === 'query' || op === 'statementQuery';
   if (query) return run(sqlite, session, sql, values, true);
+  if (session.pool) await session.files.touchDatabase(session.path, inspectFile(sqlite, session.db).counter);
   const c = sqlite.capi, before = c.sqlite3_total_changes(session.db.pointer);
   let result;
   try { result = run(sqlite, session, sql, values, false); }
@@ -467,7 +560,8 @@ onmessage = ({ data }) => {
   owner.queue = owner.queue.then(async () => {
     try {
       await earlierDisposals;
-      postMessage({ client: data.client, id: data.id, value: await dispatch(owner, data) });
+      const value = await dispatch(owner, data);
+      postMessage({ client: data.client, id: data.id, value }, value instanceof ArrayBuffer ? [value] : []);
     } catch (error) {
       const id = data.args?.[0];
       if (owner.databases.get(id)?.pool && [10, 13].includes(error.resultCode & 0xff)) {

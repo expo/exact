@@ -146,7 +146,7 @@ extension Presenter {
         func origin(_ holder: UIView) -> GridOrigin? {
             var ancestor: UIView? = holder
             while let a = ancestor, !(a is NodeView) { ancestor = a.superview }
-            guard let node = ancestor as? NodeView, node.container === holder else { return nil }
+            guard let node = ancestor as? NodeView, node.container === holder || node.scrollportHolder === holder else { return nil }
             return node.grid?.origin ?? .zero
         }
         guard let holder = view.superview else { return .zero }
@@ -210,6 +210,7 @@ extension Presenter {
             applyFrame(child, old.layout)
         }
         for case let child as NodeView in parent.container.subviews { regrid(child) }
+        parent.scrollportHolder?.bars.compactMap(\.view).forEach(regrid) // a scroller's bars on its scrollport
         navigation.lifted?.lifted(from: parent).forEach(regrid)
         // A grouped list's carried rows are its children too, in their cells.
         if groupedLists?.carriesRows == true { groupedLists?.carried(from: parent.container).forEach(regrid) }

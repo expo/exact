@@ -116,6 +116,34 @@ fn a_worlds_message_under_a_tools_mark_keeps_the_calls_command_rules() {
     }
 }
 
+#[test]
+fn a_window_focus_carries_the_reach_of_its_issuing_work() {
+    let (mut r, _) = boot_with(
+        "component App\n  state armed = false\n  action arm\n    armed = true\n  task later when armed\n    after(5, bring)\n  action bring\n    focus()\n    focus(\"x\")\n  view\n    text \"here\" testId=\"x\"\n",
+        "x",
+    );
+    r.act("arm", vec![]).unwrap();
+    r.act_from(CallOrigin::Device, "bring", vec![]).unwrap();
+    r.advance(r.now_ms() + 5.).unwrap();
+    r.act_named("bring", vec![]).unwrap();
+    let origins: Vec<_> = r
+        .take_commands()
+        .into_iter()
+        .map(|cmd| cmd.window_reach.map(|reach| reach.origin))
+        .collect();
+    assert_eq!(
+        origins,
+        [
+            Some(CallOrigin::Device),
+            None,
+            Some(CallOrigin::App),
+            None,
+            Some(CallOrigin::Device),
+            None
+        ]
+    );
+}
+
 /// expo/exact#1424: a `keepRunning` window the person shows again by
 /// launching the app reaches the app only as its page becoming visible, and
 /// what that starts is the person's, as at a cold launch.

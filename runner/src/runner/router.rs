@@ -1090,6 +1090,7 @@ impl<D: DataSource> Runner<D> {
             return;
         }
         self.commands.push(super::Command {
+            window_reach: None,
             name: "scrollToFragment".into(),
             args: vec![
                 Value::Number(visit as f64),

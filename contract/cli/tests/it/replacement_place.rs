@@ -31,6 +31,46 @@ fn places(runner: &Runner<Source>, target: &str) -> Vec<Value> {
         .collect()
 }
 
+use contract::{compile_for_comparison, ComparisonInput::Text as ComparisonText};
+
+#[test]
+fn a_place_free_plan_keeps_a_place_name_used_by_the_program() {
+    let src = r#"component App
+  state show = true
+  view
+    column
+      text (show ? "text" : "App") testId="label"
+      for x in ["a"] key=x
+        text x
+"#;
+    let compiled = contract::compile(src).unwrap();
+    assert!(!compiled.place_steps.is_empty());
+    let plan = compile_for_comparison(ComparisonText(src)).unwrap();
+    assert!(compiled.nodes.iter().any(|n| n.place.is_some()));
+    assert!(plan.strings.iter().any(|s| s == "App"));
+    assert!(compiled.regions.iter().any(|r| r.place.is_some()));
+    assert!(plan.place_steps.is_empty());
+    assert!(plan.nodes.iter().all(|n| n.place.is_none()));
+    assert!(plan.regions.iter().all(|r| r.place.is_none()));
+    let app = Runner::boot(
+        Plan::decode(&plan.encode()).unwrap(),
+        boxed(()),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let label = app.kernel().find_by_test_id("label")[0];
+    assert_eq!(
+        app.kernel()
+            .node_by_key(label)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Text),
+        Some("text")
+    );
+}
+
 #[test]
 fn editor_places_follow_source_siblings_including_hidden_branches_and_fills() {
     let source = r#"component App

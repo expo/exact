@@ -121,3 +121,24 @@ test('keyboardHeight under resizes-content without the VirtualKeyboard API is 0'
     Object.defineProperty(proto, name, { configurable: true, get() { return read.call(this) - (window.keys ?? 0); } });
   }
 }), 180000);
+
+// Safari ignores `interactive-widget`: its keys shrink only the visual viewport. Under `resizes-content` the root then
+// takes the visual viewport's height, so a box at its bottom stays above the keys, as in Chromium's resized page.
+test('under resizes-content keys that shrink only the visual viewport shorten the root', () => served([
+  'component App',
+  '  view',
+  '    column interactive-widget="resizes-content" position="relative" height="100%"',
+  '      column testId="end" position="absolute" bottom=0 left=0 right=0 height=10',
+  '',
+].join('\n'), async ({ page }) => {
+  const full = await page.evaluate(() => innerHeight);
+  const ends = bottom => page.waitForFunction(bottom => Math.round(document.querySelector('[data-testid="end"]').getBoundingClientRect().bottom) === bottom, bottom, { timeout: 5000 });
+  await ends(full);
+  await page.evaluate(() => { window.keys = 300; visualViewport.dispatchEvent(new Event('resize')); });
+  await ends(full - 300);
+  await page.evaluate(() => { window.keys = 0; visualViewport.dispatchEvent(new Event('resize')); });
+  await ends(full);
+}, {}, () => {
+  const read = Object.getOwnPropertyDescriptor(VisualViewport.prototype, 'height').get;
+  Object.defineProperty(VisualViewport.prototype, 'height', { configurable: true, get() { return read.call(this) - (window.keys ?? 0); } });
+}), 180000);

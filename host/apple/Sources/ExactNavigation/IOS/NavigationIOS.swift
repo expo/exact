@@ -157,6 +157,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     lazy var liftedNodes: any LiftedNodes = LiftedPair(siblings, barHosted)
     #endif
     weak var besideOwner: UIViewController?
+    /// The ledger identity `besideInsets` was written under on `besideOwner` (LLP 1123 D11).
+    var besideIdentity: ContributionsIOS.Identity?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
     /// whether its press navigated.
@@ -1307,6 +1309,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     func reset(clearFocus: Bool = true) {
+        retireBeside()
         #if os(iOS)
         retireBootOwner()
         #endif

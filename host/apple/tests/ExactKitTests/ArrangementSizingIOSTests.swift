@@ -142,6 +142,58 @@ final class ArrangementSizingIOSTests: XCTestCase {
         waitFor("and is told uncovered") { told == [.whole, nil] }
     }
 
+    /// A popover's or dialog's cover is the menus' to tell, as the kernel opens one told uncovered: a native arrangement
+    /// tells none for a pane that is one, with navigation and without, and uncovers none that became one while hidden.
+    func testAPaneThatIsAPopoverOrDialogIsToldNoCover() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let make = NavigationLink.make, makeModals = NavigationLink.makeModals
+        defer { NavigationLink.make = make; NavigationLink.makeModals = makeModals }
+        let popover = ["popover": "auto"], cases: [(created: [String: String], becomes: [String: String])] =
+            [(popover, [:]), (["semanticTag": "dialog"], [:]), ([:], popover)]
+        for linked in [true, false] {
+            NavigationLink.make = linked ? make : nil; NavigationLink.makeModals = linked ? makeModals : nil
+            for (created, becomes) in cases { try takeOutAndPutBack(created: created, becomes: becomes, linked: linked) }
+        }
+    }
+
+    @available(iOS 27.1, *)
+    private func takeOutAndPutBack(created: [String: String], becomes: [String: String], linked: Bool) throws {
+        let what = "\(created) \(becomes), navigation \(linked)"
+        let p = Presenter(), host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        self.window = window
+        defer { window.isHidden = true }
+        XCTAssertEqual(p.navigation is NoNavigation, !linked)
+        p.viewport.frame = host.view.bounds
+        host.view.addSubview(p.viewport)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["hatch": "arrangement"]],
+            ["op": "create", "id": 2, "kind": "view"], ["op": "create", "id": 3, "kind": "view", "props": created],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 600.0, "h": 800.0],
+        ]))
+        let controller = UIArrangementViewController()
+        XCTAssertTrue(p.arrangements.set(1, controller: controller), what)
+        let holder = try XCTUnwrap(controller.viewController(for: .secondary) as? ArrangementPaneController)
+        XCTAssertEqual(holder.node.id, 3, what)
+        waitForMainQueue("the arrangement's setup pass")
+        var told: [HostCover?] = []
+        p.onCovers = { changes in told += changes.filter { $0.0 == 3 }.map(\.1) }
+        controller.setViewController(nil, for: .secondary)
+        waitFor("a pass reads the pane hidden") { p.arrangements.hidden.contains(3) }
+        waitForMainQueue("its report")
+        let hidden: [HostCover?] = becomes.isEmpty ? [] : [.whole]
+        XCTAssertEqual(told, hidden, what)
+        p.apply(wireBatch([["op": "props", "id": 3, "set": becomes]]))
+        controller.setViewController(holder, for: .secondary)
+        controller.view.layoutIfNeeded()
+        waitFor("a pass reads the pane shown") { !p.arrangements.hidden.contains(3) }
+        waitForMainQueue("its report")
+        XCTAssertEqual(told, hidden, what)
+    }
+
     func testProposalsMeasureAuthoredTextWithoutChangingItsAllocation() throws {
         let session = try booted()
         let primary = try node("primary")

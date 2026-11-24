@@ -37,6 +37,8 @@ mod modal_tests;
 #[cfg(test)]
 mod placement_tests;
 #[cfg(test)]
+mod scrollport_bar_tests;
+#[cfg(test)]
 mod top_layer_tests;
 pub(crate) use intersection::{block_clip, intersection, Root as IntersectionRoot};
 use modal::{behind_modal, modal_dialog, modal_live};
@@ -735,7 +737,11 @@ pub(crate) fn shown_in(kernel: &Kernel, scrolled: &Scrolled, slot: u32, frame: F
         return Shown::Parent(within, placed);
     }
     let up = arena.frame(parent);
-    let (left, top) = scrolled.offset(arena.key(parent));
+    // A bar on its parent's scrollport stays in place as the content scrolls (LLP 1123 D12)
+    let (left, top) = match arena.on_scrollport(slot) {
+        true => (0.0, 0.0),
+        false => scrolled.offset(arena.key(parent)),
+    };
     let to = shift(
         f64::from(frame.x) - f64::from(up.x) - left,
         f64::from(frame.y) - f64::from(up.y) - top,

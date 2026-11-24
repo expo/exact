@@ -18,7 +18,14 @@ final class NavigationBootIOSTests: XCTestCase {
         guard #available(iOS 27.0, *) else { throw XCTSkip("deferred ownership requires iOS 27") }
     }
 
+    /// The transactions this test has open. One that a throw leaves open would hold back every later test's frames, so
+    /// `tearDown` commits it.
+    private var openTransactions = 0
+    private func beginTransaction() { CATransaction.begin(); openTransactions += 1 }
+    private func commitTransaction() { CATransaction.commit(); openTransactions -= 1 }
+
     override func tearDown() {
+        while openTransactions > 0 { commitTransaction() }
         if #available(iOS 18.0, *) { (update as? UIUpdateLink)?.isEnabled = false }
         update = nil
         session?.destroy()
@@ -32,6 +39,10 @@ final class NavigationBootIOSTests: XCTestCase {
     private func fixture(_ key: String, mounted: Bool = true, rotatable: Bool = false, ownsWindow: Bool = true, batchEdit: ((inout Batch) -> Void)? = nil, beforeBoot: (ExactView) -> Void = { _ in }) throws -> ExactSession {
         let scene = try XCTUnwrap(hostedWindowScene())
         waitFor("the test scene is active") { scene.activationState == .foregroundActive }
+        // `deferInitialOwner` makes a launch holder in a portrait scene only, and this window's controller would turn another
+        if #available(iOS 26.0, *), scene.effectiveGeometry.interfaceOrientation != .portrait {
+            throw XCTSkip("a launch holder is a portrait scene's; an open iPhone Duo's scene is landscape")
+        }
         let session = ExactApp.shared.makeSession(label: "boot-owner-\(UUID().uuidString)")
         self.session = session
         session.hatchesOwnWindow = ownsWindow
@@ -118,9 +129,8 @@ final class NavigationBootIOSTests: XCTestCase {
     func testHiddenBarsCommitBeforeTheOwnerAndKeepGeometryBeforeTheNextEvent() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the navigation owner is installed in a window scene") }
         var before: [UInt32: [CGFloat]]?
-        var committed = false, event = false, transactionOpen = true
-        CATransaction.begin()
-        defer { if transactionOpen { CATransaction.commit() } }
+        var committed = false, event = false
+        beginTransaction()
         guard #available(iOS 18.0, *) else { throw XCTSkip("post-commit update phases require iOS 18") }
         let session = try fixture("BARLESS_ROUTE", beforeBoot: { [unowned self] view in
             let link = UIUpdateLink(view: view)
@@ -132,8 +142,7 @@ final class NavigationBootIOSTests: XCTestCase {
                 XCTAssertNotNil(session.presenter.navigationHost.bootOwner)
                 before = self.geometry(session)
                 committed = true
-                transactionOpen = false
-                CATransaction.commit()
+                self.commitTransaction()
             }
             link.addAction(to: .afterUpdateComplete) { [unowned self] _, _ in
                 guard committed, !event, let session = self.session else { return }
@@ -154,9 +163,7 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testRunLoopFlushReturnsBeforeHandoffInTheSameTurn() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the first commit needs a visible scene") }
-        CATransaction.begin()
-        var open = true
-        defer { if open { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigationHost
         var events: [String] = [], turn = 0, commitTurn = -1, handedOff = false
         let turns = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeTimers.rawValue, true, 0) { _, _ in turn += 1 }
@@ -172,8 +179,7 @@ final class NavigationBootIOSTests: XCTestCase {
         CFRunLoopPerformBlock(CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue) {
             commitTurn = turn
             events.append("flush")
-            open = false
-            CATransaction.commit()
+            self.commitTransaction()
             CATransaction.flush()
             events.append("returned")
             XCTAssertNotNil(session.firstDrawMs)
@@ -201,9 +207,7 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testQueuedBootWorkKeepsTheHolderGeometryAndHoldsCodeLoading() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "queued boot work needs a mounted session") }
-        CATransaction.begin()
-        var open = true
-        defer { if open { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), p = session.presenter, nav = p.navigationHost
         let before = geometry(session), holder = try XCTUnwrap(nav.bootOwner)
         let launch = ExactLaunch()
@@ -235,8 +239,7 @@ final class NavigationBootIOSTests: XCTestCase {
             XCTAssertNotNil(nav.primaryOwner)
             consumed = true
         }
-        open = false
-        CATransaction.commit()
+        commitTransaction()
         CATransaction.flush()
         XCTAssertTrue(nav.bootOwner === holder)
         launch.drawn(session)
@@ -250,9 +253,7 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testTextWorkersAndOwnerCallbacksAreSafeBeforeHandoff() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "boot publications need the visible geometry") }
-        CATransaction.begin()
-        var open = true
-        defer { if open { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), p = session.presenter, nav = p.navigationHost
         let before = geometry(session), route = try XCTUnwrap(nav.activeRoute)
         let accessible = accessibilityOrder(try XCTUnwrap(session.view))
@@ -288,8 +289,7 @@ final class NavigationBootIOSTests: XCTestCase {
         XCTAssertTrue(nav.activeRoute === route)
         XCTAssertNotNil(nav.bootOwner)
         XCTAssertEqual(before, geometry(session))
-        open = false
-        CATransaction.commit()
+        commitTransaction()
         CATransaction.flush()
         waitFor("the content's real owner") { nav.primaryOwner != nil }
         XCTAssertTrue(nav.activeRoute === route)
@@ -300,9 +300,7 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testImageWorkersPublishWithTheTemporaryOwner() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "image publication needs the mounted launch views") }
-        CATransaction.begin()
-        var open = true
-        defer { if open { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), p = session.presenter, nav = p.navigationHost
         let source = "data:image/png;base64," + UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { context in
             UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
@@ -316,8 +314,7 @@ final class NavigationBootIOSTests: XCTestCase {
         XCTAssertTrue(nav.bootOwner === holder)
         XCTAssertNil(session.firstDrawMs)
         XCTAssertEqual(before, geometry(session))
-        open = false
-        CATransaction.commit()
+        commitTransaction()
         CATransaction.flush()
         waitFor("image ownership after the first commit") { nav.primaryOwner != nil }
         XCTAssertNotNil(image.raster)
@@ -402,17 +399,14 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testFirstDrawOutsideAUIUpdateHandsOffBeforeActivation() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
-        CATransaction.begin()
-        var transactionOpen = true
-        defer { if transactionOpen { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigationHost
         XCTAssertNil(session.firstDrawMs)
         var checked = false, activationSawOwner = false
         // Force the first draw from within the observer pass, outside a UI
         // update. A fallback armed by firstDrawn is too late for this pass.
         let commit = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue | CFRunLoopActivity.exit.rawValue, false, -1_000_000) { _, _ in
-            transactionOpen = false
-            CATransaction.commit()
+            self.commitTransaction()
             CATransaction.flush()
             XCTAssertNotNil(session.firstDrawMs)
         }
@@ -438,9 +432,7 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testDrawEvaluationWaitsForTheOwnerHandoff() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
-        CATransaction.begin()
-        var open = true
-        defer { if open { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigationHost
         session.runtime.evaluatesFromDraw = true
         XCTAssertNotNil(nav.bootOwner)
@@ -451,15 +443,13 @@ final class NavigationBootIOSTests: XCTestCase {
         XCTAssertNil(nav.bootOwner)
         XCTAssertNotNil(nav.primaryOwner)
         XCTAssertEqual(session.preparedGeneration, session.generation, "handoff releases the draw's evaluation")
-        open = false
-        CATransaction.commit()
+        commitTransaction()
         waitFor("evaluation and data activation after ownership") { session.dataGeneration == session.generation }
     }
 
     func testADestroyedSessionsHeldDrawEvaluatesNothing() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
-        CATransaction.begin()
-        defer { CATransaction.commit() }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigationHost
         session.runtime.evaluatesFromDraw = true
         XCTAssertNotNil(nav.bootOwner)
@@ -474,9 +464,7 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testEmptyObserverPassKeepsWaitingForContent() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
-        CATransaction.begin()
-        var open = true
-        defer { if open { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigationHost
         var checked = false
         let after = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, false, 2_000_002) { _, _ in
@@ -489,25 +477,21 @@ final class NavigationBootIOSTests: XCTestCase {
         CFRunLoopAddObserver(CFRunLoopGetMain(), after, .commonModes)
         defer { CFRunLoopObserverInvalidate(after) }
         waitFor("an empty observer pass") { checked }
-        open = false
-        CATransaction.commit()
+        commitTransaction()
         CATransaction.flush()
         waitFor("content ownership") { nav.primaryOwner != nil }
     }
 
     func testMainQueueFlushHoldsAnAlreadyQueuedOwnerConsumer() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
-        CATransaction.begin()
-        var open = true
-        defer { if open { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigationHost
         var queried = false
         DispatchQueue.main.async {
             XCTAssertNil(session.firstDrawMs)
             XCTAssertNil(nav.primaryOwner)
             XCTAssertNotNil(nav.bootOwner, "the queued flush must start with the temporary owner")
-            open = false
-            CATransaction.commit()
+            self.commitTransaction()
             CATransaction.flush()
             XCTAssertNotNil(session.firstDrawMs)
         }
@@ -782,14 +766,14 @@ final class NavigationBootIOSTests: XCTestCase {
         animation.fromValue = 0.5; animation.toValue = 1; animation.duration = 10
         route.node.layer.add(animation, forKey: "continuity")
         var committed = false
-        CATransaction.begin()
+        beginTransaction()
         CATransaction.setCompletionBlock {
             XCTAssertNil(nav.bootOwner)
             XCTAssertNil(nav.transferringBootOwner)
             XCTAssertNil(route.bootSurface)
             committed = true
         }
-        CATransaction.commit()
+        commitTransaction()
         nav.finishBootOwner()
         XCTAssertFalse(committed, "the synchronous transfer returns before the transaction completion")
         CATransaction.flush()
@@ -820,7 +804,7 @@ final class NavigationBootIOSTests: XCTestCase {
         for key in ["BOOT_CONTROL_TOP", "BOOT_CONTROL_BOTTOM", "BOOT_CONTROL_TAB"] {
             var snapshots: [([UInt32: [CGFloat]], Data, [String], [String])] = []
             for synchronous in [false, true] {
-                CATransaction.begin()
+                beginTransaction()
                 let session = try fixture(key, rotatable: synchronous), nav = session.presenter.navigationHost
                 let holder = nav.bootOwner
                 XCTAssertEqual(holder != nil, !synchronous, key)
@@ -855,7 +839,7 @@ final class NavigationBootIOSTests: XCTestCase {
                     return "\(type(of: view)) \(view.convert(view.bounds, to: route.surface)) \(view.accessibilityIdentifier ?? "")"
                 }.sorted()
                 let geometry = geometry(session)
-                CATransaction.commit()
+                self.commitTransaction()
                 CATransaction.flush()
                 XCTAssertNotNil(session.firstDrawMs)
                 if !synchronous { XCTAssertTrue(nav.bootOwner === holder); XCTAssertNil(nav.primaryOwner) }
@@ -885,13 +869,13 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testDrawInANonCommonModeOnlySchedulesTheHandoff() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
-        CATransaction.begin()
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigationHost
         let holder = try XCTUnwrap(nav.bootOwner)
         let mode = RunLoop.Mode("ExactBootTestMode")
         var returned = false, checked = false
         CFRunLoopPerformBlock(CFRunLoopGetMain(), mode.rawValue as CFString) {
-            CATransaction.commit()
+            self.commitTransaction()
             CATransaction.flush()
             returned = true
             XCTAssertTrue(nav.bootOwner === holder, "the draw receipt cannot install inside flush, even outside common modes")
@@ -948,7 +932,7 @@ final class NavigationBootIOSTests: XCTestCase {
     func testInputWithoutATouchInstallsOwnershipBeforeItsHandlers() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "input needs the mounted first frame") }
         for kind in ["accessibility", "native-button", "key", "keyup", "shortcut", "focus", "native-focus", "evaluated-input", "input", "change", "checked", "value"] {
-            CATransaction.begin()
+            beginTransaction()
             let session = try fixture("BOOT_CONTROL_TOP"), p = session.presenter, nav = p.navigationHost
             let holder = try XCTUnwrap(nav.bootOwner)
             let node = try XCTUnwrap(p.views.values.first { $0.handlers.contains("press") })
@@ -966,7 +950,7 @@ final class NavigationBootIOSTests: XCTestCase {
             p.onKey = { _, _ in check() }
             p.onFocus = { _ in check() }
             node.handlers.formUnion(["key", "keyup", "focus"])
-            CATransaction.commit()
+            commitTransaction()
             CATransaction.flush()
             XCTAssertTrue(nav.bootOwner === holder, "the input must cross the post-flush wait")
             switch kind {
@@ -994,10 +978,10 @@ final class NavigationBootIOSTests: XCTestCase {
     func testClipboardAndNonInputEventsEnterTheRunnerAfterOwnership() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "boot comparisons need a visible scene") }
         for kind in ["copy", "cut", "paste", "selection", "scroll", "timer", "notification", "hold", "height-drag"] {
-            CATransaction.begin()
+            beginTransaction()
             let session = try fixture("BOOT_CLIPBOARD"), nav = session.presenter.navigationHost
             let holder = try XCTUnwrap(nav.bootOwner)
-            CATransaction.commit()
+            commitTransaction()
             CATransaction.flush()
             XCTAssertTrue(nav.bootOwner === holder, kind)
             var observed = false
@@ -1029,13 +1013,13 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testAFirstScreenCSSAnimationReceivesItsTick() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "boot comparisons need a visible scene") }
-        CATransaction.begin()
+        beginTransaction()
         let session = try fixture("BOOT_MOTION"), nav = session.presenter.navigationHost
         XCTAssertNotNil(nav.bootOwner)
         XCTAssertTrue(session.frames.motion)
         session.frames.run(true)
         let link = try XCTUnwrap(session.frames.link)
-        CATransaction.commit()
+        commitTransaction()
         CATransaction.flush()
         XCTAssertNotNil(nav.bootOwner)
         var ticked = false
@@ -1053,9 +1037,7 @@ final class NavigationBootIOSTests: XCTestCase {
     /// stays, and the hand-off is the draw's.
     func testAStillFirstScreensPresentTickKeepsTheHolder() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "boot comparisons need a visible scene") }
-        CATransaction.begin()
-        var open = true
-        defer { if open { CATransaction.commit() } }
+        beginTransaction()
         let session = try fixture("BARLESS_ROUTE"), nav = session.presenter.navigationHost
         let holder = try XCTUnwrap(nav.bootOwner)
         XCTAssertTrue(session.frames.motion && session.frames.presentOnly, "the link runs only for the present")
@@ -1070,8 +1052,7 @@ final class NavigationBootIOSTests: XCTestCase {
         XCTAssertFalse(session.frames.presentOnly, "the tick heard the present")
         XCTAssertTrue(nav.bootOwner === holder, "a tick that only hears the present ends no wait")
         XCTAssertNil(nav.primaryOwner)
-        open = false
-        CATransaction.commit()
+        commitTransaction()
         CATransaction.flush()
         waitFor("the hand-off after the first draw") { nav.primaryOwner != nil && nav.bootOwner == nil }
     }
@@ -1086,8 +1067,7 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testQueuedTransformGeometryInstallsOwnershipBeforeItsHandler() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the regression needs the mounted first tree") }
-        CATransaction.begin()
-        defer { CATransaction.commit() }
+        beginTransaction()
         let session = try fixture("BOOT_TRANSFORM"), p = session.presenter, nav = p.navigationHost
         XCTAssertNotNil(nav.bootOwner)
         XCTAssertFalse(p.transformBindings.isEmpty)
@@ -1110,7 +1090,7 @@ final class NavigationBootIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else { throw missing("scene", "the regression needs the mounted first tree") }
         var snapshots: [([UInt32: [CGFloat]], Data, [CGFloat]?)] = []
         for synchronous in [false, true] {
-            CATransaction.begin()
+            beginTransaction()
             let session = try fixture("BOOT_PADDED", rotatable: synchronous), nav = session.presenter.navigationHost
             XCTAssertEqual(nav.bootOwner != nil, !synchronous)
             let route = try XCTUnwrap(nav.activeRoute), list = try XCTUnwrap(route.collapseScroll?.scrollView)
@@ -1118,7 +1098,7 @@ final class NavigationBootIOSTests: XCTestCase {
             XCTAssertEqual(list.contentInset.top > 0, safe.top > 0, "authored padding adds clearance below the status bar")
             let values = geometry(session), local = nav.localInsets.wanted[route.node.id]
             XCTAssertEqual(local, [safe.top, safe.right, safe.bottom, safe.left])
-            CATransaction.commit()
+            commitTransaction()
             CATransaction.flush()
             XCTAssertNotNil(session.firstDrawMs)
             XCTAssertEqual(nav.bootOwner != nil, !synchronous)
@@ -1137,8 +1117,7 @@ final class NavigationBootIOSTests: XCTestCase {
 
     func testFirstTreeTipRetainsTheInstalledPresenter() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "the regression needs the mounted first tree") }
-        CATransaction.begin()
-        defer { CATransaction.commit() }
+        beginTransaction()
         let recorded = TipsRecorded.install(in: self)
         let session = try fixture("BOOT_TIP"), nav = session.presenter.navigationHost
         XCTAssertNil(nav.bootOwner, "a first tree carrying a tip installs synchronously")
@@ -1166,7 +1145,7 @@ final class NavigationBootIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
         var snapshots: [[UInt32: [CGFloat]]] = []
         for synchronous in [false, true] {
-            CATransaction.begin()
+            beginTransaction()
             let session = try fixture("BARLESS_ROUTE", rotatable: synchronous), p = session.presenter, nav = p.navigationHost
             XCTAssertEqual(nav.bootOwner != nil, !synchronous)
             let route = try XCTUnwrap(nav.activeRoute), old = try XCTUnwrap(route.collapseScroll)
@@ -1183,7 +1162,7 @@ final class NavigationBootIOSTests: XCTestCase {
             XCTAssertTrue(route.collapseScroll === replacement)
             XCTAssertTrue(route.edgeScroll === replacement)
             let before = geometry(session)
-            CATransaction.commit()
+            commitTransaction()
             CATransaction.flush()
             XCTAssertNotNil(session.firstDrawMs)
             XCTAssertEqual(nav.bootOwner != nil, !synchronous)
@@ -1199,7 +1178,7 @@ final class NavigationBootIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else { throw missing("scene", "the boot owner needs a visible scene") }
         var focus: [Bool] = []
         for synchronous in [false, true] {
-            CATransaction.begin()
+            beginTransaction()
             let session = try fixture("BARLESS_ROUTE", rotatable: synchronous, batchEdit: { batch in
                 if let index = batch.ops.firstIndex(where: { $0.op == .create }) { batch.ops[index].handlers.insert("key") }
             }, beforeBoot: { _ in _ = FirstResponder.current?.resignFirstResponder() }), nav = session.presenter.navigationHost
@@ -1211,7 +1190,7 @@ final class NavigationBootIOSTests: XCTestCase {
             _ = FirstResponder.current?.resignFirstResponder()
             view.syncKeyboardFocus()
             XCTAssertEqual(nav.bootOwner != nil, !synchronous, "keyboard occupancy is a read")
-            CATransaction.commit()
+            commitTransaction()
             CATransaction.flush()
             XCTAssertNotNil(session.firstDrawMs)
             XCTAssertEqual(nav.bootOwner != nil, !synchronous)

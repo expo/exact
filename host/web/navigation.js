@@ -8,7 +8,7 @@ export { releaseAssets, devFirst } from "./navigation/assets.js";
 export { deferredFulfill, refusal } from "./navigation/requests.js";
 export { focusController, runFocusCommands } from "./navigation/focus.js";
 export { modalLayers, inertAncestor, stampOpenings } from "./navigation/layers.js";
-export { environment, keyboardInset, onKeyboard, fold, foldEnv, foldBits, onFold, evenSegments, preferFold, FOLD_EVENT, preferDisplayMode, preferences, displayMode, UPDATES, updateCode, handheld, onPreferences, pageReporter, placeReporter, timeReporter, launchLocation, launchVisits, reportTime, reportPlace } from "./navigation/environment.js";
+export { environment, keyboardInset, onKeyboard, fitVisualViewport, onVisualViewport, fold, foldEnv, foldBits, onFold, evenSegments, preferFold, FOLD_EVENT, preferDisplayMode, preferences, displayMode, UPDATES, updateCode, handheld, onPreferences, pageReporter, placeReporter, timeReporter, launchLocation, launchVisits, reportTime, reportPlace } from "./navigation/environment.js";
 export { contextAt, modalCommand, popoverCommand, popoverSource, placePopovers } from "./navigation/popover.js";
 export { appRootFontSize, fitText, noteFit, refitTexts, installFits } from "./navigation/type.js";
 export { noteSymbolEffect, playSymbolEffects, installSymbolEffects } from "./navigation/symbol.js";

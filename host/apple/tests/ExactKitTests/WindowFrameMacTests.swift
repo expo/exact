@@ -66,6 +66,94 @@ final class WindowFrameMacTests: XCTestCase {
         }
     }
 
+    func testSetBoundsLaysOutEveryStepAndAppKitSavesTheFrame() throws {
+        let (session, _, window) = try page(NSSize(width: 420, height: 270))
+        defer { window.close(); session.destroy() }
+        window.center()
+        let name = "exact-bounds-" + UUID().uuidString
+        defer { NSWindow.removeFrame(usingName: name) }
+        XCTAssertTrue(window.setFrameAutosaveName(name))
+        let compact = window.frame, placement = window.placement
+        let restored = NSWindow(contentRect: compact, styleMask: window.styleMask, backing: .buffered, defer: false)
+        restored.isReleasedWhenClosed = false
+        defer { restored.close() }
+        let top = try XCTUnwrap(NSScreen.screens.first).frame.maxY
+        var steps = 0
+        let observer = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: nil) { _ in
+            steps += 1
+            XCTAssertEqual(session.presenter.root.subviews.first?.frame.size, session.presenter.viewport.contentView.bounds.size)
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        for frame in [compact.insetBy(dx: -70, dy: -60), compact] {
+            let before = window.frame
+            steps = 0
+            placement.setBounds([[frame.minX, top - frame.maxY, frame.width, frame.height], true], on: window) { XCTFail($0) }
+            XCTAssertEqual(before, window.frame)
+            drain(5) { window.frame == frame }
+            XCTAssertEqual(window.frame, frame)
+            if ExactEnv.agentFreezes || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { XCTAssertEqual(steps, 1) }
+            else { XCTAssertGreaterThan(steps, 1) }
+            window.saveFrame(usingName: name)
+            XCTAssertTrue(restored.setFrameUsingName(name))
+            XCTAssertEqual(restored.frame, frame)
+        }
+        placement.setBounds([[compact.minX, top - compact.maxY, compact.width, compact.height]], on: window) { XCTFail($0) }
+        waitForMainQueue()
+        window.setFrameOrigin(NSPoint(x: compact.minX + 24, y: compact.minY))
+        window.saveFrame(usingName: name)
+        XCTAssertEqual(window.frameAutosaveName, name)
+        XCTAssertTrue(restored.setFrameUsingName(name))
+        XCTAssertEqual(restored.frame, window.frame)
+        XCTAssertNotEqual(restored.frame, compact)
+    }
+
+    func testBoundsRequestedDuringAnotherBoundsAnimationWins() throws {
+        let (session, _, window) = try page(NSSize(width: 420, height: 270))
+        defer { window.close(); session.destroy() }
+        let start = window.frame, top = try XCTUnwrap(NSScreen.screens.first).frame.maxY
+        let finish = start.insetBy(dx: -10, dy: -5)
+        func set(_ r: NSRect, _ animate: Bool) {
+            window.placement.setBounds([[r.minX, top - r.maxY, r.width, r.height], animate], on: window) { XCTFail($0) }
+        }
+        let native = start.insetBy(dx: -35, dy: -8)
+        for nativeLast in [true, false] {
+            window.setFrame(start, display: true)
+            Owner.shared.sync({ Owner.shared.callMain {
+                if nativeLast { set(finish, false) }
+                window.setFrame(native, display: true, animate: true)
+                if !nativeLast { set(finish, false) }
+            } }, busy: ())
+            waitForMainQueue()
+            XCTAssertEqual(window.frame, nativeLast ? native : finish)
+        }
+        window.setFrame(start, display: true)
+        set(finish, false)
+        window.setFrame(start.insetBy(dx: -24, dy: -14), display: true)
+        window.setFrame(start, display: true)
+        waitForMainQueue()
+        XCTAssertEqual(window.frame, start, "a later pair of changes can return to the starting frame")
+        for (queueAnother, intervene) in [(true, false), (true, true), (false, true)] {
+            window.setFrame(start, display: true)
+            var requested = false
+            let other = start.insetBy(dx: -24, dy: -14)
+            let observer = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: nil) { _ in
+                guard !requested else { return }
+                requested = true
+                if queueAnother { set(finish, false) }
+                if intervene { window.setFrame(other, display: true) }
+            }
+            set(start.insetBy(dx: -80, dy: -40), true)
+            let expected = intervene ? other : finish
+            drain(5) { window.frame == expected }
+            let settled = expectation(description: "queued frame applied or superseded")
+            DispatchQueue.main.async { settled.fulfill() }
+            wait(for: [settled], timeout: 2)
+            NotificationCenter.default.removeObserver(observer)
+            XCTAssertTrue(requested)
+            XCTAssertEqual(window.frame, expected)
+        }
+    }
+
     /// A frame change made after the animation was asked for, in the call or
     /// before its turn, is the window's frame: the animation does not undo it.
     func testAFrameChangeAfterADeferredAnimationWins() throws {

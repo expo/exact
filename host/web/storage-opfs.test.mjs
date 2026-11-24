@@ -1,5 +1,5 @@
 // @ref LLP 1027 D10 — database connections hand off the path lock and the OPFS handles together.
-import { afterAll, beforeAll, expect } from 'bun:test';
+import { afterAll, afterEach, beforeAll, expect } from 'bun:test';
 import { resolve } from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,14 +11,17 @@ import { hostFixtureFile } from './tests/glue-fixture.mjs';
 const engines = ['chromium', 'firefox', 'webkit'], tests = await engineTests(engines);
 const sqlite = resolve(import.meta.dir, '../../node_modules/@sqlite.org/sqlite-wasm/dist');
 let server;
+const held = new Set();
+afterEach(() => { for (const finish of held) finish(); });
 beforeAll(() => {
   server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
     if (path === '/') return new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } });
     if (path === '/hold') return new Promise(resolve => {
-      const finish = () => resolve(new Response('released'));
+      const finish = () => { held.delete(finish); clearTimeout(timer); resolve(new Response('released')); };
       const timer = setTimeout(finish, 10000);
-      request.signal.addEventListener('abort', () => { clearTimeout(timer); finish(); }, { once: true });
+      held.add(finish);
+      request.signal.addEventListener('abort', finish, { once: true });
     });
     if (path === '/cut.js') {
       const worker = hostFixtureFile(resolve(import.meta.dir, 'storage-worker.js'), 'utf8');
@@ -54,7 +57,7 @@ beforeAll(() => {
         return original.call(this, name, options);
       };`, { headers: { 'content-type': 'text/javascript' } });
     if (path === '/without-opfs.js') return new Response(
-      "import './storage-worker.js'; delete globalThis.FileSystemFileHandle?.prototype.createSyncAccessHandle;",
+      "import './storage-worker.js'; delete globalThis.FileSystemFileHandle?.prototype.createSyncAccessHandle; delete AbortSignal.any;",
       { headers: { 'content-type': 'text/javascript' } });
     const file = path === '/sqlite3.mjs' ? resolve(sqlite, 'index.mjs')
       : path === '/sqlite3.wasm' ? resolve(sqlite, 'sqlite3.wasm') : resolve(import.meta.dir, path.slice(1));
@@ -191,6 +194,15 @@ FileSystemSyncAccessHandle.prototype.getSize = function() {
 };
 const original = FileSystemSyncAccessHandle.prototype.write;
 FileSystemSyncAccessHandle.prototype.write = function(bytes, opts) {
+  if (cut === 'hot journal' && opts.at > 4096) {
+    const header = new Uint8Array(16);
+    this.read(header, { at: 4096 });
+    if (new TextDecoder().decode(header).startsWith('SQLite format 3')) {
+      original.call(this, bytes, opts);
+      this.flush();
+      checkpoint('hot journal');
+    }
+  }
   if (associating && cut === 'short association' && opts.at < 4096) return 0;
   if (associating && cut === 'changed payload' && bytes.byteLength >= 8192) {
     const altered = new Uint8Array(bytes).slice();
@@ -203,8 +215,12 @@ FileSystemSyncAccessHandle.prototype.write = function(bytes, opts) {
   }
   return original.call(this, bytes, opts);
 };
+let markers = 0;
 const put = IDBObjectStore.prototype.put;
 IDBObjectStore.prototype.put = function(value, ...args) {
+  if (cut === 'metadata quota' && value.kind === 'sqlite-opfs' && ++markers === 3) {
+    throw new DOMException('metadata quota', 'QuotaExceededError');
+  }
   const request = put.call(this, value, ...args);
   if (value.kind === 'sqlite-opfs') checkpoint('before publication');
   return request;
@@ -331,5 +347,204 @@ tests.chromium('empty files and Blob images import, and removing a staged source
       } finally { files.close(); }
     });
     expect(remaining).toEqual([1, 1]);
+  } finally { await context.close(); await browser.close(); }
+}, 30_000);
+
+const fileGrants = {
+  entries: [[1, 'fs.read app:/data', ['fs-read', 'app:', 'data'], null],
+    [2, 'fs.write app:/data', ['fs-write', 'app:', 'data'], null]],
+  error: null, keepsNoAnswers: false, seal: '855d78ac7052db66', version: 1,
+};
+
+// The filesystem in a second page uses only its file grants, including for a live snapshot.
+for (const engine of engines) tests[engine](`open and closed database paths are files (${engine})`, async () => {
+  const browser = await suiteBrowser(engine);
+  const profile = engine === 'webkit' ? mkdtempSync(resolve(tmpdir(), 'exact-db-file-')) : null;
+  try {
+    for (const worker of ['/storage-worker.js', '/without-opfs.js']) {
+      const context = profile && worker === '/storage-worker.js'
+        ? await webkit.launchPersistentContext(profile) : await browser.newContext();
+      try {
+        const [writer, reader] = await Promise.all([tab(context, 'files', worker), tab(context, 'files', worker)]);
+        await reader.evaluate(async grants => {
+          const { createFileSystem } = await import('/storage-fs.js');
+          globalThis.fs = createFileSystem('files', grants);
+          await fs.mkdir('app:/data/notes');
+        }, fileGrants);
+        const path = 'app:/data/notes/live', copy = 'app:/data/snapshot';
+        await writer.evaluate(async path => {
+          globalThis.db = await ask('open', path);
+          await ask('execute', db, 'create table notes(n)', []);
+          await ask('execute', db, 'insert into notes values(42)', []);
+          await ask('transaction', db, [{ sql: 'update notes set n=99' }, { sql: 'insert into missing values(1)' }], false)
+            .then(() => { throw new Error('invalid transaction committed'); }, () => {});
+        }, path);
+        const live = await reader.evaluate(async ({ path, copy }) => {
+          const image = new Uint8Array(await fs.readFile(path));
+          const stat = await fs.stat(path);
+          await fs.copyFile(path, copy);
+          const refused = async fn => fn.then(() => 'succeeded', e => e.code);
+          const codes = await Promise.all([fs.writeFile(path, new Uint8Array()), fs.appendFile(path, image),
+            fs.rm(path), fs.rename(path, copy), fs.copyFile(copy, path), fs.rm('app:/data/notes')].map(refused));
+          return [new TextDecoder().decode(image.subarray(0, 15)), stat.isFile && stat.size === image.length, codes];
+        }, { path, copy });
+        expect(live).toEqual(['SQLite format 3', true, Array(6).fill('EBUSY')]);
+        await writer.evaluate(async () => {
+          await ask('execute', db, 'update notes set n=43', []);
+          await ask('close', db);
+        });
+        const closed = await reader.evaluate(async ({ path, copy }) => {
+          const read = async path => {
+            const db = await ask('open', path);
+            try { return Number((await ask('query', db, 'select n from notes', [])).rows[0][0]); }
+            finally { await ask('close', db); }
+          };
+          const snapshot = await read(copy);
+          await fs.rename('app:/data/notes', 'app:/data/moved');
+          const moved = 'app:/data/moved/live';
+          const latest = await read(moved);
+          await fs.copyFile(copy, moved);
+          const restored = await read(moved);
+          await fs.rm(copy);
+          await fs.rename(moved, copy);
+          const before = (await fs.stat(copy)).size;
+          await fs.appendFile(copy, new Uint8Array([65]));
+          const appended = new Uint8Array(await fs.readFile(copy));
+          await fs.atomicWriteFile(copy, new Uint8Array([8, 9]));
+          const replaced = Array.from(new Uint8Array(await fs.readFile(copy)));
+          await fs.rm('app:/data/moved');
+          await fs.rm(copy);
+          return [snapshot, latest, restored, appended.length === before + 1 && appended.at(-1) === 65,
+            replaced, await fs.readdir('app:/data')];
+        }, { path, copy });
+        expect(closed).toEqual([42, 43, 42, true, [8, 9], []]);
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); if (profile) rmSync(profile, { recursive: true, force: true }); }
+}, 90_000);
+
+function parkSnapshot(page) {
+  return page.evaluate(() => {
+    const post = Worker.prototype.postMessage;
+    globalThis.captured = new Promise(captured => {
+      Worker.prototype.postMessage = function(data, ...rest) {
+        if (data.op === 'image') {
+          Worker.prototype.postMessage = post;
+          const deliver = this.onmessage;
+          this.onmessage = async event => {
+            if (event.data.client === data.client && event.data.id === data.id) {
+              this.onmessage = deliver;
+              await new Promise(resume => { globalThis.resume = resume; captured(); });
+            }
+            deliver.call(this, event);
+          };
+        }
+        return post.call(this, data, ...rest);
+      };
+    });
+  });
+}
+
+tests.chromium('opposite database copies publish snapshots in a serial order', async () => {
+  const browser = await suiteBrowser(), context = await browser.newContext();
+  try {
+    const pages = await Promise.all([tab(context, 'copies', '/storage-worker.js'), tab(context, 'copies', '/storage-worker.js')]);
+    const paths = ['app:/data/a', 'app:/data/b'];
+    await Promise.all(pages.map((page, i) => page.evaluate(async ({ grants, path, n }) => {
+      globalThis.fs = (await import('/storage-fs.js')).createFileSystem('copies', grants);
+      const db = await ask('open', path);
+      await ask('execute', db, 'create table notes(n)', []);
+      await ask('execute', db, 'insert into notes values(?)', [n]);
+      await ask('close', db);
+    }, { grants: fileGrants, path: paths[i], n: i + 1 })));
+    await Promise.all(pages.map(parkSnapshot));
+    const copies = pages.map((page, i) => page.evaluate(([from, to]) => fs.copyFile(from, to), [paths[i], paths[1 - i]]));
+    await Promise.all(pages.map(page => page.evaluate(() => captured)));
+    await Promise.all(pages.map(page => page.evaluate(() => resume())));
+    await Promise.all(copies);
+    const values = await Promise.all(pages.map((page, i) => page.evaluate(async path => {
+      const db = await ask('open', path);
+      try { return Number((await ask('query', db, 'select n from notes', [])).rows[0][0]); }
+      finally { await ask('close', db); }
+    }, paths[i])));
+    expect([1, 2]).toContain(values[0]);
+    expect(values[1]).toBe(values[0]);
+  } finally { await context.close(); await browser.close(); }
+}, 60_000);
+
+tests.chromium('a refused file metadata write leaves the SQL update uncommitted', async () => {
+  const browser = await suiteBrowser(), context = await browser.newContext();
+  try {
+    const page = await tab(context, 'metadata', '/cut.js?cut=metadata%20quota');
+    expect(await page.evaluate(async () => {
+      const path = 'app:/data/notes', db = await ask('open', path);
+      await ask('execute', db, 'create table notes(n)', []);
+      const result = await ask('execute', db, 'insert into notes values(7)', []).then(() => 'ok', e => e.message);
+      await ask('close', db);
+      const reopened = await ask('open', path);
+      try { return [result, Number((await ask('query', reopened, 'select count(*) from notes', [])).rows[0][0])]; }
+      finally { await ask('close', reopened); }
+    })).toEqual(['metadata quota', 0]);
+  } finally { await context.close(); await browser.close(); }
+}, 30_000);
+
+tests.chromium('a filesystem copy after a worker crash rolls back the hot journal', async () => {
+  const browser = await suiteBrowser(), context = await browser.newContext(), path = 'app:/data/notes';
+  try {
+    const reader = await tab(context, 'journal', '/storage-worker.js');
+    await reader.evaluate(async path => {
+      const db = await ask('open', path);
+      await ask('execute', db, 'create table notes(n)', []);
+      await ask('execute', db, 'insert into notes values(42)', []);
+      await ask('close', db);
+    }, path);
+    const writer = await tab(context, 'journal', '/cut.js?cut=hot%20journal');
+    expect(await writer.evaluate(async path => {
+      const db = await ask('open', path);
+      return ask('execute', db, 'update notes set n=99', []).catch(e => e.message);
+    }, path)).toBe('interrupted hot journal');
+    expect(await reader.evaluate(async ({ path, grants }) => {
+      const fs = (await import('/storage-fs.js')).createFileSystem('journal', grants);
+      const to = 'app:/data/snapshot';
+      await fs.copyFile(path, to);
+      const db = await ask('open', to);
+      try { return Number((await ask('query', db, 'select n from notes', [])).rows[0][0]); }
+      finally { await ask('close', db); fs.dispose(); }
+    }, { path, grants: fileGrants })).toBe(42);
+  } finally { await context.close(); await browser.close(); }
+}, 30_000);
+
+tests.chromium('copy publishes before a competing SQL update and a rejected statement preserves mtime', async () => {
+  const browser = await suiteBrowser(), context = await browser.newContext();
+  const from = 'app:/data/from', to = 'app:/data/to';
+  try {
+    const [writer, reader] = await Promise.all([tab(context, 'order', '/storage-worker.js'), tab(context, 'order', '/storage-worker.js')]);
+    await writer.evaluate(async path => {
+      globalThis.db = await ask('open', path);
+      await ask('execute', db, 'create table notes(n)', []);
+      await ask('execute', db, 'insert into notes values(1)', []);
+    }, from);
+    await reader.evaluate(async ({ grants, to }) => {
+      globalThis.fs = (await import('/storage-fs.js')).createFileSystem('order', grants);
+      await fs.writeFile(to, new Uint8Array([0]));
+    }, { grants: fileGrants, to });
+    await parkSnapshot(reader);
+    const copy = reader.evaluate(([from, to]) => fs.copyFile(from, to), [from, to]);
+    await reader.evaluate(() => captured);
+    const update = writer.evaluate(() => ask('execute', db, 'update notes set n=2', []));
+    await reader.waitForFunction(async () => (await navigator.locks.query()).pending.some(
+      lock => lock.name.startsWith('exact-sqlite-mutation:') && lock.mode === 'exclusive'));
+    expect(await reader.evaluate(async to => Array.from(new Uint8Array(await fs.readFile(to))), to)).toEqual([0]);
+    await reader.evaluate(() => resume());
+    await Promise.all([copy, update]);
+    const modified = await reader.evaluate(async path => (await fs.stat(path)).modifiedMs, from);
+    await writer.evaluate(() => ask('execute', db, 'invalid sql', []).then(() => { throw new Error('invalid SQL accepted'); }, () => {}));
+    expect(await reader.evaluate(async path => (await fs.stat(path)).modifiedMs, from)).toBe(modified);
+    expect(await writer.evaluate(async to => {
+      const copy = await ask('open', to);
+      try {
+        return await Promise.all([copy, db].map(async id => Number((await ask('query', id, 'select n from notes', [])).rows[0][0])));
+      } finally { await ask('close', copy); await ask('close', db); }
+    }, to)).toEqual([1, 2]);
   } finally { await context.close(); await browser.close(); }
 }, 30_000);

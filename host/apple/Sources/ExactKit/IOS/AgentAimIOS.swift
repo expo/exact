@@ -28,55 +28,97 @@ extension Agent {
     /// ([`overflowPresentationSource`](https://developer.apple.com/documentation/uikit/uinavigationitem/overflowpresentationsource))
     /// is refused, not pressed there: a tap is one touch on the item's own
     /// control, and that menu's rows have no identifier and can be scrolled
-    /// out of view. Any other item is placed only where `ownsControl` finds
-    /// its control.
+    /// out of view. Any other item is placed only where `ownedControl` finds
+    /// its control, in the bar or beside it.
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
         let place = presenter.navigation.barItem(node)
         #if os(iOS)
         guard case .success(let (_, frame))? = place, let (bar, item, navigationItem) = presenter.navigation.barButtonItem(node) else { return place }
+        // A hidden item has no control, in the bar or beside it, whatever frame UIKit reports for it
+        if item.isHidden { return .failure(BarItemMissing()) }
         let middle = CGPoint(x: frame.midX, y: frame.midY)
         if navigationItem.overflowPresentationSource?.frame(in: bar)?.contains(middle) == true { return .failure(BarItemMissing(overflowed: true)) }
         // A readout's view is its item's own
         if let own = item.customView { return own.window != nil ? place : .failure(BarItemMissing()) }
-        // Only a hit in this bar is judged: what covers the bar is `drawnCovered`'s to name
-        guard let hit = bar.window?.hitTest(bar.convert(middle, to: nil), with: nil), hit.isDescendant(of: bar) else { return place }
-        return ownsControl(item, of: navigationItem, frame: frame, hit: hit, in: bar) ? place : .failure(BarItemMissing())
+        // Only a hit in the views that draw this bar's items is judged: what covers them is `drawnCovered`'s to name
+        guard let hit = bar.window?.hitTest(bar.convert(middle, to: nil), with: nil), Self.itemHolders(of: bar).contains(where: { hit.isDescendant(of: $0) }) else { return place }
+        return ownedControl(item, of: navigationItem, frame: frame, hit: hit, in: bar) != nil ? place : .failure(BarItemMissing())
         #else
         return place
         #endif
     }
 
     #if os(iOS)
-    /// Whether `hit`, what a finger at the middle of `frame` reaches in
-    /// `bar`, is in the control UIKit shows for `item`. UIKit has no public
-    /// way from a control to its item, and names a control by its item's
-    /// identifier only once its accessibility is loaded, which a `tap`
-    /// without a real touch does not do. What it does say is the item's
-    /// frame, which is its own control's box: so the item owns a control
-    /// with that box that nothing else claims. Another item reporting the
-    /// same frame claims it, as does UIKit's name for it when that is not
-    /// the item's. Back claims the control with none of the bar's on its
+    /// The control UIKit shows for `item` where a finger at the middle of
+    /// `frame` lands (`hit`): the control the hit is in, or, where the hit is
+    /// in none, the only one with the item's box in the bar for a hit in the
+    /// bar, and inside the hit beside it (a group's shared glass around its
+    /// buttons); nil for no such control, or one another item or UIKit's name
+    /// claims. UIKit has no public way from
+    /// a control to its item, and names a control by its item's identifier
+    /// only once its accessibility is loaded, which a `tap` without a real
+    /// touch does not do. What it does say is the item's frame, which is its
+    /// own control's box: so the item owns a control with that box, in the
+    /// views that draw the bar's items, that nothing else claims. Another
+    /// item reporting the same frame claims it, as does UIKit's name for it
+    /// when that is not the item's. Where the system places no vertical bar,
+    /// Back claims the control of the bar with none of the bar's on its
     /// leading side: no item sits there (`leftItemsSupplementBackButton`).
-    /// Where the system places a vertical bar, Back is in that one.
-    private func ownsControl(_ item: UIBarButtonItem, of navigationItem: UINavigationItem, frame: CGRect, hit: UIView, in bar: UINavigationBar) -> Bool {
+    /// Where it places one (a closed iPhone Duo's cover panel), Back is in that
+    /// bar and claims nothing. There UIKit gives an item in the overflow menu
+    /// an empty frame, for which `NavigationHost.barItem` answers the More
+    /// button's; what it reports for a hidden item has not been measured (LLP
+    /// 1080.000 §13).
+    func ownedControl(_ item: UIBarButtonItem, of navigationItem: UINavigationItem, frame: CGRect, hit: UIView, in bar: UINavigationBar) -> UIView? {
+        let holders = Self.itemHolders(of: bar), holds = { (v: UIView) in holders.contains { $0 === v } }
+        guard holders.contains(where: { hit.isDescendant(of: $0) }) else { return nil }
         let same = { (a: CGRect, b: CGRect) in abs(a.minX - b.minX) <= 0.5 && abs(a.minY - b.minY) <= 0.5 && abs(a.maxX - b.maxX) <= 0.5 && abs(a.maxY - b.maxY) <= 0.5 }
         let box = { (v: UIView) in v.convert(v.bounds, to: bar) }
-        // Every control of the bar, shown or not: while a push settles the bar's views are no guide to what it shows
-        var controls: [UIView] = [], pending = bar.subviews
+        // Every control of those views, shown or not: while a push settles the bar's views are no guide to what it shows
+        var controls: [UIView] = [], pending = holders.flatMap(\.subviews)
         while let v = pending.popLast() {
             if v is UIControl { controls.append(v) } else { pending.append(contentsOf: v.subviews) }
         }
-        // The control reached, or the only one with that box where the hit is in none: a group's shared glass can
-        // leave the line through an item's middle out of its hit shape (iOS 27.0)
-        let reached = sequence(first: hit, next: \.superview).prefix(while: { $0 !== bar }).filter { $0 is UIControl }, boxed = controls.filter { same(box($0), frame) }
-        guard let control = reached.isEmpty && boxed.count == 1 ? boxed[0] : reached.first(where: { same(box($0), frame) }) else { return false }
-        let named = sequence(first: control, next: \.superview).prefix(while: { $0 !== bar }).lazy.compactMap(\.accessibilityIdentifier).first { !$0.isEmpty }
-        if let named, named != item.accessibilityIdentifier { return false }
+        // The control reached, or where the hit is in none the only one with that box, in the bar for a hit in the bar
+        // and inside the hit beside it: a group's shared glass can leave the line through an item's middle out of its
+        // hit shape (iOS 27.0), and beside the bar the hit then lands in the glass around the button
+        let reached = sequence(first: hit, next: \.superview).prefix(while: { !holds($0) }).filter { $0 is UIControl }
+        // Beside the bar the button is one the glass shows: nothing up to the hit hides it
+        let within = hit.isDescendant(of: bar) ? bar : hit
+        let shown = { (v: UIView) in within === bar || sequence(first: v, next: \.superview).prefix(while: { $0 !== within }).allSatisfy { !$0.isHidden } }
+        let boxed = controls.filter { same(box($0), frame) && $0.isDescendant(of: within) && shown($0) }
+        guard let control = reached.isEmpty && boxed.count == 1 ? boxed[0] : reached.first(where: { same(box($0), frame) }) else { return nil }
+        let named = sequence(first: control, next: \.superview).prefix(while: { !holds($0) }).lazy.compactMap(\.accessibilityIdentifier).first { !$0.isEmpty }
+        if let named, named != item.accessibilityIdentifier { return nil }
         let items = (navigationItem.leftBarButtonItems ?? []) + (navigationItem.rightBarButtonItems ?? [])
-        if items.contains(where: { other in other !== item && other.frame(in: bar).map { same($0, frame) } == true }) { return false }
-        guard bar.backItem != nil, !navigationItem.hidesBackButton, !bar.traitCollection.placesVerticalBar else { return true }
+        if items.contains(where: { other in other !== item && other.frame(in: bar).map { same($0, frame) } == true }) { return nil }
+        guard bar.backItem != nil, !navigationItem.hidesBackButton, !bar.traitCollection.placesVerticalBar, control.isDescendant(of: bar) else { return control }
         let rtl = bar.effectiveUserInterfaceLayoutDirection == .rightToLeft, own = box(control)
-        return controls.contains { $0 !== control && (rtl ? box($0).maxX > own.maxX + 0.5 : box($0).minX < own.minX - 0.5) }
+        return controls.contains { $0 !== control && $0.isDescendant(of: bar) && (rtl ? box($0).maxX > own.maxX + 0.5 : box($0).minX < own.minX - 0.5) } ? control : nil
+    }
+
+    /// The views UIKit may draw `bar`'s items in: the bar, and beside it each
+    /// view of its navigation controller's own view that holds a control but
+    /// not the controller's pages, such as the strip of the items on a closed
+    /// iPhone Duo's cover panel (iOS 27.1). Public API does not say which
+    /// draws them, so its toolbar is one too; a view with no control draws no
+    /// item, and covers what it is over, as does another navigation bar or a
+    /// view that holds one. Just the bar when the bar is not in its
+    /// controller's view or no view there holds the pages.
+    static func itemHolders(of bar: UINavigationBar) -> [UIView] {
+        guard let controller = bar.delegate as? UINavigationController, let holder = bar.superview, holder === controller.viewIfLoaded,
+              let pages = controller.topViewController?.viewIfLoaded,
+              holder.subviews.contains(where: { $0 !== bar && pages.isDescendant(of: $0) }) else { return [bar] }
+        let drawsItems = { (view: UIView) -> Bool in
+            var pending = view.subviews, control = false
+            while let v = pending.popLast() {
+                if v is UINavigationBar { return false }
+                control = control || v is UIControl
+                pending.append(contentsOf: v.subviews)
+            }
+            return control
+        }
+        return holder.subviews.filter { $0 === bar || (!($0 is UINavigationBar) && !pages.isDescendant(of: $0) && drawsItems($0)) }
     }
     #endif
 
@@ -196,22 +238,35 @@ extension Agent {
         let p = drawn.view.convert(CGPoint(x: drawn.region.midX, y: drawn.region.midY), to: nil)
         awaitAppOverlay(at: p, in: win)
         guard let hit = win.hitTest(p, with: nil) else { return "its middle is off the window" }
-        return obscured(drawn.inBar ? barItemTarget(node, bar: drawn.view, hit: hit) : drawn.view, at: p, hit: hit)
+        return obscured(drawn.inBar ? barItemTarget(node, bar: drawn.view, frame: drawn.region, hit: hit) : drawn.view, at: p, hit: hit)
     }
 
     /// What a hit at a bar item's middle must land in: the item's own button
-    /// when the hit is in it, found by the identifier Exact gives the item
-    /// (its test id) among the views this session shows, since UIKit can host
-    /// a glass item's button outside the bar's views; otherwise the bar. An
-    /// item without a test id has no identifier to find its button by, so
-    /// only the bar counts for it, where `barItem` has found the hit in the
-    /// item's own control.
-    func barItemTarget(_ node: NodeView, bar: UIView, hit: UIView) -> UIView {
-        guard let id = node.props["testId"] else { return bar }
+    /// when the hit is in it beside the bar, otherwise the bar or the view
+    /// beside it that draws the item. UIKit can host an item's
+    /// button outside the bar's views: a glass item's among the views this
+    /// session shows, found by the identifier Exact gives the item (its test
+    /// id); and on a closed iPhone Duo's cover panel a shown item's, in a
+    /// strip beside the bar (iOS 27.1, measured for Exact Chat's Options),
+    /// whose buttons carry no identifier while accessibility is not loaded,
+    /// found as `barItem` found it (`ownedControl`). `frame` is the item's, in
+    /// `bar`'s space.
+    func barItemTarget(_ node: NodeView, bar: UIView, frame: CGRect, hit: UIView) -> UIView {
         let chain = sequence(first: hit, next: { $0.superview })
         // Fall back to the bar in a nested session's view, which `Agent.shows` counts through this session's view
         if let nearest = chain.lazy.compactMap({ $0 as? ExactView }).first, nearest.session !== session { return bar }
-        return chain.first { $0.accessibilityIdentifier == id && Agent.shows(session, $0) } ?? bar
+        if let id = node.props["testId"], let named = chain.first(where: { $0.accessibilityIdentifier == id && Agent.shows(session, $0) }) {
+            return named
+        }
+        #if os(iOS)
+        // A hit in the bar lands in the bar, which `barItem` has judged
+        guard let (navigationBar, item, navigationItem) = presenter.navigation.barButtonItem(node), navigationBar === bar, !hit.isDescendant(of: bar),
+              let control = ownedControl(item, of: navigationItem, frame: frame, hit: hit, in: navigationBar) else { return bar }
+        // A control found by its box inside the hit (a group's shared glass): the hit lands in the glass, as in the bar
+        return hit.isDescendant(of: control) ? control : hit
+        #else
+        return bar
+        #endif
     }
 
     /// Whether `view` is in what `session` shows: its viewport, its view, or

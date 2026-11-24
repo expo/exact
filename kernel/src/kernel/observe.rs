@@ -64,6 +64,9 @@ pub(crate) struct Observations {
     /// block's space: its raw band less Exact's contributions (D11); `None`
     /// while it is unavailable.
     bands: IdMap<u32, Option<[f32; 4]>>,
+    /// Each owner root's own additional insets as its host measured their effect, where it wrote
+    /// them (D11, D3): UIKit's floor can hold a negative one on a child controller.
+    pub(crate) root_effects: IdMap<u32, [f32; 4]>,
     /// The session view's band, in the document's space.
     session: [f32; 4],
     /// Each reader's input, what its lengths resolve against.
@@ -226,6 +229,7 @@ impl Observations {
     pub(crate) fn forget(&mut self, slot: u32) {
         self.targets.forget(slot);
         self.bands.remove(&slot);
+        self.root_effects.remove(&slot);
         self.spaces.remove(&slot);
         self.forget_taken(slot);
         self.passing.remove(&slot);
@@ -282,10 +286,23 @@ impl Kernel {
             .ok_or(LayoutError::UnknownView(view))?;
         check_band(band.as_ref(), contributions)?;
         let cleared = super::block::clearance(&self.arena, slot);
-        let observations = &mut self.arena.observations;
         let band = band.map(|raw| provenance::incoming(raw, contributions));
+        // The root's own additional insets as UIKit applied them, which D3 clears
+        let root = self.arena.local_id(slot);
+        let effect = (contributions.iter())
+            .find(|c| c.node == root && c.operation == provenance::Operation::AdditionalInsets)
+            .map(|c| c.effect);
+        let observations = &mut self.arena.observations;
+        let effect_moved = match effect {
+            Some(e) => observations.root_effects.insert(slot, e) != Some(e),
+            None => observations.root_effects.remove(&slot).is_some(),
+        };
         if observations.bands.insert(slot, band) == Some(band) {
-            return Ok(false);
+            // The root's own effect alone moved: what it moves is the clearance and its slots
+            let moved = effect_moved && super::block::clearance(&self.arena, slot) != cleared;
+            return Ok(
+                moved || effect_moved && super::block::Blocks::slots_moved(&self.arena, slot)
+            );
         }
         observations.invalidate_band(Some(slot));
         let moved = super::block::clearance(&self.arena, slot) != cleared;

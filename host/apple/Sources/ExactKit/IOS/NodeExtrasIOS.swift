@@ -244,6 +244,7 @@ final class NodeExtras {
     weak var bandOver: NodeView?
     var navigationPaint = NavigationPaintRole.sibling
     var edgeInteraction: AnyObject?
+    var scrollportHolder: ScrollportHolder?
     var scrollWritten: String?
     /// A hatched node whose hatch undoes its own additions: its row may be
     /// reused (LLP 1075.003.000.000 §8).
@@ -573,6 +574,8 @@ extension NodeView {
     package var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
     var bandOver: NodeView? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
+    /// The view holding its bars on its scrollport, over its scroll view (`ScrollportBars`, LLP 1123 D12).
+    package var scrollportHolder: ScrollportHolder? { get { extras?.scrollportHolder } set { if newValue != nil || extras != nil { more.scrollportHolder = newValue } } }
     /// Whether a touch at `point` can reach this box's children. Overflow
     /// that is not visible clips them at the padding edge (CSS Overflow 3
     /// §3), so a touch on the border is the box's own, as a browser hit-tests

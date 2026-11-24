@@ -8,6 +8,27 @@ use contract_syntax::{Expanded, Instance, Span};
 use exact_kernel::StyleId;
 use exact_plan::{BindingKind, BindingsRow};
 
+/// Source metadata to emit alongside the compiled program.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum SourceOutput {
+    /// Keep authored places in the release plan.
+    Places,
+    /// Also produce the development source map.
+    Mapped,
+    /// Omit authored places for comparisons between spellings.
+    Comparison,
+}
+
+impl From<bool> for SourceOutput {
+    fn from(mapped: bool) -> Self {
+        if mapped {
+            Self::Mapped
+        } else {
+            Self::Places
+        }
+    }
+}
+
 /// Where every row the map describes came from, in plan order.
 #[derive(Debug, Clone)]
 pub struct Sites {

@@ -23,8 +23,9 @@ pub(super) struct ElementStep<'n> {
     pub(super) rows: u8,
 }
 
-pub(super) fn builder(ex: &contract_syntax::Expanded) -> PlanBuilder {
+pub(super) fn builder(places: Option<&contract_syntax::Expanded>) -> PlanBuilder {
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, compiler_identity());
+    let Some(ex) = places else { return b };
     for step in &ex.steps {
         use contract_syntax::inline::SourceKind;
         use exact_plan::PlaceKind;
@@ -1115,8 +1116,8 @@ impl Lowerer<'_> {
             &handler_refs,
             surface,
         );
-        if let Some(step) = place {
-            self.b.set_node_place(id, exact_plan::PlaceStepsId(*step));
+        if let Some(step) = place.filter(|_| self.source_places.is_some()) {
+            self.b.set_node_place(id, exact_plan::PlaceStepsId(step));
         }
         if !look_rows.is_empty() {
             self.b.set_looks(id, &look_rows);

@@ -57,11 +57,11 @@ component Overlay
             text "Start"
 ```
 
-Each target's cell is in `docs/reference.md`, "The displays and the pointer".
+See [host support](../reference.md#the-displays-and-the-pointer-exactwindow-management) and [window bounds](window-bounds.md).
 
-Under the agent the declaration answers one 1440 × 900 display at scale 2
-and a pointer at its centre, the window at its top left. A drive replaces
+The agent supplies one 1440 × 900 display at scale 2, the pointer centred
+and the window at its top left. A drive replaces
 either with `prefer extension window-management.getScreenDetails={…}` or
 `window-management.getPointerPosition={…}`, each a whole value; on the web
-the first read raises the permission's ticket. `--bind window-management`
-reads the platform instead (macOS, Linux and Windows).
+the first read raises a permission ticket. `--bind window-management`
+reads the platform (macOS, Linux, Windows).
