@@ -328,6 +328,8 @@ package protocol NavigationHosting: AnyObject {
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>?
     func tipItem(_ node: NodeView) -> (UIBarButtonItem, UIViewController)?
     #if os(iOS)
+    /// The bar's title that shows `node`, the pressable group the page hides for it, now
+    func titleSurface(for node: NodeView) -> (any UIView & TitleMenuSurface)?
     /// Whether `dialog`'s sheet would show its header as its bar now: its
     /// sheet is then presented in a navigation controller.
     func wantsDialogBar(_ dialog: NodeView) -> Bool
@@ -636,6 +638,7 @@ package final class NoNavigation: NavigationHosting {
     package func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? { nil }
     package func tipItem(_ node: NodeView) -> (UIBarButtonItem, UIViewController)? { nil }
     #if os(iOS)
+    package func titleSurface(for node: NodeView) -> (any UIView & TitleMenuSurface)? { nil }
     package func wantsDialogBar(_ dialog: NodeView) -> Bool { false }
     package func projectDialogBar(_ dialog: NodeView, on controller: UIViewController) -> Bool {
         controller.navigationController?.setNavigationBarHidden(true, animated: false)

@@ -132,6 +132,7 @@ let agentSources = ProcessInfo.processInfo.environment["EXACT_UPDATE_TRUST"] == 
     "IOS/AgentPanIOS.swift",
     "IOS/AgentPictureIOS.swift",
     "IOS/AgentRevealIOS.swift",
+    "IOS/AgentTitleIOS.swift",
     "Mac/AgentMac.swift",
     "Mac/AgentMouseMac.swift",
     "Mac/AgentNativeMac.swift",

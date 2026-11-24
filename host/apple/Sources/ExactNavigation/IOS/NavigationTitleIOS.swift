@@ -253,6 +253,10 @@ extension HeaderShape {
 final class HeaderTitleView: UIControl {
     private weak var host: NavigationHost?
     private var tap: UInt32?
+    #if os(iOS)
+    /// The pressable group the title stands for, as mounted when the title last updated
+    private weak var source: NodeView?
+    #endif
     #if EXACT_INSPECT
     /// The heading's group this title is drawn from (inspect mode selects it).
     private(set) var groupId: UInt32?
@@ -380,6 +384,12 @@ final class HeaderTitleView: UIControl {
     /// label's `textColor` recolours all of its attributed text (Apple,
     /// `UILabel.textColor`), so a coloured symbol in the line would take it.
     func update(_ group: HeaderTitle, title text: String, ink: UIColor = .label) {
+        tap = group.tap
+        #if os(iOS)
+        source = group.tap.flatMap { host?.presenter.views[$0] }
+        // The group's menu can come or go without a change to the title's drawing
+        host?.presenter.syncGroupedMenu(on: self)
+        #endif
         // Every batch projects the routes again: an unchanged title is left
         // alone, since invalidating its size relaid the whole navigation
         // bar out each time (~1 ms a batch, a fling's every frame).
@@ -390,7 +400,6 @@ final class HeaderTitleView: UIControl {
         #if EXACT_INSPECT
         groupId = group.id
         #endif
-        tap = group.tap
         avatar.image = group.avatar?.image
         avatar.isHidden = group.avatar == nil
         avatarWidth.constant = group.avatar?.size ?? 0
@@ -414,6 +423,40 @@ final class HeaderTitleView: UIControl {
         if let tap { _ = host?.presenter.hatchAct(tap, 0, NavigationMarks.shared.personNow()) }
     }
 }
+
+#if os(iOS)
+extension HeaderTitleView: TitleMenuSurface {
+    var menuSource: NodeView? {
+        guard let source, host?.presenter.views[source.id] === source else { return nil }
+        return source
+    }
+    var showsSource: Bool { menuSource.map { host?.projectedTitle(for: $0) === self } ?? false }
+    var avatarLift: (view: UIView, outline: UIBezierPath)? {
+        guard let face = shown?.0.avatar, !avatar.isHidden else { return nil }
+        return (avatar, UIBezierPath(cgPath: face.outline(in: avatar.bounds)))
+    }
+}
+
+extension NavigationHost {
+    /// The title a bar shows now for `node`, the pressable group the page
+    /// hides for it: on top of its stack's bar, which may be a collapsed
+    /// split column's own (`barShowing`).
+    func projectedTitle(for node: NodeView) -> HeaderTitleView? {
+        controllers.values.lazy.compactMap { c -> HeaderTitleView? in
+            guard let title = c.titleView, c.navigationItem.titleView === title, title.menuSource === node, title.window != nil, !title.isHidden, title.alpha > 0,
+                  let bar = Self.barShowing(title), bar.topItem === c.navigationItem, !bar.isHidden, bar.alpha > 0 else { return nil }
+            return title
+        }.first
+    }
+
+    /// The bar a title view is shown in: a collapsed split shows a route
+    /// pushed in its column in that column's own bar, not its navigation
+    /// controller's `navigationBar`.
+    static func barShowing(_ title: UIView) -> UINavigationBar? {
+        sequence(first: title.superview, next: { $0?.superview }).lazy.compactMap { $0 as? UINavigationBar }.first
+    }
+}
+#endif
 
 extension NavigationHost {
 

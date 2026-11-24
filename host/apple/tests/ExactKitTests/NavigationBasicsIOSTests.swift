@@ -49,9 +49,9 @@ final class NavigationBasicsIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
+    func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 
-    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
+    func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
         let deadline = Date().addingTimeInterval(seconds)
         while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(done(), what)
@@ -59,7 +59,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
 
     /// A session over the native fixture's plan, or over the one `plan`
     /// names: `EXACT_NAVIGATION_BARS_PLAN` is `scripts/fixtures/navigation-bars.contract`.
-    private func fixture(_ label: String, plan: String = "EXACT_FIXTURE_PLAN", launch: String? = nil) throws -> ExactSession {
+    func fixture(_ label: String, plan: String = "EXACT_FIXTURE_PLAN", launch: String? = nil) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env[plan], "build.mjs --test --ios compiles the fixtures' plans")))
         ExactGroupedLists.install() // navigation-bars.contract's `rows` route is a grouped list
@@ -85,13 +85,13 @@ final class NavigationBasicsIOSTests: XCTestCase {
         return session
     }
 
-    private func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
+    func node(_ session: ExactSession, _ testId: String) throws -> NodeView {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
     }
 
     private func journal(_ session: ExactSession) -> String { session.agent(#"{"op":"logs","since":0}"#) }
 
-    private func text(_ session: ExactSession, _ testId: String) -> String? {
+    func text(_ session: ExactSession, _ testId: String) -> String? {
         (try? node(session, testId))?.accessibleText
     }
 
@@ -380,7 +380,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
     }
 
     /// Home's stack with Chat pushed on it.
-    private func chat(_ session: ExactSession) throws -> (UITabBarController, UINavigationController, RouteController) {
+    func chat(_ session: ExactSession) throws -> (UITabBarController, UINavigationController, RouteController) {
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
         try tapNode(session, "chat")

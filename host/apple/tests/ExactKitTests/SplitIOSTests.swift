@@ -433,6 +433,32 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertFalse(split.list.isNavigationBarHidden, "collapsed, the headerless page shows UIKit's bar with its Back")
     }
 
+    /// Collapsed, a route pushed in the detail's column shows its title in
+    /// the list's bar, whatever the detail's own bar was: a pressable title's
+    /// menu stands there (LLP 1021 §5.1), after a bare page hid the detail's.
+    func testAPressableTitleInTheCollapsedListsBarHasItsMenu() throws {
+        let session = try boot(size: CGSize(width: 1100, height: 800), width: .regular)
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        let split = try split(session)
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        try tap(session, "row-bare")
+        until("the bare page, its column's bar hidden") { split.detail.isNavigationBarHidden && !agent.nativeInFlight() }
+        window?.traitOverrides.horizontalSizeClass = .compact
+        until("collapsed") { split.controller.isCollapsed && split.nested && !agent.nativeInFlight() }
+        split.list.popToRootViewController(animated: false)
+        until("the list again") { split.shown.count == 1 && !agent.nativeInFlight() }
+        try tap(session, "row-titled")
+        let group = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "titled-group" })
+        until("the titled page's title in the list's bar") {
+            navigation.projectedTitle(for: group).map { NavigationHost.barShowing($0) === split.list.navigationBar } == true
+        }
+        let title = try XCTUnwrap(navigation.projectedTitle(for: group)), menus = session.presenter.menus.context
+        let interaction = try XCTUnwrap(title.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
+        let configuration = try XCTUnwrap(menus.contextMenuInteraction(interaction, configurationForMenuAtLocation: CGPoint(x: title.bounds.midX, y: title.bounds.midY)),
+                                          "a long press on the title there opens the group's menu")
+        menus.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
+    }
+
     /// LLP 1127 D8: a sheet over the expanded split covers both columns
     /// first, the list beside the detail with them, which still show under
     /// it; a full-screen cover hides them.

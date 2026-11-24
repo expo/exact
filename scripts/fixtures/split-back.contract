@@ -13,7 +13,7 @@
 // book's and the photo's headers have an item, and a book's and the notes'
 // Back is their `id="back"` control. Plain makes the root say
 // `navigationSplit="none"`, and the stack pushes as one that does not split.
-// Page's row is current while a page shows; one row's press pushes book c,
+// A titled page's pressable title names a menu. Page's row is current while a page shows; one row's press pushes book c,
 // another's replaces the book with book d, and another's shows book c alone.
 routes nav
   library "/"
@@ -24,6 +24,7 @@ routes nav
     page "/page/:id"
     photo "/photo/:id"
     bare "/bare/:id"
+    titled "/titled/:id"
 
 keyframes enter-end
   from opacity=0 translate="10% 0"
@@ -100,6 +101,9 @@ component App
                 link href=path("bare", "x") testId="row-bare"
                   text "Bare"
                   image "symbol:forward-chevron"
+                link href=path("titled", "t") testId="row-titled"
+                  text "Titled"
+                  image "symbol:forward-chevron"
         if e.name == "book"
           for r in [renewals] key=r
             column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column" testId=`book-${e.params.id}`
@@ -143,6 +147,14 @@ component App
         if e.name == "bare"
           column navigationKey=`${e.id}` navigationBar="none" position="absolute" inset=0 testId="bare-page"
             text "A bare page"
+        if e.name == "titled"
+          column navigationKey=`${e.id}` position="absolute" inset=0 testId="titled-page"
+            header
+              button press=count contextPopover="titled-menu" testId="titled-group"
+                text "Titled" role="heading" aria-level=2
+            column id="titled-menu" popover="auto" role="menu"
+              button press=count popovertarget="titled-menu" popovertargetaction="hide" testId="titled-count"
+                text "Count"
         if e.name == "photo"
           column navigationKey=`${e.id}` navigationSource=`art-${e.params.id}` position="absolute" inset=0 testId="photo-page"
             header

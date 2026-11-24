@@ -197,6 +197,10 @@ extension NavigationHost: NavigationHosting {
         arrangementScrollers(in: route, top: true) + arrangementScrollers(in: route, top: false)
     }
 
+    #if os(iOS)
+    func titleSurface(for node: NodeView) -> (any UIView & TitleMenuSurface)? { projectedTitle(for: node) }
+    #endif
+
     /// The navigation bar item a shown route's bar draws for `node`, and
     /// the route it is in; nil when no shown bar stands for it, or something
     /// is presented over its route.

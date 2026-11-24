@@ -323,6 +323,10 @@ extension Agent {
             }
             target = field; barred = true
         }
+        #if os(iOS)
+        // A header's pressable group the bar's title stands for: the title.
+        if flat == nil, target === v, let title = presenter.navigation.titleSurface(for: v) { target = title; barred = true }
+        #endif
         // A tab a tab bar shows, UIKit's or the one its tablist is drawn as: its item there.
         if flat == nil, target === v, let item = tabItem(v) {
             switch item {

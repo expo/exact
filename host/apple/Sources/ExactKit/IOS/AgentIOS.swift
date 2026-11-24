@@ -537,6 +537,10 @@ extension Agent {
             if req["contextmenu"] == nil, req["dblclick"] == nil, node.activateInline(id) { return delivered(["tapped": Int(id), "delivery": "host-activation", "native": "inline-text"], node) }
         }
 
+        #if os(iOS)
+        if let reply = titleContext(req) { return delivered(reply, view(req)) }
+        #endif
+
         // A held contact (LLP 1035.003 D1) needs a touch that stays down
         // across requests, which XCTest's touches do not (LLP 1080.000 P3):
         // the iOS carrier says so rather than activating a node and calling it

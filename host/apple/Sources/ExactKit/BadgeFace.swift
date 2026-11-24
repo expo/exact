@@ -20,6 +20,8 @@ package struct BadgeFace: Equatable {
     package let pictureNode: UInt32?
     let light: [[Double]], dark: [[Double]]
     let corners: [CGSize]
+    /// The face's outline in `rect`, its box's corners
+    package func outline(in rect: CGRect) -> CGPath { BorderPaint.roundedRect(rect, corners, shape: nil) }
     #if !os(macOS)
     private let darkScheme: Bool
     private let textSize: CGFloat

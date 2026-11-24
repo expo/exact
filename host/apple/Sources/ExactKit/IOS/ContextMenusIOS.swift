@@ -38,12 +38,23 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     final class Open {
         weak var source: NodeView?
         weak var popover: NodeView?
+        /// A title's avatar as its highlight lifted it, which its dismissal returns to, decided at the first ask: none
+        /// there then lifts the whole title throughout
+        var titleLift: (view: UIView, outline: UIBezierPath)??
         /// The popover's name, or the `href` of the link the host's own menu is for (`isLink`).
         let name: String
         let inlineID: UInt32?
         /// The URL the host's own link menu copies and shares, resolved at the press; nil for an authored popover
         let linkURL: URL?
         var isLink: Bool { linkURL != nil }
+        /// Whether a bar's title opened it: it stands while the bar shows that
+        /// title for the source, never on the page's terms, as the page hides
+        /// the source for the bar
+        var fromTitle = false
+        /// For a title's menu, whether it lifts the avatar alone (no preview
+        /// row), decided once so the highlight, the preview and the
+        /// dismissal agree (`liftsAvatar`)
+        var avatarOnly: Bool?
         let point: CGPoint
         /// Whether the source's own `contextmenu` has fired (once, lazily).
         var fired = false
@@ -141,6 +152,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         // animation still holds the row; its `willEnd` returns it.
         if let owner = open, !owner.committed,
            !(owner.source.map { live($0) && contextName(owner) == owner.name } ?? false)
+            || owner.fromTitle && current(owner) == nil
             || owner.keyboardConfiguration != nil && current(owner) == nil {
             open = nil
             owner.interaction?.dismissMenu()
@@ -296,7 +308,10 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
 
     /// The source's `contextmenu`, once, before the rows or the preview are read.
     private func fire(_ owner: Open) {
-        guard !owner.fired else { return }
+        // A configuration a later one replaced fires nothing
+        guard !owner.fired, open === owner else { return }
+        // A title's group hears it only while the bar shows that title for it
+        if owner.fromTitle, (owner.interaction?.view as? TitleMenuSurface)?.showsSource != true { return }
         owner.fired = true
         guard let source = owner.source, live(source), !source.formDisabled else { return }
         source.deliverContext(at: owner.point, inline: owner.inlineID)
@@ -315,9 +330,12 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         guard !owner.isLink else { return nil }
         // A cell may have been reused while UIKit still holds its menu.
         if let cell = owner.interaction?.view as? GroupedMenuSurface, cell.menuSource !== owner.source { return nil }
+        // A title's menu ends as its bar stops showing it for the source (a
+        // hatch's replacement, a detached title)
+        if owner.fromTitle, (owner.interaction?.view as? TitleMenuSurface)?.showsSource != true { return nil }
         // Its own action, which has run, may have disabled, hidden or moved it.
         guard let source = owner.source, live(source), contextName(owner) == owner.name,
-              menus?.eligible(source, contextMenu: true) == true, let pop = popover(named: owner.name) else { return nil }
+              menus?.eligible(source, contextMenu: true, inBar: owner.fromTitle) == true, let pop = popover(named: owner.name) else { return nil }
         owner.popover = pop
         return pop
     }
@@ -359,6 +377,12 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             if let hit, presenter?.navigation.relayMounts.contains(where: { hit.isDescendant(of: $0.mount) && $0.mount.isDescendant(of: node) }) == true {
                 return nil
             }
+        } else if let title = view as? (UIView & TitleMenuSurface), let found = title.menuSource {
+            // Only where the bar shows the title, and a finger reaches it
+            guard title.showsSource, title.bounds.contains(location), let window = title.window,
+                  let shown = window.hitTest(title.convert(location, to: window), with: nil),
+                  shown === title || shown.isDescendant(of: title) else { return nil }
+            source = found; point = found.convert(location, from: title); hit = title
         } else if let cell = view as? (UIView & GroupedMenuSurface), let found = cell.menuSource {
             source = found; point = location; hit = cell
         } else if let mount = view as? any RelayMount, let relay = mount.relay, !relay.runAnswers(mount.hitTest(location, with: nil), at: location),
@@ -375,7 +399,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         let visit = presenter?.session?.routerOp?["url"] as? String ?? "/"
         let link = authored == nil && view is NodeView ? source.peekedLink(at: point, relativeTo: NodeView.linkMenuBase(visit: visit)) : nil
         if let link { run = link.run }
-        guard live(source), let name = authored ?? link?.href, menus.eligible(source, contextMenu: true) else { return nil }
+        let fromTitle = view is TitleMenuSurface
+        guard live(source), let name = authored ?? link?.href, menus.eligible(source, contextMenu: true, inBar: fromTitle) else { return nil }
         // UIKit's row menu wins over text selection. An authored menu
         // nearer the hit still belongs to that node (LLP 1115.000 D11.6).
         if view is NodeView ? NodeView.nativeEditor(hit, below: view) : NodeView.nativeInputOwns(hit, below: view) { return nil }
@@ -387,6 +412,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         if let previous = open { restore(previous) }
         let owner = Open(source: source, popover: pop, name: name, point: point, inlineID: run?.id, linkURL: link?.url)
         owner.interaction = interaction
+        owner.fromTitle = fromTitle
+        // A title's lift is the popover's as written when the press begins, before its `contextmenu` can change it
+        if fromTitle { _ = liftsAvatar(owner) }
         if !(view is NodeView) { owner.touched = hit }
         open = owner
         // A run's picture as the finger lands: UIKit asks for the configuration
@@ -477,12 +505,13 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         guard open === owner else { return nil }
         // Asked again, the same controller: the row is already in it.
         if owner.preview != nil, let controller = owner.controller { return controller }
-        guard let pop = current(owner) else { return nil }
+        // A title that lifts its avatar has no preview row (`liftsAvatar`)
+        guard let pop = current(owner), !(owner.fromTitle && liftsAvatar(owner)) else { return nil }
         // Laid out first: a closed popover has no box (`MenuHost.layOut`).
         menus?.layOut(pop)
         let rows = pop.container.subviews.compactMap { $0 as? NodeView }.filter { $0.props["contextPreview"] == "true" }
         guard rows.count <= 1 else { log("context menu \(owner.name) refused a preview: \(rows.count) contextPreview rows; at most one"); return nil }
-        guard let row = rows.first, !row.isHidden, row.bounds.width > 0, row.bounds.height > 0 else { return nil }
+        guard let row = rows.first, !row.isHidden, !row.cssVisibilityHidden, row.bounds.width > 0, row.bounds.height > 0 else { return nil }
         let controller = PreviewController()
         owner.homePopover = pop
         owner.container = pop.container; owner.inPopover = true
@@ -532,7 +561,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// what lies under the run's lines (`runPreview`), and the paragraph stays
     /// shown. Both rise over `LiftTarget.container(of:)`.
     private func targeted(_ configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
-        guard let owner = open, let source = owner.source, live(source),
+        guard let owner = open, owner.configuration === configuration, let source = owner.source, live(source),
               (configuration.identifier as? NSNumber)?.uint32Value == (owner.inlineID ?? source.id) else { return nil }
         if let id = owner.inlineID {
             // Nil where the run no longer shows lines, its text gone
@@ -544,8 +573,23 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             hideRun(owner, lines)
             return preview.retargetedPreview(with: lines.target)
         }
+        // A title the bar no longer shows has no place to lift from or return to
+        if owner.fromTitle, (owner.interaction?.view as? TitleMenuSurface)?.showsSource != true { return nil }
         // A view the touch fell on that has left the window gives way to the node
         let shown = owner.touched.flatMap { $0.window == nil ? nil : $0 } ?? source
+        // A title with no preview row lifts its avatar alone, in its outline
+        if owner.fromTitle, liftsAvatar(owner) {
+            // Decided at the first ask: the avatar then, or none, which lifts the whole title throughout
+            if owner.titleLift == nil { owner.titleLift = .some((shown as? TitleMenuSurface)?.avatarLift) }
+            if case let avatar?? = owner.titleLift {
+                // One its `contextmenu` hid or removed has no place to return to
+                guard avatar.view.window != nil, !avatar.view.isHidden, let target = LiftTarget.target(avatar.view) else { return nil }
+                let parameters = UIPreviewParameters()
+                parameters.visiblePath = avatar.outline
+                parameters.backgroundColor = .clear
+                return UITargetedPreview(view: avatar.view, parameters: parameters, target: target)
+            }
+        }
         if source.placedAncestor?.placement != nil { return Self.placedPreview(of: shown, in: source) }
         let parameters = UIPreviewParameters()
         parameters.visiblePath = LiftTarget.rounded(shown)
@@ -558,6 +602,17 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
         guard let target = LiftTarget.target(shown) else { return nil }
         return UITargetedPreview(view: shown, parameters: parameters, target: target)
+    }
+
+    /// Whether a title's menu lifts its avatar alone: its popover holds no
+    /// preview row. Read from the popover's rows as written, not as shown, so
+    /// the highlight, which UIKit asks for as the press begins, fires nothing
+    /// and agrees with the preview and the dismissal; decided at the first ask.
+    private func liftsAvatar(_ owner: Open) -> Bool {
+        if let decided = owner.avatarOnly { return decided }
+        let decided = !(popover(named: owner.name)?.childNodes.contains { $0.props["contextPreview"] == "true" } ?? false)
+        owner.avatarOnly = decided
+        return decided
     }
 
     /// A box inside a canvas child its surface places, lifted from where the
@@ -1215,7 +1270,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         guard let owner = open, let presenter, let row = owner.preview, live(row), row.handlers.contains("press"),
               let pop = owner.homePopover, live(pop), current(owner) === pop, !owner.dropped,
               owner.inPopover,
-              let source = owner.source, committable(row, in: pop, from: source) else { return }
+              let source = owner.source, committable(row, in: pop, from: source, inBar: owner.fromTitle) else { return }
         owner.committed = true
         let before = presenter.navigation.activeKey
         // Held until the stack has applied it: a push deferred behind a
@@ -1254,8 +1309,9 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// reads it but for the popover's own hiding: nothing disabled, inert or
     /// hidden (the row itself included), in the active route, and the source
     /// still eligible.
-    private func committable(_ row: NodeView, in pop: NodeView, from source: NodeView) -> Bool {
-        guard let presenter, let menus, !row.disabled, !row.isHidden, row.props["inert"] != "true", menus.eligible(source, contextMenu: true),
+    /// `inBar`: the source is a title's group, which the page hides for the bar.
+    private func committable(_ row: NodeView, in pop: NodeView, from source: NodeView, inBar: Bool) -> Bool {
+        guard let presenter, let menus, !row.disabled, !row.isHidden, row.props["inert"] != "true", menus.eligible(source, contextMenu: true, inBar: inBar),
               !presenter.navigation.isInactiveRoute(containing: pop) else { return false }
         var view: UIView? = pop
         while let current = view {

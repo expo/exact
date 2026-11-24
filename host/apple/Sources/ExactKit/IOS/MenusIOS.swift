@@ -850,8 +850,8 @@ package final class MenuHost {
         }
         let anchorView: UIView = source.isNativeButton ? presenter.controls.controls[source.id] ?? source : source
         var anchor = anchorView.convert(anchorView.bounds, to: entry.layer), scroll = presenter.anchorScroll(anchorView, outside: entry.layer)
-        // A bar item's popover opens from the item, not its hidden button (`agentOpen(barItem:)`).
-        if case .success(let (bar, item))? = presenter.navigation.barItem(source) { (anchor, scroll) = (bar.convert(item, to: entry.layer), .zero) }
+        // A popover opens from what the bar draws for its source (`barAnchor`), not the hidden node (`agentOpen(barItem:)`).
+        if let drawn = presenter.barAnchor(of: source, in: entry.layer) { (anchor, scroll) = (drawn, .zero) }
         // Sized in its option's region, as the web's (PopoverRegion.swift). The overflow's page: the
         // document less the bands past its area (status bar, home indicator).
         let at = presenter.placePainted(pop, laid: pop.bounds.size, anchor: anchor, scroll: scroll, pageScroll: presenter.viewport.contentOffset, overflow: PositionArea.overflow(of: pop, page: presenter.viewport.convert(CGRect(origin: .zero, size: presenter.viewport.contentSize).inset(by: presenter.pageMargins), to: entry.layer)),
@@ -984,9 +984,9 @@ package final class MenuHost {
     /// Paint the context popover after its source's handler ran. Read the
     /// live run's props because the handler may replace it.
     @discardableResult
-    func agentContext(_ node: NodeView, inline inlineID: UInt32? = nil) -> Bool {
+    func agentContext(_ node: NodeView, inline inlineID: UInt32? = nil, inBar: Bool = false) -> Bool {
         // Its own action may have unmounted or disabled it, or renamed its popover.
-        guard ExactEnv.agentPaints, let presenter, eligible(node, contextMenu: true) else { return false }
+        guard ExactEnv.agentPaints, let presenter, eligible(node, contextMenu: true, inBar: inBar) else { return false }
         let props: [String: String]
         if let inlineID {
             guard presenter.textHost(inlineID) === node, !presenter.inlineInert(inlineID), let run = presenter.inlineText(inlineID) else { return false }

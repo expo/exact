@@ -353,12 +353,15 @@ component NativeFixture
   // route pushed with the tablist hidden, and one that asks for no bar.
   state subtitle = "Online"
   state titlePresses = 0
+  state titleHolds = 0
   action openChat
     nav = push(nav, "/chat")
   action openPhoto
     nav = push(nav, "/photo")
   action pressTitle
     titlePresses = titlePresses + 1
+  action holdTitle
+    titleHolds = titleHolds + 1
   action toggleSubtitle
     subtitle = subtitle == "" ? "Online" : ""
   // A subtitle as a line of symbols and texts (§9.10).
@@ -438,7 +441,7 @@ component NativeFixture
                     // A pressable group around the heading, with an avatar and
                     // a subtitle: the item's title, drawn, tapped (§9.10).
                     if e.name == "chat"
-                      button press=pressTitle testId="title-group" display="flex" flex-direction="row" flex=1 align-items="center" gap=8
+                      button press=pressTitle contextmenu=holdTitle contextPopover="title-menu" testId="title-group" display="flex" flex-direction="row" flex=1 align-items="center" gap=8
                         column width=32 height=32 border-radius="50%" background-color="#dcfce7" align-items="center" justify-content="center"
                           text "CD" font-size=13 color="#166534"
                         column
@@ -773,9 +776,16 @@ component NativeFixture
                         text "Subtitle"
                       button press=toggleMuted testId="toggle-muted" padding=6 background-color="#e5e7eb"
                         text "Muted"
+                      // The title's context popover: a preview card and a row
+                      column id="title-menu" popover="auto" role="menu"
+                        button contextPreview=true press=pressTitle popovertarget="title-menu" popovertargetaction="hide" testId="title-card" width=300 height=80
+                          text "CD"
+                        button press=pressTitle popovertarget="title-menu" popovertargetaction="hide" testId="title-message"
+                          text "Message"
                       button press=toggleShortChat testId="toggle-short-chat" padding=6 background-color="#e5e7eb"
                         text "Short"
                       text ("title presses " + titlePresses.toString()) testId="title-presses"
+                      text ("title holds " + titleHolds.toString()) testId="title-holds"
                       if not shortChat
                         column testId="tall-chat" height=1600 background-color="#f0fdf4"
                       text "End" testId="chat-end" margin-top="auto"

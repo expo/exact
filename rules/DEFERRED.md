@@ -410,6 +410,10 @@ header, and a named scroller under an inline title's bar (LLP 1075.003
 §9.10). The Signal Clone's conversation header and photo viewer are the
 consumer. Unblocks them with no module. Take: none offered; waived by
 Charlie's approval. No new attribute, no title menu, no bar added by a route.
+**Clarified (James Ide, 2026-11-24, for Exact Chat's contact menu):** "no
+title menu" is UIKit's title pull-down. A pressable title's group keeps the
+`contextPopover` it has on the page when the bar draws it (LLP 1021 §5.1),
+with no new attribute.
 **Clarified (Charlie, 2026-10-12, ruling 11 for #393):** explicit
 `appearance="none"` on a header or root tablist keeps Pocket Budget's authored
 bar; a header button with it remains authored too (LLP 1075.003 §9.10).

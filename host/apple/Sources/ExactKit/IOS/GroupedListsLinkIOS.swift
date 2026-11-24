@@ -114,8 +114,21 @@ package enum GroupedListsLink {
 #endif
 
 #if os(iOS)
+/// A view that stands for a node the page hides, whose long press opens the
+/// node's context popover: a grouped list's cell, or a navigation bar's title.
 package protocol GroupedMenuSurface: AnyObject {
     var menuSource: NodeView? { get }
+}
+
+/// A navigation bar's title that stands for its header's pressable group,
+/// which the page hides while the bar shows it (LLP 1021 §5.1, LLP 1075.003
+/// §9.10). Its menu stands only while the bar shows it for that group.
+package protocol TitleMenuSurface: GroupedMenuSurface {
+    /// Whether the bar shows this title for `menuSource` now
+    var showsSource: Bool { get }
+    /// The avatar's view and its outline, which a lift with no preview row
+    /// shows alone (LLP 1021 §5.1)
+    var avatarLift: (view: UIView, outline: UIBezierPath)? { get }
 }
 
 extension Presenter {
