@@ -256,8 +256,9 @@ impl Painter {
             opacity: shown.opacity,
             transform,
             image,
+            // 6: a label, which a route flight scales by its height.
             fit: if !plain_image {
-                0
+                u32::from(node.node_type == NodeType::Text) * 6
             } else {
                 match node.style.object_fit {
                     ObjectFit::Fill => 1,

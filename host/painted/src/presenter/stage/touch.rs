@@ -163,6 +163,20 @@ impl Preview {
         self.pose_at(self.shown(now), width, height)
     }
 
+    /// Back to rest from where the gesture left it. A container plays its
+    /// entrance back from there, its emphasized path starting gently, as
+    /// Compose seeks a cancelled transition back on its own curve; a page
+    /// returns briskly.
+    fn go_back(&mut self, now: f64, still: bool) {
+        let (ms, curve) = match self.container {
+            Some(_) => (zoom::ENTER, Curve::Standard),
+            None => (RETURN_MS, Curve::Decelerate),
+        };
+        let ms = if still { 0.0 } else { ms };
+        self.release = Some(Glide::new(self.progress, 0.0, now, ms, curve));
+        self.progress = 0.0;
+    }
+
     fn pose_at(&self, p: f32, width: f32, height: f32) -> Pose {
         if let Some(container) = self.container {
             return container.pose(false, zoom::emphasized(p), None);
@@ -632,9 +646,7 @@ impl<D: DataSource> Presenter<D> {
             _ => {
                 let still = self.motion_off();
                 if let Some(p) = &mut self.stage.preview {
-                    let ms = if still { 0.0 } else { RETURN_MS };
-                    p.release = Some(Glide::new(p.progress, 0.0, now_ms, ms, Curve::Decelerate));
-                    p.progress = 0.0;
+                    p.go_back(now_ms, still);
                 }
             }
         }
@@ -670,9 +682,7 @@ impl<D: DataSource> Presenter<D> {
     pub(in crate::presenter) fn stage_back_done(&mut self, now: f64) {
         let still = self.motion_off();
         if let Some(p) = self.stage.preview.as_mut().filter(|p| p.release.is_none()) {
-            let ms = if still { 0.0 } else { RETURN_MS };
-            p.release = Some(Glide::new(p.progress, 0.0, now, ms, Curve::Decelerate));
-            p.progress = 0.0;
+            p.go_back(now, still);
             self.dirty = true;
             self.host.release_flights(&bounds_spring(), false);
         }

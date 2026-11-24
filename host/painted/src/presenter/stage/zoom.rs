@@ -8,7 +8,7 @@ use crate::paint::{FrameTarget, PaintedBox, Painter, Scene};
 // MaterialContainerTransform's motionDurationMedium4 / motionDurationMedium3
 // and motionEasingEmphasizedInterpolator; material-components-android's
 // lib/java/com/google/android/material/motion/res/values/tokens.xml.
-const ENTER: f64 = 400.0;
+pub(super) const ENTER: f64 = 400.0;
 const RETURN: f64 = 350.0;
 // Its default thresholds (DEFAULT_ENTER_THRESHOLDS, DEFAULT_RETURN_THRESHOLDS),
 // on the eased progress: the route fades in over its source, and on return

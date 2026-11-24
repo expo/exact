@@ -577,6 +577,10 @@ impl Painter {
             let Some(kept) = self.kept.routes.get(&replay.key) else {
                 continue;
             };
+            // A route that flies as a whole is drawn by its flight.
+            if self.shared.frames.iter().any(|f| f.from == replay.key) {
+                continue;
+            }
             let tape = kept.tape.clone();
             let origin = space.pre_concat(replay.at);
             let pane = replay.pane.map(|pane| Pane {
@@ -764,7 +768,8 @@ impl Painter {
                 Item::Fill(shape, color, ts) => self.backend.fill(shape, *color, *ts),
                 Item::Route { id, ts, tape } => self.stage_route(walk, *id, *ts, *tape),
                 Item::Taped(key, ts) => {
-                    if let Some(route) = self.kept.routes.get(key) {
+                    let flies = self.shared.frames.iter().any(|f| f.from == *key);
+                    if let Some(route) = self.kept.routes.get(key).filter(|_| !flies) {
                         let tape = route.tape.clone();
                         tape.replay_live(
                             self.backend.as_mut(),

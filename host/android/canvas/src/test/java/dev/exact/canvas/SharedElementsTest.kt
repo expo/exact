@@ -387,14 +387,36 @@ class SharedElementsTest {
         val clear = intArrayOf(2, Color.TRANSPARENT) + rect(from) + IntArray(8)
         val glyph = intArrayOf(1, f(1f), 0, 0, f(1f), f(to.left), f(to.top), 2, Color.RED) + rect(RectF(0f, 0f, 20f, 40f)) + IntArray(8)
         val t = Fixture()
-        t.shared.begin(state(listOf(1))); t.define(definition(1, from, content = clear)); t.shared.finish()
+        t.shared.begin(state(listOf(1))); t.define(definition(1, from, fit = 6, content = clear)); t.shared.finish()
         t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), dissolve = true))
-        t.define(definition(2, to, content = glyph)); t.shared.finish()
+        t.define(definition(2, to, fit = 6, content = glyph)); t.shared.finish()
         val pixels = t.pixels()
         // Halfway the box is 90 by 30 at 0, 20: the glyph is 15 wide, not 18 as the width would make it,
         // and at full strength, as the source is at its own.
         assertEquals(Color.RED, pixels.getPixel(12, 30))
         assertEquals(Color.WHITE, pixels.getPixel(16, 30))
+        pixels.recycle()
+    }
+
+    @Test fun aRouteFlightScalesABoxByWidthAndAChildInsideItsFlyingParent() {
+        // Halfway from 80 by 20 to 100 by 40 the box is 90 by 30 at 0, 20; by height its fill would end at 75.
+        val t = Fixture()
+        t.shared.begin(state(listOf(1))); t.define(definition(1, RectF(0f, 0f, 80f, 20f))); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), dissolve = true))
+        t.define(definition(2, RectF(0f, 40f, 100f, 80f))); t.shared.finish()
+        var pixels = t.pixels()
+        assertEquals(Color.RED, pixels.getPixel(85, 35))
+        pixels.recycle()
+        // A child 100 square flies inside its parent, 50 square.
+        val c = Fixture()
+        val parent = RectF(0f, 0f, 50f, 50f); val child = RectF(0f, 0f, 100f, 100f)
+        c.shared.begin(state(listOf(1, 3)))
+        c.define(definition(1, parent)); c.define(definition(3, child, parents = listOf(1))); c.shared.finish()
+        c.shared.begin(state(listOf(2, 4), listOf(Triple(1, 2, 0.5f), Triple(3, 4, 0.5f))))
+        c.define(definition(2, parent)); c.define(definition(4, child, parents = listOf(2))); c.shared.finish()
+        pixels = c.pixels()
+        assertEquals(Color.RED, pixels.getPixel(25, 25))
+        assertEquals(Color.WHITE, pixels.getPixel(75, 75))
         pixels.recycle()
     }
 

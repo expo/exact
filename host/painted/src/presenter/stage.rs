@@ -614,7 +614,14 @@ impl<D: DataSource> Presenter<D> {
             self.stage.shift = None;
             self.stage.preview = None;
         }
-        if (self.stage.shift.as_ref()).is_some_and(|s| !s.progress.moving(now)) {
+        // A route that flies in as a whole covers the route beneath only
+        // when it lands, so that one is drawn until then.
+        let flies_in = |s: &Shift| {
+            s.forward
+                && (self.host.kernel().node_by_key(s.incoming))
+                    .is_some_and(|n| self.host.flying(n.id))
+        };
+        if (self.stage.shift.as_ref()).is_some_and(|s| !s.progress.moving(now) && !flies_in(s)) {
             self.stage.shift = None;
         }
         self.hold_arriving();

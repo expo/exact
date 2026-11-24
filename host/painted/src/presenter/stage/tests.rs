@@ -950,3 +950,21 @@ fn the_names_fly_beside_a_routes_authored_part() {
     assert!(p.stage.shift.as_ref().unwrap().authored.is_some());
     assert_eq!(flight(&p), (hero, thumb, 0.0));
 }
+
+#[test]
+fn a_route_that_flies_in_whole_keeps_the_route_beneath_drawn_until_it_lands() {
+    let whole = PAIRED
+        .replace(
+            r#"            box sharedElement="photo" testId="thumb""#,
+            "            box sharedElement=\"page\" width=50 height=50\n            box sharedElement=\"photo\" testId=\"thumb\"",
+        )
+        .replace(r#"testId="route-detail""#, r#"sharedElement="page" testId="route-detail""#);
+    let mut p = paired_with(&whole);
+    tap(&mut p, "open");
+    // Past the shared axis, the route's flight is short of covering the home.
+    after(&mut p, 350.0);
+    assert_eq!(p.host().flight_frames().len(), 2);
+    assert!(p.stage_shows().contains(&id(&p, "route-home")));
+    after(&mut p, 1000.0);
+    assert!(p.host().flight_frames().is_empty() && p.stage.shift.is_none());
+}

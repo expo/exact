@@ -660,3 +660,22 @@ fn a_container_draws_its_source_under_it_in_and_over_it_back_masked_to_its_heigh
     );
     assert!(leaving.scale > card.2 / 412. + 0.01);
 }
+
+#[test]
+fn a_cancelled_zoom_preview_plays_its_entrance_back_from_where_it_was() {
+    let mut p = phone_source(ZOOM);
+    tap(&mut p, "card");
+    after(&mut p, 400.0);
+    let now = p.host().now();
+    assert!(p.back_progress(0, 0.0, 0, now));
+    assert!(p.back_progress(1, 0.6, 0, now));
+    after(&mut p, 0.0);
+    let held = poses(&p).0.scale;
+    assert!(p.back_progress(2, 0.0, 0, p.host().now()));
+    after(&mut p, 16.0);
+    // The first frame moves it a little, not most of the way back.
+    let first = poses(&p).0.scale;
+    assert!(first > held && first - held < 0.05, "{held} {first}");
+    after(&mut p, 400.0);
+    assert!(p.stage.preview.is_none());
+}

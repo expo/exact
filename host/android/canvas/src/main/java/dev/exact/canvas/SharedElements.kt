@@ -202,7 +202,7 @@ internal class SharedElements(
 
     private fun target(e: Element, from: Pose): Pose {
         val placed = placed(e)
-        if (e.fit == 0 || e.image != 0) return placed
+        if (e.fit !in IMAGE || e.image != 0) return placed
         return placed.copy(image = from.image, naturalW = from.naturalW,
             naturalH = from.naturalH, unit = from.unit)
     }
@@ -229,12 +229,20 @@ internal class SharedElements(
             if (pose.box.width() <= 0f || pose.box.height() <= 0f) continue
             val save = canvas.save()
             canvas.setMatrix(Matrix())
+            // A child flies inside its flying parent, as Compose clips a shared
+            // element to its parent's bounds in the overlay.
+            for (parent in element.parents) flights[parent]?.shown?.let { around ->
+                clip.reset()
+                val r = around.radius.coerceIn(0f, min(around.box.width(), around.box.height()) / 2f)
+                clip.addRoundRect(around.box, r, r, Path.Direction.CW)
+                canvas.clipPath(clip)
+            }
             clip.reset()
             val radius = pose.radius.coerceIn(0f, min(pose.box.width(), pose.box.height()) / 2f)
             clip.addRoundRect(pose.box, radius, radius, Path.Direction.CW)
             canvas.clipPath(clip)
             val opacity = ancestorOpacity(element, flight)
-            if (element.fit != 0) {
+            if (element.fit in IMAGE) {
                 canvas.clipRect(pose.contentBox)
                 paint.alpha = (element.opacity.coerceIn(0f, 1f) * opacity * 255f + 0.5f).toInt()
                 pictures(pose.image)?.let { canvas.drawBitmap(it, null, rasterRect(pose), paint) }
@@ -250,19 +258,20 @@ internal class SharedElements(
                 val t = ((flight.progress - 0.2f) / 0.4f).coerceIn(0f, 1f)
                 flight.content?.takeIf { t < 1f }?.let { content ->
                     canvas.saveLayerAlpha(null, (min(1f, 2f * (1f - t)) * 255f + 0.5f).toInt())
-                    drawScaled(canvas, content, flight.box!!, flight.contentBox!!, pose, true)
+                    drawScaled(canvas, content, flight.box!!, flight.contentBox!!, pose, element.fit == LABEL)
                     canvas.restore()
                     canvas.saveLayerAlpha(null, (min(1f, 2f * t) * 255f + 0.5f).toInt())
                 }
-                drawScaled(canvas, element.content, element.box, element.contentBox, pose, flight.route)
+                drawScaled(canvas, element.content, element.box, element.contentBox, pose,
+                    flight.route && element.fit == LABEL)
             }
             canvas.restoreToCount(save)
         }
     }
 
-    /** A route flight scales its content box by height, as a font's size goes: a label's box is
-     * often as wide as its row at one end and its text at the other, and padded differently. The
-     * flight's box clips the rest. */
+    /** A route flight scales a label's content box by height, as a font's size goes: a label's box is
+     * often as wide as its row at one end and its text at the other, and padded differently. Other
+     * content scales by width, as Material's container transform fits it. The flight's box clips the rest. */
     private fun drawScaled(canvas: Canvas, content: RenderNode, box: RectF, contentBox: RectF, pose: Pose,
         byHeight: Boolean) {
         val save = canvas.save()
@@ -283,6 +292,9 @@ internal class SharedElements(
     internal fun isFlying(key: Long) = !reduced && key in flights
 
     companion object {
+        /** An element's `fit`: a plain image's object-fit, or a label. */
+        private val IMAGE = 1..5
+        private const val LABEL = 6
         fun key(b: IntBuffer, at: Int): Long = (b.get(at).toLong() and 0xffffffffL) or (b.get(at + 1).toLong() shl 32)
         private fun f(b: IntBuffer, at: Int) = Float.fromBits(b.get(at))
         private fun rect(b: IntBuffer, at: Int): RectF = RectF(f(b, at), f(b, at + 1), f(b, at) + f(b, at + 2), f(b, at + 1) + f(b, at + 3))
