@@ -1,8 +1,15 @@
-// The gallery opens on its list of sections, and a section's views are on
-// screen only once it is chosen, so a test taps inside a section only after
-// choosing it. A narrow window pushes the section over the list, so a test
-// goes back to the list before choosing the next.
+// The app opens on its first section (`start_url`), which a narrow window
+// pushes over the list, so a test that chooses sections starts at the list
+// (`at "/"`). A section's views are on screen only once it is chosen, so a
+// test taps inside a section only after choosing it, and goes back to the
+// list before choosing the next.
+
+test "the app opens on its first section" on macos, ios
+  clock settle
+  expect tree has "intro-typography"
+
 test "text styles and color samples are present and animate"
+  at "/"
   tap "sidebar-typography"
   clock settle
   clock data
@@ -93,6 +100,7 @@ test "text styles and color samples are present and animate"
   expect text "text-numeric" == "109.01"
 
 test "HDR range choices stay enabled across native sections" on ios
+  at "/"
   tap "sidebar-typography"
   clock settle
   clock data
@@ -166,6 +174,7 @@ test "HDR range choices stay enabled across native sections" on ios
   expect state limit == "standard"
 
 test "the browser offers range choices only for HDR images" on web
+  at "/"
   tap "sidebar-typography"
   clock settle
   clock data

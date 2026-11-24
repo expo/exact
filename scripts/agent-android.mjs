@@ -317,12 +317,13 @@ const RELAY_CLEANED_ERROR = 70;
  * The package is host.android.id (default app.id), a selected variant's (LLP 1030.008), and an APK whose record names
  * another package is refused. The app boots its own baked plan with its own assets, at the phone's size, in the phone's fonts, or a
  * drive's local `--plan`, pushed to the device and named by the launch extra `x_plan` (EXACT_PLAN, which the reader
- * reads as the Linux host does). A drive's `--world`, `--size` and launch URL do not reach it, and are refused (a
- * test that names a size is skipped, agent-test.mjs). A dev loop's `--url` does: the reader polls it (LLP 1122 D4),
+ * reads as the Linux host does). A drive's `--world`, `--size` and launch URL do not reach it, and are refused, but for
+ * a launch at `/`, where it boots (a test that names a size is skipped, agent-test.mjs). A dev loop's `--url` does: the reader polls it (LLP 1122 D4),
  * through `adb reverse` when it is this Mac's loopback, as is the app's server a test runs here. */
 function readerDeploy(app, apk, env) {
+  // A launch at `/` is where the reader boots anyway (a test's `at "/"`)
   for (const [name, flag] of [['EXACT_WORLD', '--world'], ['EXACT_LAUNCH_URL', 'a launch URL']])
-    if (env[name]) throw new Error(`android --reader: ${flag} does not reach the reader, which boots the plan its APK bakes`);
+    if (env[name] && !(name === 'EXACT_LAUNCH_URL' && env[name] === '/')) throw new Error(`android --reader: ${flag} does not reach the reader, which boots the plan its APK bakes`);
   if (env.EXACT_SIZE) throw new Error('android --reader: --size does not reach the reader, which runs at the phone\'s size; --headless takes it');
   if (env.EXACT_PLAN && (!existsSync(env.EXACT_PLAN) || URL.parse(env.EXACT_PLAN)?.protocol?.startsWith('http')))
     throw new Error('android --reader: --plan is a local plan file, which the drive pushes to the phone');

@@ -5,7 +5,8 @@
   "version": "0.1.1",
   "buildNumber": 23,
   "id": "com.exact.uigallery",
-  "start_url": "/",
+  "start_url": "/demo/typography",
+  "scope": "/",
   "display": "standalone",
   "icons": [
     {

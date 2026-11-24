@@ -270,6 +270,17 @@ test('the Android reader uses a variant\'s package for lookup, launch and drive 
   }
 });
 
+test('the Android reader takes a launch at the root, where it boots, and refuses any other launch URL', async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true);
+  try {
+    expect(() => androidDeploy(fixture.app, fixture.bin, { ...fixture.env, EXACT_LAUNCH_URL: '/demo/typography' })).toThrow(/a launch URL does not reach the reader/);
+    expect(androidDeploy(fixture.app, fixture.bin, { ...fixture.env, EXACT_LAUNCH_URL: '/' }).dir).toBe(`/data/local/tmp/exact/${fixture.app.id}`);
+  } finally {
+    fixture.dispose();
+  }
+});
+
 test('Android permission detection reads only the focused window and activity', () => {
   const component = 'com.android.permissioncontroller/com.android.permissioncontroller.permission.ui.GrantPermissionsActivity';
   for (const line of [`mCurrentFocus=Window{abc u0 ${component}}`, `mFocusedApp=ActivityRecord{abc u0 ${component} t42}`,

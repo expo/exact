@@ -1,5 +1,6 @@
 // The drag section's cards carry what each says, and its switch turns a card's drag off and on
 test "the drag section's cards carry their text, links and files"
+  at "/"
   tap "sidebar-drag"
   clock settle
   clock data
@@ -26,6 +27,7 @@ test "the drag section's cards carry their text, links and files"
   expect drag "drag-tap-card" has "text/plain" == "A card you can tap"
 
 test "a card's drag turns off and on, and a tap on a draggable card is a tap"
+  at "/"
   tap "sidebar-drag"
   clock settle
   expect drag "drag-switch-card" has "text/plain" == "Turn dragging on or off"
@@ -42,6 +44,7 @@ test "a card's drag turns off and on, and a tap on a draggable card is a tap"
 
 // A test's session has a scratch store, so the section's note is written where an app file drags
 test "the note the section writes drags as an app file" on macos, ios
+  at "/"
   tap "sidebar-drag"
   clock settle
   clock data
@@ -49,6 +52,7 @@ test "the note the section writes drags as an app file" on macos, ios
   expect drag "drag-written" has "text/plain" name "drag-note.txt"
 
 test "the web carries no app file" on web
+  at "/"
   tap "sidebar-drag"
   clock settle
   clock data

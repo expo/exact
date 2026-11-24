@@ -254,13 +254,15 @@ final class GalleryUITests: XCTestCase {
         cell.tap()
     }
 
-    /// Launches the gallery with its list showing: UIKit keeps a list hidden at the next launch, so a test does not
-    /// rely on the one before it to have shown the list again
+    /// Launches the gallery with its list showing: the app opens on its first section, which a compact window shows
+    /// over the list with Back, and UIKit keeps a list hidden at the next launch, so a test does not rely on the one
+    /// before it to have shown the list again
     private func launchShowingTheList(_ app: XCUIApplication) {
         app.launch()
-        let sidebar = app.collectionViews["gallery-sidebar"], show = app.buttons["Show Sidebar"]
+        let sidebar = app.collectionViews["gallery-sidebar"], show = app.buttons["Show Sidebar"], back = app.buttons["BackButton"].firstMatch
         let rows = [sidebar.cells["sidebar-typography"], sidebar.cells["sidebar-drag"]], deadline = Date().addingTimeInterval(20)
-        while Date() < deadline, !rows.contains(where: \.isHittable), !show.isHittable { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+        while Date() < deadline, !rows.contains(where: \.isHittable), !show.isHittable, !back.isHittable { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+        if back.isHittable { back.tap() }
         if show.isHittable { show.tap() }
         XCTAssertTrue(waitForList(app, shown: true), "The list shows at launch")
     }

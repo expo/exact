@@ -7185,7 +7185,8 @@ the manifest's `start_url` on Apple, `/` on Linux and Windows; an HTTP(S)
 `--url` selects a development server, not a launch location. Native reload
 builds a fresh navigation stack; `at` changes only the first launch, so
 assert a detail-route launch before reloading. Android's APK reader refuses
-these launch URLs and a leading `at` path; `agent android --headless` runs
+these launch URLs and a leading `at` path other than `/`, where it boots;
+`agent android --headless` runs
 the Linux host on Android and accepts both. See
 [reload and native launch tests](contract-grammar.md#authored-tests)),
 `close` (the window's close button, as ⌘W: a `beforeunload` that
