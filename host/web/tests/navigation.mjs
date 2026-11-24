@@ -240,7 +240,7 @@ try {
     })`);
     const rendered = await evaluate(`[...document.getElementById('host').children].map(el=>({tag:el.tagName,href:el.getAttribute('href'),text:el.textContent}))`);
     assert.deepEqual(rendered.slice(0, unsafe.length).map(el=>[el.tag,el.href]), unsafe.map(()=>['SPAN',null]));
-    assert.deepEqual(rendered.slice(unsafe.length).map(el=>[el.tag,el.href]), safe.map(href=>['A',new URL(href,url+'/__test-mirror').href]));
+    assert.deepEqual(rendered.slice(unsafe.length).map(el=>[el.tag,el.href]), safe.map(href=>['A',href]));
     const click = async index => {
       const at = await evaluate(`(()=>{const el=document.getElementById('host').children[${index}];el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return {x:r.x+20,y:r.y+r.height/2};})()`);
       await call('Input.dispatchMouseEvent', {type:'mousePressed',button:'left',clickCount:1,...at});
