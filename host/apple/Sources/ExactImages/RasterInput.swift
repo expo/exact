@@ -36,6 +36,8 @@ package final class RasterInput: @unchecked Sendable {
     private let temporary: Bool
     /// Completed private spools keep the bytes their metadata described.
     var rechecksMetadata: Bool { !temporary }
+    /// Private spools and installed bundle files can keep their source and cold decodes at rest.
+    let reusableAtRest: Bool
     /// The asset catalog's name for this file, when it is the launch image
     /// the catalog was built from (`ExactLaunchImageSource` and its bytes'
     /// `ExactLaunchImageSHA256`, host/apple/assets.mjs) and a plain PNG:
@@ -53,8 +55,9 @@ package final class RasterInput: @unchecked Sendable {
     /// An `app:/` source's path: each read opens it again through no link
     /// (`AppFiles.open`), never by `url`.
     private let appFile: String?
-    private init(url: URL, encodedBytes: Int, temporary: Bool, catalog: String? = nil, status: (RasterHTTPStatus, URL)? = nil, appFile: String? = nil) {
+    private init(url: URL, encodedBytes: Int, temporary: Bool, bundled: Bool = false, catalog: String? = nil, status: (RasterHTTPStatus, URL)? = nil, appFile: String? = nil) {
         self.url = url; self.encodedBytes = encodedBytes; self.temporary = temporary; self.catalog = catalog; self.appFile = appFile
+        reusableAtRest = temporary || bundled
         self.status = status.map { (code: $0.0, from: $0.1) }
     }
     private func handle() throws -> FileHandle {
@@ -79,6 +82,10 @@ package final class RasterInput: @unchecked Sendable {
     private static let launchSource = Bundle.main.object(forInfoDictionaryKey: "ExactLaunchImageSource") as? String
     private static let launchDigest = Bundle.main.object(forInfoDictionaryKey: "ExactLaunchImageSHA256") as? String
     private static let launchImage = (Bundle.main.object(forInfoDictionaryKey: "UILaunchScreen") as? [String: Any])?["UIImageName"] as? String
+    private static let installedBundlePrefix: String? = {
+        let bundle = Bundle.main.bundleURL.standardizedFileURL.resolvingSymlinksInPath()
+        return bundle.pathExtension == "app" ? bundle.path + "/" : nil
+    }()
     private static let removals = DispatchQueue(label: "exact.raster.removals", qos: .utility)
     #if DEBUG
     private static let removalLock = NSLock()
@@ -135,7 +142,9 @@ package final class RasterInput: @unchecked Sendable {
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
         guard values.isRegularFile == true, let count = values.fileSize,
               count > 0, count <= RasterMetadata.encodedLimit else { throw RasterFailure.encodedLimit }
-        return RasterInput(url: url, encodedBytes: count, temporary: false,
+        // The embedded resolver already resolves symlinks in the returned URL
+        let bundled = !resolver.isComplete && installedBundlePrefix.map { url.path.hasPrefix($0) } == true
+        return RasterInput(url: url, encodedBytes: count, temporary: false, bundled: bundled,
                            catalog: name == launchSource && launchDigest != nil ? launchImage : nil)
     }
     /// The URL of an `http:` or `https:` source, which `fetch` downloads.
