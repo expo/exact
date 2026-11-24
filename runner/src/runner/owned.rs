@@ -30,7 +30,8 @@ use std::rc::{Rc, Weak};
 pub(super) struct OwnedRow {
     /// The plan's resource.
     pub(super) site: usize,
-    /// The instance's path, for the agent's `state` and the journal.
+    /// The instance's path, which finds its page's answer (`PageAnswers`)
+    /// and names it in the agent's `state` and the journal.
     pub(super) path: String,
     /// The instance's storage: gone once the render destroys the instance.
     storage: Weak<RefCell<vm::Owned>>,

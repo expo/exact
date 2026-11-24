@@ -82,7 +82,9 @@ fn each_instance_makes_and_refreshes_its_own_request() {
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
     assert!(js.contains(&format!("const r_0=owned({works:?})")), "{js}");
     assert!(
-        js.contains(&format!(".r0=own(r_0,()=>res({works:?},\"subjectWorks\"")),
+        js.contains(&format!(
+            ".r0=own(r_0,$path=>res({works:?},\"subjectWorks\""
+        )),
         "{js}"
     );
     assert!(js.contains(r#"R($r["r0"])"#), "{js}");

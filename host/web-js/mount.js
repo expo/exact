@@ -651,7 +651,8 @@ export function checkpoint() {
     return Checkpoint;
   }
   const open = new Set(cp.open),
-    readers = new Set(cp.readers);
+    readers = new Set(cp.readers),
+    paths = new Map(cp.instances);
   // A drive starts at zero even when its document was rendered on a wall clock.
   const driven = typeof location !== 'undefined' && agentMode() && !globalThis.__exactRender;
   if (driven) for (const k of checkpointFaults(cp)) open.add(k);
@@ -661,7 +662,7 @@ export function checkpoint() {
     if (!Checkpoint.kept.has(name)) {
       Checkpoint.kept.set(name, { source, answers: [], next: 0 });
     }
-    Checkpoint.kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k)]);
+    Checkpoint.kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k), paths.get(k)]);
   });
   Checkpoint.time = clock.now = driven ? 0 : cp.time || 0;
   return Checkpoint;

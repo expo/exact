@@ -334,6 +334,18 @@ pub fn checkpoint<D: DataSource>(runner: &Runner<D>, location: &str) -> String {
             json.push_str(&format!(",\"{field}\":[{}]", indices.join(",")));
         }
     }
+    if !checkpoint.instances.is_empty() {
+        json.push_str(",\"instances\":[");
+        for (i, (index, path)) in checkpoint.instances.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            let _ = write!(json, "[{index},");
+            crate::batch::quote(path, &mut json);
+            json.push(']');
+        }
+        json.push(']');
+    }
     json.push('}');
     json.replace('<', "\\u003c")
         .replace('>', "\\u003e")
@@ -504,6 +516,16 @@ pub fn read_checkpoint(text: &str) -> Result<Checkpoint, String> {
             "pending" => checkpoint.pending = read_list(&mut json, |json| json.string())?,
             "open" => checkpoint.open = read_list(&mut json, read_index)?,
             "readers" => checkpoint.readers = read_list(&mut json, read_index)?,
+            "instances" => {
+                checkpoint.instances = read_list(&mut json, |json| {
+                    json.expect(b'[')?;
+                    let index = read_index(json)?;
+                    json.expect(b',')?;
+                    let path = json.string()?;
+                    json.expect(b']')?;
+                    Ok((index, path))
+                })?
+            }
             other => return Err(format!("unknown field `{other}`")),
         }
         match json.next() {
@@ -512,7 +534,14 @@ pub fn read_checkpoint(text: &str) -> Result<Checkpoint, String> {
             _ => return Err("expected `,` or the end".into()),
         }
     }
-    if (checkpoint.open.iter().chain(&checkpoint.readers)).any(|&k| k >= checkpoint.answers.len()) {
+    let instances = checkpoint.instances.iter().map(|(k, _)| k);
+    if (checkpoint
+        .open
+        .iter()
+        .chain(&checkpoint.readers)
+        .chain(instances))
+    .any(|&k| k >= checkpoint.answers.len())
+    {
         return Err("an index past the answers".into());
     }
     Ok(checkpoint)

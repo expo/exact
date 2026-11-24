@@ -209,9 +209,11 @@ fn a_checkpoint_reads_back_as_the_runner_wrote_it() {
         !json.contains('<') && !json.contains('>') && !json.contains('&'),
         "{json}"
     );
-    // No stream is open and no answer read the store, so neither field is written
+    // No stream is open, no answer read the store and no instance asked, so no field says so
     assert!(
-        !json.contains("\"open\"") && !json.contains("\"readers\""),
+        !["open", "readers", "instances"]
+            .iter()
+            .any(|f| json.contains(&format!("\"{f}\""))),
         "{json}"
     );
     let read = read_checkpoint(&json).unwrap();
@@ -265,10 +267,29 @@ fn a_checkpoint_lists_the_answers_that_read_the_store() {
 }
 
 #[test]
+fn a_checkpoint_gives_each_instances_answer_its_path() {
+    let host = host(
+        "component A\n  state on = true\n  view\n    column\n      if on\n        Said()\n\ncomponent Said\n  resource said = say() as shape string\n  view\n    text said\n",
+        Says("hello"),
+        "/",
+    );
+    let written = host.runner().document_checkpoint("/");
+    let [(0, path)] = &written.instances[..] else {
+        panic!("{:?}", written.instances)
+    };
+    let json = checkpoint(host.runner(), "/");
+    assert!(
+        json.ends_with(&format!(",\"instances\":[[0,\"{path}\"]]}}")),
+        "{json}"
+    );
+    assert_eq!(read_checkpoint(&json).unwrap(), written);
+}
+
+#[test]
 fn checkpoint_values_are_json_that_reads_back_exactly() {
     // Every kind of plan value, as `push_value` spells it: text a page's
     // compression matches against the document's own strings.
-    let text = r#"{"location":"/","time":1.5,"logic":null,"answers":[["a","src",["x",{"n":"NaN"}],{"r":[1,-0,2.25,true,null,{},{"s":"y"},["p","q"],{"n":"-Infinity"}]}]],"pending":["b"],"open":[0],"readers":[0]}"#;
+    let text = r#"{"location":"/","time":1.5,"logic":null,"answers":[["a","src",["x",{"n":"NaN"}],{"r":[1,-0,2.25,true,null,{},{"s":"y"},["p","q"],{"n":"-Infinity"}]}]],"pending":["b"],"open":[0],"readers":[0],"instances":[[0,"/1:0"]]}"#;
     let read = read_checkpoint(text).unwrap();
     let (name, source, args, value) = &read.answers[0];
     assert_eq!((name.as_str(), source.as_str()), ("a", "src"));
@@ -291,11 +312,15 @@ fn checkpoint_values_are_json_that_reads_back_exactly() {
     assert_eq!(fields[8], Value::Number(f64::NEG_INFINITY));
     assert_eq!(read.pending, ["b"]);
     assert_eq!((read.open, read.readers), (vec![0], vec![0]));
+    assert_eq!(read.instances, [(0, "/1:0".to_string())]);
     assert!(read_checkpoint(&text.replace("{\"s\"", "{\"z\"")).is_err());
-    // Refuse an `open` or `readers` index past the answers
-    for field in ["open", "readers"] {
-        let past = text.replace(&format!("\"{field}\":[0]"), &format!("\"{field}\":[1]"));
-        assert!(read_checkpoint(&past).is_err(), "{past}");
+    // Refuse an `open`, `readers` or `instances` index past the answers
+    for (field, index) in [("open", "[0"), ("readers", "[0"), ("instances", "[[0")] {
+        let past = text.replace(
+            &format!("\"{field}\":{index}"),
+            &format!("\"{field}\":{}", index.replace('0', "1")),
+        );
+        assert!(past != text && read_checkpoint(&past).is_err(), "{past}");
     }
 }
 
