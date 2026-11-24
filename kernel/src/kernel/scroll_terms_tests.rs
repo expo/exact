@@ -782,3 +782,103 @@ fn an_extensions_bound_reads_the_boxs_own_containers() {
 // An edge-effect bar registers with the first scroller beneath its slot (D12)
 #[path = "edge_bar_tests.rs"]
 mod edge_bar;
+
+fn box_reach(k: &Kernel, id: ViewId) -> Option<[f32; 4]> {
+    k.box_reach(k.arena.key(slot(k, id)))
+}
+
+#[test]
+fn a_plain_fill_on_the_band_reaches_it_and_a_decorated_box_keeps_its_place() {
+    // 4, 200 tall at the band's inner side: a background colour reaches the band's 47 on the top,
+    // a translucent one too, and a box with none, or with any decoration besides, reaches nothing
+    let at = |rows: &[(StyleId, &'static str)]| {
+        let mut all = vec![(StyleId::Height, "200")];
+        all.extend_from_slice(rows);
+        box_reach(&holding(&[(4, all)], None), 4).unwrap()[0]
+    };
+    let fill = (StyleId::BackgroundColor, "#336699");
+    assert_eq!(at(&[fill]), 47.0);
+    assert_eq!(
+        at(&[(StyleId::BackgroundColor, "rgba(0, 0, 0, 0.5)")]),
+        47.0
+    );
+    for decorated in [
+        vec![],
+        vec![(StyleId::BackgroundColor, "transparent")],
+        vec![fill, (StyleId::BorderRadiusTopLeft, "8")],
+        vec![
+            fill,
+            (StyleId::BorderWidthTop, "1"),
+            (StyleId::BorderStyleTop, "solid"),
+        ],
+        vec![fill, (StyleId::BoxShadow, "0 2px 4px #000000")],
+        vec![
+            fill,
+            (
+                StyleId::BackgroundImage,
+                "linear-gradient(#ff0000, #0000ff)",
+            ),
+        ],
+        vec![fill, (StyleId::Rotate, "10deg")],
+        vec![fill, reach("none")[0], reach("none")[1]],
+    ] {
+        assert_eq!(at(&decorated), 0.0, "{decorated:?}");
+    }
+    // Edges it names it reaches whatever it paints, but not where it clips its overflow
+    assert_eq!(at(&reach("top")), 47.0);
+    assert_eq!(
+        at(&[
+            fill,
+            (StyleId::BorderRadiusTopLeft, "8"),
+            reach("top")[0],
+            reach("top")[1]
+        ]),
+        47.0
+    );
+    assert_eq!(
+        at(&[
+            fill,
+            (StyleId::OverflowX, "hidden"),
+            (StyleId::OverflowY, "hidden"),
+            reach("top")[0],
+            reach("top")[1]
+        ]),
+        0.0
+    );
+}
+
+#[test]
+fn a_boxs_reach_stops_where_a_scrollers_does_and_a_scroller_has_none_of_its_own() {
+    // A plain fill clear of the band reaches nothing; one under a box that clips reaches its padding
+    // edge; with no band, nothing; a scroller's reach is in its terms
+    let fill = vec![
+        (StyleId::Height, "200"),
+        (StyleId::BackgroundColor, "#336699"),
+    ];
+    let k = holding(
+        &[(3, vec![(StyleId::Height, "100")]), (4, fill.clone())],
+        None,
+    );
+    assert_eq!(box_reach(&k, 4), Some([0.0; 4]));
+    let clip = column(&[
+        (StyleId::OverflowX, "hidden"),
+        (StyleId::OverflowY, "hidden"),
+    ]);
+    let k = owner_with(
+        Some(BAND),
+        &[],
+        &[(6, clip)],
+        &[(6, 4, fill.clone())],
+        &[],
+        None,
+    );
+    assert_eq!(box_reach(&k, 4), Some([0.0; 4]));
+    let k = owner_with(None, &[], &[(4, fill)], &[], &[], None);
+    assert_eq!(box_reach(&k, 4), Some([0.0; 4]));
+    let k = holding(
+        &[(4, scroller(&[(StyleId::BackgroundColor, "#336699")]))],
+        None,
+    );
+    assert_eq!(box_reach(&k, 4), None);
+    assert_eq!(terms(&k, 4).reach[0], 47.0);
+}

@@ -299,7 +299,7 @@ package final class FlatLeaves {
         guard let view = presenter.views[id], view.kind == "view", view.paintRank == 0,
               view.handlers.isEmpty, view.props.isEmpty, view.subviews.isEmpty, !holdsLeaves(id),
               view.layoutHits == nil, view.surface == nil, view.boxFilter == nil, !presenter.boxAnimations.animatesBox(id),
-              (presenter.viewport as? Viewport)?.authoredBars[id] == nil,
+              (presenter.viewport as? Viewport)?.authoredBars[id] == nil, view.reach == .zero,
               let flat = FlatPaint(view.style), !flat.positioned else { return }
         var ancestor = view.superview
         while let v = ancestor, !(v is NodeView) { ancestor = v.superview }

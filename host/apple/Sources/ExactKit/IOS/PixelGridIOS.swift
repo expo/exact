@@ -170,6 +170,7 @@ extension Presenter {
         // under a transform); the presentation goes back on after.
         v.transform = .identity
         v.frame = groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn
+        if v.reach != .zero, v.scrollView == nil { v.outsetByReach() }
         v.textRasterGeometryChanged()
         v.scroll?.frame = v.scrollFrame
         if v.fieldWaits, rect.width > 0 || rect.height > 0 { v.makeWaitingField() } // its box laid out (MenuHost.waitingFields)

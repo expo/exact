@@ -11,7 +11,7 @@ use super::area::{self, Space};
 use super::block::reservation;
 use super::{block, ignore, keyboard};
 use crate::arena::NodeArena;
-use crate::generated::{SafeAreaEdges, SafeAreaExtend, SafeAreaIgnore, SafeAreaReach};
+use crate::generated::{SafeAreaEdges, SafeAreaExtend, SafeAreaIgnore, SafeAreaReach, StyleProps};
 use crate::style::Dimension;
 use crate::{Kernel, NodeKey, Overflow, StyleId};
 
@@ -64,6 +64,32 @@ impl Kernel {
         self.laid_out_frame(key)?;
         let space = area::band_at(self, slot);
         space.placed().then(|| terms(arena, slot, &space))
+    }
+
+    /// How far the box `key`, no scroller, reaches past its laid-out border box on each edge, top
+    /// right bottom left, in points in its layout's space (D13): on each edge
+    /// `-exact-safe-area-reach` names, or under `auto` where it paints a plain colour fill, to the
+    /// outer side of the area that reaches it where its border edge meets or lies inside that area,
+    /// no further than reach's stops; 0 elsewhere, and while the band is unavailable. Its layout,
+    /// its observations and its geometry keep its laid-out box. `None` for a scroller, whose
+    /// terms carry its reach, and for a box not live, not laid out or where the kernel is not told.
+    pub fn box_reach(&self, key: NodeKey) -> Option<[f32; 4]> {
+        let arena = &self.arena;
+        let slot = arena.resolve(key)?;
+        if area::scroll_view(arena, slot) {
+            return None;
+        }
+        self.laid_out_frame(key)?;
+        let space = area::band_at(self, slot);
+        if !space.placed() {
+            return None;
+        }
+        let named = box_reached(arena, slot);
+        let Some(band) = space.band.filter(|_| named.contains(&true)) else {
+            return Some([0.0; 4]);
+        };
+        let sides = sides(arena, slot, &space, band, None).0;
+        Some(reach_on(arena, slot, &space, &sides, named))
     }
 
     /// How far the box `key`'s picture is mirrored past its laid-out border box on each edge, top
@@ -259,20 +285,7 @@ fn stops(arena: &NodeArena, slot: u32, space: &Space) -> [f32; 4] {
         .then(|| arena.parent(slot))
         .flatten();
     while let Some(s) = above {
-        let (style, m) = (arena.style(s), &arena.style(s).mask);
-        let whole = (m.has(StyleId::Transform) && !style.transform.0.is_empty())
-            || m.has(StyleId::Translate)
-            || m.has(StyleId::Scale)
-            || m.has(StyleId::Rotate)
-            || (m.has(StyleId::PressScale) && style.press_scale != 1.0)
-            || m.has(StyleId::PressTranslate)
-            || (m.has(StyleId::Perspective) && style.perspective > 0.0)
-            || (m.has(StyleId::Filter) && !style.filter.is_none())
-            || (m.has(StyleId::BackdropFilter) && !style.backdrop_filter.is_none())
-            || (m.has(StyleId::ClipPath)
-                && style.rare.clip_path != crate::clip::ClipPath::default())
-            || (m.has(StyleId::MaskImage)
-                && style.rare.mask_image != crate::gradient::BackgroundImage::default());
+        let whole = drawn_through(arena.style(s));
         let (x, y) = area::overflow(arena, s);
         let (clips_x, clips_y) = (x != Overflow::Visible, y != Overflow::Visible);
         let border = area::border(arena, s);
@@ -288,4 +301,75 @@ fn stops(arena: &NodeArena, slot: u32, space: &Space) -> [f32; 4] {
         above = (space.root != Some(s)).then(|| arena.parent(s)).flatten();
     }
     limit
+}
+
+/// Whether `style` draws its box through a transform, a translation, a scale, a rotation, a press
+/// scale or translation, a perspective, a filter, a backdrop filter, a clip path or a mask (D13).
+fn drawn_through(style: &StyleProps) -> bool {
+    let m = &style.mask;
+    (m.has(StyleId::Transform) && !style.transform.0.is_empty())
+        || m.has(StyleId::Translate)
+        || m.has(StyleId::Scale)
+        || m.has(StyleId::Rotate)
+        || (m.has(StyleId::PressScale) && style.press_scale != 1.0)
+        || m.has(StyleId::PressTranslate)
+        || (m.has(StyleId::Perspective) && style.perspective > 0.0)
+        || (m.has(StyleId::Filter) && !style.filter.is_none())
+        || (m.has(StyleId::BackdropFilter) && !style.backdrop_filter.is_none())
+        || (m.has(StyleId::ClipPath) && style.rare.clip_path != crate::clip::ClipPath::default())
+        || (m.has(StyleId::MaskImage)
+            && style.rare.mask_image != crate::gradient::BackgroundImage::default())
+}
+
+/// The edges a non-scrolling box reaches on (D13): those `-exact-safe-area-reach` names, or under
+/// `auto` every edge where it paints a plain fill. None for a box whose edge is its host's drawing
+/// (a text, a replaced box, a control), one that clips its overflow or one drawn through what stops
+/// reach, which show no strip of an extension either.
+fn box_reached(arena: &NodeArena, slot: u32) -> [bool; 4] {
+    let (x, y) = area::overflow(arena, slot);
+    let style = arena.style(slot);
+    if arena.node_type(slot) != crate::NodeType::View
+        || x != Overflow::Visible
+        || y != Overflow::Visible
+        || drawn_through(style)
+    {
+        return [false; 4];
+    }
+    match style.rare.safe_area_reach == SafeAreaReach::Auto {
+        true => [plain_fill(arena, slot); 4],
+        false => reached(arena, slot),
+    }
+}
+
+/// Whether `slot` paints a plain colour fill (D13): a background colour not wholly transparent
+/// filling a rectangle undecorated by a background image, a border, a radius, a shadow or a
+/// material, as a SwiftUI colour's background ignores the safe area and a UIKit view's background
+/// colour fills its bounds.
+fn plain_fill(arena: &NodeArena, slot: u32) -> bool {
+    use crate::style::ColorValue;
+    let s = arena.style(slot);
+    // `currentColor`, a role, a platform colour or one of a wide space paints
+    let coloured = match s.background_color {
+        Some(ColorValue::Fixed(c)) => c.a() > 0,
+        Some(ColorValue::LightDark(a, b)) => a.a() > 0 || b.a() > 0,
+        _ => true,
+    };
+    let radius = [
+        &s.border_radius_top_left,
+        &s.border_radius_top_right,
+        &s.border_radius_bottom_right,
+        &s.border_radius_bottom_left,
+    ];
+    let material = arena
+        .props(slot)
+        .str(crate::PropId::BackgroundMaterial)
+        .is_some();
+    coloured
+        && !material
+        && s.border_widths().iter().all(|&w| w == 0.0)
+        && radius
+            .iter()
+            .all(|r| matches!(r, Dimension::Points(p) if *p == 0.0))
+        && s.background_image == Default::default()
+        && s.box_shadow.0.is_empty()
 }

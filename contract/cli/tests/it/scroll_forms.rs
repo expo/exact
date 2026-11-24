@@ -321,6 +321,31 @@ fn an_extending_boxs_node_reply_carries_its_extension() {
 }
 
 #[test]
+fn a_reaching_boxs_node_reply_carries_its_reach() {
+    // @ref LLP 1123 D13 — a box at the inner side of the session's 47-point top band with a plain
+    // background colour reaches the band; one with a radius besides, and one with none, say nothing
+    let source = "component A\n  view\n    column\n      row padding-top=47\n        column testId=\"fill\" width=100 height=100 background-color=\"#336699\"\n        column testId=\"round\" width=100 height=100 background-color=\"#336699\" border-radius=8\n      column testId=\"plain\"\n";
+    let mut r = boot(source);
+    let root = r.roots()[0];
+    let k = r.kernel_mut();
+    k.set_session_band([47.0, 0.0, 34.0, 0.0]).unwrap();
+    k.compute_layout(root, exact_kernel::Offer::definite(390.0, 844.0))
+        .unwrap();
+    let id = |r: &Runner<Source>, t: &str| {
+        r.kernel()
+            .node_by_key(r.kernel().find_by_test_id(t)[0])
+            .unwrap()
+            .id
+    };
+    let fill = exact_runner::agent::node(&r, id(&r, "fill"));
+    assert!(fill.contains("\"reach\":[47,0,0,0]"), "{fill}");
+    for quiet in ["round", "plain"] {
+        let reply = exact_runner::agent::node(&r, id(&r, quiet));
+        assert!(!reply.contains("\"reach\":"), "{quiet}: {reply}");
+    }
+}
+
+#[test]
 fn an_edge_effect_bars_node_reply_carries_its_registration() {
     // @ref LLP 1123 D12 — a top bar over a scroller registers with it; a bottom one over a box that
     // does not scroll registers with none; a box that is no bar says nothing of it

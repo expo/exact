@@ -596,7 +596,8 @@ pub(super) fn token_fields(
 /// the parent (a block's root in its own block), `absolute` in the root's
 /// space or the viewport when the host places its block (as `frame()`
 /// reports it), `content` when it scrolls, a scroller's D13 and D14 terms
-/// (`scrollTerms`), and an `edge-effect` bar's registration (`barEdgeEffect`).
+/// (`scrollTerms`), another box's reach where it reaches (`reach`), and an `edge-effect` bar's
+/// registration (`barEdgeEffect`).
 /// Observations of the runner's memory, tagged with the generation, epoch and
 /// incarnation; a host adds the spaces and what it mounted. An id that is
 /// not a live node in this incarnation is refused by name.
@@ -788,6 +789,18 @@ pub fn node<D: DataSource>(runner: &Runner<D>, id: u32) -> String {
             edges(t.keyboard),
             t.band_reaches.map(|b| b.to_string()).join(","),
             t.container.map(|c| c.to_string()).join(",")
+        );
+    }
+    // A non-scrolling box's reach (LLP 1123 D13) where it reaches on some edge, each top right
+    // bottom left
+    if let Some(r) = kernel
+        .box_reach(node.key)
+        .filter(|r| r.iter().any(|&x| x != 0.0))
+    {
+        let _ = write!(
+            s,
+            ",\"reach\":[{}]",
+            r.map(|x| num(x as f64).to_string()).join(",")
         );
     }
     // A box's extension (LLP 1123 D13): how far its picture is mirrored past its border box, each

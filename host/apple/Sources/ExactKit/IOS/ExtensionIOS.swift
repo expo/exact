@@ -200,13 +200,13 @@ extension NodeView {
     /// The extension's rectangle in the box's coordinates, the border box outset by its bounds.
     var extensionFrame: CGRect? {
         guard let o = boxExtension?.outsets else { return nil }
-        return bounds.inset(by: UIEdgeInsets(top: -o.top, left: -o.left, bottom: -o.bottom, right: -o.right))
+        return laidOutBox.inset(by: UIEdgeInsets(top: -o.top, left: -o.left, bottom: -o.bottom, right: -o.right))
     }
 
     /// The extension's frames: the view's (`extensionFrame`), and the picture or the strip's hole at the border box.
     func placeExtension() {
         guard let e = boxExtension, let frame = extensionFrame else { return }
-        let box = CGRect(x: e.outsets.left, y: e.outsets.top, width: bounds.width, height: bounds.height)
+        let box = CGRect(x: e.outsets.left, y: e.outsets.top, width: laidOutBox.width, height: laidOutBox.height)
         if e.view.frame != frame {
             e.view.frame = frame
             // An ancestor that clips one axis fits its clip to what its children paint, the strip among it

@@ -955,8 +955,12 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package override var accessibilityFrame: CGRect {
         get {
             if placedAncestor?.placementHidden == true { return .zero }
-            guard placedAncestor?.placement != nil, let window else { return super.accessibilityFrame }
-            return UIAccessibility.convertToScreenCoordinates(drawnRect(bounds, in: window), in: window)
+            guard placedAncestor?.placement != nil, let window else {
+                // A box that does not scroll keeps its laid-out frame however far it reaches (LLP 1123 D13)
+                guard laidOutBox != bounds, let window else { return super.accessibilityFrame }
+                return UIAccessibility.convertToScreenCoordinates(convert(laidOutBox, to: window), in: window)
+            }
+            return UIAccessibility.convertToScreenCoordinates(drawnRect(laidOutBox, in: window), in: window)
         }
         set { super.accessibilityFrame = newValue }
     }
@@ -1239,7 +1243,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if scrolls { syncClipBox(false) }
         if scrolls && scroll == nil && !scrollWaits && !groupedOwner {
             if pageBand != .zero, extras?.nativeScrollView != nil { setPageBand(.zero) } // the list leaving keeps its scrollTop
-            if reach != .zero, extras?.nativeScrollView != nil { setReach(.zero) }
+            if reach != .zero { setReach(.zero) } // the box's own reach, or a native list's, goes as the scroll view comes
             let sv = ScrollView(frame: bounds)
             sv.backgroundColor = .clear
             sv.contentInsetAdjustmentBehavior = .never
