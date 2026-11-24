@@ -410,9 +410,14 @@ mod tests {
             let items = chosen.iter().map(|p| {
                 SHCreateItemFromParsingName::<_, _, IShellItem>(&crate::shell_path(p)?, None)
             });
-            let result = paths(items);
+            let result = paths(items).unwrap();
             CoUninitialize();
-            assert_eq!(result.unwrap(), chosen);
+            assert!(
+                result.len() == chosen.len()
+                    && (result.iter().zip(&chosen))
+                        .all(|(a, b)| a.as_os_str().eq_ignore_ascii_case(b)),
+                "{result:?} != {chosen:?}"
+            );
         }
         std::fs::remove_dir_all(dir).unwrap();
     }
