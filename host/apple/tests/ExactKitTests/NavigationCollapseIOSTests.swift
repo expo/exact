@@ -622,8 +622,13 @@ final class NavigationCollapseIOSTests: XCTestCase {
             scene.requestGeometryUpdate(.iOS(interfaceOrientations: wasLandscape ? .landscapeLeft : .portrait))
         }
         for landscape in [true, false] {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeLeft : .portrait))
-            waitFor("the scene rotates") { scene.interfaceOrientation.isLandscape == landscape }
+            var refusal: Error?
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeLeft : .portrait)) { refusal = $0 }
+            waitFor("the scene rotates", giveUp: { refusal != nil }, onFailure: { if refusal == nil { XCTFail($0) } }) {
+                scene.interfaceOrientation.isLandscape == landscape
+            }
+            // An open iPhone Duo's scene does not turn for its app
+            if let refusal { throw XCTSkip(refusal.localizedDescription) }
             window.frame = scene.coordinateSpace.bounds
             for fraction: CGFloat in [0.75, 1] {
                 host.additionalSafeAreaInsets = UIEdgeInsets(top: 7, left: 11, bottom: 13, right: 17)
