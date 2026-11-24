@@ -75,5 +75,6 @@ test "the drop zone shows the text, link and files dropped on it" on macos, web,
   tap "drop-zone" drop file "assets/drag-notes.pdf" text "Notes" url "https://example.com/notes"
   clock settle
   expect text "drop-count" == "Got 1 file"
+  expect text "drop-file-name" == "drag-notes.pdf"
   expect text "drop-text" == "Text: Notes"
   expect text "drop-link" == "Link: https://example.com/notes"

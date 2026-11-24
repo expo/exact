@@ -1,5 +1,5 @@
 use TextStyles from "./text-styles.contract"
-use DragDrop, DragNote from "./drag.contract"
+use DragDrop, DragNote, DropPreview from "./drag.contract"
 
 shape Display
   colorGamut: string
@@ -129,6 +129,8 @@ component GalleryDemo
     liftPicked: string
     os: string
     dragNote: DragNote
+    dropPreviews: DropPreview[]
+    dropFiles: action
     active: bool
     chooseVideo: action
     toggleVideo: action
@@ -391,7 +393,7 @@ component GalleryDemo
                 text "Favorite"
           if section == "drag"
             text "Try dragging a card into another app." font="-exact-subheadline" color="-exact-secondary-label" padding-bottom=8 testId=`intro-${section}`
-            DragDrop(host=os, note=dragNote)
+            DragDrop(host=os, note=dragNote, previews=dropPreviews, dropFiles=dropFiles)
 
 component LimitControl
   props

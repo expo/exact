@@ -2,7 +2,7 @@
 import type { Answer, Ctx2D, Frame, NativeModule, Storage } from './app.contract.d.ts';
 
 export const appId = 'com.exact.uigallery';
-export const grants = 'fs.read app:/tmp/drag-note.txt\nfs.write app:/tmp/drag-note.txt';
+export const grants = 'fs.read app:/tmp/drag-note.txt\nfs.write app:/tmp/drag-note.txt\nfs.read doc:/\nfs.read app:/tmp/drops\nfs.write app:/tmp/drops';
 
 type Swatch = { label: string; color: string };
 const rgb = (space: string, mid = '0.5 0.5 0.5') => [
@@ -126,6 +126,31 @@ async function writeDragNote(storage: Storage): Promise<{ path: string; why: str
   }
 }
 
+// Each file dropped on the drag section's zone, copied into the app's own files so an `image` can show it, with its
+// name and size. The zone draws the copy over a document icon: the platform decides what is a picture, so a file it
+// cannot draw, such as a video or a sound, shows the icon. One drop's copies are kept at a time.
+const DROPS = 'app:/tmp/drops';
+async function dropPreviews(storage: Storage, files: string[], drop: number): Promise<{ id: string; name: string; picture: string; size: string }[]> {
+  try {
+    for (const name of await storage.fs.readdir(DROPS)) await storage.fs.rm(`${DROPS}/${name}`);
+  } catch {
+    await storage.fs.mkdir(DROPS).catch(() => undefined);
+  }
+  return Promise.all(files.map(async (file, index) => {
+    const id = `${drop}-${index}`, name = file.slice(file.lastIndexOf('/') + 1), copy = `${DROPS}/${id}-${name}`;
+    const size = await storage.fs.stat(file).then((s) => bytes(s.size), () => '');
+    const picture = await storage.fs.copyFile(file, copy).then(() => copy, () => '');
+    return { id, name, picture, size };
+  }));
+}
+
+// A size as Finder and Files write it, in powers of 1,000
+function bytes(count: number): string {
+  if (count < 1000) return `${count} ${count === 1 ? 'byte' : 'bytes'}`;
+  const [unit, scale] = count < 1e6 ? ['KB', 1e3] : count < 1e9 ? ['MB', 1e6] : ['GB', 1e9];
+  return `${(count / scale).toFixed(1).replace(/\.0$/, '')} ${unit}`;
+}
+
 export const answer: Answer = ((source: string, args: unknown[], _secrets: unknown, storage: Storage, native?: NativeModule) => {
   const web = args[args.length - 1] === 'web';
   if (source === 'colorSpaces') {
@@ -166,6 +191,7 @@ export const answer: Answer = ((source: string, args: unknown[], _secrets: unkno
   // As of Mobile Safari 27.0 (LLP 1100 D8).
   if (source === 'caveat') return web ? SAFARI_CONSTRAINED : '';
   if (source === 'dragNote') return web ? { path: '', why: '' } : writeDragNote(storage);
+  if (source === 'dropPreviews') return dropPreviews(storage, args[0] as string[], Number(args[1]));
   if (source === 'hidden') {
     const gone = (args[0] === 'hdr' ? HDR : PICTURES).filter((p) => !shows(p.src, web)).map((p) => p.src.slice(7));
     return gone.length ? `Not shown in this browser (it can't decode them): ${gone.join(', ')}.` : '';
