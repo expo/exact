@@ -173,18 +173,23 @@ extension NodeView {
             return (own, node?.bandOver)
         }
         var depths = placed.map(\.depth)
-        // A control bar (LLP 1131 D3) goes over its sibling that holds its scroller, as that sibling is placed:
-        // halfway to the next place above it, the origin's included, where native layers stay (or half a step past
-        // the last place). Each lift reads the places before any lift, so bars over one sibling start from one
-        // place and keep their tree order. A sibling no longer among these children lifts nothing.
-        if placed.contains(where: { $0.over != nil }) {
-            let places = depths
-            for (i, lift) in placed.enumerated() {
-                guard let over = lift.over, let j = children.firstIndex(where: { $0 === over }) else { continue }
-                let under = places[j]
-                let next = (places + [0]).filter { $0 > under }.min() ?? under + 0.001
-                depths[i] = max(places[i], (under + next) / 2)
-            }
+        // A control bar (LLP 1131 D3) goes just over its sibling that holds its scroller, as that sibling is
+        // placed: a third of the way to the next place above, the origin's included, where native layers stay
+        // (or of a step past the last place). The sibling's equals after it in the tree painted over it and
+        // stay over the bar, at two thirds, a bar among them included: it is over its sibling already and
+        // keeps its tree order. A bar ranked higher stays there. Bars lifted over one sibling share a place
+        // and keep their tree order. A sibling no longer among these children lifts nothing.
+        var lifts: [Int: [Int]] = [:]
+        for (i, lift) in placed.enumerated() {
+            guard let over = lift.over, let j = children.firstIndex(where: { $0 === over }) else { continue }
+            lifts[j, default: []].append(i)
+        }
+        for (j, bars) in lifts.sorted(by: { $0.key < $1.key }) {
+            let under = depths[j]
+            let step = (((depths + [0]).filter { $0 > under }.min() ?? under + 0.001) - under) / 3
+            let lifted = bars.filter { depths[$0] < under || depths[$0] == under && $0 < j }
+            for k in depths.indices where k > j && depths[k] == under { depths[k] = under + 2 * step }
+            for i in lifted { depths[i] = under + step }
         }
         #endif
         var top: CGFloat = 0

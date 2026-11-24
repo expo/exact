@@ -634,8 +634,8 @@ final class PageEdgesIOSTests: XCTestCase {
             for (row, over, button) in rows {
                 let which = "\(ranks), \(button.props["testId"] ?? "")"
                 XCTAssertGreaterThan(row.layer.zPosition, over.layer.zPosition, "\(which): the row draws over its sibling holding the list")
-                if wrapRank == 0, over === wrap, row.paintRank < pickers.paintRank {
-                    XCTAssertLessThan(row.layer.zPosition, pickers.layer.zPosition, "\(which): and stays under a sibling ranked above both")
+                if over === wrap, row.paintRank < pickers.paintRank {
+                    XCTAssertLessThan(row.layer.zPosition, pickers.layer.zPosition, "\(which): and stays under a sibling that painted over the column")
                 }
                 let hit = try XCTUnwrap(window.hitTest(button.convert(CGPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil), with: nil))
                 XCTAssertTrue(hit.isDescendant(of: button), "\(which): a tap on the row's button is the button's, not \(type(of: hit))")
@@ -709,6 +709,27 @@ final class PageEdgesIOSTests: XCTestCase {
         until("the sheet is gone") { !p.dialogs.owns(sheet) && !p.dialogs.inTransition }
         p.reachPageEdges()
         XCTAssertEqual(opener.pageBand.top, band, "and once the dialog is back in the row")
+    }
+
+    /// LLP 1131 D1: a scroll view that scrolls nothing makes no control content. A tablist UIKit draws as its
+    /// segmented control, written `overflow-x: auto`, and a button whose label truncates (`overflow-x: hidden`
+    /// gives the text a scroll view) are bars over the list.
+    func testAScrollViewThatScrollsNothingLeavesItsControlABar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the bars and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("CONTROL_BARS")
+        let p = session.presenter
+        for shape in ["tabs-scroll", "truncating"] {
+            p.press(try node(session, "pick-\(shape)").id)
+            // The scroll view that would have made the row no bar: the tablist's, behind UIKit's control, or the label's
+            until("\(shape) is laid out with its scroll view") {
+                guard let filter = try? node(session, "filter"), filter.frame.height > 0 else { return false }
+                return shape == "tabs-scroll" ? filter.scrollView != nil && p.segments.projects(filter.id)
+                    : (try? node(session, "filter-label"))?.scrollView != nil
+            }
+            p.reachPageEdges()
+            XCTAssertGreaterThan(try node(session, "list").pageBand.top, 0, "\(shape): the list runs under the bar")
+        }
     }
 
     func testLargeTitleRidersRequireBothEdgesAndTheBarsPaintOrder() throws {

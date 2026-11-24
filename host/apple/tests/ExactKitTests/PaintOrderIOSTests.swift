@@ -205,10 +205,20 @@ final class PaintOrderIOSTests: XCTestCase {
         PaintOrder.changed(mount)
         XCTAssertGreaterThan(bar.paintZPosition, column.paintZPosition, "the bar goes over its sibling's place")
         XCTAssertTrue(NodeView.hitOrder(mount.subviews).first { $0 === bar || $0 === column } === bar, "and takes the touch first")
+        // What painted over the sibling stays over the bar: its equal after it in the tree, and a rank above
+        let later = try XCTUnwrap(p.views[4]), above = try XCTUnwrap(p.views[5])
+        later.setRank(1)
+        later.navigationPaint = .besideRoutes
+        above.setRank(2)
+        PaintOrder.changed(mount)
+        XCTAssertGreaterThan(bar.paintZPosition, column.paintZPosition)
+        XCTAssertGreaterThan(later.paintZPosition, bar.paintZPosition, "the sibling's later equal stays over the bar")
+        XCTAssertGreaterThan(above.paintZPosition, later.paintZPosition, "and a rank above stays over both")
     }
 
     /// LLP 1131 D3: bars lifted over one sibling share a place, so the later takes the touch first, as in tree
-    /// order; and a bar ranked under the origin is lifted no higher than halfway to it, where native layers stay.
+    /// order; a bar after its sibling at the sibling's place is over it already and keeps its tree order over
+    /// them; and a bar ranked under the origin is lifted to under it, where native layers stay.
     func testBarsOverOneSiblingShareAPlaceUnderTheOrigin() throws {
         let p = fixture()
         let mount = try XCTUnwrap(p.views[1]).container
@@ -221,6 +231,12 @@ final class PaintOrderIOSTests: XCTestCase {
         XCTAssertGreaterThan(first.paintZPosition, column.paintZPosition)
         XCTAssertTrue(NodeView.hitOrder(mount.subviews).first { $0 === first || $0 === second } === second,
                       "the later bar takes the touch first, as in tree order")
+        let foot = try XCTUnwrap(p.views[5])
+        foot.setRank(1)
+        foot.bandOver = column
+        PaintOrder.changed(mount)
+        XCTAssertGreaterThan(foot.paintZPosition, second.paintZPosition, "a bar after its sibling stays over the bars before it")
+        foot.bandOver = nil
         // No child at the origin now: the bar and its sibling under it, the others over it
         second.bandOver = nil
         first.setRank(-2)

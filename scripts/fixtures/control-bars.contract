@@ -13,8 +13,10 @@
 // spacer drawn as a layer; `preview-hidden`, the column holding a label and a
 // hidden list (a bar); `sheet-opener`: a row of a button, a spacer drawn as a
 // layer and a dialog holding a list, over a list (the row stays a bar while
-// the dialog is up in its sheet). The buttons that pick a shape are placed
-// absolutely, out of flow, so they are nobody's bar.
+// the dialog is up in its sheet); `tabs-scroll`: a switcher written
+// `overflow-x="auto"`, and `truncating`: a button whose label truncates (bars:
+// neither scroll view scrolls anything). The buttons that pick a shape are
+// placed absolutely, out of flow, so they are nobody's bar.
 // `thread` is pushed: the chat recipe's virtualized transcript over a composer,
 // shown when its messages arrive while the push runs, as a fetched thread's are.
 routes nav
@@ -70,6 +72,16 @@ component ControlBars
                   text "All"
                 button role="tab" aria-selected=(filter == "mine") press=show("mine") testId="filter-mine" flex=1
                   text "Mine"
+            if shape == "tabs-scroll"
+              row role="tablist" aria-label="Filter" testId="filter" margin="8px 16px" overflow-x="auto"
+                button role="tab" aria-selected=(filter == "all") press=show("all") flex=1
+                  text "All"
+                button role="tab" aria-selected=(filter == "mine") press=show("mine") flex=1
+                  text "Mine"
+            if shape == "truncating"
+              row testId="filter" margin="8px 16px"
+                button press=show("all") flex=1 min-width=0
+                  text "All" testId="filter-label" white-space="nowrap" overflow-x="hidden" text-overflow="ellipsis"
             if shape == "painted"
               row testId="filter" margin="8px 16px" background-color="-exact-secondary-grouped-background"
                 button press=show("all") testId="filter-all" flex=1
@@ -174,5 +186,9 @@ component ControlBars
                 text "wrapped"
               button press=pick("preview-hidden") testId="pick-preview-hidden"
                 text "hidden"
+              button press=pick("tabs-scroll") testId="pick-tabs-scroll"
+                text "tabs"
+              button press=pick("truncating") testId="pick-truncating"
+                text "truncating"
               button press=open testId="pick-thread"
                 text "thread"

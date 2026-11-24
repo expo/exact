@@ -81,10 +81,11 @@ package final class ControlBars {
         let answer: Int?
         if Self.hidden(n) { answer = 0 }
         // A control that scrolls or holds a shown scroller is content scrolled on its own, not a bar's control.
-        else if isControl(n) { answer = n.scrollView != nil || holdsScroller(n) ? nil : 1 }
+        // UIKit's segmented control or tab bar is one control, whatever the tablist behind it says.
+        else if isControl(n) { answer = !presenter.segments.projects(n.id) && (Self.scrolls(n) || holdsScroller(n)) ? nil : 1 }
         // A wrapper is a plain box with no paint of its own: a text, an image, a picture, a canvas, a native
         // view or a scroller is not.
-        else if n.wrote("background_color") || n.scrollView != nil { answer = nil }
+        else if n.wrote("background_color") || Self.scrolls(n) { answer = nil }
         else if n.isParagraph { answer = 0 }
         else if n.kind != "view" { answer = nil }
         else if let ids = presenter.flats.children(of: n.id) { answer = ids.reduce(0) { sum, id in sum.flatMap { s in leaf(id).map { s + $0 } } } }
@@ -95,8 +96,16 @@ package final class ControlBars {
 
     private static func hidden(_ n: NodeView) -> Bool { n.isHidden || n.style["display"]?.string == "none" }
 
+    /// Whether `n` is a scroller. A text's scroll view with nothing to scroll is its text, as a touch on it
+    /// is (`ScrollView.hitTest`): CSS makes one beside every `overflow-x: hidden`, so a truncating label
+    /// has one.
+    private static func scrolls(_ n: NodeView) -> Bool {
+        guard let sv = n.scrollView else { return false }
+        return !(n.isParagraph && (sv as? ScrollView)?.hasRange == false)
+    }
+
     private func holdsScroller(_ n: NodeView) -> Bool {
-        NodeView.structural(n.container.subviews).contains { !Self.hidden($0) && ($0.scrollView != nil || holdsScroller($0)) }
+        NodeView.structural(n.container.subviews).contains { !Self.hidden($0) && (Self.scrolls($0) || holdsScroller($0)) }
     }
 
     /// A button, a link, a field, a `select`, a switch or a checkbox, a tab,
