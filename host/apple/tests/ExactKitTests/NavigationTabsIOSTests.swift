@@ -353,11 +353,13 @@ final class NavigationTabsIOSTests: XCTestCase {
         defer { p.onCovers = deliver }
         XCTAssertEqual(maximumDepth, 1, history.joined(separator: "\n"))
         XCTAssertLessThan(calls, 24, history.joined(separator: "\n"))
-        XCTAssertEqual(list.bounds.width, try XCTUnwrap(session.view).bounds.width + 8, accuracy: 0.5,
-                       "authored content-box overflow stays authored")
+        var sides: CGFloat = 0
         if case .edges(let edges)? = p.navigationHost.covers[list.id] {
             XCTAssertLessThanOrEqual(edges.right, try XCTUnwrap(window).safeAreaInsets.right + 0.5, history.joined(separator: "\n"))
+            sides = edges.left + edges.right
         }
+        XCTAssertEqual(list.bounds.width, try XCTUnwrap(session.view).bounds.width + 8 + sides, accuracy: 0.5,
+                       "authored content-box overflow stays authored")
         let settled = calls
         for _ in 0..<12 { session.view?.layoutIfNeeded(); p.navigationHost.reportCovers() }
         XCTAssertEqual(calls, settled, "unchanged geometry sends no further cover")
@@ -1205,7 +1207,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         list.pendingScrollTop = 600
         list.applyPendingScroll()
         waitFor("the content scrolls down and the large title collapses") {
-            abs(css() - 600) < 0.5 && !self.showsLargeTitle(nav) && !Agent(session: session).nativeInFlight()
+            abs(css() - 600) < 0.5 && !(large && self.showsLargeTitle(nav)) && !Agent(session: session).nativeInFlight()
         }
         // The other tab, then back: selecting a tab keeps its scroll.
         tapTab(tabs, 0)
@@ -1214,7 +1216,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertEqual(tabs.selectedIndex, 1, "Second selected again")
         waitFor("the returning tab settles") { !Agent(session: session).nativeInFlight() }
         XCTAssertEqual(css(), 600, accuracy: 0.5, "a tab selected from another keeps its place")
-        XCTAssertFalse(showsLargeTitle(nav), "the returning scrolled tab keeps its inline title")
+        XCTAssertFalse(large && showsLargeTitle(nav), "the returning scrolled tab keeps its inline title")
         // The selected tab, tapped again at its root.
         tapTab(tabs, 1)
         waitFor("the content returns to the top and the large title opens") {

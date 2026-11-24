@@ -1078,7 +1078,10 @@ final class NavigationBarIOSTests: XCTestCase {
         until("the press presents the sheet", 30) { shown() != nil }
         let sheet = try XCTUnwrap(shown())
         defer { sheet.dismiss(animated: false) }
-        XCTAssertTrue((sheet.popoverPresentationController?.sourceItem as AnyObject?) === item)
+        // UIKit keeps the item but where it places a vertical bar (the iPhone Duo)
+        let hand = UIActivityViewController(activityItems: [""], applicationActivities: nil)
+        hand.popoverPresentationController?.sourceItem = item
+        XCTAssertTrue((sheet.popoverPresentationController?.sourceItem as AnyObject?) === (hand.popoverPresentationController?.sourceItem as AnyObject?))
         if #available(iOS 26.0, *) { XCTAssertNotNil(sheet.preferredTransition, "it grows out of the button") }
     }
 

@@ -358,9 +358,14 @@ final class TabEdgeIOSTests: XCTestCase {
         }
         navigation.reportCovers()
         XCTAssertFalse(navigation.siblings.holds(mini), "the row below the panels stays in its column")
+        let aim = Agent(session: session).aim(["id": Int(try node("tab-grid").id), "aim": ["press": true]])
+        XCTAssertNil(aim["error"], "a tab keeps its touches: \(aim)")
         let tabBar = try XCTUnwrap(navigation.tabController).tabBar
-        let point = tabBar.convert(CGPoint(x: tabBar.bounds.midX, y: tabBar.bounds.midY), to: win)
-        XCTAssertTrue(win.hitTest(point, with: nil)?.isDescendant(of: tabBar) == true, "the tab bar keeps its touches")
+        // A vertical bar's box holds more than its items
+        if !tabBar.traitCollection.placesVerticalBar {
+            let point = tabBar.convert(CGPoint(x: tabBar.bounds.midX, y: tabBar.bounds.midY), to: win)
+            XCTAssertTrue(win.hitTest(point, with: nil)?.isDescendant(of: tabBar) == true, "the tab bar keeps its touches")
+        }
     }
 
     /// The mini player the tablist names (`navigationTabAccessory`) as UIKit's tab bar accessory (LLP 1075.003 §9.17).
@@ -383,7 +388,8 @@ final class TabEdgeIOSTests: XCTestCase {
         let session = try fixture(wholeScreen: true), navigation = session.presenter.navigationHost
         let (tabs, content, mini) = try accessory()
         XCTAssertNotEqual(mini.frame.height, 60, "UIKit's box, not the row's authored height: \(content.bounds)")
-        if UIDevice.current.userInterfaceIdiom == .phone {
+        let bottomBar = UIDevice.current.userInterfaceIdiom == .phone && !tabs.traitCollection.placesVerticalBar
+        if bottomBar {
             XCTAssertLessThan(box(content).maxY, box(tabs.tabBar).minY + 0.5, "above the bar on the iPhone")
         }
         // The runner's frame and hit test find the row where UIKit shows it
@@ -412,7 +418,7 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertNil(Agent(session: session).tap(["id": Int(mini.id), "at": empty])["error"])
         waitFor("a press on the accessory reaches its authored ancestor's listener") { area.props["accessibilityLabel"] == "Presses 1" }
         // The runner follows the accessory inline, where the bar was, as UIKit moves it
-        if UIDevice.current.userInterfaceIdiom == .phone {
+        if bottomBar {
             let above = box(content)
             try press("select-grid", route: "grid")
             waitFor("the accessory goes inline", facts: { "\(self.box(content))" }) { self.box(content) != above && mini.frame.size == content.bounds.size }
@@ -478,6 +484,7 @@ final class TabEdgeIOSTests: XCTestCase {
         try tap("tab-grid", route: "grid")
         try press("show-rows", route: "grid")
         let (tabs, content, mini) = try accessory("bare-player", by: "use-bare-accessory")
+        guard !tabs.traitCollection.placesVerticalBar else { throw XCTSkip("a vertical tab bar, where the accessory stays as it is") }
         let above = content.bounds.size
         try press("select-grid", route: "grid")
         waitFor("the tab bar hides and the accessory goes inline", facts: { "\(content.bounds), \(mini.frame)" }) {

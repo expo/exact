@@ -1114,9 +1114,10 @@ final class NavigationBootIOSTests: XCTestCase {
             let session = try fixture("BOOT_PADDED", rotatable: synchronous), nav = session.presenter.navigationHost
             XCTAssertEqual(nav.bootOwner != nil, !synchronous)
             let route = try XCTUnwrap(nav.activeRoute), list = try XCTUnwrap(route.collapseScroll?.scrollView)
-            XCTAssertGreaterThan(list.contentInset.top, 0, "authored padding adds clearance below the status bar")
+            let safe = route.surface.safeAreaInsets
+            XCTAssertEqual(list.contentInset.top > 0, safe.top > 0, "authored padding adds clearance below the status bar")
             let values = geometry(session), local = nav.localInsets.wanted[route.node.id]
-            XCTAssertEqual(local, [route.surface.safeAreaInsets.top, 0, route.surface.safeAreaInsets.bottom, 0])
+            XCTAssertEqual(local, [safe.top, safe.right, safe.bottom, safe.left])
             CATransaction.commit()
             CATransaction.flush()
             XCTAssertNotNil(session.firstDrawMs)

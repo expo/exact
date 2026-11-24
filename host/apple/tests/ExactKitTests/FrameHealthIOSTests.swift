@@ -146,8 +146,9 @@ final class FrameHealthIOSTests: XCTestCase {
         tap(CGPoint(x: minimize.midX * card.scale, y: minimize.midY * card.scale))
         XCTAssertTrue(card.minimized, "the visible Minimize control takes a tap")
         let bar = scene.statusBarManager?.statusBarFrame ?? .zero
-        XCTAssertEqual(card.frame.origin, CGPoint(x: full.minX, y: max(full.minY, overlay.convert(bar, from: nil).maxY + 8)),
-            "at the same edge, 8 points below the status bar")
+        let rest = clearOfCorner(CGPoint(x: full.minX, y: max(full.minY, overlay.convert(bar, from: nil).maxY + 8)), overlay)
+        XCTAssertEqual(card.frame.minX, rest.x, accuracy: 0.01, "at the same edge")
+        XCTAssertEqual(card.frame.minY, rest.y, accuracy: 0.01, "8 points below the status bar")
         let free = CGPoint(x: full.midX, y: full.maxY - 60)
         let button = UIButton(type: .system)
         button.frame = CGRect(x: free.x - 40, y: free.y - 22, width: 80, height: 44)
@@ -222,6 +223,12 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertFalse(card.minimized, "with the keyboard dismissed, the compact card restores")
     }
 
+    /// Where the minimized card that would rest at `origin`, by the top edge, rests clear of the screen's corner
+    private func clearOfCorner(_ origin: CGPoint, _ overlay: FrameHealthOverlay) -> CGPoint {
+        FrameHealthCardFace.clearing(CGRect(origin: origin, size: overlay.card.frame.size), cornersOf: overlay.screenRadius,
+            in: overlay.bounds, horizontal: true)
+    }
+
     func testTheMinimizedCardKeepsBelowTheStatusBar() throws {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the minimized frame-health card beside the status bar")
@@ -243,7 +250,7 @@ final class FrameHealthIOSTests: XCTestCase {
         card.activate?(.minimize)
         overlay.layoutIfNeeded()
         XCTAssertEqual(card.frame.minY, overlay.convert(bar, from: nil).maxY + 8, accuracy: 0.5, "8 points below it, as from the side")
-        XCTAssertEqual(card.frame.minX, 8, accuracy: 0.5)
+        XCTAssertEqual(card.frame.minX, clearOfCorner(CGPoint(x: 8, y: card.frame.minY), overlay).x, accuracy: 0.5)
         card.activate?(.minimize)
         overlay.layoutIfNeeded()
         XCTAssertEqual(card.frame.minY, 8, accuracy: 0.5)
@@ -351,9 +358,9 @@ final class FrameHealthIOSTests: XCTestCase {
         }
 
         let navigation = DevMenuController.navigation()
-        let shown = expectation(description: "native developer sheet presented")
-        root.present(navigation, animated: false) { shown.fulfill() }
-        wait(for: [shown], timeout: 5)
+        var shown = false, pushed = false, dismissed = false
+        root.present(navigation, animated: false) { shown = true }
+        waitFor("the native developer sheet is presented") { shown }
         // Attached to the bottom edge in regular height, where a sheet can rest at the medium detent
         if window.traitCollection.horizontalSizeClass == .compact && window.traitCollection.verticalSizeClass == .regular,
            let sheet = navigation.sheetPresentationController {
@@ -413,13 +420,12 @@ final class FrameHealthIOSTests: XCTestCase {
         // Build Information's text clears the sheet's side insets, as the menu's rows do: on the iPhone Duo the sheet's
         // bar items stand in a strip at its side
         menu.tableView(menu.tableView, didSelectRowAt: IndexPath(row: 0, section: 2))
-        let pushed = expectation(description: "Build Information pushed")
         if let transition = navigation.transitionCoordinator {
-            transition.animate(alongsideTransition: nil) { _ in pushed.fulfill() }
+            transition.animate(alongsideTransition: nil) { _ in pushed = true }
         } else {
-            pushed.fulfill()
+            pushed = true
         }
-        wait(for: [pushed], timeout: 5)
+        waitFor("Build Information is pushed") { pushed }
         let information = try XCTUnwrap(navigation.topViewController?.view as? UITextView)
         navigation.view.layoutIfNeeded()
         let whole = try XCTUnwrap(information.textRange(from: information.beginningOfDocument, to: information.endOfDocument))
@@ -433,9 +439,8 @@ final class FrameHealthIOSTests: XCTestCase {
         buildInformation.name = "Developer menu — Build Information"
         buildInformation.lifetime = .keepAlways
         add(buildInformation)
-        let dismissed = expectation(description: "native developer sheet dismissed")
-        root.dismiss(animated: false) { dismissed.fulfill() }
-        wait(for: [dismissed], timeout: 5)
+        root.dismiss(animated: false) { dismissed = true }
+        waitFor("the native developer sheet is dismissed") { dismissed }
         // Details takes the place of the card's charts at the same size, and Share asks what to share,
         // then opens the share sheet with that one item. The card presents from its own window's root, over itself
         let cardRoot = try XCTUnwrap(cardWindow.rootViewController)

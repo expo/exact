@@ -569,6 +569,7 @@ final class PageEdgesIOSTests: XCTestCase {
         let route = try XCTUnwrap(p.navigationHost.activeRoute)
         until("the filter is page content and its bar has settled") { route.scoped == nil && !Agent(session: session).nativeInFlight() }
         let nav = try XCTUnwrap(route.navigationController), sv = try XCTUnwrap(list.scrollView)
+        guard !nav.traitCollection.placesVerticalBar else { throw XCTSkip("a vertical bar has no expanding title") }
         nav.view.layoutIfNeeded()
         let expanded = nav.navigationBar.bounds.height
         XCTAssertGreaterThan(expanded, 80)
@@ -769,7 +770,7 @@ final class PageEdgesIOSTests: XCTestCase {
     func testUnderACoverRootARoutesLastScrollerRunsUnderTheTabBar() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
         guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
-        let (session, _) = try fixture("COVER_TABS")
+        let (session, view) = try fixture("COVER_TABS")
         let p = session.presenter, routeNode = try node(session, "route-home")
         let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id])
         let foot = { routeNode.convert(routeNode.bounds, to: nil).maxY }
@@ -778,7 +779,7 @@ final class PageEdgesIOSTests: XCTestCase {
         until("the scroller runs under the tab bar") { (list()?.pageBand.bottom ?? 0) > 0.5 }
         guard case .edges(let cover)? = p.navigationHost.covers[routeNode.id] else { return XCTFail("the route keeps the tab bar's cover") }
         XCTAssertGreaterThan(cover.bottom, 0.5)
-        XCTAssertGreaterThan(cover.top, 0.5, "the route clears the status bar itself")
+        XCTAssertEqual(cover.top, view.safeAreaInsets.top, accuracy: 0.5, "the route clears the status bar itself")
         var v = try XCTUnwrap(list()), sv = try XCTUnwrap(v.scrollView)
         let box = v.convert(v.bounds, to: nil)
         XCTAssertEqual(box.maxY, foot() - cover.bottom, accuracy: 0.5, "laid out above the cover, as before")
