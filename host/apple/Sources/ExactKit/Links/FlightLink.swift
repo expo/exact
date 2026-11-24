@@ -84,7 +84,6 @@ package protocol FlightHosting: AnyObject {
     /// A route change UIKit runs on `coordinator`, from the route `leaving` to the route `arriving`: the
     /// names both hold once fly alongside it (LLP 1013.004 D3). `zoom` is the `navigationSource` the
     /// change zooms by, which carries its own element. True when something flies.
-    @discardableResult
     func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool
     #endif
 }

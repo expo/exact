@@ -56,9 +56,9 @@ extension Presenter {
         }
     }
 
-    @discardableResult
     func crossFlights(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool {
-        guard coordinator.isAnimated, !DisplayPreferences.reducedMotion else { return false }
+        // An unanimated change flies nothing, what it held included.
+        guard coordinator.isAnimated, !DisplayPreferences.reducedMotion else { holds = [:]; return false }
         let pairs = Self.routePairs(leaving: named(in: leaving, excluding: zoom), arriving: named(in: arriving, excluding: zoom))
             .filter { $0.from.window != nil && flights[$0.to.id] == nil }
         // A hold lasts until the transition that flies it, or until its route leaves the window.
@@ -89,7 +89,9 @@ extension Presenter {
                 // Hidden each frame: a batch that applies the leaver's style shows it again.
                 for h in held where flights[h.flight.id] === h.flight { h.leaver.alpha = 0; h.flight.progress = p; showFlight(h.flight) }
                 // Not shown beside a leaver still on screen: a zoom's first frame is the route as last drawn.
-                held.lazy.compactMap { $0.flight.container }.first?.isHidden = held.contains { $0.leaver.window != nil && ($0.leaver.layer.presentation()?.opacity ?? 0) > 0.01 }
+                held.lazy.compactMap { $0.flight.container }.first?.isHidden = held.contains {
+                    self.flights[$0.flight.id] === $0.flight && $0.leaver.window != nil && ($0.leaver.layer.presentation()?.opacity ?? 0) > 0.01
+                }
                 // Text paints where it shows: what flies, as it flies.
                 paintVisibleText()
             }

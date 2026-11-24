@@ -51,7 +51,7 @@ component App
   translate, scale and rotate. `animation="none"` cuts. Modal sheets and routes
   with a literal nonempty `navigationSource` reject these parts.
 - **Layout:** surfaces move/resize; children jump, unscaled. `sharedElement=` flies
-  except on Linux/Windows, in a page or between routes (not sheets).
+  except on Linux/Windows; across routes (no sheets) except on macOS.
 - **Zoom:** `navigationSource=` names a source `id` for iOS 18 zoom or Android's
   container transform. Without a visible source, push uses shared axis and
   fullscreen cuts. Sheets have their own motion.

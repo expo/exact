@@ -67,6 +67,19 @@ final class RouteFlightsIOSTests: XCTestCase {
         XCTAssertTrue(arriver.superview === place, "it lands in its place")
         XCTAssertEqual(arriver.convert(arriver.bounds, to: nil).minY, detail.view.convert(CGRect(x: 0, y: 0, width: 1, height: 1), to: nil).minY, accuracy: 0.5)
         XCTAssertEqual(leaver.alpha, 1, "and the leaver shows again")
+        // An app's Back: its batch destroys the detail before UIKit's pop starts, and the hold keeps its name.
+        p.holdFlights(leaving: detail.view, arriving: list.view, zoom: nil)
+        p.views.removeValue(forKey: 6)
+        crossed = false
+        delegate.willShow = { nav in
+            guard let coordinator = nav.transitionCoordinator else { return }
+            crossed = p.crossFlights(coordinator, leaving: detail.view, arriving: list.view, zoom: nil)
+        }
+        nav.popViewController(animated: true)
+        let popped = Date().addingTimeInterval(1)
+        while !crossed, Date() < popped { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
+        XCTAssertTrue(crossed, "the destroyed route's held name flies home")
+        XCTAssertEqual(p.flights.keys.sorted(), [2])
     }
 
     func testOnlyANameEachRouteHoldsOncePairs() {

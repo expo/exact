@@ -135,7 +135,8 @@ impl<D: DataSource> Host<D> {
                     lands_after,
                     seeking,
                 });
-                if !seeking {
+                // A route change's destination is where its route puts it.
+                if !seeking && !route {
                     self.flights.reveal.push(to);
                 }
             }

@@ -168,11 +168,15 @@ extension NavigationHost {
         // pixels as drawn, and under them its views, until UIKit takes its view out of the window, as a sheet's views
         // stay while UIKit dismisses it. An editor among them stays focused while UIKit moves the keyboard away, as
         // the outgoing editor of UIKit's own pop does.
+        #if os(iOS)
+        let destroyed = Set(batch.ops.filter { $0.op == .destroy }.map(\.id))
+        #endif
         for op in batch.ops where op.op == .destroy {
             guard let c = controllers[op.id], c.viewIfLoaded?.window != nil else { continue }
             #if os(iOS)
-            // The names the pop will fly, kept before the batch removes them (LLP 1013.004 D3).
-            if let routes = c.navigationController?.viewControllers, routes.last === c, routes.count > 1, let beneath = routes[routes.count - 2].viewIfLoaded {
+            // The names the pop will fly to the route it reveals, kept before the batch removes them (LLP 1013.004 D3).
+            let kept = c.navigationController?.viewControllers.last { ($0 as? RouteController).map { !destroyed.contains($0.node.id) } ?? true }
+            if c.navigationController?.viewControllers.last === c, let beneath = kept?.viewIfLoaded {
                 presenter.flightHost.hold(leaving: c.view, arriving: beneath, zoom: c.zoomSource)
             }
             #endif
