@@ -10,6 +10,8 @@ No event reports a hinge that moves in a window of the same size, so `exactViewp
 
 Down a fold the panes had to know where their container starts, which CSS does not say. The chrome used to move into the upper pane for that, which moved the title. Now an empty box after the container, as tall as the route below the upper segment, ends the container there, and the lower pane is placed from the route.
 
+Safari on an iPhone Duo (iOS 27.1) tells a page of no fold, so the panes there stay as they are flat. It does resize the page as the Duo opens or turns, and the panes' spring played then: the second pane crossed the first, with white gaps for over a second. Exact's JS target measured the commit that answers a resize, which LLP 1063 D6 has take its boxes at once; fixed in Exact. Emulated folds in Chromium keep the window's size, so only a film of Safari showed it.
+
 A bound `position` of `static` on a scroller is refused (`lower-attr-value`); `relative` is meant. The message says so.
 
 ### Lean in
@@ -18,7 +20,7 @@ A bound `position` of `static` on a scroller is refused (`lower-attr-value`); `r
 
 ### Needed
 
-- foldable segments: provided
+- foldable segments: provided (not by Safari)
 - an event for a hinge that moves in place: missing in the browser (worked around with `env()`)
 - a container's offset from the viewport in CSS: missing (the empty box)
 

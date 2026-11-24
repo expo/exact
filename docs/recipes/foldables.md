@@ -4,7 +4,7 @@ Duo simulator drives and tests take `fold 130`. `devicePosture` is `continuous` 
 0° and 180°, `folded` at 90° and 130°. `exactViewport()` gives
 `horizontalViewportSegments=2` (book) or `verticalViewportSegments=2` (laptop).
 `env(viewport-segment-<left|top|width|height> <x> <y>)` reads segment `x, y`’s bounds.
-Web pages need browser support.
+Some browsers (Safari 27) report no fold.
 
 ```contract
 shape Viewport
@@ -44,7 +44,7 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
   `calc(100% - env(viewport-segment-top 0 1))`, from the viewport origin.
   An iOS keyboard can leave that segment below the viewport and zero tall;
   Duo Lab's note sheet then lifts the cap.
-- End panes under the keyboard at `100%` or `bottom: 0`; hosts report different segment heights.
+- End panes under the keyboard at `100%` or `bottom: 0`; hosts' segment heights differ.
 - Keep the same pane instances to retain field text; UIKit may end editing on a panel switch.
 - Panes move as UIKit's with `-exact-layout-transition="-exact-spring(439, 41.9, 1)"`; browsers drop
   `env()` early on opening (fall back to `exactViewport().segments`).

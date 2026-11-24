@@ -46,6 +46,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `flex=1 min-width=0` so it takes the space left by the heading and buttons.
   (Agents, 402-point iOS simulator, 2026-11-12.)
 
+- **Safari drops a declaration that names a viewport segment, its fallback included.** Safari on
+  iOS 27.1 parses no `env()` with indices, so `width="env(viewport-segment-width 1 0, 100%)"` leaves
+  the width `auto`. It tells a page of no fold either: on an iPhone Duo the posture, the segments and
+  the window's size are the same at 180° and 90°. Fix: write a segment only where `exactViewport()`
+  reports two, as the [foldables recipe](recipes/foldables.md) does. (A page in Safari on an iPhone
+  Duo simulator, 2026-11-24.)
 - **A layout-region inset is not a page gutter.** The web can report zero
   for `env(-exact-readable-content-corners-inset-left)` and its right-edge equivalent. Give reading
   content ordinary padding inside the safe region, and bound a full-width

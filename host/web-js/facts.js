@@ -16,9 +16,9 @@ import { data, Resources, commit, R, Refusal, Kept, say, Sounds } from "./rt.js"
 import * as rt from "./rt.js";
 import { environment, screenOrientation, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold, preferDisplayMode } from "./navigation.js";
 
-const again = (source, why) => {
+const again = (source, why, snaps) => {
   const changed = () => {
-    if (!rt.deferForReplacement(changed)) return commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why);
+    if (!rt.deferForReplacement(changed)) return commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why, undefined, snaps?.());
   };
   return changed;
 };
@@ -54,7 +54,10 @@ export function viewport(readers) {
     return shape ? shaped(shape, facts, "viewport", name) : byName(readers, name, facts);
   };
   if (typeof addEventListener !== "function") return;
-  const changed = again("exactViewport", "viewport");
+  // @ref LLP 1063 D6 — a resize takes new boxes without animating, what the app commits to answer it included
+  const size = () => `${innerWidth}x${innerHeight}`;
+  let told = size();
+  const changed = again("exactViewport", "viewport", () => told !== (told = size()));
   addEventListener("resize", changed);
   globalThis.visualViewport?.addEventListener("resize", changed);
   onKeyboard(changed); // LLP 1039 D9

@@ -912,6 +912,50 @@ test('a resized box accepts presses after its spring ends on either clock', asyn
   } finally { await browser?.close(); server?.close(); rmSync(dir, { recursive: true, force: true }); }
 }, 30000);
 
+// LLP 1063 D6: a resize takes new boxes without animating, what the app commits to answer it included, and ends a move
+// under way. A commit at one size plays, a viewport fact's included.
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a commit that answers a resize plays no layout transition`, async () => {
+  const app = await exitApp(engine, `shape Viewport
+  width: number
+  horizontalViewportSegments: number
+
+component App
+  resource viewport = exactViewport() as shape Viewport
+  state shown = true
+  action drop
+    shown = not shown
+  view
+    column
+      button "Drop" press=drop testId="drop"
+      if shown
+        text "First" height=40
+      if viewport.width < 600
+        text "Narrow" height=40
+      if viewport.horizontalViewportSegments == 2
+        text "Folded" height=40
+      text "Second" testId="second" height=40 -exact-layout-transition="10s linear"
+`, { viewport: { width: 800, height: 600 } });
+  try {
+    const second = app.page.getByTestId('second');
+    const moves = () => second.evaluate(el => el.getAnimations().length);
+    const top = () => second.evaluate(el => el.offsetTop);
+    const resize = async (width, expected) => {
+      await app.page.setViewportSize({ width, height: 600 });
+      await app.page.waitForFunction(([width, expected]) => innerWidth === width && document.querySelector('[data-testid="second"]').offsetTop === expected, [width, expected]);
+    };
+    const wide = await top();
+    await resize(500, wide + 40);
+    expect(await moves()).toBe(0);
+    await app.page.getByTestId('drop').click();
+    expect(await moves()).toBe(1);
+    await resize(700, wide - 40);
+    expect(await moves()).toBe(0);
+    await app.page.evaluate(() => { exact.fold.prefer({ cols: 2, rows: 1, gap: 20 }); dispatchEvent(new Event('exact-fold')); });
+    await app.page.waitForFunction(expected => document.querySelector('[data-testid="second"]').offsetTop === expected, wide);
+    expect(await moves()).toBe(1);
+  } finally { await app.close(); }
+}, 30000);
+
 for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a commit preserves departing boxes and the survivor’s starting position`, async () => {
   const app = await exitApp(engine, `keyframes out
   to opacity=0
