@@ -191,6 +191,17 @@ export const answer: Answer = ((source: string, args: unknown[], _secrets: unkno
   // As of Mobile Safari 27.0 (LLP 1100 D8).
   if (source === 'caveat') return web ? SAFARI_CONSTRAINED : '';
   if (source === 'dragNote') return web ? { path: '', why: '' } : writeDragNote(storage);
+  // Which steps the drag section's hint gives on iOS (`pad`, `duo-open`, `duo-closed`, `phone`), which the gallery's
+  // module tells and says again when the Duo opens or closes; "" elsewhere, or where the module did not load
+  if (source === 'dragDevice') {
+    if (args[args.length - 1] !== 'ios' || !native?.available) return '';
+    native.watch('gallery-drag-device');
+    try {
+      return String((native.call({ op: 'dragDevice' }) as { kind: string }).kind);
+    } catch {
+      return '';
+    }
+  }
   if (source === 'dropPreviews') return dropPreviews(storage, args[0] as string[], Number(args[1]));
   if (source === 'hidden') {
     const gone = (args[0] === 'hdr' ? HDR : PICTURES).filter((p) => !shows(p.src, web)).map((p) => p.src.slice(7));

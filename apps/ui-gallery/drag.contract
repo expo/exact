@@ -77,10 +77,16 @@ shape DropPreview
 component DragDrop
   props
     host: string
+    // On iOS, `pad`, `duo-open`, `duo-closed` or `phone`, else ""
+    device: string
     note: DragNote
     previews: DropPreview[]
     dropFiles: action
   derive touch = host == "ios" or host == "android"
+  // An iPad, or an iPhone Duo while open, shows two apps side by side, and an iPhone, or a closed Duo, one at a time
+  derive acrossSteps = "Open the other app beside UI Gallery. Then hold a card until it lifts and drag it across."
+  derive homeSteps = "Hold a card until it lifts. Keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there."
+  derive iosSteps = device == "pad" ? acrossSteps : device == "duo-open" ? acrossSteps : device == "duo-closed" ? "Open iPhone Duo to show the other app beside UI Gallery, then drag a card across. Or, with it closed, hold a card until it lifts, keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there." : device == "phone" ? homeSteps : "On iPad or an open iPhone Duo, open the other app beside UI Gallery and drag a card across. On iPhone, hold a card until it lifts, keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there."
   derive drops = host == "macos" or host == "web" or host == "windows" or host == "ios"
   state over = false
   state dropped: string[] = []
@@ -109,7 +115,7 @@ component DragDrop
     dragOn = not dragOn
   view
     column row-gap=8 testId="drag-drop"
-      text (host == "ios" ? "On iPad, open the other app beside UI Gallery. Then hold a card until it lifts and drag it across. On iPhone, hold a card until it lifts, keep holding it, swipe up from the bottom with another finger to go Home, then open the other app." : host == "android" ? "Open another app beside this one. Then hold a card until it lifts and drag it there." : host == "macos" ? "Drop it in Finder, Notes, Mail, Safari or another app." : "Drop it on the desktop, in another app or in another tab.") class=DragCaption
+      text (host == "ios" ? iosSteps : host == "android" ? "Open another app beside this one. Then hold a card until it lifts and drag it there." : host == "macos" ? "Drop it in Finder, Notes, Mail, Safari or another app." : "Drop it on the desktop, in another app or in another tab.") class=DragCaption testId="drag-steps"
       text (host == "web" ? "File cards share links, and some pages can show the photo. To save a copy, drag a file card from Chrome to Finder or File Explorer. Chrome saves only the first file." : "UI Gallery offers the original files, with their names and details.") class=DragCaption
 
       text "Text and links" class=DragHeading

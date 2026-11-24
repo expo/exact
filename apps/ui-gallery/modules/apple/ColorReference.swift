@@ -19,8 +19,14 @@ final class ColorReference: ExactModule {
             #else
             return ["height": 0]
             #endif
+        case "dragDevice":
+            #if os(iOS)
+            return ["kind": dragDevice.kind]
+            #else
+            return ["kind": ""]
+            #endif
         case let op:
-            throw ExactNativeRefusal("The gallery's module was asked for \(op.map { "\"\($0)\"" } ?? "no operation"), which it does not answer. Pass \"colorReference\" or \"sidebarBarHeight\" as native.call's op.")
+            throw ExactNativeRefusal("The gallery's module was asked for \(op.map { "\"\($0)\"" } ?? "no operation"), which it does not answer. Pass \"colorReference\", \"sidebarBarHeight\" or \"dragDevice\" as native.call's op.")
         }
     }
 
@@ -31,7 +37,16 @@ final class ColorReference: ExactModule {
         return height
     }()
 
-    override func window(_ window: ExactWindow) { sidebarBar.scheduleUpdate() }
+    private lazy var dragDevice: DragDevice = {
+        let device = DragDevice()
+        device.changed = { [context] in context.changed(DragDevice.topic) }
+        return device
+    }()
+
+    override func window(_ window: ExactWindow) {
+        sidebarBar.scheduleUpdate()
+        dragDevice.watch(window)
+    }
 
     override func windowEnded(_ window: ExactWindow) { sidebarBar.scheduleUpdate() }
 
