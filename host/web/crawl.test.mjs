@@ -54,6 +54,23 @@ test('build page paths preserve encoded separators on POSIX and Windows', () => 
   expect(() => buildPageFiles('C:\\site\\dist', [page('/a'), page('/A')], [], win32)).toThrow('same page file');
 });
 
+// A host looks a page's file up by the path's decoded segments (`filePathOf`), so it gives the file to each spelling of
+// the path, and one of those may be a literal route's (LLP 1048.000 D7). A route rendered per request is not looked up by
+// file, and a parameter route's value at that spelling is a URL nothing needs to link.
+test('build pages refuse a file that a literal route the browser draws is served from', () => {
+  const listed = { name: 'product', pattern: '/product/:id', render: 'build' }, amp = render => ({ name: 'amp', pattern: '/product/a&b', render });
+  for (const render of ['client', 'build']) {
+    expect(() => buildPageFiles('/site/dist', [page('/product/a%26b')], [amp(render), listed])).toThrow('route `product` page "/product/a%26b" (value "a&b"): its file product/a&b/index.html is also served at "/product/a&b", which is route `amp`\'s');
+  }
+  expect(buildPageFiles('/site/dist', [page('/product/a&b')], [amp('build'), { ...listed, render: 'client' }])).toEqual(['product/a&b/index.html']);
+  for (const render of ['request', 'cached']) {
+    expect(buildPageFiles('/site/dist', [page('/product/a%26b')], [amp(render), listed])).toEqual(['product/a&b/index.html']);
+  }
+  for (const location of ['/product/plain', '/product/caf%C3%A9', '/product/a%2Fb', '/product/a%26c', '/product/50%25']) {
+    expect(buildPageFiles('/site/dist', [page(location)], [amp('client'), listed])).toHaveLength(1);
+  }
+});
+
 test('build pages keep hidden names and reject only dot path segments', () => {
   const locations = ['/.well-known/security.txt', '/product/.draft', '/product/%2Edraft'];
   for (const location of locations) {
