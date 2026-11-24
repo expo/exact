@@ -34,6 +34,64 @@ extension NodeView {
         return clips(style["overflow_x"]?.string) && clips(style["overflow_y"]?.string)
     }
 
+    var materialView: UIVisualEffectView? {
+        get { extras?.materialView }
+        set {
+            if newValue != nil || extras != nil { more.materialView = newValue }
+            if materialView == nil { presenter?.materialNodes.remove(id) }
+            else { presenter?.materialNodes.insert(id) }
+        }
+    }
+    func updateMaterial() {
+        defer { syncGlassSlot(); syncGlassGroup(); settleVibrancy(); syncDefaultSurfaceScroll() }
+        let kind = materialRequest
+        let supported = kind != nil
+        let interactive = Materials.glass(kind) && glassInteracts
+        if materialKind != (supported ? kind : nil) {
+            let children = container.subviews.compactMap { $0 as? NodeView }
+            let old = materialView
+            materialView = nil
+            materialKind = nil
+            if supported {
+                let effect = kind == "backdrop" ? BackdropEffectView() : UIVisualEffectView()
+                effect.isUserInteractionEnabled = Materials.glass(kind)
+                effect.frame = materialFrame
+                effect.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                (glassSlot?.contentView ?? self).insertSubview(effect, at: 0)
+                materialView = effect
+                materialKind = kind
+            }
+            // The children move before the old effect goes, so they never
+            // leave the window: UIKit cancels the touches of a view that
+            // does, and a press held inside would end at the swap (euxy's
+            // dice, whose charge turned the capsule's glass off).
+            GlassGroups.moving(in: self) {
+                for (index, child) in children.enumerated() { container.insertSubview(child, at: index) }
+                old?.removeFromSuperview()
+            }
+            presenter?.flats.containerChanged(id)
+        }
+        guard let materialView else { rehomeMaterialChildren(); return }
+        if cssVisibilityHidden { materialView.effect = nil }
+        else if materialView.effect == nil || materialInteractive != interactive || materialTint != glassTint || backdropStale {
+            showMaterialEffect(backdropEffect() ?? materialEffect(kind ?? "ultra-thin", interactive: interactive))
+            materialInteractive = interactive; materialTint = glassTint
+        }
+        applyMaterialRadius()
+        rehomeMaterialChildren()
+    }
+    func applyMaterialRadius() {
+        guard let materialView else { return }
+        let radius = BorderPaint.clip(materialView.layer, in: materialBox, radii: effectiveCornerSizes(in: materialBox))
+        if #available(iOS 26.0, tvOS 26.0, *) {
+            materialView.cornerConfiguration = .corners(radius: .fixed(Double(radius)))
+        } else {
+            materialView.layer.cornerRadius = radius
+            materialView.clipsToBounds = true
+        }
+        if style["mask_image"] != nil { applyBoxMask() }
+    }
+
     /// The children back where `container` says, after a material, its
     /// clip or a scroll changed which view holds them, in their order. Flat
     /// leaves (`presenter.flats`) follow the container even when no view
