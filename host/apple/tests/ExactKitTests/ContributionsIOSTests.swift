@@ -99,6 +99,25 @@ final class ContributionsIOSTests: XCTestCase {
         XCTAssertEqual(child.additionalSafeAreaInsets, UIEdgeInsets(top: 0, left: 5, bottom: 0, right: 0))
     }
 
+    func testAnOwnersRootWritesItsInsetsThenItsPaddingInThatOrder() throws {
+        let (_, child) = try controllers()
+        let ledger = ContributionsIOS.of(child)
+        // The padding first, then an additional inset: both stand in their order, the inset first
+        ledger.write(id(2), top(5))
+        ledger.writeRoot(1, additional: .zero, padding: top(8))
+        ledger.writeRoot(1, additional: top(20), padding: top(8))
+        XCTAssertEqual(ledger.entries.map(\.identity.operation), [.additionalInsets, .additionalInsets, .safeAreaPadding])
+        XCTAssertEqual(child.additionalSafeAreaInsets, top(33))
+        XCTAssertEqual(ledger.entries.map(\.effect), [top(5), top(20), top(8)])
+        // A new value stays in its place
+        ledger.writeRoot(1, additional: top(10), padding: top(8))
+        XCTAssertEqual(ledger.entries.map(\.identity.operation), [.additionalInsets, .additionalInsets, .safeAreaPadding])
+        ledger.write(id(2), .zero)
+        ledger.writeRoot(1, additional: .zero, padding: .zero)
+        XCTAssertTrue(ledger.entries.isEmpty)
+        XCTAssertEqual(child.additionalSafeAreaInsets, .zero)
+    }
+
     func testExactsReactionsReadOnlyTheSettledInsets() throws {
         let (_, child) = try controllers()
         let ledger = ContributionsIOS.of(child)

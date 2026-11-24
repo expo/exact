@@ -125,3 +125,44 @@ fn an_update_with_a_contribution_it_cannot_take_is_refused_whole() {
     update(&mut k, &[wrote(9, Operation::KeyboardInsets, 26.0)]).unwrap();
     assert_eq!(band(&k), [34.0, 0.0, 0.0, 0.0]);
 }
+
+#[test]
+fn an_owner_roots_negative_inset_is_cleared_as_uikit_applied_it() {
+    // 2, which takes none of its band, adds -50 on top under a 34-point band and pads 8 past it:
+    // with no write measured its host clears what CSS says, 8; with its write measured to have no
+    // effect, as a child controller's floor keeps its band, it clears the band and the padding, 42
+    let mut ops = create(3..=3);
+    let rows = [
+        (StyleId::SafeAreaIgnore, "none"),
+        (StyleId::AdditionalSafeAreaTop, "-50"),
+        (StyleId::SafeAreaPaddingTop, "8"),
+    ];
+    ops.push(style(2, vec![], &rows));
+    ops.push(style(3, vec![], &[(StyleId::Height, "10")]));
+    ops.push(children(2, &[3]));
+    let mut k = owner(390.0, 844.0, ops);
+    assert_eq!(
+        k.owner_writes(2),
+        Some(vec![
+            (2, Operation::AdditionalInsets, [-50.0, 0.0, 0.0, 0.0]),
+            (2, Operation::SafeAreaPadding, [8.0, 0.0, 0.0, 0.0]),
+        ])
+    );
+    assert_eq!(k.owner_writes(3), None, "no owner");
+    let band = Some([34.0, 0.0, 0.0, 0.0]);
+    k.set_owner_band(2, band, &[]).unwrap();
+    lay_out(&mut k);
+    let clear = |k: &Kernel| crate::kernel::block::clearance(&k.arena, slot(k, 2))[0];
+    assert_eq!(
+        clear(&k),
+        8.0,
+        "the band less 50, at least 0, then the padding"
+    );
+    let floored = wrote(2, Operation::AdditionalInsets, 0.0);
+    assert!(
+        k.set_owner_band(2, band, &[floored]).unwrap(),
+        "a new effect owes a layout"
+    );
+    lay_out(&mut k);
+    assert_eq!(clear(&k), 42.0, "the band the floor kept, then the padding");
+}

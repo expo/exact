@@ -92,3 +92,32 @@ pub(crate) fn check(contributions: &[Contribution]) -> Result<(), KernelError> {
     }
     Ok(())
 }
+
+impl crate::Kernel {
+    /// What the owner `view`'s host writes to its controller's additional insets for its root (D11,
+    /// D3), in this order: the root's additional insets, then its safe-area padding, each top right
+    /// bottom left and with the root's id; an operation the root reserves nothing by is left out.
+    /// The kernel clears them around the content root; the host writes them so the controller's
+    /// own safe area holds them too, recording each as a contribution, whose effect it reports.
+    /// `None` for a view that is no owner. Activation delivers them live (stage 5).
+    pub fn owner_writes(&self, view: ViewId) -> Option<Vec<(ViewId, Operation, [f32; 4])>> {
+        let arena = &self.arena;
+        let slot = arena
+            .slot_of(view)
+            .filter(|&s| super::block::owns(arena, s))?;
+        let Some(r) = super::block::reservation::reserved(arena, slot) else {
+            return Some(Vec::new());
+        };
+        let writes = [
+            (Operation::AdditionalInsets, r.added),
+            (Operation::SafeAreaPadding, r.padding),
+        ];
+        Some(
+            writes
+                .into_iter()
+                .filter(|(_, insets)| insets.iter().any(|&v| v != 0.0))
+                .map(|(operation, insets)| (view, operation, insets))
+                .collect(),
+        )
+    }
+}

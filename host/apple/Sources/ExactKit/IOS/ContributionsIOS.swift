@@ -52,9 +52,28 @@ package final class ContributionsIOS {
     /// of its own accord.
     package func write(_ identity: Identity, _ insets: UIEdgeInsets) {
         guard insets != self.insets(of: identity) else { return }
-        let last = entries.first { $0.identity == identity }?.generation ?? retired[identity] ?? 0
-        set(identity, insets == .zero ? nil : insets, generation: last + 1)
+        set(identity, insets == .zero ? nil : insets, generation: generation(after: identity))
         apply()
+    }
+
+    /// Write the owner's root's own contributions (LLP 1123 D11, D3): its additional insets, then its
+    /// safe-area padding, each apart and none where zero; activation supplies them from
+    /// `Kernel::owner_writes` (stage 5), and tests set them directly.
+    package func writeRoot(_ node: UInt32, additional: UIEdgeInsets, padding: UIEdgeInsets) {
+        let inset = Identity(node: node, operation: .additionalInsets), pad = Identity(node: node, operation: .safeAreaPadding)
+        guard additional != insets(of: inset) || padding != insets(of: pad) else { return }
+        // Record the padding again after a new inset, which stands before it
+        if additional != .zero, insets(of: inset) == .zero, insets(of: pad) != .zero {
+            set(pad, nil, generation: generation(after: pad))
+        }
+        set(inset, additional == .zero ? nil : additional, generation: generation(after: inset))
+        set(pad, padding == .zero ? nil : padding, generation: generation(after: pad))
+        apply()
+    }
+
+    /// A generation newer than `identity`'s last, recorded or taken away.
+    private func generation(after identity: Identity) -> UInt64 {
+        (entries.first { $0.identity == identity }?.generation ?? retired[identity] ?? 0) + 1
     }
 
     package struct Entry: Equatable {
