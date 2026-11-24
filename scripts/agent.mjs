@@ -321,6 +321,7 @@ export async function main(argv, injected = {}) {
             'modifiers <Shift+Meta…>',
             'fingers <2-5> [at <x> <y>] (fingers tapped together; iOS --touch platform: four open the dev menu)',
             'pinch <scale> [at <x> <y>]',
+            "swipe <left|right|up|down> [at <x> <y>] (the platform's swipe as a real 120-point flick; iOS --touch platform)",
             'mediasession <action> [seconds]',
             "pictureinpicture minimize|back|close|hover (Exact's picture-in-picture window, macOS)",
             'drag <dx> <dy> [from <x> <y>] [mouse: the left button, desktop pointers] [modifiers <M>] [press <ms>] [over <ms>] [hold <ms>] [into keyboard: iOS --touch platform, keyboard up; end above the screen bottom safe area] [during "<op>" …: after the move, the finger down; inside the hold under --touch platform] [then <dx> <dy> [over <ms>] [hold <ms>] [during "<op>" …]: another leg, same iOS touch]',
@@ -548,7 +549,8 @@ export async function main(argv, injected = {}) {
         // `tap hold`, `tap up`, `tap cancel` only while a contact is down;
         // with none down those words are targets like any other.
         if (holdOf(args[0]))
-          r = await s.tap(args[0], { choice: args[1] }); // `tap @7 cancel` is the hold, even while a contact is down
+          // `tap @7 cancel` is the hold, even while a contact is down; `tap @7 swipe down`, a swipe, is refused
+          r = await s.tap(args[0], args[1] === 'swipe' && args[2] !== undefined ? { swipe: args[2] } : { choice: args[1] });
         else if (args[1] === 'drag' && !(s.contact && ['move', 'hold', 'up', 'cancel'].includes(args[0]))) {
           const tail = named ? named[3] : trimmed.replace(/^\S+\s+\S+\s+/, '');
           const drag = parseDrag(s, tail.replace(/^drag(?:\s+|$)/, ''));

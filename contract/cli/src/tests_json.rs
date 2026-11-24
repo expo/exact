@@ -107,6 +107,12 @@ fn step_json(step: &Step, s: &mut String) {
                         s.push_str(&format!(",\"at\":[{x},{y}]"));
                     }
                 }
+                TapForm::Swipe { direction, at } => {
+                    s.push_str(&format!("\"swipe\",\"direction\":\"{direction}\""));
+                    if let Some((x, y)) = at {
+                        s.push_str(&format!(",\"at\":[{x},{y}]"));
+                    }
+                }
                 TapForm::Wheel { dx, dy } => {
                     s.push_str(&format!("\"wheel\",\"wheel\":[{dx},{dy}]"))
                 }

@@ -237,6 +237,7 @@ const PERSON_EVENTS: &[&str] = &[
     "scrolldragend",
     "swipeleft",
     "swiperight",
+    "swipe",
     "key",
     "keyup",
     "keycapture",

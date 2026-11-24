@@ -222,6 +222,11 @@ pub(crate) fn with_text_styles(
     out.extend(parts::empty_state_in_list(&checking));
     // @ref LLP 1116.021 D7 — a summary card in a grouped list's card.
     out.extend(parts::summary_card_in_list(&checking));
+    // @ref LLP 1057.001 §8.1 — a swipe inside a grouped list, which UIKit draws itself.
+    out.extend(crate::handlers::swipe::unseen_in_grouped(
+        &checking,
+        &checked.file.styles,
+    ));
     // @ref LLP 1121 D8 — a node's own state part it never meets.
     states::dead(&checked_view, &mut out);
     performance_now(root, &checked.file.fns, &mut out);

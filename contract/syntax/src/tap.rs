@@ -27,6 +27,16 @@ pub enum TapForm {
         /// Where the pinch is centred, in the node's box; its middle when `None`.
         at: Option<(f64, f64)>,
     },
+    /// `swipe <left|right|up|down> [at x y]`: the platform's discrete swipe,
+    /// a real flick of 120 points that way from the node's middle, or from
+    /// `at` in its box, which the platform's recognizer reads (LLP 1057.001
+    /// §8.3).
+    Swipe {
+        /// `left`, `right`, `up` or `down`.
+        direction: String,
+        /// Where the swipe starts, in the node's box; its middle when `None`.
+        at: Option<(f64, f64)>,
+    },
     /// `wheel <dx> <dy>`: the agent's wheel at the node's middle, in points,
     /// as `tap <t> wheel dx dy`: a positive `dy` scrolls on toward the
     /// content's end (the offset grows), a negative one back toward its start.

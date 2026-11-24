@@ -885,8 +885,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       Object.assign(fresh, fixture, { EXACT_AGENT_STORED: JSON.stringify(stored) });
     }
     const heads = await Promise.all(shared.map((o) => backendHead(o)));
-    // An authored drag uses XCTest on iOS. Other taps opt in with `--touch platform` (LLP 1080.000 §11).
-    const dragged = (steps) => steps.some((st) => st.op === 'drag' || (st.steps && dragged(st.steps)));
+    // An authored drag uses XCTest on iOS, as does a swipe, a flick (LLP 1057.001 §8.3). Other taps opt in with `--touch platform` (LLP 1080.000 §11).
+    const dragged = (steps) => steps.some((st) => st.op === 'drag' || (st.op === 'tap' && st.form === 'swipe') || (st.steps && dragged(st.steps)));
     const drags = ['ios', 'host-ios'].includes(host) && dragged(t.steps);
     const fingers = touch !== 'agent' ? touch : drags ? 'drag' : 'agent';
     // The date a relaunch starts at: this launch's date at the clock's zero plus the virtual time the test has reached
@@ -1080,6 +1080,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
             const opts = st.form === 'into' ? { into: { key: st.key } }
               : st.form === 'pinch' ? { pinch: st.scale, ...(st.at ? { at: st.at } : {}) }
               : st.form === 'dblclick' && st.touch ? { dblclick: true, touch: true }
+              : st.form === 'swipe' ? { swipe: st.direction, ...(st.at ? { at: st.at } : {}) }
               : st.form === 'wheel' ? { wheel: st.wheel }
               : st.form === 'history' ? { history: st.history }
               : st.form === 'drop' ? { drop: st.files.map((f) => resolve(dirname(file), f)), ...(st.text != null ? { text: st.text } : {}), ...(st.url != null ? { url: st.url } : {}) }

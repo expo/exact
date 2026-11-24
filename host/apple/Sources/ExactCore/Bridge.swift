@@ -192,6 +192,10 @@ package typealias TopLayerFrame = (UInt32, CGRect, CGRect?)
 package typealias TopLayerBackdrop = (UInt32, CGRect, CGRect?)
 package typealias TopLayerGeometry = (frames: [TopLayerFrame], modal: Int?, backdrop: TopLayerBackdrop?)
 
+/// A swipe's host kind, with no payload: `swiperight` (12) and `swipeleft` (61), and `swipe` (66), the platform's
+/// discrete swipe in the node's `swipe-direction` (LLP 1057.001 §8).
+package enum SwipeKind: UInt32 { case right = 12, left = 61, discrete = 66 }
+
 /// A runtime handle and its calls. `destroy` is idempotent at this layer and
 /// one-shot at the C boundary; a call after it is refused by the library by
 /// name, never a trap.
@@ -581,8 +585,8 @@ package final class Runtime {
             read(exact_hold_end(rt, token, cancel ? 1 : measured ? 2 : 0, vx, vy, now, at ?? now))
         }
     }
-    package func swiperight(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 12, 0, now)) } }
-    package func swipeleft(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 61, 0, now)) } }
+    /// A swipe's action: `swiperight` or `swipeleft`, which the node followed, or `swipe`, the platform's discrete one.
+    package func swipe(_ view: UInt32, _ kind: SwipeKind, now: Double) -> Batch { on { read(exact_dispatch(rt, view, kind.rawValue, 0, now)) } }
     /// The history swipe the Mac tracks (LLP 1115.000 D5.5): its phase,
     /// `back` or `forward`, how far along that way (0 or more), and where
     /// the pointer was as it began, in the viewport.

@@ -838,7 +838,7 @@ public final class ExactSession {
             apply(runtime.focusEvent(id, entering: kind == "focusin", target: target, related: related, now: now()))
         } }
         presenter.onContextmenu = { [unowned self] id in applyInput(runtime.contextmenu(id, now: now()), at: id) }
-        presenter.onSwiperight = { [unowned self] id in applyInput(runtime.swiperight(id, now: now()), at: id) }
+        presenter.onSwiperight = { [unowned self] id in applyInput(runtime.swipe(id, .right, now: now()), at: id) }
         presenter.onRefresh = { [unowned self] id in applyInput(runtime.refresh(id, now: now()), at: id) }
         presenter.onPan = { [unowned self] id, dx, dy in applyInput(runtime.pan(id, dx: dx, dy: dy, now: now()), at: id) }
         presenter.onPanRelease = { [unowned self] id, vx, vy in applyInput(runtime.panRelease(id, vx: vx, vy: vy, now: now()), at: id) }

@@ -583,6 +583,9 @@ component App
   finger and the one action runs when it lifts past 64 points, with no button revealed
   (a message's swipe to reply; `contract vocab swipeleft`). A row that shows Delete is
   `delete=`.
+- `swipe=action swipe-direction="down"` is not a swipe action either: the platform's discrete
+  swipe, which nothing follows, runs the action once (a flick down on a composer that puts the
+  keys away; `contract vocab swipe-direction`).
 - Other actions than Delete (Pin, Flag, a leading action, several) are the long form: a
   horizontal snap `scroll` laid out as a row (`display="flex"`), naming its content
   (`swipeContent`) and its actions (`swipeTrailing`, `swipeLeading`: buttons' `id`s, inside

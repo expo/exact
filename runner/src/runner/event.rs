@@ -326,6 +326,9 @@ pub enum Event {
     Swiperight,
     /// Its mirror, a left swipe (Charlie, 2026-11-10).
     Swipeleft,
+    /// The platform's discrete swipe in the node's `swipe-direction` (LLP
+    /// 1057.001 §8).
+    Swipe,
     /// A pull past the top of a scroll container asked for fresh content
     /// (UIKit's `UIRefreshControl`); the app answers through `refreshing`.
     Refresh,
@@ -1109,6 +1112,7 @@ impl<D: DataSource> Runner<D> {
             Event::Pointermove(_) => "pointermove",
             Event::Swiperight => "swiperight",
             Event::Swipeleft => "swipeleft",
+            Event::Swipe => "swipe",
             Event::Refresh => "refresh",
             Event::Scroll(_) => "scroll",
             Event::Resize(_) => "resize",
@@ -1314,6 +1318,7 @@ impl<D: DataSource> Runner<D> {
             Event::Pointermove(_) => (EventKind::Pointermove, None, "pointermove"),
             Event::Swiperight => (EventKind::Swiperight, None, "swiperight"),
             Event::Swipeleft => (EventKind::Swipeleft, None, "swipeleft"),
+            Event::Swipe => (EventKind::Swipe, None, "swipe"),
             Event::Refresh => (EventKind::Refresh, None, "refresh"),
             Event::Scroll(_) => (EventKind::Scroll, None, "scroll"),
             Event::Resize(_) => (EventKind::Resize, None, "resize"),

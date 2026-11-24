@@ -581,7 +581,7 @@ impl Parser {
                     return self.drag_step(target, span);
                 }
                 let form = match self.peek_kind().clone() {
-                    TokenKind::Ident(w) if w == "hover" || w == "dblclick" || w == "contextmenu" || w == "into" || w == "pinch" || w == "wheel" => {
+                    TokenKind::Ident(w) if w == "hover" || w == "dblclick" || w == "contextmenu" || w == "into" || w == "pinch" || w == "swipe" || w == "wheel" => {
                         self.next();
                         match w.as_str() {
                             "hover" => TapForm::Hover,
@@ -607,6 +607,31 @@ impl Parser {
                                     None
                                 };
                                 TapForm::Pinch { scale, at }
+                            }
+                            // `tap "id" swipe <direction> [at x y]`: the platform's discrete swipe (LLP 1057.001 §8.3).
+                            "swipe" => {
+                                let direction = match self.peek_kind().clone() {
+                                    TokenKind::Ident(d) if ["left", "right", "up", "down"].contains(&d.as_str()) => {
+                                        self.next();
+                                        d
+                                    }
+                                    _ => {
+                                        return self.err(
+                                            "syntax-expected-step",
+                                            "`swipe` takes a direction: left, right, up or down",
+                                        )
+                                    }
+                                };
+                                let at = if self.at_ident("at") {
+                                    self.next();
+                                    Some((
+                                        self.step_number("the swipe's x in the node's box")?,
+                                        self.step_number("the swipe's y in the node's box")?,
+                                    ))
+                                } else {
+                                    None
+                                };
+                                TapForm::Swipe { direction, at }
                             }
                             // `tap "id" wheel <dx> <dy>`: the agent's wheel, so a Mac's scroll can be tested.
                             "wheel" => {

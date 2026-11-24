@@ -7532,6 +7532,14 @@ runs when it lifts 64 points or more that way. Both directions are the
 screen's, in a right-to-left layout too, and a node may have both
 ([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
 
+`swipe=action` with `swipe-direction` (`left`, `right`, `up` or `down`) is the
+platform's discrete swipe: nothing follows the finger, and the action runs once
+when UIKit's swipe recognizer recognizes a swipe that way on the node or a view
+inside it, a text field included. UIKit arbitrates it with the other gestures
+under the finger, as it does any swipe: a field whose text overflows pans
+instead. Only iOS has it; macOS,
+tvOS, the web, Linux, Windows and Android fire none (LLP 1057.001 §8).
+
 ## Timer options
 
 ### A timer that can wait

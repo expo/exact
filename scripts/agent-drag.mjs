@@ -212,6 +212,9 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
   if (!b) throw new Error(`view ${node.id} has no box on screen`);
   const start = from ? [b.x + from[0], b.y + from[1]] : [b.x + b.w / 2, b.y + b.h / 2], end = [start[0] + dx, start[1] + dy];
   const inside = ([x, y]) => x >= 0 && y >= 0 && x <= vp.w && y <= vp.h;
+  // A swipe's flick (`swipeDrag`, LLP 1057.001 §8.3) is one real stroke from inside its target, never the scroll view's own
+  const after = scrolled ? ' after the view scrolled in' : '';
+  if (opts.flick && !(start[0] >= b.x && start[1] >= b.y && start[0] < b.x + b.w && start[1] < b.y + b.h)) throw new Error(`swipe: its start (${start}) is outside the target's ${b.w} × ${b.h} box at (${b.x}, ${b.y})${after}`);
   // Android's reader owns scrolling; Presenter.pointer_* cannot hold its scroll contact.
   // Use the reader's deterministic scroll samples, and report that delivery explicitly.
   let liftAt;
@@ -243,6 +246,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
 
   if (into && !endpoint(end)) throw new Error(`drag: end (${end}) leaves the screen above its bottom safe area`);
   if (vp && !(inside(start) && endpoint(end))) {
+    if (opts.flick) throw new Error(`swipe: the flick from (${start}) to (${end}) leaves the viewport (${vp.w} × ${vp.h})${after}; start it farther in with at, where the target leaves room for the stroke`);
     // A scroller dragged further than the viewport reaches scrolls the whole way (euxy FRICTION 14). On iOS it is the
     // scroll view's own drag, which a viewport does not bound, under real touches too: a held real stroke scrolls less
     // than its length (a 300-point one scrolled Reflow 214) and an unheld one flings, so real strokes would not scroll

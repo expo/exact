@@ -1395,6 +1395,7 @@ impl Em<'_> {
                 | EventKind::Capture // and the runtime refusing a capture (`onFrameCapture`)
                 | EventKind::Userpromptopened // @ref LLP 1020.002 D9: the browser's own dialogs
                 | EventKind::Historyswipe // @ref LLP 1115.000 D5.5: the browser shows its own arrow
+                | EventKind::Swipe // @ref LLP 1057.001 §8.1: the web has no swipe of the platform's
                 | EventKind::Select => {}
                 // The motion piece's: the swipe's holds, a pan's velocity.
                 EventKind::Swiperight

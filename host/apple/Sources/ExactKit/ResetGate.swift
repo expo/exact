@@ -104,8 +104,7 @@ enum ResetGate {
         // Events on the old tree's views: as the gestures and inputs above.
         "contextmenu(_:now:)": "a context menu asked of the old tree",
         "dblclick(_:now:)": "a double click on the old tree",
-        "swiperight(_:now:)": "a swipe on the old tree",
-        "swipeleft(_:now:)": "a swipe on the old tree",
+        "swipe(_:_:now:)": "a swipe on the old tree",
         "historySwipe(_:phase:direction:amount:client:now:)": "a history swipe's progress told to the old tree's root",
         "scrollend(_:now:)": "an old scroller's end",
         "scrolldragstart(_:now:)": "a drag of an old scroller",

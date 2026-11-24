@@ -1107,11 +1107,13 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
 /// A surface argument carries its declared type (`surface_args.ty`, LLP
 /// 1056 D1), by which a TypeScript `draw` receives records by field name:
 /// every plan-reading host rebuilds for it.
+/// `EventKind::Swipe`, the platform's discrete swipe (LLP 1057.001 §8.2):
+/// every plan-reading host rebuilds for it.
 /// The digest covers all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0x5c2e_c964_da8c_72ab,
+        FORMAT_DIGEST, 0xfbfa_6cc7_0c37_7765,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

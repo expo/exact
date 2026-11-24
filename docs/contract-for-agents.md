@@ -5510,6 +5510,35 @@ test "a swipe right answers the message"
 A test's drag is a real touch on an iOS simulator: start it where 100 points stay on the
 screen, and `clock settle` after it, so the spring back has ended when the screen is read.
 
+#### A flick that puts the keys away
+
+`swipe=action` with `swipe-direction="down"` is the platform's discrete swipe: nothing
+follows the finger, and the action runs once when iOS recognizes a quick flick down on the
+node or anything inside it, its field included. UIKit arbitrates it with the other gestures
+under the finger, as it does any swipe: a field whose text overflows scrolls instead. Only
+iOS has it, so give the effect a control as well (the keyboard recipe's Done). A swipe fires
+nothing where UIKit draws its own control in a node's place (tabs it draws as a segmented
+control, a bar's item, a native menu's item, a grouped list's cells): put it on what the
+page draws. `lower-swipe-unseen` names one inside a grouped list.
+
+```contract
+component Composer
+  state draft = ""
+  action edit(text: string)
+    draft = text
+  action hideKeys
+    blur("composer")
+  view
+    column swipe=hideKeys swipe-direction="down" testId="composer-bar"
+      textarea id="composer" testId="composer" value=draft input=edit field-sizing="content" max-height=120
+```
+
+`tap "composer-bar" swipe down` drives it on iOS under `--touch platform`, and in a test
+file, which takes real touches for it: a real flick, a fast drag of 120 points from inside
+the target and the viewport, which UIKit's recognizer reads. Without real touches it is
+refused, since nothing else reaches the recognizer. The reply says the touch was
+delivered, not that UIKit recognized it, so read the action's effect (the keyboard here).
+
 #### A confirmation
 
 "Remove book?" with a message, Cancel and a destructive Remove (React Native's
@@ -7182,6 +7211,9 @@ before, so the app's dates agree with the server's but differ run to run. The st
 `tap "list" into "key"` (a virtualized list's row brought into view by its key,
 so the next step can tap a row outside the rendered window),
 `tap "id" pinch <scale> [at x y]` (two fingers; `scale` greater than 0),
+`tap "id" swipe <left|right|up|down> [at x y]` (the platform's swipe as a real flick, a fast
+drag of 120 points from the target's middle or `at`; iOS, where a test file takes real
+touches for it),
 `tap "id" drag dx dy [from x y] [mouse] [press ms] [over ms] [hold ms] [into keyboard] [during "op" …]`
 (a finger, `pointerType` touch, where the carrier has one, unless `mouse` names the left button; `during`
 is last: quoted reads or `clock` while that contact is down, after the move and

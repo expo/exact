@@ -21,6 +21,7 @@ pub(crate) fn id_refusals(checked: &contract_types::Checked<'_>) -> Vec<crate::L
     out.extend(portal::check(checked));
     out
 }
+use crate::handlers::swipe;
 use exact_kernel::{NodeType, PropId, StyleId};
 use exact_plan::BindingsRow;
 /// What an attribute lowers to.
@@ -58,7 +59,7 @@ pub struct Tag {
     /// The prop the first positional argument fills, if any.
     pub positional: Option<PropId>,
 }
-fn p(name: &str) -> PropId {
+pub(crate) fn p(name: &str) -> PropId {
     PropId::from_name(name).unwrap_or_else(|| panic!("kernel schema has no prop `{name}`"))
 }
 /// Look up a tag.
@@ -546,8 +547,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "intersect" => AttrTarget::Handler("intersect"),
         "intersect-margin" => AttrTarget::Prop(p("intersectMargin")),
         "reachend" => AttrTarget::Handler("reachend"),
-        "swiperight" => AttrTarget::Handler("swiperight"),
-        "swipeleft" => AttrTarget::Handler("swipeleft"),
+        "swiperight" | "swipeleft" | "swipe" | "swipe-direction" => swipe::attr(name)?,
         "refresh" => AttrTarget::Handler("refresh"),
         "scroll" => AttrTarget::Handler("scroll"),
         "scrollend" => AttrTarget::Handler("scrollend"),

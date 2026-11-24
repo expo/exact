@@ -3,7 +3,7 @@
 import { test, expect } from 'bun:test';
 import { resolve } from 'node:path';
 import { chordKeys } from './agent-playwright.mjs';
-import { KEY_REPEAT, validateKey, typeFor, cdpKey, withHeldModifiers, browserKey, nativeKey, typeArguments, typeCommand, tapWords, tapArguments, pointerGap, intoArguments, MalformedOperation, clockSlices, padOp, postCommand, postInto, resizeArguments } from './agent-keys.mjs';
+import { KEY_REPEAT, validateKey, typeFor, cdpKey, withHeldModifiers, browserKey, nativeKey, typeArguments, typeCommand, tapWords, tapArguments, swipeDrag, pointerGap, intoArguments, MalformedOperation, clockSlices, padOp, postCommand, postInto, resizeArguments } from './agent-keys.mjs';
 import { open } from './agent.mjs';
 import { helpText } from './help.mjs';
 import { launchFacts } from './agent-launch.mjs';
@@ -36,6 +36,23 @@ test('a drag in carries its paths, quoted text and link whole, and refuses an em
   expect(() => tapArguments({ drop: [], url: 'file:///tmp/a' })).toThrow('names a file: drop it by its path instead');
   expect(() => tapArguments({ drop: [], text: '' })).toThrow('drop: a drag carries a path, text or a link');
   expect(() => tapArguments({ dragenter: [], url: 'https://example.com/' })).not.toThrow();
+});
+
+test('tap <target> swipe names one of four directions and may start at a point (LLP 1057.001 §8.3)', () => {
+  expect(tapWords(['composer-bar', 'swipe', 'down'])).toEqual(['composer-bar', { swipe: 'down' }]);
+  expect(tapWords(['composer-bar', 'swipe', 'left', 'at', '4', '20'])).toEqual(['composer-bar', { swipe: 'left', at: [4, 20] }]);
+  expect(() => tapWords(['composer-bar', 'swipe'])).toThrow(MalformedOperation);
+  expect(() => tapWords(['composer-bar', 'swipe', 'Down'])).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'sideways' })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'up', modifiers: 'Shift' })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'up', mouse: true })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'down', mediaSession: 'pause' })).toThrow('swipe cannot be combined with mediaSession');
+  expect(() => tapArguments({ swipe: 'down', drag: { by: [0, 40] } })).toThrow(MalformedOperation);
+  expect(() => tapArguments({ swipe: 'down', holdState: 'active' })).toThrow('swipe cannot be combined with holdState');
+  expect(() => tapArguments({ swipe: 'down', x: -1, y: -1 })).toThrow('swipe cannot be combined with x');
+  // A real flick: a fast straight drag the platform's recognizer reads
+  expect(swipeDrag({ swipe: 'down' })).toEqual({ dx: 0, dy: 120, over: 100 });
+  expect(swipeDrag({ swipe: 'left', at: [4, 20] })).toEqual({ dx: -120, dy: 0, over: 100, from: [4, 20] });
 });
 
 test('a press point before drag is refused with the drag from a point and the held contact\'s phases (#1332)', () => {

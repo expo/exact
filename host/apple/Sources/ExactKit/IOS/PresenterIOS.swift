@@ -100,6 +100,9 @@ package final class Presenter {
         AriaCarriers.note(view, of: self)
         reorders.updateGesture(view)
         view.updateRefresh()
+        #if os(iOS)
+        view.updateDiscreteSwipe()
+        #endif
         view.relook()
     }
     package func carrying(_ key: String) -> [NodeView] { chrome.ids(key).sorted().compactMap { views[$0] } }

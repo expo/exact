@@ -5,6 +5,7 @@ use crate::{err, LowerError, Lowerer};
 use contract_syntax::{Attr, Expr};
 use contract_types::{Scope, Ty};
 use exact_plan::{ActionsId, Code, EventKind};
+pub(crate) mod swipe;
 
 /// `toggle` written on an element with no `popover`. HTML fires `toggle` at
 /// a popover as it opens or closes, never at the button that opens it, and

@@ -130,6 +130,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             updateRefresh()
             if handlers.contains("scroll") || handlers.contains("scrollend") { needScroll() }
             #if !os(tvOS)
+            updateDiscreteSwipe()
             if handlers.contains("hover"), hoverRecognizer == nil {
                 let g = UIHoverGestureRecognizer(target: self, action: #selector(hovering(_:)))
                 // Hover observes pointer movement; it must never hold or cancel
@@ -182,6 +183,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         }
         if let reorder = presenter?.reorders.shouldBegin(self, gesture) { return reorder }
         if let drag = DragLink.installed?.shouldBegin(self, gesture) { return drag }
+        if gesture === discreteSwipe { return SwipeInput.allows(self) }
         if gesture === swipeRecognizer, let pan = gesture as? UIPanGestureRecognizer {
             let velocity = pan.velocity(in: window)
             // Where the finger landed: the translation leaves out the travel

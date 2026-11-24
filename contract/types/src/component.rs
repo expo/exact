@@ -613,6 +613,7 @@ pub(crate) fn handler_attr(name: &str) -> bool {
             | "atompress"
             | "swiperight"
             | "swipeleft"
+            | "swipe"
             | "refresh"
             | "reachstart"
             | "reachend"

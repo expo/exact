@@ -111,6 +111,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   // NamedWindowsTests' links that name a window (LLP 1030.004).
   contract([resolve(root, 'host/apple/tests/fixtures/named-windows.contract'), '-o', env[`${prefix}_NAMED_WINDOWS_PLAN`] = resolve(dir, 'named-windows.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/sticky-transition.contract'), '-o', env[`${prefix}_STICKY_TRANSITION_PLAN`] = resolve(dir, 'sticky-transition.plan')]);
+  // DiscreteSwipeTests': `swipe` on a bar with a field and inside an inert node.
+  contract([resolve(root, 'host/apple/tests/fixtures/discrete-swipe.contract'), '-o', env[`${prefix}_DISCRETE_SWIPE_PLAN`] = resolve(dir, 'discrete-swipe.plan')]);
   // SwipeScrollDragTests': swipeleft and swiperight rows and a scroller's drag events.
   contract([resolve(root, 'host/apple/tests/fixtures/swipe-scroll-drag.contract'), '-o', env[`${prefix}_SWIPE_SCROLL_DRAG_PLAN`] = resolve(dir, 'swipe-scroll-drag.plan')]);
   // SwipeRoutesIOSTests: swipe rows in a route that pushes another.

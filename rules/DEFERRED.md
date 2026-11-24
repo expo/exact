@@ -31,6 +31,13 @@ for synchronous OPFS selects IndexedDB. On either store, opening a path held by
 another connection follows D10's ten-second Web Lock wait. A timeout returns
 `Unavailable`/`EBUSY` and never switches stores.
 
+**Expanded (James, 2026-11-24: "We can make the ruling"):** `swipe=action`
+with `swipe-direction` (LLP 1057.001 §8), the platform's discrete swipe in one
+direction, built on iOS. Exact Chat is the consumer: its composer bar puts the
+keyboard away on a flick down. Take: none offered; waived by James, whom
+Charlie gave the call. Still out: Android's recognizer, and a swipe on what
+UIKit draws in a node's place (§8.1).
+
 **Expanded (Charlie, 2026-10-08, option A for protocol-handler URL templates):**
 `app.json` `protocol_handlers` carries a complete custom-scheme URL through
 the existing navigation root as an encoded handler location (LLP 1038 D8).

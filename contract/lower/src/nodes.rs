@@ -489,6 +489,13 @@ impl Lowerer<'_> {
                     a.span,
                 );
             }
+            if let Some(a) = expanded.iter().find(|a| a.name == "swipe") {
+                return err(
+                    "lower-swipe-direction",
+                    "`swipe` on a run inside a paragraph: the run is drawn in its paragraph's text, with no view of its own for the platform's swipe to be recognized on; put `swipe` on the paragraph or make the run a box (LLP 1057.001 §8)",
+                    a.span,
+                );
+            }
         }
         // The press's absolute opacity is lowering's, from `:active`.
         if let Some(a) = expanded
@@ -675,7 +682,9 @@ impl Lowerer<'_> {
             {
                 continue;
             }
-            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a) {
+            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a)
+                .or_else(|| crate::handlers::swipe::refusal(expanded, a))
+            {
                 self.errors.push(e);
                 continue;
             }
