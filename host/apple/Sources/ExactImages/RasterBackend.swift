@@ -153,12 +153,12 @@ final class RasterBackend: @unchecked Sendable {
     private func retire(_ sources: [RasterSource]) {
         for source in sources { exact_raster_session_retire_generation(id, source.id) }
     }
-    private func evictColdLocked(_ count: Int, keepingPrivateSpools: Bool = false) -> [RasterSource] {
+    private func evictColdLocked(_ count: Int, keepingReusableInputs: Bool = false) -> [RasterSource] {
         guard count > 0 else { return [] }
         var evicted: [RasterSource] = [], retained: [RasterSource] = []
         for source in cold {
             if evicted.count < count && source.users == 0 &&
-                (!keepingPrivateSpools || source.input?.rechecksMetadata != false) {
+                (!keepingReusableInputs || source.input?.reusableAtRest != true) {
                 sources.removeValue(forKey: source.id)
                 if byName[source.key] == source.id { byName.removeValue(forKey: source.key) }
                 evicted.append(source)
@@ -379,10 +379,10 @@ final class RasterBackend: @unchecked Sendable {
         lock.lock()
         // A mutable file needs a fresh identity after rest so a cache hit
         // cannot hide a replacement's pixels and natural size.
-        let evicted = evictColdLocked(cold.count, keepingPrivateSpools: bytes > 0)
+        let evicted = evictColdLocked(cold.count, keepingReusableInputs: bytes > 0)
         // Another size may still be live: its file's unused sizes must also
         // go, so their next decode checks the file for replacement.
-        let mutable = sources.values.compactMap(\.value).filter { $0.input?.rechecksMetadata == true }.map(\.id)
+        let mutable = sources.values.compactMap(\.value).filter { $0.input?.reusableAtRest == false }.map(\.id)
         lock.unlock()
         retire(evicted)
         for generation in mutable { exact_raster_session_trim_generation(id, generation) }
