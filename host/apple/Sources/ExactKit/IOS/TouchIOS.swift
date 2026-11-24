@@ -243,7 +243,9 @@ extension Agent {
     /// or why it may not: the refusals `tap` makes, computed with nothing
     /// pressed, focused or opened.
     func aim(_ req: [String: Any]) -> [String: Any] {
+        if presenter.navigation.holdsAgentTargets { return ["error": "Tap is held by a UIKit transition. Run clock settle first."] }
         settleForPress()
+        if presenter.navigation.holdsAgentTargets { return ["error": "Tap is held by a UIKit transition. Run clock settle first."] }
         let flat = flatBoxForRequest(req)
         guard let v = view(req) ?? flat?.host, let win = v.window else { return miss(req) }
         if v.placedAncestor?.placementHidden == true { return ["error": "tap #\(v.id): placed child is hidden"] }
@@ -312,9 +314,6 @@ extension Agent {
         // (r5 weather, mood journal): there. A search field collapsed into
         // its bar button is reached as a finger reaches it, through the button.
         var barred = false, inBar = false
-        if flat == nil, target === v, let collapsed = presenter.navigation.collapsedSearch(v) {
-            target = collapsed.view; region = collapsed.box; barred = true
-        }
         if flat == nil, target === v, let place = drawnPlace(v) {
             switch place {
             case .failure(let refusal): return ["error": "tap #\(v.id): \(refusal.why)"]

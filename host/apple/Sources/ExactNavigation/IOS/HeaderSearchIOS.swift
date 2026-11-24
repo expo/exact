@@ -5,8 +5,18 @@ import UIKit
 /// A header's search field as UIKit's search controller (LLP 1075.003
 /// §9.6): text, focus and blur go to the authored field's handlers.
 final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDelegate, UITextFieldDelegate, BarSearch {
-    let controller = UISearchController(searchResultsController: nil)
-    package var shownField: UITextField { controller.searchBar.searchTextField }
+    let controller: UISearchController
+    var paired: Bool {
+        #if os(iOS)
+        results != nil
+        #else
+        false
+        #endif
+    }
+    #if os(iOS)
+    let results: HeaderSearchResults?
+    package var shownField: UITextField { bindEditor() }
+    #endif
     weak var host: NavigationHost?
     /// The field's placeholder is drawn in an authored colour, not UIKit's.
     var paintsPlaceholder = false
@@ -44,12 +54,25 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
             if oldValue !== field { if oldValue?.headerSearch === self { oldValue?.headerSearch = nil }; acceptingDismissal = false }
             #if os(iOS)
             field?.headerSearch = self
+            _ = bindEditor()
             field?.applyFieldDirection()
-            controller.searchBar.searchTextField.pasteDelegate = field
             #endif
         }
     }
     private weak var textDelegate: UITextFieldDelegate?
+    #if os(iOS)
+    private weak var boundEditor: UISearchTextField?
+    enum CloseCause { case projection, agent, cancelButton, uikit }
+    private struct Close {
+        let presentation: Int
+        let queryRevision: Int
+        let query: String
+        let cause: CloseCause
+        let projection: UInt64
+    }
+    private var pairedClose: Close?
+    private var queryRevision = 0
+    #endif
     private var editingCompletion: (value: String, finish: () -> Void)?
     /// The person's close takes UIKit's emptying of the field, the platform's default, to the app.
     private var acceptingDismissal = false
@@ -58,19 +81,121 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     private var closingText: String?
     /// The host closes the search itself (`close()`) until UIKit has dismissed it: no `cancel`, and the text stays.
     private var closingItself = false
-    init(host: NavigationHost) {
+    init(host: NavigationHost, resultsOwner: RouteController? = nil) {
         self.host = host
+        #if os(iOS)
+        let results = resultsOwner.map { HeaderSearchResults(host: host, owner: $0) }
+        self.results = results
+        controller = UISearchController(searchResultsController: results)
+        #else
+        controller = UISearchController(searchResultsController: nil)
+        #endif
         super.init()
         controller.searchBar.delegate = self
         controller.delegate = self
         #if os(iOS)
         controller.searchResultsUpdater = self
-        textDelegate = controller.searchBar.searchTextField.delegate
-        controller.searchBar.searchTextField.delegate = self
+        _ = bindEditor()
+        if results != nil { controller.showsSearchResultsController = false }
         #endif
         controller.obscuresBackgroundDuringPresentation = false
-        controller.hidesNavigationBarDuringPresentation = true
+        if !paired { controller.hidesNavigationBarDuringPresentation = true }
     }
+
+    #if os(iOS)
+    @discardableResult
+    func bindEditor() -> UISearchTextField {
+        let editor = controller.searchBar.searchTextField
+        if boundEditor !== editor || editor.delegate !== self {
+            boundEditor = editor
+            if editor.delegate !== self { textDelegate = editor.delegate; editor.delegate = self }
+        }
+        if editor.pasteDelegate !== field { editor.pasteDelegate = field }
+        if editor.accessibilityIdentifier != field?.props["testId"] { editor.accessibilityIdentifier = field?.props["testId"] }
+        if editor.accessibilityLabel != field?.props["accessibilityLabel"] { editor.accessibilityLabel = field?.props["accessibilityLabel"] }
+        return editor
+    }
+
+    func bindResults(in owner: RouteController, field: NodeView) {
+        guard let results, let host else { return }
+        results.bind(host.searchResult(named: field.props["accessibilityControls"], in: owner.node))
+        results.update(self)
+    }
+
+    func setValue(_ query: String) {
+        if value != query { queryRevision += 1 }
+        let bar = controller.searchBar
+        let editor = bindEditor()
+        let composing = editor.markedTextRange != nil
+        if !dismissing && bar.text != query && (!editor.isFirstResponder || (value != query && !composing)) { bar.text = query }
+        if !composing { value = query }
+    }
+
+    private func beginClose(_ cause: CloseCause) {
+        guard pairedClose == nil else { return } // The first report owns this presentation's close
+        pairedClose = Close(presentation: presentation, queryRevision: queryRevision, query: field?.props["value"] ?? "",
+                            cause: cause, projection: host?.split?.searchProjectionEpoch ?? 0)
+        dismissing = true
+        presenting = false
+        resignsWhenPresented = false
+        host?.scheduleSplitProjection()
+    }
+
+    func closeFromAgent() {
+        guard controller.isActive else { return }
+        beginClose(.agent)
+        controller.isActive = false
+    }
+
+    func settlePairedClose() {
+        guard let close = pairedClose, !controller.isActive, controller.transitionCoordinator == nil else { return }
+        pairedClose = nil
+        dismissing = false
+        guard let host, let field, host.presenter.views[field.id] === field, close.presentation == presentation else { return }
+        // An integrated X and an automatic dismissal use the same callback. A move of the owner
+        // disqualifies that unattributed dismissal even if the fold or cover has since reversed.
+        let userClose = close.cause == .agent || close.cause == .cancelButton
+            || (close.cause == .uikit && host.exposesSearchOwner(self)
+            && close.projection == host.split?.searchProjectionEpoch)
+        if userClose {
+            let keep = cancelKeepsText()
+            if !keep, !close.query.isEmpty, queryRevision == close.queryRevision, presentation == close.presentation,
+               !controller.isActive, self.field === field, host.presenter.views[field.id] === field,
+               field.props["value"] == close.query {
+                field.typedText("")
+                host.presenter.commitEdit(field.id, "", change: field.handlers.contains("change"))
+            }
+        }
+        if presentation == close.presentation, !controller.isActive, self.field === field, host.presenter.views[field.id] === field {
+            setValue(field.props["value"] ?? "")
+            applyHiding()
+        }
+    }
+
+    func searchBarCancelButtonClicked(_ searchBar: UISearchBar) {
+        if paired { beginClose(.cancelButton) }
+        controller.isActive = false
+    }
+
+    func reconcilePresentation() {
+        if presenting, !controller.isBeingPresented, controller.transitionCoordinator == nil {
+            presented(presentation)
+        }
+    }
+
+    func returnAccessibilityFocus() {
+        guard let host, let field else { return }
+        host.presenter.afterBatch { [weak self, weak field] in
+            guard let self, let field, self.field === field, let host = self.host, host.splitPrimaryExposed else { return }
+            let editor = self.bindEditor()
+            if editor.window != nil && !editor.isHidden {
+                host.presenter.focus(field.id)
+                UIAccessibility.post(notification: .layoutChanged, argument: editor)
+            }
+        }
+    }
+    #endif
+
     /// The navigation item the controller is on.
     weak var item: UINavigationItem?
     /// The field scrolls away with the content only while it is empty
@@ -93,7 +218,17 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         acceptingDismissal = false
         presenting = true
         presentation &+= 1
-        host?.searchOpenChanged()
+        #if os(iOS)
+        if paired {
+            // Reopening supersedes an older dismissal, including its final text reset.
+            pairedClose = nil
+            dismissing = false
+            if let field { setValue(field.props["value"] ?? "") }
+            host?.searchInteracted(self)
+            results?.update(self)
+            host?.scheduleSplitProjection()
+        }
+        #endif
     }
     func didPresentSearchController(_ search: UISearchController) {
         #if os(iOS)
@@ -118,13 +253,18 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
             resignsWhenPresented = false
             editor.resignFirstResponder()
         }
+        #if os(iOS)
+        _ = bindEditor()
+        if paired { host?.scheduleSplitProjection() }
+        else { host?.searchPresented() }
+        #else
         host?.searchPresented()
+        #endif
         settle()
     }
     /// Exact's own end of the field's editing: the app's `blur()`, and the host's before UIKit covers the field's
-    /// route or as the person goes Back from its results. UIKit makes the field the first responder again at the end
-    /// of its move into search when editing ended during it (`-[_UISearchBarVisualProviderIOS
-    /// completeTransitionToSearchLayoutState:]`), so an end asked for during that move waits for the move to end.
+    /// route. UIKit can restore first responder at the end of its presentation,
+    /// so an end asked for during that move waits for the move to end.
     /// UIKit's own end during the move (iOS 27.1: its floating bar takes the field from one view to another) is
     /// followed by that refocus, which keeps the field the person's.
     package func resign() {
@@ -136,10 +276,23 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     /// The host's own close: the search's settle, a route that no longer holds the field. The text stays.
     func close() {
         guard controller.isActive else { return }
+        #if os(iOS)
+        if paired {
+            beginClose(.projection)
+            controller.isActive = false
+            return
+        }
+        #endif
         closingItself = true
         controller.isActive = false
     }
     func willDismissSearchController(_ search: UISearchController) {
+        #if os(iOS)
+        if paired {
+            beginClose(host?.mayCancelSearch(self) == true ? .uikit : .projection)
+            return
+        }
+        #endif
         dismissing = true
         if presenting {
             // A close that interrupts the move into search: nothing waits for that move any more
@@ -153,22 +306,19 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         // close, a route going and a sheet moving keep the text.
         let persons = !closingItself && editingCompletion == nil && host?.changing == false && host?.presenter.modalHost.inTransition == false
         acceptingDismissal = persons && !cancelKeepsText()
-        // Any close leaves the results when they are the route on top, before the app hears the field emptied: a Back
-        // from them, unanimated, as the bar's own animation is the one the person sees (an empty search put away
-        // included). Under a result opened from them they stay, with the search closed.
-        if editingCompletion == nil, let field, let host, host.selectsResults(of: field) {
-            host.unanimated = true
-            host.goBack()
-            if !host.inTransition { host.unanimated = false }
-        }
         // The keyboard leaves as the search begins to close, as SwiftUI's `searchable` takes it: closed by its close
         // button, UIKit's integrated bar keeps its field the first responder until the field's view goes at the
         // dismissal's end (iOS 27.1), the keyboard meanwhile showing capitals for the emptied field
         editor.resignFirstResponder()
     }
     func didDismissSearchController(_ search: UISearchController) {
+        #if os(iOS)
+        if paired {
+            host?.scheduleSplitProjection()
+            return
+        }
+        #endif
         dismissing = false
-        defer { host?.searchOpenChanged() }
         let accepts = acceptingDismissal
         acceptingDismissal = false
         closingItself = false
@@ -194,15 +344,19 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
     }
     /// HTML's `cancel` at the field for the person's close; whether its action called `preventDefault()`.
     private func cancelKeepsText() -> Bool {
-        guard let field, field.handlers.contains("cancel"), let presenter = host?.presenter, presenter.views[field.id] === field,
-              let session = presenter.session else { return false }
-        presenter.defaultPrevented = false
-        session.applyInput(session.runtime.cancel(field.id, now: session.now()))
-        defer { presenter.defaultPrevented = false }
-        return presenter.defaultPrevented
+        guard let field, field.handlers.contains("cancel"), let presenter = host?.presenter,
+              presenter.views[field.id] === field else { return false }
+        return presenter.searchCancelPreventsReset(field.id)
     }
     func searchBar(_ bar: UISearchBar, textDidChange text: String) {
         guard let field, let presenter = host?.presenter, presenter.views[field.id] === field else { return }
+        #if os(iOS)
+        if paired {
+            guard controller.isActive, pairedClose == nil else { return }
+            queryRevision += 1
+            host?.searchInteracted(self)
+        }
+        #endif
         field.typedText(text)
         field.applyFieldDirection() // a `direction` that came while it composed (LLP 1001 §1)
     }
@@ -210,7 +364,8 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         guard field?.textField(textField, shouldChangeCharactersIn: range, replacementString: string) ?? true else { return false }
         return textDelegate?.textField?(textField, shouldChangeCharactersIn: range, replacementString: string) ?? true
     }
-    /// UIKit is closing the search: from `willDismissSearchController` to `didDismissSearchController`.
+    /// Paired search holds its projection until the closing presentation is
+    /// inactive and its transition has settled. Ordinary search follows UIKit's dismissal callbacks.
     private(set) var dismissing = false
     /// The view that edits: the bar's text field (tvOS's bar edits itself).
     var editor: UIResponder {
@@ -220,18 +375,17 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         controller.searchBar.searchTextField
         #endif
     }
-    /// An open search whose field is not editing has something to show, or it closes, keeping its text: text, and its
-    /// results route in the router's stack where its field names one (`aria-controls`). An empty field put away closes
-    /// into its button, as a person who puts the keyboard away from it means; with text it stays open, as UIKit's and
-    /// SwiftUI's do; a Back or a page that took its results away closes it. Asked at rest: after an end of editing
-    /// outside a transition, after a sync, a push or a pop, and once the bar has moved into search; not while its
-    /// route is covered nor while UIKit moves the split's columns.
     func settle() {
+        #if os(iOS)
+        _ = bindEditor()
+        if paired {
+            results?.update(self)
+            return
+        }
+        #endif
         guard controller.isActive, !presenting, !dismissing, editingCompletion == nil, controller.transitionCoordinator == nil,
-              !editor.isFirstResponder,
+              !editor.isFirstResponder, (controller.searchBar.text ?? "").isEmpty,
               let field, let host, host.split?.moving != true, !host.isInactiveRoute(containing: field) else { return }
-        let names = !(field.props["accessibilityControls"] ?? "").isEmpty
-        guard (controller.searchBar.text ?? "").isEmpty || (names && !host.showsResults(of: field)) else { return }
         close()
     }
     func textFieldShouldClear(_ textField: UITextField) -> Bool {
@@ -243,7 +397,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         if let field { host?.presenter.fieldSelections.changed(field) }
         field?.applyFieldDirection() // a `direction` that came while it composed (LLP 1001 §1)
     }
-    // UISearchBar remains the recipient of UIKit's focus, return and private callbacks. It is the field's own
+    // UISearchBar remains the recipient of UIKit's focus and return callbacks. It is the field's own
     // delegate in the search controller this object holds, so it lives as long as this object, and UIKit's own
     // class answers the same at each call: unlike an app's delegate (`ForwardingDelegate`), it needs no strong hold
     // and no unconditional forwarding.
@@ -254,14 +408,20 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         textDelegate?.responds(to: selector) == true ? textDelegate : nil
     }
     func searchBarTextDidBeginEditing(_ bar: UISearchBar) {
+        #if os(iOS)
+        _ = bindEditor()
+        #endif
         host?.presenter.searchEditingChanged()
         // UIKit begins the field's editing again while a close it began goes on, after the close took the keys away
         // (`willDismissSearchController`): no focus of the person's, so the app hears none and the keys go again
         if dismissing {
-            editor.resignFirstResponder()
+            if !paired { editor.resignFirstResponder() }
             return
         }
         guard let field else { return }
+        #if os(iOS)
+        if paired { host?.searchInteracted(self) }
+        #endif
         host?.presenter.fieldSelections.focused(field)
         host?.presenter.focus(field.id)
     }
@@ -284,7 +444,8 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
             // A close ends editing as it begins, before UIKit empties the bar (`willDismissSearchController`): one that
             // keeps the text commits the text it had, and one that takes the emptying tells the app the emptied field and
             // commits it, `input` before `change`, which leaves the dismissal's end nothing new to tell
-            let value = completion?.value ?? (dismissing ? (acceptingDismissal ? "" : closingText) : bar.text) ?? ""
+            let closingValue = paired ? field.props["value"] : (acceptingDismissal ? "" : closingText)
+            let value = completion?.value ?? (dismissing ? closingValue : bar.text) ?? ""
             if completion == nil, dismissing, acceptingDismissal { searchBar(bar, textDidChange: value) }
             presenter.commitEdit(field.id, value, change: field.handlers.contains("change"))
             presenter.blur(field.id)
@@ -298,7 +459,7 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
               let editor = field.headerField, editor.isEditing else { return false }
         if editingCompletion == nil {
             editingCompletion = (editor.text ?? "", completion)
-            controller.isActive = false
+            close()
             controller.searchBar.endEditing(true)
         }
         return true
@@ -308,6 +469,11 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
 #if os(iOS)
 extension HeaderSearch: UISearchResultsUpdating {
     func updateSearchResults(for search: UISearchController) {
+        _ = bindEditor()
+        if paired {
+            results?.update(self)
+            return
+        }
         // UIKit resets the query before ending editing, without the bar's text-change callback
         guard acceptingDismissal else { return }
         searchBar(search.searchBar, textDidChange: search.searchBar.text ?? "")

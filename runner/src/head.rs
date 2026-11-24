@@ -232,7 +232,6 @@ fn inactive_with(kernel: &Kernel, id: ViewId, covered_shows: bool) -> bool {
 /// container (LLP 1123 D2): the route over it covers it, unless that host
 /// says it shows the route beside the stack's top (`Kernel::host_block_shown`).
 fn beside_a_pane(kernel: &Kernel, root: &HeadNode<'_>, route: ViewId) -> bool {
-    use exact_kernel::BlockAxis;
     let Some(key) = root.1.str(PropId::NavigationKey) else {
         return false;
     };
@@ -262,7 +261,7 @@ fn beside_a_pane(kernel: &Kernel, root: &HeadNode<'_>, route: ViewId) -> bool {
         && stack
             .find(|n| key_of(n.id) == Some(key))
             .and_then(|selected| kernel.host_block(selected.id))
-            .is_some_and(|b| matches!((b.width, b.height), (BlockAxis::Is(_), BlockAxis::Is(_))))
+            .is_some_and(|b| b.width.fixed_length().is_some() && b.height.fixed_length().is_some())
 }
 
 /// The active head of the tree under `roots`, as `node` reads it: the walk
@@ -391,7 +390,6 @@ fn under_a_sheet<'a>(
     node: &impl Fn(ViewId) -> Option<HeadNode<'a>>,
     at: &HeadNode<'a>,
 ) -> Vec<ViewId> {
-    use exact_kernel::BlockAxis;
     let Some(key) =
         at.1.str(PropId::NavigationBack)
             .and(at.1.str(PropId::NavigationKey))
@@ -430,7 +428,7 @@ fn under_a_sheet<'a>(
             };
             let page = (0..top).rev().find(|i| !sheet(rs[*i])).unwrap_or(0);
             let pane = kernel.host_block(rs[page]).is_some_and(|b| {
-                matches!((b.width, b.height), (BlockAxis::Is(_), BlockAxis::Is(_)))
+                b.width.fixed_length().is_some() && b.height.fixed_length().is_some()
             });
             let list = (page > 0 && pane && kernel.host_block(rs[0]).is_none()).then_some(rs[0]);
             Some(rs[page..top].iter().copied().chain(list).collect())

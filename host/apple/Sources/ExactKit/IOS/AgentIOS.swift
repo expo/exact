@@ -133,7 +133,8 @@ extension Agent {
     /// available for a confirmation to show (`resumeAfterRouteDismissal`).
     var hostsInTransition: Bool {
         let navigation = presenter.navigation
-        return navigation.inTransition || navigation.syncScheduled || presenter.modals.inTransition || presenter.menus.inTransition
+        // UIKit's move of a paired split's search ends by itself, unlike a swipe a finger holds
+        return navigation.inTransition || navigation.syncScheduled || (navigation.holdsAgentTargets && !navigation.hasInteractiveTransition) || presenter.modals.inTransition || presenter.menus.inTransition
     }
 
     /// Under platform timing UIKit animates an alert's dismissal, and a
@@ -226,17 +227,24 @@ extension Agent {
         let vp = presenter.viewport
         var focus: [String: Any] = ["logical": NSNull(), "editor": NSNull(), "responder": NSNull(), "pending": NSNull(),
                                     "native": NSNull(), "events": ResignTrace.events]
+        // A header search edits in UIKit's search field, which stands for the search's node
+        func editor(of node: NodeView) -> UIView? {
+            #if os(iOS)
+            if let search = node.headerSearch { return search.shownField }
+            #endif
+            return node.textArea ?? node.field
+        }
         let responding = presenter.views.values
-            .filter { $0.isFirstResponder || $0.field?.isFirstResponder == true || $0.textArea?.isFirstResponder == true }
+            .filter { $0.isFirstResponder || editor(of: $0)?.isFirstResponder == true }
             .min { $0.id < $1.id }
         if let node = responding ?? presenter.editing {
             focus["logical"] = Int(node.id)
-            if node.field != nil || node.textArea != nil { focus["editor"] = Int(node.id) }
-            let responder: UIResponder = node.textArea ?? node.field ?? node
-            focus["responder"] = String(describing: Swift.type(of: responder))
+            let native = editor(of: node)
+            if native != nil { focus["editor"] = Int(node.id) }
+            focus["responder"] = String(describing: Swift.type(of: native ?? node))
         }
         // The native editor UIKit holds as first responder, by its token (`ResignTrace`)
-        if let node = responding, let editor: UIView = node.textArea ?? node.field, editor.isFirstResponder {
+        if let node = responding, let editor = editor(of: node), editor.isFirstResponder {
             focus["native"] = ResignTrace.token(editor)
         }
         if let pending = presenter.pendingFocusObservation {
@@ -503,6 +511,7 @@ extension Agent {
     /// a tap outside), else a pushed route's Back button, else the top
     /// sheet's swipe down. The system's button is no node, so no tap reaches it.
     func back() -> [String: Any] {
+        if presenter.navigation.holdsAgentTargets { return ["error": "Back is held by a UIKit transition. Run clock settle first."] }
         #if os(iOS)
         if session.shareHost.agentBack(session) || session.picker.agentBackDocument() { return backReply(("sheet", "")) }
         #endif
@@ -513,6 +522,16 @@ extension Agent {
     }
 
     func tap(_ req: [String: Any]) -> [String: Any] {
+        if let phase = req["phase"] as? String, phase == "up" || phase == "cancel" {
+            // A release belongs to the contact that went down. Its original
+            // target may already have moved out of the authored tree.
+            if panContact != nil, let reply = recognizedPan(phase, req) { return reply }
+            if contact != nil, presenter.navigation.holdsAgentTargets {
+                defer { contact = nil; canvasContact = nil; canvasPoint = nil; canvasTime = nil }
+                return canvasTap(["phase": "cancel"]) ?? ["phase": "cancel", "delivery": "recognized"]
+            }
+        }
+        if req["log"] == nil, presenter.navigation.holdsAgentTargets { return ["error": "Tap is held by a UIKit transition. Run clock settle first."] }
         if req["holdState"] != nil { return holdTap(req) } // a held state (LLP 1122 D8, HeldState.swift)
         // A drag from another app, through the drop target the drag-in module keeps (LLP 1094.001 D6); tvOS has no drag
         if req["drop"] != nil || req["dragenter"] != nil || req["dragleave"] != nil {
@@ -532,10 +551,11 @@ extension Agent {
         if let reply = touchForm(req) { return reply }
         // One finger at a time: a press while the held contact is down would
         // nest a second gesture on its pointer, as a second `down` would.
-        if req["phase"] == nil, req["wheel"] == nil, req["hover"] == nil, panContact != nil {
+        if req["phase"] == nil, req["wheel"] == nil, req["hover"] == nil, panContact != nil || contact != nil {
             return ["error": "a contact is already down; use `tap up` or `tap cancel` first"]
         }
         settleForPress()
+        if req["log"] == nil, presenter.navigation.holdsAgentTargets { return ["error": "Tap is held by a UIKit transition. Run clock settle first."] }
         // Each synthetic contact ends a live press's handoff before it is
         // delivered, as a real one's touch-down does (PressHandoffIOS).
         presenter.supersedePress()
@@ -1099,10 +1119,16 @@ extension Agent {
     /// Set an input's text as typing does: the field focused, all selected,
     /// the text inserted — the field sends one change with the new value.
     func type(_ req: [String: Any]) -> [String: Any] {
+        if presenter.navigation.holdsAgentTargets { return ["error": "Typing is held by a UIKit transition. Run clock settle first."] }
         guard let v = view(req), v.window != nil else { return miss(req) }
         guard !v.disabled else { return ["error": "view \(v.id) is disabled"] }
         // An inert view takes no input, as a person cannot reach it (HTML inert; a modal presentation's background)
         guard !v.inert else { return ["error": "view \(v.id) is inert"] }
+        #if os(iOS)
+        if v.headerSearch != nil, presenter.navigation.drawnSearch(v) == nil {
+            return ["error": "UIKit's search editor is unavailable. Tap the visible Search button and run clock settle."]
+        }
+        #endif
         if let edit = req["clipboard"] as? String { return withAgentPasteboard(req) { clipboardType(v, edit, req["text"] as? String, board: $0) } }
         if session.canvases.wantsInput(v.id) {
             if let routed = canvasRouted(v, req) { return routed }

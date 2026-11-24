@@ -595,6 +595,7 @@ uint32_t exact_location_behind(ExactRuntime rt);
 uint32_t exact_location_ahead(ExactRuntime rt);
 /* A retained visit's canonical location, UTF-8 in exact_out; 0 when absent. */
 uint32_t exact_visit_location(ExactRuntime rt, uint64_t id);
+
 /* Return from source to an earlier destination in the selected stack, one commit. A batch. */
 uint32_t exact_host_back_to(ExactRuntime rt, uint64_t source, uint64_t destination, double now_ms);
 /* LLP 1133.016 D15 item 1: a package's call of the app's handler, the JSON
@@ -1085,7 +1086,7 @@ uint32_t exact_host_covers(ExactRuntime rt, size_t len);
  * position-area option, LLP 1021 D2): each axis a length and a policy as
  * exact_host_covers' kind 4 takes them (0 size, 1 maximum, 2 fit, 3 a
  * position-area's region, 4 a pane's border box, 5 the axis a container
- * sizes to the content). The used width and height, the border box's
+ * sizes to the content, 6 stretch an automatic root). The used width and height, the border box's
  * width and height, then the margins (top, right, bottom, left) as the layout
  * resolved them, eight LE floats in the output buffer, and 32; 0 when refused.
  * The tactic uses kind 4's side permutation.
@@ -1124,8 +1125,8 @@ uint32_t exact_role_keys(ExactRuntime rt, uint32_t view, uint32_t focused, size_
  * location, the current row, and whether the press of `pressed` writes the router; null for a stack
  * that pushes. */
 /* `retained` is a previous list to keep while empty and still eligible, or 0;
- * `pressed` is a view being pressed, or 0. */
-uint32_t exact_stack_split(ExactRuntime rt, uint32_t view, uint32_t retained, uint32_t pressed);
+ * `pressed` is a view being pressed, or 0; `results` is a subtree excluded from the list search, or 0. */
+uint32_t exact_stack_split(ExactRuntime rt, uint32_t view, uint32_t retained, uint32_t pressed, uint32_t results);
 /* A button's face, custom or native (LLP 1069.011.000 D1), JSON in the output
  * buffer, not a batch: {"button":bool,"title":string|null,"symbol":apple-name|null,
  * "raster","leading","fits":bool,"label":string|null,"style",...the native style}. */

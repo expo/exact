@@ -152,3 +152,52 @@ fn shown_routes_name_the_selected_tab_route() {
     assert!(r.refresh_shown_routes().unwrap().is_some());
     assert_eq!(answered(&r), keys(&first));
 }
+
+#[test]
+fn a_native_search_covers_an_in_flow_subtree_without_giving_it_a_block() {
+    let mut r = boot(SOURCE);
+    let row = view(&r, "open");
+    let before = r.kernel().node(row).unwrap().frame;
+    assert!(!r.inactive(row));
+    assert!(r.kernel_mut().set_host_block_shown(row, BlockShown::Under));
+    assert!(r.inactive(row));
+    assert_eq!(r.kernel().host_block(row), None);
+    assert_eq!(r.kernel().node(row).unwrap().frame, before);
+    assert!(r
+        .kernel_mut()
+        .set_host_block_shown(row, BlockShown::InStack));
+    assert!(!r.inactive(row));
+}
+
+#[test]
+fn a_repeated_open_advances_the_router_revision_but_a_refusal_does_not() {
+    let mut r = boot(
+        r#"routes nav
+  home "/"
+    item "/item"
+component App
+  state text = ""
+  action choose(url: string)
+    nav = open(nav, url)
+  action edit
+    text = "another query"
+  view
+    text text
+"#,
+    );
+    let start = r.router_revision();
+    let choose = |r: &mut Runner<NoData>, url| {
+        r.act("choose", vec![Value::str(url)]).unwrap();
+    };
+    choose(&mut r, "/item");
+    assert_eq!(r.router_revision(), start + 1);
+    let first = r.take_router_change().unwrap().top;
+    choose(&mut r, "/item");
+    assert_eq!(r.router_revision(), start + 2);
+    assert!(r.take_router_change().is_none(), "the visit stays the same");
+    r.act("edit", vec![]).unwrap();
+    assert_eq!(r.router_revision(), start + 2);
+    choose(&mut r, "/missing");
+    assert_eq!(r.router_revision(), start + 2);
+    assert_eq!(r.visit_location(first).as_deref(), Some("/item"));
+}

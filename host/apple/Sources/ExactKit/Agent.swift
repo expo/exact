@@ -348,6 +348,10 @@ public final class Agent {
             return
         }
         switch op {
+        #if os(iOS)
+        case "tree" where presenter.navigation.holdsAgentTargets:
+            emit(["error": "The UIKit targets are moving. Run clock settle first."])
+        #endif
         case "tree" where req["ax"] as? Bool == true: emit(accessibilityElementsTree(req)) // LLP 1080.002
         case "tree":
             var tree = decorateTree(presenter.elements.decorateRegions(session.natives.decorate(session.webviews.tree(line))))

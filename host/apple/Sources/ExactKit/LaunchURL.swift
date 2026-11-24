@@ -118,6 +118,10 @@ extension ExactSession {
             else { pendingLaunchLocations.append(location) }
             return true
         }
+        #if os(iOS)
+        let finish = presenter.navigation.beginSearchNavigation()
+        defer { finish?() }
+        #endif
         return navigate(location)
     }
 

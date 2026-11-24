@@ -393,8 +393,14 @@ impl Batch {
     /// @ref LLP 1038 D7 — one coalesced router change beside commands; its
     /// `url` carries the visit's fragment, and `scroll` asks for the scroll
     /// to it (LLP 1153 D5).
-    pub fn router(&mut self, change: &exact_runner::RouterChange) {
-        let mut s = format!("{{\"op\":\"router\",\"top\":{},\"url\":", change.top);
+    pub fn router(&mut self, revision: u64, change: Option<&exact_runner::RouterChange>) {
+        let mut s = format!("{{\"op\":\"router\",\"revision\":\"{revision}\"");
+        let Some(change) = change else {
+            s.push('}');
+            self.ops.push(s);
+            return;
+        };
+        let _ = write!(s, ",\"top\":{},\"url\":", change.top);
         quote(&change.location(), &mut s);
         s.push_str(",\"fragment\":");
         quote(&change.fragment, &mut s);

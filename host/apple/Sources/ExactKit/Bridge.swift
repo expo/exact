@@ -289,17 +289,17 @@ extension Batch {
     /// so it never waits on the owner to learn it (LLP 1072 T2).
     mutating func takeSplit(_ runtime: Runtime) {
         guard let asked = runtime.splitAsked, ops.contains(where: { Self.movesSplit.contains($0.op) }) else { return }
-        split = runtime.readSplit(asked.view, retained: asked.retained, sequence: sequence)
+        split = runtime.readSplit(asked.view, retained: asked.retained, results: asked.results, sequence: sequence)
     }
 }
 
 extension Runtime {
     /// On the owner: the split rule of the stack whose root route is `view`,
     /// which each later batch that can change it carries.
-    package func readSplit(_ view: UInt32, retained: UInt32, sequence: UInt64) -> SplitRead {
-        splitAsked = (view, retained)
-        let length = exact_stack_split(rt, view, retained, 0)
-        return SplitRead(view: view, retained: retained, json: Data(bytes: exact_out(rt), count: Int(length)), sequence: sequence)
+    package func readSplit(_ view: UInt32, retained: UInt32, results: UInt32, sequence: UInt64) -> SplitRead {
+        splitAsked = (view, retained, results)
+        let length = exact_stack_split(rt, view, retained, 0, results)
+        return SplitRead(view: view, retained: retained, results: results, json: Data(bytes: exact_out(rt), count: Int(length)), sequence: sequence)
     }
 }
 #endif

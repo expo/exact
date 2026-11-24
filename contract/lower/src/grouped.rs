@@ -1017,9 +1017,7 @@ fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> N
                 "padding" | "padding-top" | "padding-bottom"
             )
         });
-    // A label beside a field: the row wraps, so where both do not fit (the
-    // accessibility text sizes) the field goes under the label, as in a
-    // SwiftUI `Form`, rather than squeezing the label to nothing.
+    // Wrap the field below its label at accessibility text sizes, as SwiftUI's `Form` does.
     let row_padding = cell::row_padding(attrs, subtitle_column, class, span);
     let field = field_beside_label(children);
     let mut sheet = vec![

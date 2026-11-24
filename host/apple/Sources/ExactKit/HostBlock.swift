@@ -12,7 +12,7 @@ package struct HostBlock: Equatable {
     /// a container sizes to the content, measured as a region with the box's
     /// own percentages there cyclic (`BlockAxis::Content`, LLP 1123 D7).
     package enum Axis: Equatable {
-        case size(CGFloat), fill(CGFloat), atMost(CGFloat), fit(CGFloat), region(CGFloat), content(CGFloat)
+        case size(CGFloat), fill(CGFloat), atMost(CGFloat), fit(CGFloat), region(CGFloat), content(CGFloat), stretch(CGFloat)
         fileprivate var wire: (length: CGFloat, policy: CGFloat) {
             switch self {
             case .size(let length): (length, 0)
@@ -21,6 +21,7 @@ package struct HostBlock: Equatable {
             case .fit(let length): (length, 2)
             case .region(let length): (length, 3)
             case .content(let length): (length, 5)
+            case .stretch(let length): (length, 6)
             }
         }
     }
@@ -34,6 +35,8 @@ package struct HostBlock: Equatable {
     package init(width: Axis, height: Axis, tactic: Tactic = .none) { (self.width, self.height, self.tactic) = (width, height, tactic) }
     /// A pane's: the block is its size.
     package static func size(_ size: CGSize) -> HostBlock { HostBlock(width: .size(size.width), height: .size(size.height)) }
+    /// A native results viewport stretches its root on auto-sized axes.
+    static func stretch(_ size: CGSize) -> HostBlock { HostBlock(width: .stretch(size.width), height: .stretch(size.height)) }
     /// A sheet's: as large as its content, at most this.
     static func atMost(_ size: CGSize) -> HostBlock { HostBlock(width: .atMost(size.width), height: .atMost(size.height)) }
     /// A modal route fits an automatic size; its authored size and minimum win.

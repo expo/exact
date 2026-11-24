@@ -94,6 +94,8 @@ pub trait Routing {
     fn take_refusals(&self) -> Vec<String>;
     /// The pending change, once.
     fn take_change(&mut self) -> Option<RouterChange>;
+    /// The number of committed router assignments, including equal values.
+    fn revision(&self) -> u64;
     /// The location a native host's Forward goes to, the nearest of the
     /// visits Back left (`history.rs`; LLP 1115.000 D5.5).
     fn ahead(&self) -> Option<&str>;
@@ -149,6 +151,7 @@ pub struct RouterContext {
     param_names: Vec<String>,
     table: Table,
     committed: Option<Value>,
+    revision: u64,
     pending: Option<RouterChange>,
     /// The visit, fragment and activation a host scrolls to once the
     /// content settles.
@@ -268,6 +271,7 @@ impl RouterContext {
             param_names,
             table,
             committed: None,
+            revision: 0,
             pending: None,
             fragment: None,
             activations: 0,
@@ -867,6 +871,14 @@ impl Routing for RouterContext {
                     .is_some_and(|old| !crate::compare::same(old, &value));
             super::history::step(before.as_ref(), &after, &mut self.ahead, forward);
         }
+        // A successful assignment may keep every visit and location unchanged.
+        if self
+            .committed
+            .as_ref()
+            .is_none_or(|old| !crate::compare::same(old, &value))
+        {
+            self.revision += 1;
+        }
         self.committed = Some(value);
         if let Some(mut change) = change {
             change.due = due;
@@ -905,6 +917,10 @@ impl Routing for RouterContext {
             }
             self.pending = Some(change);
         }
+    }
+
+    fn revision(&self) -> u64 {
+        self.revision
     }
 
     fn fragment_due(&self) -> bool {
@@ -1126,6 +1142,11 @@ impl<D: DataSource> Runner<D> {
     /// Returns `None` after a take until navigation changes again, or without a router.
     pub fn take_router_change(&mut self) -> Option<RouterChange> {
         self.router.as_mut()?.take_change()
+    }
+
+    /// The count of committed router assignments, including same-visit navigation.
+    pub fn router_revision(&self) -> u64 {
+        self.router.as_ref().map_or(0, |r| r.revision())
     }
 
     /// Whether `location` names a pattern the plan's route table declares —

@@ -163,9 +163,9 @@ package struct ControlRead: Equatable {
 /// host retains (0 for none), the answer's JSON (`null` for a stack that
 /// pushes), and the newest batch the runtime had made when it was read.
 package struct SplitRead {
-    package let view: UInt32, retained: UInt32, json: Data, sequence: UInt64
-    package init(view: UInt32, retained: UInt32, json: Data, sequence: UInt64) {
-        (self.view, self.retained, self.json, self.sequence) = (view, retained, json, sequence)
+    package let view: UInt32, retained: UInt32, results: UInt32, json: Data, sequence: UInt64
+    package init(view: UInt32, retained: UInt32, results: UInt32 = 0, json: Data, sequence: UInt64) {
+        (self.view, self.retained, self.results, self.json, self.sequence) = (view, retained, results, json, sequence)
     }
 }
 
@@ -224,7 +224,7 @@ package final class Runtime {
     package var controlTypes: [UInt32: String] = [:], controlsRead: [UInt32: ControlRead] = [:]
     /// On the owner, the stack whose split rule a batch that can change it
     /// carries (`Batch.split`): the one main last asked the runtime about.
-    package var splitAsked: (view: UInt32, retained: UInt32)?
+    package var splitAsked: (view: UInt32, retained: UInt32, results: UInt32)?
     package init(hooks: RuntimeHooks = .headless) {
         self.hooks = hooks
         rt = Owner.shared.sync {

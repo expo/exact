@@ -307,7 +307,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     /// The assigned flag before placeholder suppression, for save and restore.
     package var storedAccessibilityElementsHidden: Bool { super.accessibilityElementsHidden }
     package override var accessibilityElementsHidden: Bool {
-        get { super.accessibilityElementsHidden || isEmptyPanelPlaceholder }
+        get { super.accessibilityElementsHidden || isEmptyPanelPlaceholder || presenter?.navigation.searchCovers(self) == true }
         set { super.accessibilityElementsHidden = newValue }
     }
     /// Marked before `becomeFirstResponder` runs: its `focus` handler can
@@ -356,7 +356,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
     package var disabled: Bool { props["disabled"] == "true" }
     /// HTML inertness covers the subtree, including direct agent activation.
-    package var inert: Bool { presenter?.modals.inertBehind(self) == true || authoredInert }
+    package var inert: Bool { presenter?.modals.inertBehind(self) == true || presenter?.navigation.searchCovers(self) == true || authoredInert }
     /// Inert by an `inert` attribute at or above it, whatever is presented:
     /// what an event bubbling out of a presentation still reaches.
     package var authoredInert: Bool {
@@ -870,7 +870,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
            presenter?.flats.holdsLeaves(id) != true, layoutHits == nil, !hitBounds.contains(point) { return nil }
         // UIKit's conversion already carries a box in space through its
         // plane (LLP 1077 D8); a hidden back face is the host's to refuse.
-        if placedAncestor?.placementHidden == true || hidesBack() { return nil }
+        if placedAncestor?.placementHidden == true || hidesBack() || presenter?.navigation.searchCovers(self) == true { return nil }
         let matrix = layer.transform
         if CATransform3DIsAffine(matrix), matrix.m11 * matrix.m22 - matrix.m12 * matrix.m21 == 0 { return nil }
         if let clipPath, !clipPath.contains(point, using: clipRule) { return nil }

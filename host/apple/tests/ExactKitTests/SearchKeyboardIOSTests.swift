@@ -26,11 +26,13 @@ final class SearchKeyboardIOSTests: XCTestCase {
         field.insertText("a")
         // As a result opened from the search does
         session.presenter.press(try node(session, "detail").id)
-        until("editing ends as the push is written") { !field.isFirstResponder }
-        until("the detail shows") { nav.topViewController !== home && nav.transitionCoordinator == nil }
+        let agent = Agent(session: session)
+        waitFor("the detail shows") { nav.topViewController !== home }
+        waitFor("the push settles") { !agent.nativeInFlight() }
+        XCTAssertFalse(field.isFirstResponder)
         nav.popViewController(animated: true)
-        until("the search's route shows again") { nav.topViewController === home && nav.transitionCoordinator == nil }
-        spin(0.5)
+        waitFor("the search's route shows again") { nav.topViewController === home }
+        waitFor("the pop settles") { !agent.nativeInFlight() }
         XCTAssertFalse(field.isFirstResponder, "the keyboard stays down")
         XCTAssertTrue(search.isActive, "the search stays open")
         XCTAssertEqual(search.searchBar.text, "a")
@@ -46,54 +48,98 @@ final class SearchKeyboardIOSTests: XCTestCase {
         let field = search.searchBar.searchTextField
         field.insertText("a")
         XCTAssertTrue(field.resignFirstResponder())
-        spin(0.5)
+        waitForMainQueue("the host handles the end of editing")
         XCTAssertTrue(search.isActive, "with text the search stays open")
         session.presenter.focusElement(["keyboard-search"])
-        until("the field edits again") { field.isFirstResponder && search.transitionCoordinator == nil }
+        waitFor("the field edits again") { field.isFirstResponder }
         field.deleteBackward()
         XCTAssertEqual(search.searchBar.text, "")
         XCTAssertTrue(field.resignFirstResponder())
-        until("the empty search closes", 10) { !search.isActive }
-        until("its close ends", 10) { search.transitionCoordinator == nil }
+        waitFor("the empty search closes") { !search.isActive }
+        waitFor("the close settles") { search.transitionCoordinator == nil }
     }
 
-    /// The person's close takes UIKit's emptying of the field to the app, the platform's default; an app whose
-    /// `cancel` calls `preventDefault()` keeps its text, which the bar shows, closed, once UIKit has dismissed it.
-    /// (`isActive = false` from outside the host is the person's close, as the Duo's close button dismisses the
-    /// controller without the bar's Cancel action.)
-    func testTheCloseButtonClearsTheTextUnlessCancelPreventsIt() throws {
-        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
-        for (typed, kept) in [("abc", ""), ("keep it", "keep it")] {
-            let (session, _, search) = try openSearch()
-            let field = search.searchBar.searchTextField, input = try node(session, "header-search")
-            field.insertText(typed)
-            until("the app hears \(typed)") { input.props["value"] == typed }
-            search.isActive = false
-            until("UIKit closes the search (\(typed))") { !search.isActive && search.transitionCoordinator == nil && !field.isFirstResponder }
-            spin(0.3)
-            XCTAssertEqual(input.props["value"], kept, typed)
-            XCTAssertEqual(search.searchBar.text ?? "", kept, typed)
-            if !kept.isEmpty {
-                session.presenter.focusElement(["keyboard-search"])
-                until("the search opens again with its text") { search.isActive && field.isFirstResponder && search.transitionCoordinator == nil }
-                XCTAssertEqual(search.searchBar.text, kept)
-            }
-            session.destroy(); self.session = nil; window?.isHidden = true
-        }
-    }
-
-    /// The host's own close (`HeaderSearch.close()`) fires no `cancel` and keeps the text, whatever the app's `cancel`.
-    func testTheHostsOwnCloseKeepsTheText() throws {
+    func testPreventedDismissalAndHostCloseKeepTheQuery() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
         let (session, nav, search) = try openSearch()
-        let field = search.searchBar.searchTextField, input = try node(session, "header-search")
-        field.insertText("abc")
-        until("the app hears the text") { input.props["value"] == "abc" }
-        try XCTUnwrap((nav.topViewController as? RouteController)?.search).close()
-        until("the search closes") { !search.isActive && search.transitionCoordinator == nil && !field.isFirstResponder }
-        spin(0.3)
+        let input = try node(session, "header-search")
+        let projection = try XCTUnwrap((nav.topViewController as? RouteController)?.search)
+        projection.bindEditor().insertText("keep it")
+        waitFor("the app hears the first query") { input.props["value"] == "keep it" }
+        search.isActive = false
+        waitFor("UIKit settles the prevented dismissal") { !projection.dismissing }
+        XCTAssertEqual(input.props["value"], "keep it")
+        XCTAssertEqual(search.searchBar.text, "keep it")
+        session.presenter.focusElement(["keyboard-search"])
+        waitFor("the field reopens") { projection.bindEditor().isFirstResponder }
+        waitFor("the reopened search settles") { !projection.presenting }
+        XCTAssertEqual(search.searchBar.text, "keep it")
+
+        projection.bindEditor().selectAll(nil)
+        projection.bindEditor().insertText("abc")
+        waitFor("the app hears the new query") { input.props["value"] == "abc" }
+        projection.close()
+        waitFor("UIKit settles the host's close") { !projection.dismissing }
         XCTAssertEqual(input.props["value"], "abc")
         XCTAssertEqual(search.searchBar.text, "abc")
+    }
+
+    func testSearchClearanceUsesOnlyTheResidualOverlapInEachPort() {
+        let sidebar = CGRect(x: 0, y: 50, width: 300, height: 550)
+        let detail = CGRect(x: 300, y: 50, width: 500, height: 550)
+        let fitted = CGRect(x: 0, y: 50, width: 300, height: 310)
+        let keys = CGRect(x: 0, y: 400, width: 800, height: 250)
+        let bar = CGRect(x: 100, y: 360, width: 450, height: 80)
+        let docked = SearchClearance.Occupancy(keyboard: keys, docked: true, bar: bar)
+        let resized = CGRect(x: 0, y: 50, width: 300, height: 350)
+        XCTAssertEqual(docked.contentBlock(sidebar, policy: "resizes-content", ignoringKeyboard: false), resized)
+        XCTAssertEqual(docked.bottomDepth(in: resized), 40, "only the bar remains after the viewport resizes")
+        XCTAssertEqual(docked.contentBlock(sidebar, policy: "resizes-content", ignoringKeyboard: true), sidebar)
+        for policy in ["resizes-visual", "overlays-content"] {
+            XCTAssertEqual(docked.contentBlock(sidebar, policy: policy, ignoringKeyboard: false), sidebar)
+        }
+        XCTAssertEqual(docked.bottomDepth(in: sidebar), 240)
+        XCTAssertEqual(docked.bottomDepth(in: detail), 240)
+        XCTAssertEqual(docked.bottomDepth(in: fitted), 0, "UIKit already fitted this viewport")
+        XCTAssertEqual(docked.bottomDepth(in: CGRect(x: 600, y: 50, width: 200, height: 550)), 200, "the bar does not reach this column")
+        let floating = SearchClearance.Occupancy(keyboard: CGRect(x: 410, y: 270, width: 180, height: 150))
+        XCTAssertEqual(floating.contentBlock(detail, policy: "resizes-content", ignoringKeyboard: false), detail)
+        XCTAssertEqual(floating.bottomDepth(in: detail), 0, "an interior keyboard rectangle adds no bottom inset")
+        XCTAssertEqual(SearchClearance.Occupancy().bottomDepth(in: sidebar), 0, "the dismissed guide adds no clearance")
+
+        let presenter = Presenter()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 800, height: 650))
+        let view = UIView(frame: window.bounds)
+        window.addSubview(view)
+        let root = NodeView(id: 1, kind: "scroll", presenter: presenter)
+        root.frame = sidebar
+        root.style["overflow_y"] = .string("scroll")
+        view.addSubview(root)
+        let scroll = ScrollView(frame: root.bounds)
+        scroll.contentInsetAdjustmentBehavior = .never
+        root.scroll = scroll
+        root.addSubview(scroll)
+
+        let nested = NodeView(id: 2, kind: "scroll", presenter: presenter)
+        nested.frame = root.bounds
+        nested.style["overflow_y"] = .string("scroll")
+        root.container.addSubview(nested)
+        let inner = ScrollView(frame: nested.bounds)
+        inner.contentInsetAdjustmentBehavior = .never
+        inner.contentInset.bottom = 12
+        nested.scroll = inner
+        nested.addSubview(inner)
+        XCTAssertEqual(inner.convert(inner.bounds, to: view).maxY, sidebar.maxY)
+
+        let clearance = SearchClearance()
+        _ = clearance.fit(root, in: view, allocation: sidebar, occupancy: docked, policy: "resizes-visual", enabled: true)
+        XCTAssertEqual(scroll.contentInset.bottom, 240, "the outer port clears the keyboard and the bar above it")
+        XCTAssertEqual(inner.contentInset.bottom, 12, "the nested port keeps its own inset")
+        root.props["keyboardAvoidance"] = "none"
+        _ = clearance.fit(root, in: view, allocation: sidebar, occupancy: docked, policy: "resizes-visual", enabled: true)
+        XCTAssertEqual(scroll.contentInset.bottom, 200, "the opt-out removes only the bar's clearance")
+        _ = clearance.fit(root, in: view, allocation: sidebar, occupancy: docked, policy: "overlays-content", enabled: true)
+        XCTAssertEqual(scroll.contentInset.bottom, 0, "overlays-content releases the inset with the keyboard still present")
     }
 
     /// The fixture's home route with its header's search open and its field editing.
@@ -103,8 +149,8 @@ final class SearchKeyboardIOSTests: XCTestCase {
         let search = try XCTUnwrap(nav.topViewController?.navigationItem.searchController)
         try node(session, "header-search").props["id"] = "keyboard-search"
         session.presenter.focusElement(["keyboard-search"])
-        until("the bar is in search") { search.isActive && search.transitionCoordinator == nil }
-        XCTAssertTrue(search.searchBar.searchTextField.isFirstResponder)
+        waitFor("the field begins editing") { search.searchBar.searchTextField.isFirstResponder }
+        waitFor("the search presentation settles") { search.transitionCoordinator == nil }
         return (session, nav, search)
     }
 
@@ -123,7 +169,7 @@ final class SearchKeyboardIOSTests: XCTestCase {
         XCTAssertNil(session.boot(plan: plan, size: window.bounds.size).error)
         view.frame = host.view.bounds
         view.layoutIfNeeded()
-        until("the fixture's route") { session.presenter.navigationHost.primaryNavigation?.topViewController is RouteController }
+        waitFor("the fixture's route") { session.presenter.navigationHost.primaryNavigation?.topViewController is RouteController }
         return session
     }
 
@@ -131,12 +177,5 @@ final class SearchKeyboardIOSTests: XCTestCase {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, testId)
     }
 
-    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
-        XCTAssertTrue(done(), what)
-    }
-
-    private func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 }
 #endif

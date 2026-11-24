@@ -534,7 +534,7 @@ impl<D: DataSource> Bridge<D> {
     /// route above the root with its location, the current row, and whether the press of
     /// `pressed` (a view being pressed, or 0) writes the router; `null` for a
     /// stack that pushes. Not a batch: nothing changes.
-    pub fn stack_split(&mut self, view: u32, retained: u32, pressed: u32) -> u32 {
+    pub fn stack_split(&mut self, view: u32, retained: u32, pressed: u32, results: u32) -> u32 {
         let json = self
             .host
             .as_ref()
@@ -544,7 +544,7 @@ impl<D: DataSource> Bridge<D> {
                     .then(|| runner.press_writes_router(pressed))
                     .flatten();
                 runner
-                    .stack_split(view, (retained != 0).then_some(retained))
+                    .stack_split_excluding(view, (retained != 0).then_some(retained), (results != 0).then_some(results))
                     .map(|split| (split, writes))
             })
             .map(|(split, writes)| {

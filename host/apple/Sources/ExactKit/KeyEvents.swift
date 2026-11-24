@@ -141,7 +141,7 @@ extension Presenter {
         }
         #else
         // A node lifted over the tab container bubbles to its parent (LLP 1083.000 D4)
-        if let parent = navigation.lifted?.parent(of: view) { return parent }
+        if let parent = navigation.searchResultsParent(of: view) ?? navigation.lifted?.parent(of: view) { return parent }
         if let node = view as? NodeView, navigation.routeSurfaces[node.id]?.node === node,
            let parent = navigation.logicalParent(of: node) ?? navigation.container {
             return parent

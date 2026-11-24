@@ -35,8 +35,9 @@ extension NavigationHost {
         // still uses the runner's row associations when it finds a list.
         let requested = tabWantsSplit(root) ? StackSplit(list: nil, width: nil, rows: [:]) : nil
         let retained = split?.list.stackRoutes.first === root ? split?.listNode ?? 0 : 0
-        if let heard = heardSplit, heard.read.view == root.node.id, heard.read.retained == retained { return .some(heard.rule ?? requested) }
-        guard let read = session.runtime.on(busy: nil, { session.runtime.readSplit(root.node.id, retained: retained, sequence: session.runtime.sequence.newest) }) else { return nil }
+        let results = candidateSearchResult(in: root)?.id ?? 0
+        if let heard = heardSplit, heard.read.view == root.node.id, heard.read.retained == retained, heard.read.results == results { return .some(heard.rule ?? requested) }
+        guard let read = session.runtime.on(busy: nil, { session.runtime.readSplit(root.node.id, retained: retained, results: results, sequence: session.runtime.sequence.newest) }) else { return nil }
         heardSplit = HeardSplit(read)
         return .some(heardSplit?.rule ?? requested)
         #endif
@@ -102,12 +103,13 @@ extension NavigationHost {
                 session.hostGo(location)
             }
         }
-        split.resultsOnTop = { [weak self, weak split] in
-            guard let self, let split,
-                  let list = split.list.stackRoutes.first as? RouteController,
-                  let route = controllers.values.first(where: { $0.key == selectedKey }) else { return false }
-            return resultsRoute(of: list.search?.field, in: [route]) === route
+        #if os(iOS)
+        if let root = first.first { split.setSearchOwner(root, children: searchChildIDs(of: root.node)) }
+        split.stageForExpansion = { [weak self, weak split] in
+            guard let self, let split, self.split === split else { return }
+            split.stageExpansion(committedSplitRoutes, awaitingCommit: split.searchState.pop != nil)
         }
+        #endif
         split.listWillBeCovered = { [weak split] in
             (split?.list.stackRoutes.first as? RouteController)?.search?.resign()
         }
@@ -148,10 +150,8 @@ extension NavigationHost {
     /// The stack in the split's columns, its routes projected into each,
     /// while UIKit moves neither them nor the columns (`changing`). Returns
     /// whether a lifted header or a column move holds the projection.
-    func syncSplit(_ split: SplitIOS, _ wanted: [RouteController], animated: Bool) -> Bool {
-        let stack = placingResults(wanted, on: split.controller.isCollapsed ? split.list : nil,
-                                   inPlace: !split.settledExpanded, collapsed: split.settledCollapsed)
-        if let results = resultsInPlace { prepareRoutes([results], in: split.list) }
+    func syncSplit(_ split: SplitIOS, _ wanted: [RouteController], animated: Bool, reveal: Bool? = nil) -> Bool {
+        let stack = wanted
         prepareRoutes(Array(stack.prefix(1)), in: split.list)
         prepareRoutes(Array(stack.dropFirst()), in: split.detail)
         let top = split.detailRoutes.last
@@ -160,7 +160,7 @@ extension NavigationHost {
         if changingRoutes, liftHeld { return true }
         let location = stack.count > 1 ? stack.last.flatMap { split.rule?.locations[$0.node.id] } : nil
         let relocated = location != nil && split.topLocation != nil && location != split.topLocation && stack.last === split.detailRoutes.last
-        guard split.show(stack, animated: animated, relocated: relocated) else { return split.moving }
+        guard split.show(stack, animated: animated, relocated: relocated, revealsDetail: reveal) else { return split.moving }
         split.topLocation = location
         if let location { split.left = location }
         else if !split.controller.isCollapsed, !split.moving { split.left = nil }
@@ -185,7 +185,7 @@ extension NavigationHost {
         let changed = !columns.shown.elementsEqual(routes, by: ===)
         guard changed || !columns.presses.isEmpty else { return }
         if let root = routes.first, let runtime = presenter.session?.runtime {
-            if let rule = runtime.stackSplitAnswer(root.node.id, retaining: columns.listNode) {
+            if let rule = runtime.stackSplitAnswer(root.node.id, retaining: columns.listNode, excluding: candidateSearchResult(in: root)?.id) {
                 columns.rule = rule
                 columns.listNode = rule?.list
             } else {
@@ -245,6 +245,13 @@ extension NavigationHost {
     /// which routes are live (`routesShown`) and a sync its move held follow.
     func splitChanged() {
         guard let split else { return }
+        #if os(iOS)
+        if split.paired {
+            presenter.groupedLists?.sync(changed: nil)
+            scheduleSplitProjection()
+            return
+        }
+        #endif
         // Nested, N1's bar is UIKit's; N0's shows the top of the column on top (`showBar`)
         if !split.nested { showBar(split.detail, animated: false) }
         showBar(split.list, animated: false)
@@ -252,8 +259,7 @@ extension NavigationHost {
         presenter.owners.publish()
         // Beside the detail the list is UIKit's sidebar list, collapsed its authored style (LLP 1127 D7)
         presenter.groupedLists?.sync(changed: nil)
-        if split.inspecting != nil || presenter.modalHost.routes.last?.node.props["navigationInspector"] == "true"
-            || split.resultsOnTop() || resultsInPlace != nil {
+        if split.inspecting != nil || presenter.modalHost.routes.last?.node.props["navigationInspector"] == "true" {
             projectionHeld = true
         }
         runHeldSync()
@@ -321,6 +327,17 @@ extension NavigationHost {
     /// full-screen one hides them.
     var splitShown: (beside: [RouteController], under: [RouteController]) {
         guard let split else { return ([], []) }
+        #if os(iOS)
+        // A split's search says which column a person sees (`publishSplitSearch`), collapsed too, where the
+        // columns show nothing beside: the detail it holds behind the list is under it
+        if split.paired && !presenter.modalHost.routes.contains(where: { $0.kind == "fullscreen" }) {
+            let list = split.searchOwner, detail = split.detail.topViewController as? RouteController
+            let state = split.searchState
+            let live = (state.primaryExposed ? [list] : []) + (state.detailExposed ? [detail] : [])
+            let under = (state.primaryExposed ? [] : [list]) + (state.detailExposed ? [] : [detail])
+            return (live.compactMap { $0 }, under.compactMap { $0 })
+        }
+        #endif
         let columns = split.showing, over = presenter.modalHost.routes
         if over.isEmpty { return columns }
         return ([], over.allSatisfy { $0.kind == "modal" } ? columns.beside + columns.under + [split.inspecting].compactMap { $0 } : [])
@@ -454,6 +471,11 @@ extension NavigationHost {
     /// the containers that take them next (`reshape`).
     func retireSplit(releasing: Bool = false) {
         guard let split else { return }
+        #if os(iOS)
+        FrameClock.shared.drop(split.searchState)
+        split.searchState.showInstalledDetail()
+        split.searchOwner?.detachSearch()
+        #endif
         for nav in [split.list, split.detail] + [split.inspector].compactMap({ $0 }) {
             if releasing { release(nav) } else { retireStack(nav) }
         }

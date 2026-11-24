@@ -386,10 +386,7 @@ impl Kernel {
             return (0.0, 0.0);
         };
         let used = self.used_size(slot);
-        let length = |axis: BlockAxis, used: f32| match axis {
-            BlockAxis::Is(length) => length,
-            _ => used,
-        };
+        let length = |axis: BlockAxis, used: f32| axis.fixed_length().unwrap_or(used);
         (length(block.width, used.0), length(block.height, used.1))
     }
 

@@ -35,7 +35,6 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var changed: () -> Void = {}
     var columnsWillChange: () -> Void = {}
     var listWillBeCovered: () -> Void = {}
-    var resultsOnTop: () -> Bool = { false }
     var columnsDidChange: () -> Void = {}
     var left: String?
     var returnTo: (String) -> Void = { _ in }
@@ -43,6 +42,26 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private(set) var inspector: UINavigationController?
     /// The person closed the inspector's column; the router has yet to hear it.
     var inspectorClosed: () -> Void = {}
+    #if os(iOS)
+    private(set) var searchState = SplitSearchState()
+    private(set) weak var searchOwner: RouteController?
+    var pairedSearch: HeaderSearch? { searchOwner?.search.flatMap { $0.paired ? $0 : nil } }
+    var searchProjectionEpoch: UInt64 { searchState.projectionEpoch }
+    var stageForExpansion: () -> Void = {}
+    #endif
+    var paired: Bool {
+        #if os(iOS)
+        pairedSearch != nil
+        #else
+        false
+        #endif
+    }
+    private(set) var writing = false
+    var columnsAboutToMove: Bool { aboutToMove != nil }
+    var showsList: Bool { !controller.isCollapsed && controller.displayMode != .secondaryOnly }
+    var overlaysDetail: Bool { !controller.isCollapsed && [.oneOverSecondary, .twoOverSecondary].contains(controller.displayMode) }
+    var projectedDetailTop: RouteController? { stack.dropFirst().last }
+
     /// UIKit is moving the columns, inside its animation (`moveAlong`).
     var columnsMove: () -> Void = {}
     /// UIKit is about to push a route within N1, over the route beneath it.
@@ -148,6 +167,38 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var shown: [RouteController] {
         list.stackRoutes.prefix(1).compactMap { $0 as? RouteController } + (showsDetail ? detailRoutes : [])
     }
+    #if os(iOS)
+    func setSearchOwner(_ owner: RouteController, children: [UInt32]) {
+        guard searchOwner !== owner else { return }
+        if paired { searchOwner?.detachSearch() }
+        FrameClock.shared.drop(searchState)
+        searchState.showInstalledDetail()
+        searchState = SplitSearchState()
+        searchOwner = owner
+        searchState.children = children
+    }
+
+    func stageExpansion(_ stack: [RouteController], awaitingCommit: Bool = false) {
+        let routes = Array(stack.dropFirst())
+        let next: [UIViewController] = routes.isEmpty ? [empty] : routes
+        if awaitingCommit || writing || list.transitionCoordinator != nil || detail.transitionCoordinator != nil {
+            searchState.concealDetail(in: detail.view)
+        } else if !Self.same(detail.viewControllers, next) {
+            writing = true
+            defer { writing = false }
+            keepTransition(routes)
+            if !write(next, detail, false) { searchState.concealDetail(in: detail.view) }
+        }
+    }
+
+    func reconcileMoveAfterLayout() {
+        if move != nil, controller.viewIfLoaded?.window != nil,
+           controller.transitionCoordinator == nil, list.transitionCoordinator == nil, detail.transitionCoordinator == nil {
+            settle()
+        }
+    }
+    #endif
+
     /// The route the inspector's column shows, while the split is expanded.
     var inspecting: RouteController? {
         guard !controller.isCollapsed, let inspector else { return nil }
@@ -225,6 +276,17 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         if let coordinator = controller.transitionCoordinator { coordinator.animate(alongsideTransition: nil) { finish($0.isCancelled) } } else { finish(false) }
         #endif
     }
+
+    #if os(iOS)
+    func reconcileInspectorClose() {
+        guard #available(iOS 26.0, *), let closing, let inspector, controller.transitionCoordinator == nil else { return }
+        if !controller.isShowing(.inspector) {
+            empty(inspector)
+            endSlide()
+        }
+        if self.closing == closing { self.closing = nil }
+    }
+    #endif
 
     /// UIKit pops the route the inspector's route is above, which takes the
     /// inspector's route too (`NavigationRules.poppedTop`): the column closes
@@ -362,13 +424,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// top stays and shows another location. Returns whether the projection
     /// went through, including a stack already in place.
     @discardableResult
-    func show(_ stack: [RouteController], animated: Bool, relocated: Bool = false) -> Bool {
+    func show(_ stack: [RouteController], animated: Bool, relocated: Bool = false, revealsDetail: Bool? = nil) -> Bool {
         self.stack = stack
         // UIKit is moving N1 between the columns: the stack shows once it has
         // expanded or collapsed (`settle`). Written now, the columns would be
         // set from the split's state before the move, and UIKit, finding
         // them changed, pushed the detail twice and asserted.
-        if moving { return false }
+        if laysOutItself { return false }
+        writing = true
+        defer { writing = false }
         guard let root = stack.first else {
             keepTransition([])
             if !list.viewControllers.isEmpty, !write([], list, false) { return false }
@@ -384,7 +448,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         let column: [UIViewController] = [root] + (nested ? [detail] : [])
         if !Self.same(list.viewControllers, column), !write(column, list, false) { return false }
         let collapsed = controller.isCollapsed
-        if collapsed, nested, rest.isEmpty {
+        let revealDetail = revealsDetail ?? moved
+        var showsPrimary = rest.isEmpty
+        #if os(iOS)
+        if paired {
+            if revealDetail && !rest.isEmpty { searchState.collapseToPrimary = false }
+            showsPrimary = showsPrimary || searchState.collapseToPrimary
+        }
+        #endif
+        if collapsed, nested, showsPrimary {
             // Let UIKit pop nested N1 with its routes and zoom still in place
             reveal(.primary, animated: animated)
             return true
@@ -405,9 +477,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         }
         if collapsed {
             // UIKit animates the push of N1 itself when it is outside N0
-            if !rest.isEmpty, !nested { reveal(.secondary, animated: animated) }
-        } else if moved {
-            if !rest.isEmpty, [.oneOverSecondary, .twoOverSecondary].contains(controller.displayMode) { reveal(.secondary, animated: animated) }
+            if !rest.isEmpty, !nested, !paired || revealDetail { reveal(.secondary, animated: animated) }
+        } else if moved || revealDetail {
+            if !rest.isEmpty, revealDetail, overlaysDetail { reveal(.secondary, animated: animated) }
             if rest.isEmpty, hadDetail, controller.displayMode == .secondaryOnly { reveal(.primary, animated: animated) }
         }
         return true
@@ -452,12 +524,12 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private func settle() {
         let expanded = !controller.isCollapsed && move == .expanding
         move = nil
-        show(stack, animated: false)
+        if !paired { show(stack, animated: false) }
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             changed()
             columnsDidChange()
-            if expanded, stack.count == 1, let location = left { returnTo(location) }
+            if expanded, !paired, stack.count == 1, let location = left { returnTo(location) }
         }
     }
 
@@ -472,7 +544,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
             svc.setViewController(nil, for: .inspector)
         }
         #endif
-        let coversList = !detailRoutes.isEmpty && !resultsOnTop()
+        #if os(iOS)
+        if paired {
+            searchState.beginOwnerMove()
+            searchState.collapseToPrimary = detailRoutes.isEmpty || searchState.primaryForeground
+            changed()
+            return searchState.collapseToPrimary ? .primary : .secondary
+        }
+        #endif
+        let coversList = !detailRoutes.isEmpty
         if coversList { listWillBeCovered() }
         else { for route in detailRoutes { route.held = false } }
         return coversList ? .secondary : .primary
@@ -481,6 +561,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
                              displayModeForExpandingToProposedDisplayMode proposedDisplayMode: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
         move = .expanding
         columnsWillChange()
+        #if os(iOS)
+        if paired {
+            searchState.collapseToPrimary = false
+            searchState.beginOwnerMove()
+            stageForExpansion()
+            changed()
+            if searchState.primaryForeground && proposedDisplayMode == .secondaryOnly { return .oneOverSecondary }
+        }
+        #endif
         return proposedDisplayMode
     }
     func splitViewController(_ svc: UISplitViewController, didHide column: UISplitViewController.Column) {
@@ -491,11 +580,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     }
 
     func splitViewControllerDidCollapse(_ svc: UISplitViewController) {
-        if resultsOnTop() { stack = Array(stack.prefix(1)) }
         settle()
     }
     func splitViewControllerDidExpand(_ svc: UISplitViewController) { settle() }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
+        #if os(iOS)
+        if paired { searchState.beginOwnerMove() }
+        #endif
         if let coordinator = svc.transitionCoordinator { holdLayout(until: coordinator) }
         DispatchQueue.main.async { [weak self] in self?.changed() }
     }

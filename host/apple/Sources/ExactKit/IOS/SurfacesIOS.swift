@@ -21,7 +21,8 @@ extension Presenter {
         let documents = own.filter { candidate in
             !own.contains { other in candidate.0 !== other.0 && candidate.0.isDescendant(of: other.0) }
         }.map { SessionSurface(view: $0.0, label: $0.1, kind: .document) }
-        return documents + modals.surfaces(includingRetiring: includingRetiring)
+        let results = navigation.searchResultsSurface.map { [SessionSurface(view: $0, label: "search results", kind: .route)] } ?? []
+        return documents + results + modals.surfaces(includingRetiring: includingRetiring)
             + dialogs.surfaces(includingRetiring: includingRetiring)
             + menus.sheetLayers.map { SessionSurface(view: $0, label: "popover over a sheet", kind: .popover) }
     }

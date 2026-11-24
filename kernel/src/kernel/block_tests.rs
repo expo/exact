@@ -415,6 +415,50 @@ fn laid_out(ops: Vec<Op>) -> Kernel {
     k
 }
 
+#[test]
+fn a_stretched_results_root_bounds_an_auto_height_scroller() {
+    let mut ops = Vec::new();
+    ops.extend(view(1, NodeType::View, &[]));
+    ops.extend(view(
+        2,
+        NodeType::View,
+        &[
+            (StyleId::Display, t("flex")),
+            (StyleId::FlexDirection, t("column")),
+            (StyleId::MarginTop, n(8.0)),
+            (StyleId::PaddingTop, n(10.0)),
+        ],
+    ));
+    ops.extend(view(
+        3,
+        NodeType::ScrollView,
+        &[(StyleId::FlexGrow, n(1.0)), (StyleId::MinHeight, n(0.0))],
+    ));
+    ops.extend(view(4, NodeType::View, &[(StyleId::Height, n(500.0))]));
+    ops.extend([
+        children(3, [4]),
+        children(2, [3]),
+        children(1, [2]),
+        Op::AttachRoot { id: 1 },
+    ]);
+    let mut k = laid_out(ops);
+    let viewport = |height| HostBlock {
+        width: BlockAxis::Stretch(300.0),
+        height: BlockAxis::Stretch(height),
+        tactic: Default::default(),
+    };
+    for height in [300.0, 200.0] {
+        k.set_host_block(2, Some(viewport(height))).unwrap();
+        k.compute_layout(1, OFFER).unwrap();
+        assert_eq!(k.node(3).unwrap().frame.height, height - 18.0);
+        assert_eq!(k.node(4).unwrap().frame.height, 500.0);
+    }
+    k.apply(0, 2, &[style(2, &[(StyleId::Height, n(120.0))])])
+        .unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(k.node(3).unwrap().frame.height, 120.0);
+}
+
 /// A root, a holder and a route with one child, 150 by 40.
 fn small() -> Vec<Op> {
     let half = [(StyleId::Width, n(150.0)), (StyleId::Height, n(40.0))];

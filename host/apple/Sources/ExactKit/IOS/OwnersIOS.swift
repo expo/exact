@@ -69,7 +69,10 @@ extension Presenter {
     /// Ends editing wherever the session is mounted; whether any editor resigned. A bar's search field ends
     /// through its search, which holds the end back while UIKit moves the bar into search (`HeaderSearch.resign`).
     @discardableResult
-    package func endEditing() -> Bool {
+    package func endEditing(pressed view: UIView? = nil) -> Bool {
+        // Rows in UIKit's search results leave that search field editing.
+        if let view, let results = navigation.searchResultsSurface, view.isDescendant(of: results),
+           editor?.headerSearch != nil { return false }
         if navigation.resignSearch() { return true }
         return presentations(includingRetiring: true).reduce(documentHost.endEditing(true)) { $1.endEditing(true) || $0 }
     }
@@ -84,7 +87,7 @@ extension Presenter {
         if let node = view as? NodeView, navigation.routeSurfaces[node.id]?.node === node, modals.mounts(node) {
             return eventParent(of: node)
         }
-        return navigation.lifted?.parent(of: view) ?? view.superview
+        return navigation.searchResultsParent(of: view) ?? navigation.lifted?.parent(of: view) ?? view.superview
     }
 
     /// The next view a press bubbles to (`listenerParent`), through a
@@ -269,7 +272,7 @@ package final class OwnerBlocks {
 
     /// A stack's routes: a navigation controller's, or a plain tab's one route.
     private func routes(of stack: UIViewController, presented: Bool, editor: UIView?) -> [(route: any RouteSurface, view: UIView, block: CGRect, shown: Bool, presented: Bool)] {
-        var controllers = stack.shownStackRoutes
+        var controllers = stack.stackRoutes
         if let leaving = (stack as? UINavigationController)?.transitionCoordinator?.viewController(forKey: .from),
            !controllers.contains(where: { $0 === leaving }) { controllers.append(leaving) }
         return controllers.compactMap { controller in
@@ -293,9 +296,8 @@ package final class OwnerBlocks {
             block.size.height = max(0, min(block.height, end - block.minY))
             return block
         }
-        // Only an editor in the content shortens it. A search field in the
-        // bar is UIKit's: the content keeps its layout and takes the keys as
-        // safe area (`RouteController.fitContentViewport`).
+        if let search = presenter.navigation.searchContentBlock(in: view) { return search }
+        // Outside paired search, an editor in the content shortens its own block.
         guard editor?.isDescendant(of: view) == true else { return block }
         #if !os(tvOS)
         if let sheet = presenter.modals.coordinateView, view.isDescendant(of: sheet),
@@ -412,6 +414,12 @@ package final class OwnerBlocks {
             #endif
             now[id] = (.size(block.size), presented ? nil : placement(of: route, block: block, in: view))
         }
+        if let results = presenter.navigation.measureSearchResults(), let owner = presenter.navigation.container, !results.block.isEmpty {
+            let placement = results.shown && results.view.window != nil
+                ? BlockPlacement(rect: NativeGeometry.convert(results.block, from: results.view, to: owner), within: owner.id)
+                : told[results.root.id]?.placement
+            now[results.root.id] = (.stretch(results.block.size), placement)
+        }
         #if os(iOS)
         if #available(iOS 27.1, *) {
             for (id, pane) in presenter.arrangements.blocks {
@@ -430,9 +438,6 @@ package final class OwnerBlocks {
         }
         // A block taken back forgets its placement with it
         blocks += told.keys.filter { now[$0] == nil && presenter.views[$0] != nil }.map { ($0, nil) }
-        // How a route shows is told of its block only: one given again starts
-        // in its stack in the kernel, so how it shows is told again (LLP 1127 D8)
-        for id in Array(toldShown.keys) where now[id] == nil { toldShown[id] = nil }
         told = now
         // A bar item's block is told as one; one taken back is none
         let items = Set(presenter.navigation.barItemBlocks.keys)
@@ -460,7 +465,7 @@ package final class OwnerBlocks {
             return Runtime.blockRecords(blocks, placements: placements, barItems: barItems, sideBars: sideChanges) + updateRecords
         }
         let shown = shownChanges()
-        toldShown = presenter.navigation.routesShown.filter { told[$0.key] != nil }
+        toldShown = visibilityClaims()
         return Runtime.blockRecords(blocks, placements: placements, shown: shown, barItems: barItems, sideBars: sideChanges) + updateRecords
     }
 
@@ -490,8 +495,17 @@ package final class OwnerBlocks {
     /// How the routes with a block show against their stacks' tops, where
     /// that changed since it was last told (`NavigationHosting.routesShown`).
     private func shownChanges() -> [(UInt32, BlockShown)] {
-        let shown = presenter.navigation.routesShown.filter { told[$0.key] != nil }
-        return Set(toldShown.keys).union(shown.keys).filter { toldShown[$0] != shown[$0] }.map { ($0, shown[$0] ?? .inStack) }
+        let shown = visibilityClaims()
+        return Set(toldShown.keys).union(shown.keys).compactMap { id in
+            guard toldShown[id] != shown[id], presenter.views[id] != nil else { return nil }
+            return (id, shown[id] ?? .inStack)
+        }
+    }
+
+    private func visibilityClaims() -> [UInt32: BlockShown] {
+        var shown = presenter.navigation.routesShown.filter { told[$0.key] != nil }
+        for id in presenter.navigation.searchCoveredNodes { shown[id] = .under }
+        return shown
     }
 
     private func revealIfOwed() {
