@@ -708,19 +708,13 @@ extension NavigationHost {
             #endif
             let color = shows ? shape?.heading?.ownUIColor("text_color") : nil
             #if os(iOS)
-            let family = shows ? shape?.family.flatMap { id in shape?.header.text.map { HeaderFamily(id: id, engine: $0) } } : nil
-            // Give the hatch the same point in route preparation. A family that is going
-            // away releases its slots before the hatch runs; a written family paints last.
-            if family == nil && c.titleInk.hasHeaderFamily {
-                c.titleInk.updateFamily(nil, shape: shape, route: c, bar: nav?.navigationBar, color: color, fonts: fonts, transparent: transparent)
+            let family = shows && shape?.family != nil ? shape.flatMap(HeaderFamily.init) : nil
+            if family != nil, let nav { observeHeaderTypography(in: nav) }
+            if family != nil || c.titleInk.hasHeaderFamily {
+                c.titleInk.updateFamily(family, shape: shape, route: c, bar: nav?.navigationBar, color: color, fonts: fonts, transparent: transparent)
+            } else {
+                c.titleInk.update(color, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent)
             }
-            defer {
-                if let family {
-                    if let nav { observeHeaderTypography(in: nav) }
-                    c.titleInk.updateFamily(family, shape: shape, route: c, bar: nav?.navigationBar, color: color, fonts: fonts, transparent: transparent)
-                }
-            }
-            if family == nil { c.titleInk.update(color, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent) }
             #else
             c.titleInk.update(color, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent)
             #endif
@@ -729,6 +723,12 @@ extension NavigationHost {
             guard presenter.session?.natives.hatchesConnected == true else { continue }
             hatching(nav) { presenter.session?.natives.routeHatch(c.hatched ? .changed : .built, controller: c, navigation: nav, scroll: scroll,
                                                                   key: c.key, dataset: dataset) }
+            #if os(iOS)
+            if let family {
+                c.titleInk.updateFamily(family, shape: shape, route: c, bar: nav?.navigationBar, color: color, fonts: fonts,
+                                        transparent: transparent, afterHatch: true)
+            }
+            #endif
             c.hatched = true
             c.ownedScroll = scroller
             // Run the passes again for a selection this route's hatch made, before UIKit lays out its stack, unless a

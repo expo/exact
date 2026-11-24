@@ -6,6 +6,13 @@ import ExactKit
 struct HeaderFamily {
     let id: Int
     let engine: TextEngine
+    init(id: Int, engine: TextEngine) { self.id = id; self.engine = engine }
+
+    init?(_ shape: HeaderShape) {
+        guard let id = shape.family, let engine = shape.header.text else { return nil }
+        self.init(id: id, engine: engine)
+    }
+
     typealias Appearance = UINavigationBarAppearance
     private typealias Attributes = ReferenceWritableKeyPath<Appearance, [NSAttributedString.Key: Any]>
     private static let itemAttributes: [Attributes] = [
@@ -20,7 +27,7 @@ struct HeaderFamily {
     private static let stock = Appearance()
 
     func appearance(over base: Appearance, heading: NavigationTitleInk.Fonts?, ownTitle: Bool, traits: UITraitCollection) -> Appearance {
-        let copy = base.copy() as! Appearance
+        let copy = base.copy()
         let inlineSize = TextEngine.inlineBarPointSize(traits)
         let largeSize = UIFont.preferredFont(forTextStyle: .largeTitle, compatibleWith: traits).pointSize
         let available = id < 8 || engine.catalog[id]?.isEmpty == false
@@ -37,7 +44,17 @@ struct HeaderFamily {
                 continue
             }
             let size = large ? largeSize : inlineSize
-            let normal = stock ?? Self.stock.buttonAppearance.normal.titleTextAttributes[.font] as? UIFont ?? HeaderShape.Item.titleFont(bold: false)
+            let normal: UIFont
+            if let stock {
+                normal = stock
+            } else if title {
+                let platform = NavigationTitleInk.platformFonts(traits)
+                normal = large ? platform.large : platform.title
+            } else {
+                let index = Self.itemAttributes.firstIndex(of: path)!
+                let normalPath = Self.itemAttributes[index - index % 4]
+                normal = Self.stock[keyPath: normalPath][.font] as? UIFont ?? HeaderShape.Item.titleFont(bold: false)
+            }
             var source = normal.withSize(size)
             if traits.legibilityWeight == .bold {
                 let weight = TextEngine.controlWeight(normal)
@@ -88,19 +105,19 @@ struct HeaderFamily {
     /// An app can change one field on a copy of the item appearance. Import just
     /// its edits into the native slot, including removal of an attribute.
     static func nativeEdit(_ edit: Appearance?, after last: Appearance?, base: Appearance) -> Appearance? {
-        guard let edit, let last else { return edit }
-        let result = base.copy() as! Appearance
+        guard let edit else { return nil }
+        let last = last ?? base
+        let result = edit.copy()
         func field<T: Equatable>(_ path: ReferenceWritableKeyPath<Appearance, T>) {
-            if edit[keyPath: path] != last[keyPath: path] { result[keyPath: path] = edit[keyPath: path] }
+            if edit[keyPath: path] == last[keyPath: path] { result[keyPath: path] = base[keyPath: path] }
         }
         func attributes(_ path: Attributes) {
-            let before = last[keyPath: path] as NSDictionary, after = edit[keyPath: path] as NSDictionary
-            guard !before.isEqual(after) else { return }
-            var values = result[keyPath: path]
-            for key in Set(last[keyPath: path].keys).union(edit[keyPath: path].keys) {
-                if key == .font, titleAttributes.contains(path) || itemAttributes.contains(path) { continue }
-                if let old = before[key] as? NSObject, old.isEqual(after[key]) { continue }
-                values[key] = after[key]
+            let before = last[keyPath: path], after = edit[keyPath: path], underlying = base[keyPath: path]
+            var values = after
+            for key in Set(before.keys).union(after.keys).union(underlying.keys) {
+                let owned = key == .font && (titleAttributes.contains(path) || itemAttributes.contains(path))
+                let unchanged = (before[key] as? NSObject)?.isEqual(after[key]) ?? (after[key] == nil)
+                if owned || unchanged { values[key] = underlying[key] }
             }
             result[keyPath: path] = values
         }
@@ -112,8 +129,8 @@ struct HeaderFamily {
         field(\.shadowColor)
         field(\.titlePositionAdjustment)
         if #available(iOS 27, *) { field(\.overrideUserInterfaceStyle) }
-        if edit.backIndicatorImage != last.backIndicatorImage || edit.backIndicatorTransitionMaskImage != last.backIndicatorTransitionMaskImage {
-            result.setBackIndicatorImage(edit.backIndicatorImage, transitionMaskImage: edit.backIndicatorTransitionMaskImage)
+        if edit.backIndicatorImage == last.backIndicatorImage && edit.backIndicatorTransitionMaskImage == last.backIndicatorTransitionMaskImage {
+            result.setBackIndicatorImage(base.backIndicatorImage, transitionMaskImage: base.backIndicatorTransitionMaskImage)
         }
         for path in titleAttributes { attributes(path) }
         if #available(iOS 26, *) { attributes(\.subtitleTextAttributes); attributes(\.largeSubtitleTextAttributes) }
@@ -139,9 +156,10 @@ extension NavigationHost {
         let refresh = { [weak self, weak nav, weak stack] in
             guard let self, let nav, let stack, stacks[ObjectIdentifier(nav)] === stack else { return }
             for case let route as RouteController in nav.stackRoutes where route.titleInk.hasHeaderFamily && controllers[route.node.id] === route {
-                guard let shape = HeaderShape.bar(of: route.node), let id = shape.family, let engine = shape.header.text else { continue }
+                guard let shape = HeaderShape.bar(of: route.node, back: container?.props["navigationBack"], backIsUIKits: route.pushed),
+                      let family = HeaderFamily(shape) else { continue }
                 let fonts = NavigationTitleInk.fonts(of: shape.heading, level: shape.level, traits: route.traitCollection)
-                route.titleInk.updateFamily(HeaderFamily(id: id, engine: engine), shape: shape, route: route, bar: nav.navigationBar,
+                route.titleInk.updateFamily(family, shape: shape, route: route, bar: nav.navigationBar,
                                             color: shape.heading?.ownUIColor("text_color"), fonts: fonts, transparent: RouteGeometry.transparentBar(route.node))
             }
         }

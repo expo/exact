@@ -469,8 +469,10 @@ an item on the Mac, Android and tvOS; a header per platform in an app that
 ships iOS; the heading's own box drawn as written.
 **Route header typography (Charlie, 2026-11-24, "recs ok").** Unblocks one
 `font-family` on an iOS route's header for its title, item titles and Back title
-(LLP 1141.004 D1). The heading can override the title alone. A native button
-still refuses `font-family`.
+(LLP 1141.004 D1). The heading can override the title alone. Take: a header
+that sets the family owns the route's bar fonts, including any its Swift hatch
+sets (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel").
+A native button still refuses `font-family`.
 **Expanded (Charlie, 2026-10-03: "A native grouped-list role mapped to
 UICollectionView list layout"):** `list appearance="auto"` is a grouped list
 (LLP 1084): sections with a header and footer, rows read by shape, UIKit's

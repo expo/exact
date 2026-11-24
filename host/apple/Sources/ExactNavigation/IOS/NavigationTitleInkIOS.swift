@@ -86,26 +86,30 @@ final class NavigationTitleInk {
     private(set) var hasHeaderFamily = false
 
     func updateFamily(_ family: HeaderFamily?, shape: HeaderShape?, route: RouteController, bar: UINavigationBar?,
-                      color: UIColor?, fonts: Fonts?, transparent: Bool) {
+                      color: UIColor?, fonts: Fonts?, transparent: Bool, afterHatch: Bool = false) {
         let item = route.navigationItem
         let current = [item.standardAppearance, item.compactAppearance, item.scrollEdgeAppearance, item.compactScrollEdgeAppearance]
         let standard = bar?.standardAppearance ?? UINavigationBarAppearance()
         let defaults = [standard, bar?.compactAppearance, bar?.scrollEdgeAppearance, bar?.compactScrollEdgeAppearance]
-        var saved = self.saved ?? current
-        if hasHeaderFamily, let projected {
-            for i in current.indices where current[i] != projected[i] {
-                let inherited = defaults[i] ?? (i == 3 ? saved[2] ?? defaults[2] ?? saved[1] ?? defaults[1] : nil) ?? saved[0] ?? standard
-                let base = saved[i] ?? inherited
-                let edited = HeaderFamily.nativeEdit(current[i], after: projected[i], base: base)
-                if edited != base || current[i] == nil { saved[i] = edited }
+        // The route hatch sees the prepared colours and edges. Its return changes only fonts.
+        var next = current
+        if !afterHatch {
+            var saved = self.saved ?? current
+            if hasHeaderFamily, let projected {
+                for i in current.indices where current[i] != projected[i] {
+                    let inherited = defaults[i] ?? (i == 3 ? saved[2] ?? defaults[2] ?? saved[1] ?? defaults[1] : nil) ?? saved[0] ?? standard
+                    let base = saved[i] ?? inherited
+                    let edited = HeaderFamily.nativeEdit(current[i], after: projected[i], base: base)
+                    if edited != base || current[i] == nil { saved[i] = edited }
+                }
             }
+            self.saved = saved
+            self.ink = color
+            self.fonts = fonts
+            self.transparent = transparent
+            hasHeaderFamily = family != nil
+            next = appearances(saved, color: color, fonts: fonts, bar: bar, transparent: transparent)
         }
-        self.saved = saved
-        self.ink = color
-        self.fonts = fonts
-        self.transparent = transparent
-        hasHeaderFamily = family != nil
-        var next = appearances(saved, color: color, fonts: fonts, bar: bar, transparent: transparent)
         var bases = next
         if let family {
             for i in next.indices {
@@ -113,7 +117,7 @@ final class NavigationTitleInk {
                 let branded = family.appearance(over: base, heading: fonts, ownTitle: shape?.heading?.authoredFontFamily != nil,
                                                 traits: bar?.traitCollection ?? route.traitCollection)
                 if branded != base {
-                    bases[i] = base.copy() as? UINavigationBarAppearance
+                    bases[i] = base.copy()
                     next[i] = branded
                 }
             }
@@ -127,10 +131,18 @@ final class NavigationTitleInk {
             item.compactScrollEdgeAppearance = next[3]
             if #available(iOS 26, *), bar?.topItem === item, zip(current, next).contains(where: {
                 $0?.buttonAppearance != $1?.buttonAppearance || $0?.doneButtonAppearance != $1?.doneButtonAppearance
-            }) { HeaderFamily.refreshItems(in: item) }
+            }) {
+                if let transition = route.transitionCoordinator {
+                    transition.animate(alongsideTransition: nil) { [weak bar, weak item] _ in
+                        if let item, bar?.topItem === item { HeaderFamily.refreshItems(in: item) }
+                    }
+                } else {
+                    HeaderFamily.refreshItems(in: item)
+                }
+            }
         }
         // Retain the underlying appearance for non-font edits and for the return to the parent path.
-        projected = bases
+        if !afterHatch { projected = bases }
         if family == nil, color == nil, fonts == nil, !transparent { self.saved = nil }
     }
     #endif

@@ -208,6 +208,7 @@ extension NavigationBarIOSTests {
         XCTAssertEqual(item.scrollEdgeAppearance?.backButtonAppearance.normal.titlePositionAdjustment.horizontal, 3)
         session.presenter.apply(wireBatch([["op": "style", "id": header.id, "style": ["written": []]]]))
         kept.setTitleTextAttributes([.font: custom], for: .highlighted)
+        session.presenter.navigationHost.prepareRoutes(nav.viewControllers.compactMap { $0 as? RouteController }, in: nav)
         XCTAssertEqual(kept.titleTextAttributes(for: .highlighted)?[.font] as? UIFont, custom)
         XCTAssertEqual(item.standardAppearance?.backButtonAppearance.normal.titleTextAttributes[.font] as? UIFont, custom)
         func cascadeAfterPress() throws -> [UIFontDescriptor] {

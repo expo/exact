@@ -428,12 +428,26 @@ final class HeaderTitleView: UIControl {
 
     #if os(iOS)
     func applyHeaderFont(_ family: HeaderFamily) {
-        guard let (group, text) = shown else { return }
+        guard let (group, _) = shown else { return }
         let base = UIFont.preferredFont(forTextStyle: .headline, compatibleWith: traitCollection)
         let authored = group.heading.authoredTitleFont(over: base) ?? base
-        title.font = group.heading.authoredFontFamily == nil ? family.font(authored) : authored
-        if !group.titleGlyphs.isEmpty {
-            title.attributedText = Self.titleLine(group, text: text, font: title.font, colour: title.textColor)
+        let font = group.heading.authoredFontFamily == nil ? family.font(authored) : authored
+        guard let text = title.attributedText else {
+            if title.font != font { title.font = font }
+            return
+        }
+        let range = NSRange(location: 0, length: text.length)
+        var updated: NSMutableAttributedString?
+        text.enumerateAttribute(.font, in: range) { value, run, _ in
+            guard value as? UIFont != font else { return }
+            if updated == nil { updated = NSMutableAttributedString(attributedString: text) }
+            updated?.addAttribute(.font, value: font, range: run)
+        }
+        if title.font != font {
+            title.font = font
+            title.attributedText = updated ?? text
+        } else if let updated {
+            title.attributedText = updated
         }
     }
     #endif

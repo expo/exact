@@ -6,6 +6,36 @@ import UIKit
 @testable import ExactNativeViews
 
 extension NavigationBarIOSTests {
+    func testTheRouteHatchSeesTheHeadingColorAndKeepsItsUnderline() throws {
+        let session = try fixture("family-hatch-ink", module: true, plan: "HEADER_FAMILY_HATCH")
+        let natives = try XCTUnwrap(session.nativeViews)
+        until("the route hatch is connected") { natives.hatchCalls != nil }
+        natives.hatchCalls?.route = { _, event, pointer, _, _, _, _ in
+            guard event == RouteHatchEvent.built.rawValue, let pointer else { return }
+            let item = Unmanaged<UIViewController>.fromOpaque(pointer).takeUnretainedValue().navigationItem
+            guard item.title == "Notes" else { return }
+            let color = item.standardAppearance?.titleTextAttributes[.foregroundColor] as? UIColor
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+            XCTAssertTrue(color?.getRed(&red, green: &green, blue: &blue, alpha: &alpha) == true)
+            XCTAssertEqual([red, green, blue, alpha], [1, 0, 0, 1])
+            if let label = (item.titleView as? HeaderTitleView)?.title, let line = label.attributedText {
+                let text = NSMutableAttributedString(attributedString: line)
+                text.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: (text.string as NSString).range(of: "Notes"))
+                label.attributedText = text
+            }
+        }
+        let nav = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation)
+        session.presenter.press(try node(session, "open").id)
+        until("Notes is visible") { nav.topViewController?.navigationItem.title == "Notes" && nav.transitionCoordinator == nil }
+        let route = try XCTUnwrap(nav.topViewController as? RouteController)
+        session.presenter.navigationHost.prepareRoutes(nav.viewControllers.compactMap { $0 as? RouteController }, in: nav)
+        let line = try XCTUnwrap((route.navigationItem.titleView as? HeaderTitleView)?.title.attributedText)
+        let word = (line.string as NSString).range(of: "Notes")
+        XCTAssertNotEqual(word.location, NSNotFound)
+        XCTAssertEqual(line.attribute(.underlineStyle, at: word.location, effectiveRange: nil) as? Int, NSUnderlineStyle.single.rawValue)
+        XCTAssertEqual((line.attribute(.font, at: word.location, effectiveRange: nil) as? UIFont)?.familyName, "Georgia")
+    }
+
     func testAChangedItemSizeAppliesAfterTheHatchClearsItsFont() throws {
         let session = try fixture("header-family-cleared-font", module: false, plan: "HEADER_FAMILY")
         let presenter = session.presenter
@@ -39,7 +69,7 @@ extension NavigationBarIOSTests {
         item.setTitleTextAttributes(nil, for: .normal)
         prepare()
         size(22)
-        for state: UIControl.State in [.normal, .highlighted, .disabled, .focused] {
+        for state: UIControl.State in [.normal, .selected, .highlighted, .disabled, .focused] {
             let font = try XCTUnwrap(item.titleTextAttributes(for: state)?[.font] as? UIFont)
             XCTAssertEqual(font.pointSize, 22)
             XCTAssertEqual(font.familyName, "Georgia")

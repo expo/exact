@@ -44,6 +44,7 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'scripts/fixtures/prose-list.contract'), '-o', env[`${prefix}_PROSE_LIST_PLAN`] = resolve(dir, 'prose-list.plan')]);
   if (prefix === 'TEST_RUNNER_EXACT') {
     contract([resolve(root, 'host/apple/tests/fixtures/header-family.contract'), '-o', env[`${prefix}_HEADER_FAMILY_PLAN`] = resolve(dir, 'header-family.plan')]);
+    contract([resolve(root, 'host/apple/tests/fixtures/header-family-hatch.contract'), '-o', env[`${prefix}_HEADER_FAMILY_HATCH_PLAN`] = resolve(dir, 'header-family-hatch.plan')]);
     // LaunchColorIOSTests reads the build's XML and compiled catalogue as an app bundle.
     const fixtures = env[`${prefix}_LAUNCH_COLOR_FIXTURES`] = resolve(dir, 'launch-colors');
     for (const [name, manifest] of [
