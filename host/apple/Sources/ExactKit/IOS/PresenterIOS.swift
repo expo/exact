@@ -139,6 +139,8 @@ package final class Presenter {
     package lazy var flats = FlatLeaves(self)
     /// Whether `id` is drawn, as a view or as a flat leaf.
     package func draws(_ id: UInt32) -> Bool { views[id] != nil || flats.isFlat(id) }
+    /// Whether a container tells the kernel that `id` is uncovered.
+    package func uncovers(_ id: UInt32) -> Bool { draws(id) && !menus.ownsCover(id) }
     /// The native swipe rows (LLP 1008 §9), a grouped list's included.
     package lazy var swipeActions: any SwipeActionsHosting = SwipeActionsLink.make?(self) ?? NoSwipeActions()
     package lazy var rowCells: any RowCellsHosting = SwipeActionsLink.makeRowCells?(self) ?? NoRowCells()

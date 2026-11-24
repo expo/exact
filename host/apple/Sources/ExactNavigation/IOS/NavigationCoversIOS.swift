@@ -353,12 +353,12 @@ extension NavigationHost {
         #if os(iOS)
         if #available(iOS 27.1, *) {
             // Keep the cover of a pane UIKit hid since the arrangement's last pass, as it owns no edge, until the next pass
-            for id in presenter.arrangements.hiddenPanes { wanted[id] = covers[id] }
+            for id in presenter.arrangements.hiddenPanes where presenter.uncovers(id) { wanted[id] = covers[id] }
         }
         wanted.merge(arrangedCovers) { _, whole in whole }
         #endif
         for (id, cover) in wanted where covers[id] != cover { changes.append((id, cover)) }
-        for id in covers.keys where wanted[id] == nil && presenter.draws(id) { changes.append((id, nil)) }
+        for id in covers.keys where wanted[id] == nil && presenter.uncovers(id) { changes.append((id, nil)) }
         covers = wanted
         let locals = reportLocalInsets()
         guard !changes.isEmpty || locals else { return writeCarriedScrollsWhenAnswered() }
@@ -380,7 +380,7 @@ extension NavigationHost {
     /// The panes a native arrangement hides: each takes no room.
     var arrangedCovers: [UInt32: HostCover] {
         guard #available(iOS 27.1, *) else { return [:] }
-        return Dictionary(uniqueKeysWithValues: presenter.arrangements.hidden.filter { presenter.views[$0] != nil }.map { ($0, HostCover.whole) })
+        return Dictionary(uniqueKeysWithValues: presenter.arrangements.covered.map { ($0, HostCover.whole) })
     }
     #endif
 
@@ -476,7 +476,7 @@ extension NavigationHost {
     private func untoldCovers() -> [(UInt32, HostCover?)] {
         var changes: [(UInt32, HostCover?)] = []
         for (id, cover) in covers where delivered[id] != cover { changes.append((id, cover)) }
-        for id in delivered.keys where covers[id] == nil && presenter.draws(id) { changes.append((id, nil)) }
+        for id in delivered.keys where covers[id] == nil && presenter.uncovers(id) { changes.append((id, nil)) }
         return changes
     }
 

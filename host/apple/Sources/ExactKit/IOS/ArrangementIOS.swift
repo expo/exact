@@ -185,6 +185,8 @@ package final class ArrangementHost {
     /// The panes UIKit hid at the last pass, after its layout, which the covers read: a report can find UIKit's views
     /// partway through a change
     package private(set) var hidden: Set<UInt32> = []
+    /// Those the kernel is told are covered whole
+    package var covered: Set<UInt32> { hidden.filter { presenter.views[$0] != nil && !presenter.menus.ownsCover($0) } }
     private var reaches: [UInt32: BottomReach] = [:]
     private var children: [UInt32: [UInt32]] = [:]
     private(set) var entries: [UInt32: Entry] = [:]

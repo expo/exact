@@ -150,6 +150,8 @@ package final class MenuHost {
     private var sheets: any DialogHosting { presenter!.dialogs }
 
     private func isDialog(_ node: NodeView) -> Bool { node.props["semanticTag"] == "dialog" }
+    /// Whether `id` is a `dialog` or popover, whose cover only the menus tell: the kernel opens one told `nil` (`layOut`)
+    func ownsCover(_ id: UInt32) -> Bool { presenter?.views[id].map { $0.props["popover"] != nil || isDialog($0) } == true }
     package func isConfirmation(_ node: NodeView) -> Bool {
         isDialog(node) || node.props["accessibilityRole"] == "alertdialog"
     }
