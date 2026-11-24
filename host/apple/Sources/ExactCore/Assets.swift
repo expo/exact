@@ -42,9 +42,7 @@ public final class AssetResolver {
         self.root = root; names = Array(verified.keys); read = nil; publicationID = UUID().uuidString
         self.digests = digests
         for (name, bytes) in verified {
-            guard Self.validAssetName(name.hasPrefix("assets/") ? String(name.dropFirst(7)) : name) else {
-                throw CocoaError(.fileReadInvalidFileName)
-            }
+            guard Self.validPath(name) else { throw CocoaError(.fileReadInvalidFileName) }
             if name.hasSuffix(".tex") { _ = try materialize(name, bytes) }
             else { cache[name] = bytes }
         }
@@ -71,7 +69,10 @@ public final class AssetResolver {
 
     deinit { if let directory { try? FileManager.default.removeItem(at: directory) } }
 
+    /// An asset's bytes. Content chooses names (a frame's `src`, a guest page's request), so one that is no asset's, valid
+    /// or not, is absent and refuses nothing; an asset that fails to read refuses the generation.
     package func bytes(_ name: String) -> Data? {
+        guard Self.validPath(name) else { return nil }
         do { return try delivery(name) } catch { refuse(error.localizedDescription); return nil }
     }
 
@@ -92,7 +93,7 @@ public final class AssetResolver {
         let source: Source
         do {
             lock.lock(); defer { lock.unlock() }
-            guard Self.validAssetName(name.hasPrefix("assets/") ? String(name.dropFirst(7)) : name) else { throw CocoaError(.fileReadInvalidFileName) }
+            guard Self.validPath(name) else { throw CocoaError(.fileReadInvalidFileName) }
             if let bytes = cache[name] { return bytes }
             if let url = files[name] { source = .file(url, embedded: false) }
             else if let read {
@@ -111,8 +112,14 @@ public final class AssetResolver {
             return bytes
         case .file(let file, let embedded):
             do { return try Data(contentsOf: file) }
-            catch let error as CocoaError where embedded && error.code == .fileReadNoSuchFile { return nil }
+            catch let error as CocoaError where embedded && Self.namesNoFile(error) { return nil }
         }
+    }
+
+    /// Whether a read failed because its path is no file's: nothing is there, a directory is, or a file is on the way
+    private static func namesNoFile(_ error: CocoaError) -> Bool {
+        let posix = (error.underlying as? POSIXError)?.code
+        return error.code == .fileReadNoSuchFile || posix == .EISDIR || posix == .ENOTDIR
     }
 
     package func url(_ name: String, maximumBytes: Int? = nil) -> URL? {
@@ -171,8 +178,10 @@ public final class AssetResolver {
             && name.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
 
+    private static func validPath(_ name: String) -> Bool { validAssetName(name.hasPrefix("assets/") ? String(name.dropFirst(7)) : name) }
+
     private func embeddedURL(_ name: String) -> URL? {
-        guard Self.validAssetName(name.hasPrefix("assets/") ? String(name.dropFirst(7)) : name) else { return nil }
+        guard Self.validPath(name) else { return nil }
         let url = base.appendingPathComponent(name).standardizedFileURL.resolvingSymlinksInPath()
         return url.path.hasPrefix(base.path + "/") ? url : nil
     }

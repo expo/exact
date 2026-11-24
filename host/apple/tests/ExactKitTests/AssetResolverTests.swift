@@ -30,4 +30,16 @@ final class AssetResolverTests: XCTestCase {
         XCTAssertEqual(reads["assets/model.tex"], 2)
         XCTAssertEqual(reads["assets/font.ttf"], 1)
     }
+
+    func testANameThatIsNoAssetsRefusesNothing() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("assets-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("pages"), withIntermediateDirectories: true)
+        try Data([1]).write(to: root.appendingPathComponent("a.png"))
+        for resolver in [AssetResolver(root: root), AssetResolver(root: root, names: ["a.png"]) { _ in Data([1]) }] {
+            XCTAssertEqual(resolver.bytes("a.png"), Data([1]))
+            for name in ["", "..", "é.png", "missing.png", "pages", "a.png/b"] { XCTAssertNil(resolver.bytes(name), name) }
+            XCTAssertNil(resolver.refusal)
+        }
+    }
 }
