@@ -16,14 +16,14 @@ component PageLink
     label: string
     end: bool
   view
-    link href=link.href flex="1 1 14rem" display="flex" flex-direction="column" align-items=(end ? "flex-end" : "flex-start") gap=4 padding="12px 16px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-lg)" testId=`page-${label.toLowerCase()}`
+    link href=link.href flex="1 1 14rem" display="flex" flex-direction="column" align-items=(end ? "flex-end" : "flex-start") gap=4 padding=24 border="0.5px solid var(--color-border-default)" border-radius="var(--radius-lg)" testId=`page-${label.toLowerCase()}`
       row gap=4 align-items="center"
         if not end
-          image "symbol:back" aria-hidden=true font-size="var(--text-xs)" color="var(--color-icon-tertiary)"
-        text label text-transform="uppercase" font-family="var(--font-mono)" font-size="var(--text-xs)" color="var(--color-text-secondary)"
+          image "symbol:back" aria-hidden=true width="1rem" height="1rem" color="var(--color-icon-tertiary)"
+        text label text-transform="uppercase" font-family="var(--font-mono)" font-size="var(--text-xs)" font-weight=500 line-height=1 letter-spacing="-0.5px" color="var(--color-text-tertiary)"
         if end
-          image "symbol:back" aria-hidden=true font-size="var(--text-xs)" color="var(--color-icon-tertiary)" transform="rotate(180deg)"
-      text link.title font-size="var(--text-sm)" color="var(--color-text-default)" text-align=(end ? "end" : "start")
+          image "symbol:back" aria-hidden=true width="1rem" height="1rem" color="var(--color-icon-tertiary)" transform="rotate(180deg)"
+      text link.title font-size="var(--text-sm)" font-weight=500 line-height=1.4 color="var(--color-text-default)" text-align=(end ? "end" : "start")
 
 style Vote
   padding="4px 12px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-lg)" font-size="var(--text-sm)"
@@ -134,8 +134,8 @@ component Article
     theme: string
     chooseTheme: action
   view
-    row justify-content="center" padding="clamp(24px, 5vw, 64px) clamp(20px, 3vw, 32px) 48px"
-      main flex=1 min-width=0 max-width="48rem" testId="page"
+    row justify-content="center" padding="clamp(24px, 5vw, 64px) clamp(20px, 3vw, 32px) 24px"
+      main flex=1 min-width=0 max-width=(page.slug == "home" ? "60rem" : "48rem") testId="page"
         // Not shown, but in the page's text: an agent that reads the HTML learns where the Markdown is.
         text position="absolute" width="0.0625rem" height="0.0625rem" overflow="hidden" white-space="nowrap" testId="agent-note"
           text "This documentation is available as Markdown for AI agents and LLMs. See the full Markdown index at "
@@ -168,7 +168,7 @@ component Article
             view overflow="hidden" inert=roomy max-height="clamp(0px, (1280px - 100vw) * 1000, 400px)" margin-top="clamp(0px, (1280px - 100vw) * 1000, 48px)"
               Helpful(href=page.feedbackUrl, voted=voted, vote=vote, place="-end")
             view height=1 background-color="var(--color-border-secondary)" margin="48px 0 24px"
-            row flex-wrap="wrap" gap=12
+            row flex-wrap="wrap" gap=16
               if page.prev.href != ""
                 PageLink(link=page.prev, label="Previous", end=false)
               if page.next.href != ""

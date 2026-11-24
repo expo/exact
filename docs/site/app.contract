@@ -436,7 +436,7 @@ component App
     view navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%" background-color="var(--color-background-screen)" font-family="var(--font-sans)" color="var(--color-text-default)"
       for e in stack(nav).slice(-1) key=e.id
         column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0 overflow-x="clip"
-          padding-top="clamp(0px, (960px - 100vw) * 1000, 57px)" padding-left=(sidebar ? "calc(234px - clamp(0px, (960px - 100vw) * 1000, 234px))" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease"
+          padding-top="clamp(0px, (960px - 100vw) * 1000, 57px)" padding-left=(sidebar ? "calc(258px - clamp(0px, (960px - 100vw) * 1000, 258px))" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease"
           if e.name == "notfound"
             head title=page.title description=page.description image=site.shareImage status=404
             if destination != ""
@@ -444,7 +444,7 @@ component App
           else
             head title=page.title description=page.description image=site.shareImage
           scroll id=`page-${e.id}` flex=1 min-width=0 -exact-layout-transition="220ms ease" background-color="var(--color-background-default)"
-            margin="calc(8px - clamp(0px, (960px - 100vw) * 1000, 9px))" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-xl)"
+            margin="calc(4px - clamp(0px, (960px - 100vw) * 1000, 5px)) calc(16px - clamp(0px, (960px - 100vw) * 1000, 17px)) calc(16px - clamp(0px, (960px - 100vw) * 1000, 17px)) calc(8px - clamp(0px, (960px - 100vw) * 1000, 9px))" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-xl)"
             Article(page=page, nav=site, missing=(e.name == "notfound"), failed=failed(page), retry=retryPage, url=top(nav).url, moved=moved.to, suggestions=moved.suggestions, from=from, opened=opened, toggle=toggle, pick=pick, seen=seen, active=active, copyMarkdown=copyMarkdown, copied=copied, copyLink=copyLink, linked=linked, copiedId=copiedId, copyBlock=copyBlock, voted=voted, vote=vote, roomy=roomy, year=site.year, theme=theme, chooseTheme=chooseTheme)
       header appearance="none" inert=wide display="flex" align-items="center" justify-content="space-between" flex-shrink=0 overflow="hidden" position="absolute" top=0 left=0 right=0
         height="clamp(0px, (960px - 100vw) * 1000, 57px)" padding="0 16px" border-bottom="1px solid var(--color-border-secondary)" background-color="var(--color-background-default)"
@@ -459,32 +459,32 @@ component App
             row gap=6 align-items="center"
               image (menu ? "symbol:close" : "symbol:menu") aria-hidden=true font-size="var(--text-sm)" color="var(--color-icon-default)"
               text (menu ? "Close" : "Menu") font-size="var(--text-sm)"
-      column width=(sidebar ? "calc(242px - clamp(0px, (960px - 100vw) * 1000, 242px))" : "0px") -exact-layout-transition="220ms ease" flex-shrink=0 overflow="hidden" inert=(not wide or not sidebar) testId=(sidebar ? "sidebar-shown" : "sidebar-hidden") position="absolute" top=0 bottom=0 left=0
-        row align-items="center" justify-content="space-between" padding="12px 12px 0 20px" width=234 box-sizing="border-box"
+      column width=(sidebar ? "calc(266px - clamp(0px, (960px - 100vw) * 1000, 266px))" : "0px") -exact-layout-transition="220ms ease" flex-shrink=0 overflow="hidden" inert=(not wide or not sidebar) testId=(sidebar ? "sidebar-shown" : "sidebar-hidden") position="absolute" top=0 bottom=0 left=0
+        row align-items="center" justify-content="space-between" padding="16px 24px 12px" width=266 box-sizing="border-box"
           link href="/" class=Hit testId="home"
             row align-items="center" gap=8
               image "symbol:icon.exactmark" aria-hidden=true width="1.625rem" height="1rem" color="var(--color-text-default)"
               text "Exact Docs" font-size="var(--text-base)" font-weight=600 color="var(--color-text-default)"
-          button press=toggleSidebar appearance="none" aria-label="Hide the sidebar" title="Hide the sidebar" padding=6 border-radius="var(--radius-lg)" testId="sidebar-hide"
+          button press=toggleSidebar appearance="none" aria-label="Hide the sidebar" title="Hide the sidebar" padding=8 border-radius="var(--radius-lg)" testId="sidebar-hide"
             image "symbol:icon.panelclose" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
-        row padding="10px 12px" width=234 box-sizing="border-box"
+        row padding="10px 16px" width=266 box-sizing="border-box"
           button press=openSearch appearance="none" aria-keyshortcuts="Meta+K Control+K" aria-label="Search the docs" testId="search-open"
-            flex=1 display="flex" align-items="center" gap=8 padding="8px 16px 8px 8px" border="0.5px solid var(--color-border-default)" border-radius="var(--radius-full)" background-color="var(--color-background-default)" box-shadow="0 1px 1px rgba(0, 0, 0, 0.05), 0 1px 1.5px rgba(0, 0, 0, 0.03)"
+            flex=1 display="flex" align-items="center" gap=8 height=36 box-sizing="border-box" padding="0 16px 0 8px" border="0.5px solid var(--color-border-default)" border-radius="var(--radius-full)" background-color="var(--color-background-default)" box-shadow="0 1px 1px rgba(0, 0, 0, 0.05), 0 1px 1.5px rgba(0, 0, 0, 0.03)"
             image "symbol:search" aria-hidden=true width="1.25rem" height="1.25rem" color="var(--color-icon-default)"
             text "Search" flex=1 text-align="left" font-size="var(--text-sm)" font-weight=500 line-height=1.4 color="var(--color-text-secondary)"
             text "⌘K" aria-hidden=true font-size="var(--text-sm)" font-weight=500 line-height=1.4 color="var(--color-text-quaternary)"
-        row width=234 box-sizing="border-box" border-bottom="0.5px solid var(--color-border-default)"
+        row width=266 box-sizing="border-box"
           Tabs(nav=site, tab=tab, prefix="")
-        scroll flex=1 min-height=0 min-width=242 padding-right=8 box-sizing="border-box"
+        scroll flex=1 min-height=0 min-width=266 box-sizing="border-box"
           Sidebar(nav=site, current=top(nav).name, tab=tab, toggled=navToggled, toggle=toggleNav, prefix="")
-      column width=(sidebar ? "0px" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease" flex-shrink=0 overflow="hidden" inert=(not wide or sidebar) padding-top=12 align-items="center" testId=(sidebar ? "sidebar-rail" : "sidebar-rail-shown") position="absolute" top=0 bottom=0 left=0
+      column width=(sidebar ? "0px" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease" flex-shrink=0 overflow="hidden" inert=(not wide or sidebar) padding-top=18 align-items="center" testId=(sidebar ? "sidebar-rail" : "sidebar-rail-shown") position="absolute" top=0 bottom=0 left=0
         button press=toggleSidebar appearance="none" aria-label="Show the sidebar" title="Show the sidebar" padding=6 border-radius="var(--radius-lg)" testId="sidebar-show"
           image "symbol:icon.panelopen" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
         button press=openSearch appearance="none" aria-keyshortcuts="Meta+K Control+K" aria-label="Search the docs" title="Search" padding=6 margin-top=8 border-radius="var(--radius-lg)" testId="search-rail"
           image "symbol:search" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
       if menu
         scroll id="site-menu" flex=1 min-width=0 background-color="var(--color-background-screen)" testId="site-menu" position="absolute" top="clamp(0px, (960px - 100vw) * 1000, 57px)" left=0 right=0 bottom=0
-          row padding-top=10 border-bottom="0.5px solid var(--color-border-default)"
+          row padding-top=10
             Tabs(nav=site, tab=tab, prefix="menu-")
           Sidebar(nav=site, current=top(nav).name, tab=tab, toggled=navToggled, toggle=toggleNav, prefix="menu-")
       dialog id="search" close=searchClosed closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
