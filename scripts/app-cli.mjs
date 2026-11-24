@@ -484,7 +484,13 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   if (verb === 'ios' && process.platform === 'linux' && rest.includes('--run') && !rest.includes('--help')) {
     console.error('ios --run needs an iOS simulator or connected iPhone; bun exact.mjs ios builds the bundle on Linux/WSL'); return log(2);
   }
-  if (platform) {
+  // Experimental: a share on a machine with no iOS build of its own, or with EXACT_BUILD=1, builds on Exact Build
+  // (scripts/exact-build.mjs), which needs none of this machine's tools. A machine set up to build keeps building here.
+  const exactBuild = verb === 'share' && !helpFlag ? (await import(resolve(exact2, 'scripts/exact-build.mjs')).catch(() => null))?.exactBuildReason() : null;
+  if (exactBuild) {
+    console.error(`share: ${exactBuild}, so the iPhone build runs on Exact Build.`);
+    process.env.EXACT_BUILD = '1';
+  } else if (platform) {
     const shells = await import(resolve(exact2, 'scripts/app-shells.mjs'));
     const named = shells.namesPlatform(existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')) : {}, platform);
     const device = rest.includes('--device') || verb === 'share';

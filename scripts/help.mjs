@@ -285,7 +285,7 @@ Ports    none. Runs to completion (--run too); --prebuild returns at once, the b
       ['--force', 'publish over the other branch\'s link instead'],
       ['--json', 'one JSON object on stdout: url, revision, branch, action (or code and error)'],
     ],
-    internal: ['--app <name>'],
+    internal: ['--app <name>', '--login <number>'],
     body: `Run it when the app is ready for a person to try on their phone, and send them the link
 (stdout's last line). They open it on their iPhone, and AppDrop installs the app with their
 own Apple ID. The first share makes the link; later ones publish a new version to it, and
