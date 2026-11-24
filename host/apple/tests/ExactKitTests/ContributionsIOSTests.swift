@@ -79,6 +79,26 @@ final class ContributionsIOSTests: XCTestCase {
         XCTAssertTrue(ledger.entries.isEmpty)
     }
 
+    func testAHostsOwnWriteTakesANewerGenerationAndZeroTakesItAway() throws {
+        let (_, child) = try controllers()
+        child.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 5, bottom: 0, right: 0)
+        let ledger = ContributionsIOS.of(child)
+        ledger.write(id(1), top(20))
+        XCTAssertEqual(child.additionalSafeAreaInsets, UIEdgeInsets(top: 20, left: 5, bottom: 0, right: 0))
+        XCTAssertEqual(ledger.insets(of: id(1)), top(20))
+        let generation = try XCTUnwrap(ledger.entries.first?.generation)
+        // A write as before records nothing; a new one is newer than every one before it
+        ledger.write(id(1), top(20))
+        XCTAssertEqual(ledger.entries.first?.generation, generation)
+        ledger.write(id(1), top(30))
+        XCTAssertGreaterThan(try XCTUnwrap(ledger.entries.first?.generation), generation)
+        XCTAssertFalse(ledger.set(id(1), top(40), generation: generation), "an older generation is refused")
+        // Zero takes it away, the app's part staying
+        ledger.write(id(1), .zero)
+        XCTAssertTrue(ledger.entries.isEmpty)
+        XCTAssertEqual(child.additionalSafeAreaInsets, UIEdgeInsets(top: 0, left: 5, bottom: 0, right: 0))
+    }
+
     func testExactsReactionsReadOnlyTheSettledInsets() throws {
         let (_, child) = try controllers()
         let ledger = ContributionsIOS.of(child)

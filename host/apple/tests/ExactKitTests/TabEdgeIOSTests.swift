@@ -1270,6 +1270,8 @@ final class TabEdgeIOSTests: XCTestCase {
         tabs.view.layoutIfNeeded()
         XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, added, accuracy: 0.5)
 
+        // An app's own inset on the route stays through the search's
+        route.additionalSafeAreaInsets.bottom += 7
         let search = try XCTUnwrap(route.navigationItem.searchController)
         search.isActive = true
         let field = search.searchBar.searchTextField
@@ -1290,6 +1292,8 @@ final class TabEdgeIOSTests: XCTestCase {
         XCTAssertEqual(tabs.additionalSafeAreaInsets.bottom, added, accuracy: 0.5)
         setKeyboard(p, top: nil)
         field.resignFirstResponder()
+        waitFor("the search's part goes, the app's staying") { abs(route.additionalSafeAreaInsets.bottom - 7) < 0.5 }
+        route.additionalSafeAreaInsets.bottom -= 7
         waitFor("dismissing the keyboard restores the row's inset") { abs(scroll.adjustedContentInset.bottom - obstruction) < 0.5 }
     }
 

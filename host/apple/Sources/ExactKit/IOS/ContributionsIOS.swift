@@ -35,6 +35,26 @@ package final class ContributionsIOS {
         case safeAreaPadding = 1
         case barReservation = 2
         case keyboardInsets = 3
+        case containerClearance = 4
+    }
+
+    /// What `identity` adds, as last recorded, and its effect, as last measured; zero where it adds
+    /// nothing.
+    package func insets(of identity: Identity) -> UIEdgeInsets {
+        entries.first { $0.identity == identity }?.insets ?? .zero
+    }
+    package func effect(of identity: Identity) -> UIEdgeInsets {
+        entries.first { $0.identity == identity }?.effect ?? .zero
+    }
+
+    /// Record that `identity` adds `insets`, none where they are zero, at a generation newer than its
+    /// last, and write the contributions, unless that is what it adds already: a write the host makes
+    /// of its own accord.
+    package func write(_ identity: Identity, _ insets: UIEdgeInsets) {
+        guard insets != self.insets(of: identity) else { return }
+        let last = entries.first { $0.identity == identity }?.generation ?? retired[identity] ?? 0
+        set(identity, insets == .zero ? nil : insets, generation: last + 1)
+        apply()
     }
 
     package struct Entry: Equatable {
@@ -139,10 +159,14 @@ package final class ContributionsIOS {
         // A call from a callback a write raises is owed, not dropped: the pass runs again once the
         // writes end, from what the call recorded
         guard !writing else { return owed = true }
-        repeat {
-            owed = false
-            measure()
-        } while owed
+        // One stepping holds Exact's reactions through the owed passes too, so they read only the
+        // settled insets
+        SafeAreaSteps.stepping {
+            repeat {
+                owed = false
+                measure()
+            } while owed
+        }
     }
 
     private func measure() {

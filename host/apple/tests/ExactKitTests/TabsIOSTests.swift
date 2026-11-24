@@ -421,6 +421,8 @@ final class TabsIOSTests: XCTestCase {
         let owner = try XCTUnwrap(navigation.primaryOwner)
         let begins = route.convert(route.bounds, to: holder).minX
         XCTAssertEqual(owner.additionalSafeAreaInsets.left, begins, accuracy: 0.5)
+        let clearance = ContributionsIOS.existing(on: owner)?.entries.filter { $0.identity.operation == .containerClearance }
+        XCTAssertEqual(clearance?.map(\.insets.left), [begins], "the container's ledger holds Exact's part")
         let nav = try XCTUnwrap(navigation.primaryNavigation)
         until("the bar's layout clears the column") { nav.navigationBar.safeAreaInsets.left >= begins - 0.5 }
         if case .edges(let edges)? = navigation.covers[route.id] { XCTAssertEqual(edges.left, 0, "no left cover on the route") }

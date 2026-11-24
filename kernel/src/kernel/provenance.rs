@@ -46,15 +46,19 @@ pub enum Operation {
     BarReservation,
     /// The keyboard's inset (D7).
     KeyboardInsets,
+    /// The host's clearance of what its container's own chrome or a box beside the routes covers,
+    /// and of the band nested containment withholds from a pane (D11).
+    ContainerClearance,
 }
 
 impl Operation {
     /// Every operation, in wire order (`OwnerUpdate::encode`).
-    pub const ALL: [Operation; 4] = [
+    pub const ALL: [Operation; 5] = [
         Operation::AdditionalInsets,
         Operation::SafeAreaPadding,
         Operation::BarReservation,
         Operation::KeyboardInsets,
+        Operation::ContainerClearance,
     ];
 }
 

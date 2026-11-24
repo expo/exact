@@ -58,7 +58,9 @@ extension NavigationHost {
         if let accessory = tabAccessory, let node = accessory.node, accessory.holds { owned.insert(node.id) }
         #endif
         let area = holder.convert(holder.bounds, to: root)
-        let before = besideOwner === owner ? besideInsets : .zero
+        let id = ContributionsIOS.Identity(node: root.id, operation: .containerClearance)
+        // What Exact's part did to the container's safe area, as measured, which UIKit's floor can hold
+        let before = besideOwner === owner && besideIdentity == id ? ContributionsIOS.existing(on: owner)?.effect(of: id) ?? .zero : .zero
         var changed = false, reach = UIEdgeInsets.zero, above: [NodeView] = []
         siblings.place(in: ownerMount(root))
         var walk = panelSiblings(in: area, routes: routes, drawn: drawn, skipping: owned, hidden: tabBarHidden)
@@ -111,14 +113,20 @@ extension NavigationHost {
         reach.right = max(0, reach.right - max(0, own.right - before.right))
         reach.bottom = max(0, bottom - max(0, own.bottom - before.bottom))
         if changed { PaintOrder.changed(ownerMount(root)) }
-        // Exact's part only: what an app's hatch set on its container stays
-        let now = owner.additionalSafeAreaInsets
-        let wanted = UIEdgeInsets(top: now.top - before.top + reach.top, left: now.left - before.left + reach.left,
-                                  bottom: now.bottom - before.bottom + reach.bottom, right: now.right - before.right + reach.right)
+        // Exact's part, on the container's ledger, what an app's hatch set there staying (LLP 1123 D11); a container
+        // or root replaced gives its part up under the identity it was written with
+        retireBeside(unless: owner, id)
         besideInsets = reach
-        besideOwner = owner
-        if now != wanted { owner.additionalSafeAreaInsets = wanted }
+        (besideOwner, besideIdentity) = (owner, id)
+        ContributionsIOS.of(owner).write(id, reach)
         return above
+    }
+
+    /// Takes Exact's part beside the routes off the container it was written to, unless that is `owner` under `id`.
+    func retireBeside(unless owner: UIViewController? = nil, _ id: ContributionsIOS.Identity? = nil) {
+        guard let old = besideOwner, let was = besideIdentity, old !== owner || was != id else { return }
+        ContributionsIOS.existing(on: old)?.write(was, .zero)
+        (besideOwner, besideIdentity, besideInsets) = (nil, nil, .zero)
     }
 
     /// The edges of the session's view that `node`, page content outside the routes, reaches where the page did not ask

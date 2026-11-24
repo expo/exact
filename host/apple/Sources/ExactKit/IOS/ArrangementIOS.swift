@@ -292,6 +292,10 @@ package final class ArrangementHost {
     private func retire(_ entry: Entry) {
         // Before the panes move, whose callbacks a pass may be running under
         for pane in entry.panes { reaches[pane.id] = nil }
+        // Exact's part on each pane goes with it, what an app set there staying (LLP 1123 D11)
+        for holder in entry.holders {
+            ContributionsIOS.existing(on: holder)?.write(ContributionsIOS.Identity(node: holder.node.id, operation: .containerClearance), .zero)
+        }
         let ids = children[entry.node.id] ?? entry.panes.map(\.id)
         let held = entry.holders.filter { $0.node.superview === $0.view }.map(\.node)
         for pane in held where presenter.views[pane.id] !== pane || !ids.contains(pane.id) { pane.removeFromSuperview() }
@@ -467,8 +471,10 @@ package final class ArrangementHost {
     private func syncSafeAreas() {
         for entry in entries.values {
             guard let route = route(of: entry.node), let window = route.surface.window else { continue }
+            // Exact's part, on each pane's ledger, what an app set there staying (LLP 1123 D11)
+            let id = { (holder: ArrangementPaneController) in ContributionsIOS.Identity(node: holder.node.id, operation: .containerClearance) }
             if entry.controller.parent === route {
-                for holder in entry.holders where holder.additionalSafeAreaInsets != .zero { holder.additionalSafeAreaInsets = .zero }
+                for holder in entry.holders { ContributionsIOS.existing(on: holder)?.write(id(holder), .zero) }
                 continue
             }
             for holder in entry.holders where holder.view.window === window {
@@ -476,10 +482,11 @@ package final class ArrangementHost {
                 let room = route.surface.bounds.inset(by: route.surface.safeAreaInsets)
                 let expected = UIEdgeInsets(top: max(0, min(frame.height, room.minY - frame.minY)), left: 0,
                                            bottom: max(0, min(frame.height, frame.maxY - room.maxY)), right: 0)
-                let actual = holder.view.safeAreaInsets, extra = holder.additionalSafeAreaInsets
+                // What Exact's part did to the pane's safe area, as measured, which UIKit's floor can hold
+                let actual = holder.view.safeAreaInsets, extra = ContributionsIOS.existing(on: holder)?.effect(of: id(holder)) ?? .zero
                 let needed = UIEdgeInsets(top: max(0, expected.top - max(0, actual.top - extra.top)), left: 0,
                                          bottom: max(0, expected.bottom - max(0, actual.bottom - extra.bottom)), right: 0)
-                if needed != extra { holder.additionalSafeAreaInsets = needed }
+                ContributionsIOS.of(holder).write(id(holder), needed)
             }
         }
     }
