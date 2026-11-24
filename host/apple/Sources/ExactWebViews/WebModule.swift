@@ -154,6 +154,8 @@ private final class WebEntry {
     /// `apple.*` words), and the last `FrameNavigation` record the frame
     /// reported, which `tree` shows (@ref LLP 1020.002 §10).
     var configuration: Data?
+    /// How much of the guest lies under its owner's bars and band, top left bottom right (LLP 1123 D15).
+    var obscured: [Double] = [0, 0, 0, 0]
     var partition: String?
     var navigation: [String: Any]?
     /// A local PDF's page count while the frame shows it in a PDF view (@ref LLP 1020.002 D10).
@@ -331,6 +333,8 @@ final class WebViews: WebHosting {
         // A hatched frame's web view has its own preferences (§9).
         if owner.props["hatch"] != nil { values["hatched"] = true }
         if let zoom = owner.style["zoom"]?.number, zoom > 0 { values["zoom"] = zoom }
+        // How much of the guest lies under its owner's bars and band, top left bottom right (`obscure`)
+        if let obscured = entries[owner.id]?.obscured, obscured.contains(where: { $0 != 0 }) { values["obscured"] = obscured }
         // A local PDF, by its name: the arm shows a PDF's view from the start, and no web view (the file decides).
         // Not a sandboxed or partitioned frame, which stays WebKit's from its mount (D10).
         if owner.props["sandbox"] == nil, owner.props["partition"] == nil, Self.localPDF(owner.props["src"]) { values["pdf"] = true }
@@ -376,6 +380,14 @@ final class WebViews: WebHosting {
     func reloadDocument(_ owner: NodeView) {
         entries[owner.id]?.initialized = false
         update(owner)
+    }
+
+    func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {
+        guard let entry = entries[owner.id] else { return }
+        let insets = [top, left, bottom, right].map(Double.init)
+        guard insets != entry.obscured else { return }
+        entry.obscured = insets
+        if let module, let handle = entry.handle { configure(entry, owner, module: module, handle: handle) }
     }
 
     func update(_ owner: NodeView) {

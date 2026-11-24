@@ -101,7 +101,7 @@ package struct ScrollInsetsIOS: Equatable {
     /// reads less than it overlaps (LLP 1123, the evidence row "Outset scroll view"). It reads the
     /// overlap at the current offsets of the scroll views above, and it holds Exact's own writes to
     /// the owner's controller, which D11's writers are to take out.
-    package static func band(of scroll: UIScrollView, in owner: UIView) -> [CGFloat] {
+    package static func band(of scroll: UIView, in owner: UIView) -> [CGFloat] {
         let frame = scroll.convert(scroll.bounds, to: owner), area = owner.safeAreaInsets
         let safe = owner.bounds.inset(by: area)
         let depth = { (value: CGFloat, most: CGFloat) in min(max(0, value), most) }

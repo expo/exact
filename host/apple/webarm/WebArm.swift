@@ -540,6 +540,16 @@ final class WebArm: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         // displayed frame after a zoom unobservable (LLP 1020.002 D6).
         if said("zoom") { web.pageZoom = CGFloat((options["zoom"] as? NSNumber)?.doubleValue ?? 1) }
         if said("allowsBackForwardNavigationGestures") { web.allowsBackForwardNavigationGestures = options["allowsBackForwardNavigationGestures"] as? Bool ?? false }
+        #if os(iOS)
+        // How much of the guest lies under its owner's bars and band, top left bottom right (LLP 1123
+        // D15): WebKit lays the page's fixed and sticky content and its visible rect out clear of it, as
+        // in a web view pinned under a navigation bar
+        if #available(iOS 26.0, *), said("obscured") {
+            let o = (options["obscured"] as? [NSNumber])?.map(\.doubleValue) ?? [0, 0, 0, 0]
+            let insets = o.count == 4 ? UIEdgeInsets(top: o[0], left: o[1], bottom: o[2], right: o[3]) : .zero
+            if web.obscuredContentInsets != insets { web.obscuredContentInsets = insets }
+        }
+        #endif
         #if os(macOS)
         if said("allowsMagnification") { web.allowsMagnification = options["allowsMagnification"] as? Bool ?? false }
         #endif

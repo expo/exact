@@ -187,4 +187,44 @@ final class IframeEmbedTests: XCTestCase {
         XCTAssertNotNil(node.web, "made without its hatch once the module will not connect")
     }
     #endif
+
+    #if os(iOS)
+    /// LLP 1123 D15: a frame that reach draws into its owner's band tells WebKit what the band covers.
+    func testAFrameReachingIntoItsOwnersBandKeepsThePagesFixedFooterClearOfIt() throws {
+        // The owner's controller gives its view a 40-point bottom band; the frame, 100 high, reaches 10
+        // above its box and 20 below, so its web view fills the 130 points and its last 40 lie in the band
+        let session = try session("obscured")
+        let owner = try XCTUnwrap(window?.rootViewController)
+        owner.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 40, right: 0)
+        owner.view.layoutIfNeeded()
+        let name = "app:/tmp/obscured-\(UUID().uuidString).html"
+        let file = try XCTUnwrap(AppFiles.url(name))
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try Data("""
+        <!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">
+        <div id="footer" style="position:fixed;left:0;right:0;bottom:0;height:10px"></div>
+        """.utf8).write(to: file)
+        let loaded = expectation(description: "guest loaded")
+        session.presenter.onLoad = { if $0 == 7001 { loaded.fulfill() } }
+        mount(session, ["src": name], y: 180)
+        let node = try XCTUnwrap(session.presenter.views[7001])
+        node.handlers.insert("load")
+        wait(for: [loaded], timeout: 30)
+        session.presenter.setReach(7001, UIEdgeInsets(top: 10, left: 0, bottom: 20, right: 0))
+        let web = try XCTUnwrap(node.web as? WKWebView)
+        XCTAssertEqual(web.frame, node.bounds, "the web view fills the reached frame")
+        XCTAssertEqual(node.bounds.size, CGSize(width: 200, height: 130))
+        node.writeObscured(in: owner.view)
+        guard #available(iOS 26.0, *) else { return }
+        XCTAssertEqual(web.obscuredContentInsets, UIEdgeInsets(top: 0, left: 0, bottom: 40, right: 0))
+        // The page's fixed footer ends where the band begins, 40 points above the web view's bottom
+        var footer: Double?
+        until(5) {
+            web.evaluateJavaScript("document.getElementById('footer').getBoundingClientRect().bottom") { value, _ in footer = value as? Double }
+            return footer == 90
+        }
+        XCTAssertEqual(footer, 90, "the fixed footer ends above the band")
+    }
+    #endif
 }
