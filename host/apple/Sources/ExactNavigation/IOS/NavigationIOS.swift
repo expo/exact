@@ -956,7 +956,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// wrapper is no stack navigation follows
     var moreChanging: Bool {
         #if os(iOS)
-        guard let more = tabController?.moreNavigationController, more.viewIfLoaded?.window != nil else { return false }
+        guard let more, more.viewIfLoaded?.window != nil else { return false }
         return pushOrPop(on: more) != nil
         #else
         return false

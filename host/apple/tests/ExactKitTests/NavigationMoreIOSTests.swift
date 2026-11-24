@@ -247,6 +247,62 @@ final class NavigationMoreIOSTests: XCTestCase {
         if last !== again { assertLetGo(navigation, again) }
     }
 
+    /// UIKit reports its move of a tab's routes into More as the end of a
+    /// transition, from within the move. The sync a transition held, which
+    /// lays out the tab container, waits for the sync the move owes next turn,
+    /// and runs even if the tabs have gone by then.
+    func testASyncHeldThroughUIKitsMoveIntoMoreRunsAfterIt() throws {
+        let (session, tabs, _) = try moreFixture("more-held")
+        let navigation = session.presenter.navigationHost
+        setSizeClasses(tabs, horizontal: .regular)
+        let five = try XCTUnwrap(tabs.tabControllers?[4] as? UINavigationController)
+        tapTab(tabs, 4)
+        waitFor("the router follows Five on the bar") { navigation.routerTab == 4 && five.viewControllers.count == 1 && navigation.primaryNavigation === five && !navigation.changing }
+        waitForMainQueue()
+        let root = try XCTUnwrap(five.topViewController as? RouteController)
+        let released = { !navigation.pendingSync && !navigation.resyncOwed && !Agent(session: session).nativeInFlight() }
+        setSizeClasses(tabs, horizontal: .compact)
+        let more = try XCTUnwrap(root.navigationController, "UIKit moved Five's root")
+        XCTAssertTrue(more !== five && navigation.resyncOwed, "the move owes a sync")
+        navigation.primaryNavigation = more
+        navigation.projectionHeld = true
+        let syncs = navigation.syncCalls
+        more.delegate?.navigationController?(more, didShow: root, animated: false)
+        XCTAssertEqual(navigation.syncCalls, syncs, "nothing is projected in the move's turn")
+        XCTAssertTrue(navigation.projectionHeld, "and the hold stands")
+        waitFor("the next turn's sync projects it") { released() && navigation.syncCalls > syncs }
+        XCTAssertNil(navigation.restDifference, "UIKit and the router agree")
+        setSizeClasses(tabs, horizontal: .regular)
+        XCTAssertTrue(navigation.resyncOwed)
+        navigation.projectionHeld = true
+        navigation.retireTabs()
+        waitFor("the hold is released with the tabs gone") { released() && navigation.tabController != nil }
+    }
+
+    /// Reading whether More is changing makes no More where UIKit has none.
+    func testReadingWhetherMoreIsChangingAsksUIKitForNoMore() throws {
+        let session = try fixture("more-getter")
+        let navigation = session.presenter.navigationHost
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let selector = #selector(getter: UITabBarController.moreNavigationController)
+        let getter = try XCTUnwrap(class_getInstanceMethod(UITabBarController.self, selector))
+        let original = method_getImplementation(getter)
+        var asked = 0
+        let counting: @convention(block) (UITabBarController) -> UINavigationController = { each in
+            if each === tabs { asked += 1 }
+            typealias Getter = @convention(c) (UITabBarController, Selector) -> UINavigationController
+            return unsafeBitCast(original, to: Getter.self)(each, selector)
+        }
+        let replacement = imp_implementationWithBlock(counting)
+        method_setImplementation(getter, replacement)
+        defer {
+            method_setImplementation(getter, original)
+            imp_removeBlock(replacement)
+        }
+        XCTAssertFalse(navigation.moreChanging)
+        XCTAssertEqual(asked, 0)
+    }
+
     /// A More Exact adopted before the one it follows now has no record and
     /// no delegate of Exact's.
     private func assertLetGo(_ navigation: NavigationHost, _ more: UINavigationController, file: StaticString = #filePath, line: UInt = #line) {

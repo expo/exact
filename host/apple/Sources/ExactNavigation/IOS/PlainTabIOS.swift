@@ -170,14 +170,22 @@ extension NavigationHost {
         resyncOwed = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            guard let owner = tabOwner else { resyncOwed = false; return }
+            let held = pendingSync
             // Let UIKit first apply what it deferred to layout (More shows a tab selected in code in a later turn,
             // LLP 1075.003 §9.16), so More's delegate calls and the press they make run before this sync, not inside
             // it; a move that layout makes is this sync's to follow
-            owner.view.layoutIfNeeded()
+            tabOwner?.view.layoutIfNeeded()
             resyncOwed = false
-            sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
-            if let more, more.viewIfLoaded?.window != nil, more.topViewController === more.viewControllers.first { buildTabsUnderMore() }
+            if tabOwner == nil {
+                runHeldSync()
+            } else {
+                // Release what was left to this sync, whose projection takes the holds it still needs
+                projectionHeld = false
+                resync()
+                if let more, more.viewIfLoaded?.window != nil, more.topViewController === more.viewControllers.first { buildTabsUnderMore() }
+            }
+            // A transition's end posts no screen change while its sync is held
+            if held { presenter.syncModal() }
         }
     }
 

@@ -194,8 +194,10 @@ extension NavigationHost {
 
     /// Run the sync a transition or refused stack write held.
     func runHeldSync() {
-        // Leave each hold for its own release while a projection is running
-        guard !syncing else { return }
+        // Leave each hold for its own release while a projection is running, or for the sync owed in the next turn: UIKit
+        // reports its own move of a tab's routes as a transition's end, from within the move, where a layout of the tab
+        // container can leave it a More that UIKit let go, as a tab
+        guard !syncing, !resyncOwed else { return }
         guard pendingSync || tabsHeld || stackWritesOwed else {
             settleScrollEdges()
             return
