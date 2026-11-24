@@ -482,15 +482,15 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Native presentation and navigation (iOS)
 
-- **A pushed route never flies by `sharedElement`: the card stays mounted beneath.** A
-  name pairs only when one commit destroys its holder and creates another
-  (`kernel/src/handoff.rs`); a push keeps the screen beneath in the stack, so the card is
-  never destroyed and the product's photo lands without a flight. The platform's way is the
-  zoom: `navigationSource=` on the pushed route's `navigationKey` column, naming the `id`
-  on the card's `image` and on the route's own (`ZoomPushIOS.swift`, iOS 18 and later). Film
-  on the agent's clock skips UIKit's push and zoom, which run on their own: film them under
-  `--timing platform`, whose frames are sampled on the wall clock and not reproducible, or
-  record the simulator (`xcrun simctl io booted recordVideo`) and read its frames.
+- **A name across a push flies with nothing else written (LLP 1013.004).** On iOS a
+  `sharedElement` name the leaving and the arriving route each hold once flies alongside
+  UIKit's push, pop, back swipe and full-screen presentation, a drag to dismiss included; no
+  `-exact-layout-transition` is needed. A name held twice in a route, or in a sheet, stays
+  put. The zoom's own element is `navigationSource=`'s `id` (`ZoomPushIOS.swift`, iOS 18 and
+  later), and the names beside it fly alongside the zoom. Film on the agent's clock skips
+  UIKit's transitions, which run on their own: film them under `--timing platform`, whose
+  frames are sampled on the wall clock and not reproducible, or record the simulator
+  (`xcrun simctl io booted recordVideo`) and read its frames.
 
 - **A cold launch flashes the wrong colour, and no screenshot shows it.** The launch
   screen is `host.ios.launchImage` centred on the launch colour, which a top-level

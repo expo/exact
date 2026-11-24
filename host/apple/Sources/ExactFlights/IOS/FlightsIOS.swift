@@ -43,6 +43,10 @@ final class Flight {
     var clip: UIView?
     var geometry: BatchOp?
     var saved: (interaction: Bool, hidden: Bool)?
+    /// A route change's (LLP 1013.004 D3): its transition lifts it, and it scales by its shown box's
+    /// height, not its width, since a paragraph's box can be the row's width at one end and its words'
+    /// at the other while its height is its font's.
+    var crossing = false
     init(id: UInt32, source: FlightSource) { self.id = id; self.source = source }
 }
 
@@ -56,6 +60,8 @@ final class FlightLayer: UIView {
 final class BuiltInFlights: FlightHosting {
     weak var presenter: Presenter?
     var flights: [UInt32: Flight] = [:]
+    /// Leavers of a route the batch destroys, kept for the transition that starts with it (`holdFlights`).
+    var holds: [ObjectIdentifier: NodeView] = [:]
     init(_ presenter: Presenter) { self.presenter = presenter }
     var isEmpty: Bool { flights.isEmpty }
     func begin(_ op: BatchOp) { presenter?.beginFlight(op) }
@@ -70,6 +76,14 @@ final class BuiltInFlights: FlightHosting {
     func slot(of view: NodeView) -> UIView? { flights[view.id].flatMap { $0.view === view ? $0.slot : nil } }
     func owns(_ view: UIView) -> Bool { flights.values.contains { $0.container === view || $0.slot === view } }
     func frame(_ op: BatchOp) -> Bool { presenter?.flightFrame(op) ?? false }
+    #if os(iOS)
+    func hold(leaving: UIView, arriving: UIView, zoom: String?) {
+        presenter?.holdFlights(leaving: leaving, arriving: arriving, zoom: zoom)
+    }
+    func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool {
+        presenter?.crossFlights(coordinator, leaving: leaving, arriving: arriving, zoom: zoom) ?? false
+    }
+    #endif
 }
 
 extension Presenter {
@@ -110,6 +124,13 @@ extension Presenter {
             flights[id] = Flight(id: id, source: FlightSource(rect: .null, radius: 0))
             return
         }
+        let source = flightSource(leaver)
+        if let old = flights[id] { landFlight(old) }
+        flights[id] = Flight(id: id, source: source)
+    }
+
+    /// Where `leaver` shows now, as a flight starts from it.
+    func flightSource(_ leaver: NodeView) -> FlightSource {
         var source = FlightSource(rect: Self.shownRect(leaver), radius: leaver.cornerRadii(in: leaver.bounds).max() ?? 0)
         if let flying = flights.values.first(where: { $0.view === leaver }), let look = leaver.flightLook {
             // A flight interrupted: from where it is now.
@@ -132,8 +153,7 @@ extension Presenter {
             source.raster = leaver.raster
         }
         source.root = ViewPresentation.root(of: leaver)
-        if let old = flights[id] { landFlight(old) }
-        flights[id] = Flight(id: id, source: source)
+        return source
     }
 
     /// The `flight` progress the host presents this frame.
@@ -156,7 +176,7 @@ extension Presenter {
     /// After the batch: lift new flights, show every flight at its progress.
     func flightsBatchApplied() {
         for f in Array(flights.values) {
-            if f.view == nil, f.slot == nil { liftFlight(f) }
+            if f.view == nil, f.slot == nil, !f.crossing { liftFlight(f) }
             showFlight(f)
         }
     }
@@ -246,7 +266,8 @@ extension Presenter {
         flights = [:]
     }
 
-    private func liftFlight(_ f: Flight) {
+    /// `container`: a route change's transition container (LLP 1013.004 D3), else the presentation's root.
+    func liftFlight(_ f: Flight, in container: UIView? = nil) {
         // A document root is placed by `roots`, not by a parent: it lands in place.
         guard let view = views[f.id], let parent = view.superview, parent !== root, view.window != nil, !f.source.rect.isNull,
               !DisplayPreferences.reducedMotion else {
@@ -271,13 +292,13 @@ extension Presenter {
             self.scrollIntoView(slot)
             self.showFlight(f)
         }
-        guard let own = ViewPresentation.root(of: parent) else { slot.removeFromSuperview(); flights.removeValue(forKey: f.id); return }
+        guard let own = container ?? ViewPresentation.root(of: parent) else { slot.removeFromSuperview(); flights.removeValue(forKey: f.id); return }
         // The flight goes in B's presentation (D4 step 3), unless A's encloses
         // it: then in A's, so a photo closing from an overlay above the routes
         // into a thumbnail in a route stays above that overlay as it fades,
         // as UIKit's and Signal's zooms keep the image above their backdrops.
         // A flight inside one modal still stays inside it.
-        let root = f.source.root.flatMap { outer in own !== outer && own.isDescendant(of: outer) ? outer : nil } ?? own
+        let root = container ?? f.source.root.flatMap { outer in own !== outer && own.isDescendant(of: outer) ? outer : nil } ?? own
         let layer = root.subviews.last as? FlightLayer ?? {
             let l = FlightLayer(frame: root.bounds)
             l.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -317,7 +338,7 @@ extension Presenter {
         PaintOrder.changed(layer)
     }
 
-    private func showFlight(_ f: Flight) {
+    func showFlight(_ f: Flight) {
         guard let view = f.view, let slot = f.slot, let layer = f.container else { return }
         let p = f.progress
         let from = layer.convert(f.source.rect, from: nil)
@@ -331,7 +352,8 @@ extension Presenter {
             // is the shown box; the radius is the clip's, in the shown box's
             // units, as the leaver's was captured (D4.4).
             let layout = slot.bounds.size
-            let s = FlightScale.of(shown: shown.size, layout: layout) ?? 1
+            var s = FlightScale.of(shown: shown.size, layout: layout) ?? 1
+            if f.crossing, layout.height > 0 { s = shown.height / layout.height }
             let ratio = to.width / max(layout.width, 1)
             clip.frame = shown
             clip.layer.cornerRadius = mix(f.source.radius, (view.cornerRadii(in: CGRect(origin: .zero, size: layout)).max() ?? 0) * ratio)

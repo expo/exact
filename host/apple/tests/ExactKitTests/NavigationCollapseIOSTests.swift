@@ -907,6 +907,28 @@ final class NavigationCollapseIOSTests: XCTestCase {
         }
     }
 
+    /// A cancelled swipe's source is out of the stack for a moment, with no
+    /// transition, before UIKit puts it back: shown, it keeps its cover.
+    func testARouteOutOfTheStackKeepsItsCoverWhileItShows() throws {
+        let (session, nav, route) = try pushed("tall")
+        let navigation = session.presenter.navigationHost
+        let host = try XCTUnwrap(window?.rootViewController)
+        host.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 84)
+        host.view.layoutIfNeeded()
+        until("the route is covered") { navigation.covers[route.node.id] != nil }
+        let cover = navigation.covers[route.node.id]
+        route.willMove(toParent: nil)
+        route.removeFromParent()
+        XCTAssertNil(route.navigationController)
+        XCTAssertNil(nav.transitionCoordinator)
+        XCTAssertNotNil(route.view.window)
+        navigation.reportCovers()
+        XCTAssertEqual(navigation.covers[route.node.id], cover, "the cover stands while the route shows")
+        route.view.removeFromSuperview()
+        navigation.reportCovers()
+        XCTAssertNil(navigation.covers[route.node.id], "gone from the window, it releases its cover")
+    }
+
     /// D11.1, several scrollers: the bar's is the one the status bar's tap
     /// already picked, the first that scrolls vertically, by one rule for
     /// both; `navigationScroll` is how a route names a different one.

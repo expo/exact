@@ -170,6 +170,12 @@ extension NavigationHost {
         // the outgoing editor of UIKit's own pop does.
         for op in batch.ops where op.op == .destroy {
             guard let c = controllers[op.id], c.viewIfLoaded?.window != nil else { continue }
+            #if os(iOS)
+            // The names the pop will fly, kept before the batch removes them (LLP 1013.004 D3).
+            if let routes = c.navigationController?.viewControllers, routes.last === c, routes.count > 1, let beneath = routes[routes.count - 2].viewIfLoaded {
+                presenter.flightHost.hold(leaving: c.view, arriving: beneath, zoom: c.zoomSource)
+            }
+            #endif
             c.freeze()
             c.retiringRoot = c.node
             retiringRoutes.add(c)
@@ -256,14 +262,15 @@ extension RouteController {
     /// before UIKit starts its pop, and UIKit's own pop reaches the router as
     /// it begins, before UIKit has drawn the route where it animates it, when
     /// no snapshot of what was drawn is to be had.
-    func freeze() {
-        guard isViewLoaded, let snapshot = view.snapshotView(afterScreenUpdates: false) ?? view.snapshotView(afterScreenUpdates: true) else { return }
+    func freeze(updated: Bool = false) {
+        guard isViewLoaded, let snapshot = view.snapshotView(afterScreenUpdates: updated) ?? view.snapshotView(afterScreenUpdates: true) else { return }
         snapshot.frame = view.bounds
         // Pinned to the top, never stretched: the viewport can grow under it
         // as the pop starts (a keyboard going away, see NavigationHost.sync).
         snapshot.autoresizingMask = [.flexibleWidth, .flexibleBottomMargin]
         view.addSubview(snapshot)
         snapshot.setPaintForeground()
+        frozen = snapshot
     }
 }
 #endif

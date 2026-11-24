@@ -16,7 +16,7 @@ extension NavigationHost {
     /// route, or a collapsed split's detail column with the route on top.
     func prepareZoomPush(_ top: RouteController, beneath: RouteController?, on pushed: UIViewController? = nil) {
         let pushed = pushed ?? top
-        guard #available(iOS 18.0, *), let beneath, top.node.props["navigationSource"] != nil,
+        guard #available(iOS 18.0, *), let beneath, top.node.props["navigationSource"]?.isEmpty == false,
               pushed.preferredTransition == nil else { return }
         let route = top.node, preceding = beneath.node
         let options = UIViewController.Transition.ZoomOptions()

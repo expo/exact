@@ -77,6 +77,16 @@ package protocol FlightHosting: AnyObject {
     #else
     func frame(_ op: BatchOp) -> Bool
     #endif
+    #if os(iOS)
+    /// The leavers of a route change about to start, kept before a batch destroys the leaving route,
+    /// for `cross` to fly.
+    func hold(leaving: UIView, arriving: UIView, zoom: String?)
+    /// A route change UIKit runs on `coordinator`, from the route `leaving` to the route `arriving`: the
+    /// names both hold once fly alongside it (LLP 1013.004 D3). `zoom` is the `navigationSource` the
+    /// change zooms by, which carries its own element. True when something flies.
+    @discardableResult
+    func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool
+    #endif
 }
 
 /// No flights: nothing lifts, every frame lands where laid out.
@@ -98,6 +108,10 @@ package final class NoFlights: FlightHosting {
     package func frame(_ id: UInt32, _ frame: NSRect) -> Bool { false }
     #else
     package func frame(_ op: BatchOp) -> Bool { false }
+    #endif
+    #if os(iOS)
+    package func hold(leaving: UIView, arriving: UIView, zoom: String?) {}
+    package func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool { false }
     #endif
 }
 

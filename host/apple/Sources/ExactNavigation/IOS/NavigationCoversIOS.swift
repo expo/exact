@@ -216,7 +216,12 @@ extension NavigationHost {
             // Include the departing route until UIKit finishes its transition
             let nav = c.navigationController
             let stacked = c.stack?.stackRoutes.contains(c) == true || nav?.transitionCoordinator?.viewController(forKey: .from) === c
-            guard stacked else { continue }
+            // A cancelled swipe's source leaves the stack for a moment before UIKit puts it back: while it shows,
+            // its last covers stand (dropped, its content jumped under the bar).
+            guard stacked else {
+                if c.surface.window != nil { for id in [c.node, c.collapseScroll, c.edgeScroll].compactMap({ $0?.id }) { wanted[id] = covers[id] } }
+                continue
+            }
             // A presented route's controller takes its sheet's whole view, and
             // the document's insets (`env()`) are not the sheet's: its route is
             // covered for its own safe area whatever the document's fit (LLP
