@@ -1,10 +1,11 @@
 // share's experimental iPhone build on Exact Build (scripts/exact-build.mjs), against a stand-in for the service.
 import { expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { exactBuildReason } from './exact-build.mjs';
+import { exactBuildReason, sdkSource } from './exact-build.mjs';
 import { createApp } from '../game/new.mjs';
 
 test('share builds on Exact Build only with EXACT_EXPERIMENTAL=1, and then with EXACT_BUILD=1 or no iOS build here', () => {
@@ -31,13 +32,14 @@ test('share builds on Exact Build only with EXACT_EXPERIMENTAL=1, and then with 
 test.skipIf(!Bun.which('npx'))('share signs in, builds on Exact Build with its build number, and passes the IPA to AppDrop', async () => {
   const scratch = mkdtempSync(resolve(tmpdir(), 'exact-build-share-'));
   const ipa = Buffer.from('PK\x03\x04 an IPA from the service');
-  const builds = [], blobs = new Set(), seen = [];
+  const builds = [], blobs = new Set(), seen = [], auths = new Set();
   let polls = 0;
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
       const url = new URL(request.url), auth = request.headers.get('authorization');
       seen.push(`${request.method} ${url.pathname}`);
+      if (auth) auths.add(auth);
       if (url.pathname === '/auth/device') return Response.json({ url: 'https://expo.example/login/abc', request_id: 'req1' });
       if (url.pathname === '/auth/device/req1') {
         const { match } = await request.json();
@@ -77,10 +79,16 @@ test.skipIf(!Bun.which('npx'))('share signs in, builds on Exact Build with its b
     createApp(app);
     const manifest = JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8'));
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({ ...manifest, deploy: { ...manifest.deploy, store: { ...manifest.deploy?.store, ios: '0' } } }, null, 2));
-    const env = { HOME: scratch, PATH: bin, EXACT_FEEDBACK: '0', EXACT_EXPERIMENTAL: '1', EXACT_BUILD: '1', EXACT_BUILD_URL: server.url.origin, EXACT_APPDROP_CLI: appdrop };
+    // EXACT_VERSION, for an app.json that names no version: the local build's version, so the remote build's too.
+    const env = { HOME: scratch, PATH: bin, EXACT_FEEDBACK: '0', EXACT_EXPERIMENTAL: '1', EXACT_BUILD: '1', EXACT_BUILD_URL: server.url.origin, EXACT_APPDROP_CLI: appdrop, EXACT_VERSION: '9.7.1' };
+    // Exact Build's own token, which another service (EXACT_BUILD_URL) must never be sent.
+    const official = 'o'.repeat(40);
+    writeFileSync(resolve(scratch, '.exact-build-token'), official, { mode: 0o600 });
+    const own = (prefix) => readdirSync(scratch).filter((name) => name.startsWith(prefix) && name !== '.exact-build-token' && name !== '.exact-build-login.json');
     // Not spawnSync: the stand-in serves from this process's event loop.
     const share = async (...args) => {
-      const child = Bun.spawn([process.execPath, resolve(app, 'exact.mjs'), 'share', '--json', ...args], { cwd: app, env, stdout: 'pipe', stderr: 'pipe' });
+      const extra = typeof args[0] === 'object' ? args.shift() : {};
+      const child = Bun.spawn([process.execPath, resolve(app, 'exact.mjs'), 'share', '--json', ...args], { cwd: app, env: { ...env, ...extra }, stdout: 'pipe', stderr: 'pipe' });
       const [stdout, stderr, status] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
       return { stdout, stderr, status };
     };
@@ -89,14 +97,29 @@ test.skipIf(!Bun.which('npx'))('share signs in, builds on Exact Build with its b
     expect(first.status).toBe(1);
     expect(JSON.parse(first.stdout)).toMatchObject({ code: 'exact_build_login', url: 'https://expo.example/login/abc' });
     expect(first.stderr).toContain('share: EXACT_BUILD=1, so the iPhone build runs on Exact Build.');
-    expect(statSync(resolve(scratch, '.exact-build-login.json')).mode & 0o777).toBe(0o600);
+    expect(own('.exact-build-login-')).toHaveLength(1);
+    expect(statSync(resolve(scratch, own('.exact-build-login-')[0])).mode & 0o777).toBe(0o600);
+
+    // --login is experimental too: without EXACT_EXPERIMENTAL=1 it signs in to nothing.
+    const unflagged = await share({ EXACT_EXPERIMENTAL: '' }, '--login', '1234');
+    // Through the app CLI, this machine's preflight refuses first; share.mjs itself, as a machine whose preflight
+    // passes would reach it, refuses the login by name.
+    expect(unflagged.status).not.toBe(0);
+    const direct = Bun.spawn([process.execPath, resolve(import.meta.dir, 'share.mjs'), '--app', app, '--json', '--login', '1234'], { cwd: app, env: { ...env, EXACT_EXPERIMENTAL: '' }, stdout: 'pipe', stderr: 'pipe' });
+    const [said, status] = await Promise.all([new Response(direct.stdout).text(), direct.exited]);
+    expect(status).toBe(1);
+    expect(JSON.parse(said)).toMatchObject({ code: 'exact_build_login', error: expect.stringContaining('EXACT_EXPERIMENTAL=1') });
+    expect(seen).not.toContain('POST /auth/device/req1');
+    expect(own('.exact-build-token-')).toHaveLength(0);
 
     const shared = await share('--login', '1234');
     expect(shared.status, shared.stderr).toBe(0);
     expect(JSON.parse(shared.stdout)).toMatchObject({ url: 'https://appdrop.app/d/abc123', build: 1, action: 'created' });
-    expect(statSync(resolve(scratch, '.exact-build-token')).mode & 0o777).toBe(0o600);
-    expect(existsSync(resolve(scratch, '.exact-build-login.json'))).toBe(false);
-    expect(builds[0].query).toMatchObject({ profile: 'release', buildNumber: '1' });
+    expect(own('.exact-build-token-')).toHaveLength(1);
+    expect(statSync(resolve(scratch, own('.exact-build-token-')[0])).mode & 0o777).toBe(0o600);
+    expect(readFileSync(resolve(scratch, '.exact-build-token'), 'utf8')).toBe(official);
+    expect(own('.exact-build-login-')).toHaveLength(0);
+    expect(builds[0].query).toMatchObject({ profile: 'release', buildNumber: '1', version: '9.7.1' });
     // deploy.store.ios is "0": no update stream, so no genesis.
     expect(builds[0].query.updateGenesis).toBeUndefined();
     expect(builds[0].query.base).toBeUndefined();
@@ -115,8 +138,32 @@ test.skipIf(!Bun.which('npx'))('share signs in, builds on Exact Build with its b
     expect(builds[1].query.base).toBeUndefined();
     expect(seen.filter((line) => line === 'POST /blobs').length).toBe(before + 1);
     expect(builds[1].missing).toBe(1);
+    expect(auths.has(`Bearer ${official}`)).toBe(false);
   } finally {
     server.stop(true);
     rmSync(scratch, { recursive: true, force: true });
   }
 }, 240_000);
+
+// A checkout's changes go as a patch whether it is a clone or a linked worktree (whose `.git` is a file naming its Git
+// directory), and a Git step that fails says so instead of sending a wrong patch.
+test('the SDK patch is made in a linked worktree, and a failed Git step refuses', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-build-worktree-'));
+  const git = (cwd, ...args) => { const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-C', cwd, ...args], { encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr); return r.stdout.trim(); };
+  try {
+    const main = resolve(dir, 'main'), linked = resolve(dir, 'linked');
+    mkdirSync(main);
+    git(main, 'init', '-q');
+    writeFileSync(resolve(main, 'sdk.txt'), 'one\n');
+    git(main, 'add', '.'); git(main, 'commit', '-qm', 'one');
+    const head = git(main, 'rev-parse', 'HEAD');
+    git(main, 'worktree', 'add', '-q', linked);
+    expect(statSync(resolve(linked, '.git')).isFile()).toBe(true);
+    writeFileSync(resolve(linked, 'sdk.txt'), 'two\n');
+    const { commit, patch } = await sdkSource(linked, resolve(dir, 'app'), async () => ({ upstream: head }));
+    expect(commit).toBe(head);
+    expect(patch.toString()).toContain('+two');
+    // A snapshot commit this checkout lacks and cannot fetch (no remote) refuses by name.
+    await expect(sdkSource(linked, resolve(dir, 'app'), async () => ({ upstream: 'f'.repeat(40) }))).rejects.toThrow(/git fetch of the SDK snapshot's commit/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

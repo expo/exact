@@ -147,6 +147,7 @@ async function main(argv) {
   // Experimental: the number an Exact Build sign-in page shows, which finishes the login the last share started.
   const match = argv.includes('--login') ? argv[argv.indexOf('--login') + 1] : null;
   if (match) {
+    if (process.env.EXACT_EXPERIMENTAL !== '1') return fail('exact_build_login', 'share: --login signs in to Exact Build, which is experimental: set EXACT_EXPERIMENTAL=1');
     try {
       const done = await exactBuild.finishLogin(match);
       if (done.pending) return fail('exact_build_login', `share: the sign-in is not approved yet; approve it, then run share --login ${match} again in ${done.pending} s.`);
@@ -196,9 +197,9 @@ async function main(argv) {
   const streamed = app.manifest.deploy?.store?.ios !== '0';
   if (exactBuild.exactBuildReason()) {
     // Experimental: the same build on Exact Build (the app CLI said why): a release archive with the build number,
-    // version and update genesis build.mjs is given below.
+    // version and update genesis build.mjs is given below (its version, when app.json names none, is EXACT_VERSION's).
     try {
-      await exactBuild.buildIpa(app, ipa, { checkout: ROOT, say, options: { profile: 'release', buildNumber: String(build), ...(version ? { version } : {}), ...(streamed ? { updateGenesis: '1' } : {}) } });
+      await exactBuild.buildIpa(app, ipa, { checkout: ROOT, say, options: { profile: 'release', buildNumber: String(build), ...(version ?? process.env.EXACT_VERSION ? { version: version ?? process.env.EXACT_VERSION } : {}), ...(streamed ? { updateGenesis: '1' } : {}) } });
     } catch (error) { return fail(error.code ?? 'build_failed', error.message, error.url ? { url: error.url } : {}); }
   } else {
     const built = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), '--device', app.crate('apple'), '--archive', ipa, '--unsigned'], {

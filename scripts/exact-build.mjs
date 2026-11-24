@@ -16,8 +16,14 @@ export const SERVICE = 'https://exact.appdrop.app';
 /** Never source: the app's build outputs and dependencies, at its top level (client.py's SKIP). */
 const SKIP = new Set(['node_modules', '.exact', 'target', 'dist', '.git']);
 const SDK_PATCH = '.exact-sdk.patch', MAX_PATCH = 8 * 1024 * 1024;
-const tokenPath = (env) => resolve(env.HOME ?? homedir(), '.exact-build-token');
-const loginPath = (env) => resolve(env.HOME ?? homedir(), '.exact-build-login.json');
+/** Each service's own token and pending login, so a token goes only to the service that issued it: Exact Build's in
+ *  ~/.exact-build-token, another's (EXACT_BUILD_URL) in a file named by a digest of its URL. */
+const ownFile = (env, name, ext = '') => {
+  const url = serviceUrl(env);
+  return resolve(env.HOME ?? homedir(), url === SERVICE ? `${name}${ext}` : `${name}-${createHash('sha256').update(url).digest('hex').slice(0, 16)}${ext}`);
+};
+const tokenPath = (env) => ownFile(env, '.exact-build-token');
+const loginPath = (env) => ownFile(env, '.exact-build-login', '.json');
 
 /** The service's origin: EXACT_BUILD_URL or Exact Build's own, refused unless HTTPS (plain HTTP to this machine only). */
 export function serviceUrl(env = process.env) {
@@ -83,7 +89,7 @@ export function token(env = process.env) {
 /** Start an Expo device login: `{ url }`, the page a person opens to approve, its request kept for `finishLogin`. */
 export async function startLogin(env = process.env) {
   const started = await (await call(serviceUrl(env), '/auth/device', { body: '' })).json();
-  writeFileSync(loginPath(env), JSON.stringify({ request_id: started.request_id, url: started.url }), { mode: 0o600 });
+  writeFileSync(loginPath(env), JSON.stringify({ service: serviceUrl(env), request_id: started.request_id, url: started.url }), { mode: 0o600 });
   return { url: started.url };
 }
 
@@ -91,7 +97,8 @@ export async function startLogin(env = process.env) {
  *  `{ username }`, or `{ pending: seconds }` while the person has not approved yet. */
 export async function finishLogin(match, env = process.env) {
   if (!existsSync(loginPath(env))) throw new Error('no Exact Build login was started here; run share again to start one');
-  const { request_id: id } = JSON.parse(readFileSync(loginPath(env), 'utf8'));
+  const { request_id: id, service } = JSON.parse(readFileSync(loginPath(env), 'utf8'));
+  if (service !== serviceUrl(env)) { rmSync(loginPath(env), { force: true }); throw new Error('the Exact Build login here was started with another service; run share again to start one'); }
   let answer;
   try { answer = await (await call(serviceUrl(env), `/auth/device/${encodeURIComponent(id)}`, { body: JSON.stringify({ match: String(match) }), type: 'application/json' })).json(); }
   catch (error) { rmSync(loginPath(env), { force: true }); throw new Error(`${error.message}. Run share again to start a new login.`); }
@@ -123,18 +130,26 @@ export async function sdkSource(checkout, app, lookup) {
   const sdk = changed ? await lookup(commit) : null;
   if (!changed) return { commit, patch: null };
   if (!sdk) throw new Error('this Exact checkout has changes of its own, and the build service takes no SDK patch: share from an unchanged checkout');
-  if (git(root, ['cat-file', '-e', `${sdk.upstream}^{commit}`]).status !== 0) git(root, ['fetch', '-q', remote ?? 'origin', sdk.upstream]);
+  if (git(root, ['cat-file', '-e', `${sdk.upstream}^{commit}`]).status !== 0) {
+    const fetched = git(root, ['fetch', '-q', remote ?? 'origin', sdk.upstream]);
+    if (fetched.status !== 0) refuseGit(`fetch of the SDK snapshot's commit ${sdk.upstream}`, fetched);
+  }
   // The working tree, untracked files too (.gitignore kept), through an index of its own: the checkout's is untouched.
-  const index = resolve(root, '.git', `exact-build-index-${process.pid}`), env = { GIT_INDEX_FILE: index };
+  // It lives in the checkout's own Git directory, which a linked worktree's `.git` file only names.
+  const gitDir = out(git(root, ['rev-parse', '--absolute-git-dir'])) || refuseGit('rev-parse --absolute-git-dir', git(root, ['rev-parse', '--absolute-git-dir']));
+  const index = resolve(gitDir, `exact-build-index-${process.pid}`), env = { GIT_INDEX_FILE: index };
+  const step = (args) => { const result = git(root, args, env); if (result.status !== 0) refuseGit(args.slice(0, 2).join(' '), result); };
   try {
-    git(root, ['read-tree', head], env);
-    git(root, ['add', '-A', '--', '.', ...exclude], env);
+    step(['read-tree', head]);
+    step(['add', '-A', '--', '.', ...exclude]);
     const diff = git(root, ['diff', '--cached', '--full-index', '--binary', '--no-renames', '--no-ext-diff', '--no-textconv', sdk.upstream, '--', '.', ...exclude], env);
     if (diff.status !== 0) throw new Error(`git diff against the SDK snapshot failed: ${diff.stderr.toString().trim()}`);
     if (diff.stdout.length > MAX_PATCH) throw new Error(`this checkout's changes come to ${diff.stdout.length >> 10} KiB; the service takes ${MAX_PATCH >> 20} MiB at most`);
     return { commit, patch: diff.stdout.length ? diff.stdout : null };
   } finally { rmSync(index, { force: true }); }
 }
+
+const refuseGit = (what, result) => { throw new Error(`git ${what} in this Exact checkout failed: ${result.stderr.toString().trim() || `exit ${result.status}`}`); };
 
 /** The app's files as `{ "<app>/<path>": [git blob id, mode] }` and each blob's bytes (client.py `manifest`). */
 export function appFiles(dir) {
