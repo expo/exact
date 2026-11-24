@@ -108,6 +108,40 @@ final class ArrangementSizingIOSTests: XCTestCase {
         XCTAssertEqual(told, [.whole, nil], "each change is told once, and a pane shown is never told covered")
     }
 
+    /// A batch can draw a pane whose arrangement just went as a bare layer, as it draws any inert box: a cover its
+    /// arrangement left it goes all the same.
+    func testAPaneDrawnAsALayerIsUncovered() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let p = Presenter(), host = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        self.window = window
+        p.viewport.frame = host.view.bounds
+        host.view.addSubview(p.viewport)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["hatch": "arrangement"]],
+            ["op": "create", "id": 2, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            ["op": "create", "id": 3, "kind": "view", "style": ["background_color": [0, 0, 255, 255]]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 600.0, "h": 800.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 600.0, "h": 400.0],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 400.0, "w": 600.0, "h": 400.0],
+        ]))
+        let controller = UIArrangementViewController()
+        XCTAssertTrue(p.arrangements.set(1, controller: controller))
+        let holder = try XCTUnwrap(controller.viewController(for: .secondary) as? ArrangementPaneController), id = holder.node.id
+        waitForMainQueue("the arrangement's setup pass")
+        var told: [HostCover?] = []
+        p.onCovers = { changes in told += changes.filter { $0.0 == id }.map(\.1) }
+        controller.setViewController(nil, for: .secondary)
+        waitFor("the pane taken out is told covered whole") { told == [.whole] }
+        XCTAssertTrue(p.arrangements.set(1, controller: nil))
+        p.apply(wireBatch([["op": "style", "id": Int(id), "style": ["background_color": [0, 255, 0, 255]]]]))
+        XCTAssertTrue(p.flats.isFlat(id), "the pane is drawn as a layer before the next pass")
+        waitFor("and is told uncovered") { told == [.whole, nil] }
+    }
+
     func testProposalsMeasureAuthoredTextWithoutChangingItsAllocation() throws {
         let session = try booted()
         let primary = try node("primary")

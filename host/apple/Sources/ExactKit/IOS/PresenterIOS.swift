@@ -137,6 +137,8 @@ package final class Presenter {
     /// The list whose row is creating node `id` now, for the hold.
     package func listCreating(_ id: UInt32) -> NodeView? { pool.list(creating: id) }
     package lazy var flats = FlatLeaves(self)
+    /// Whether `id` is drawn, as a view or as a flat leaf.
+    package func draws(_ id: UInt32) -> Bool { views[id] != nil || flats.isFlat(id) }
     /// The native swipe rows (LLP 1008 §9), a grouped list's included.
     package lazy var swipeActions: any SwipeActionsHosting = SwipeActionsLink.make?(self) ?? NoSwipeActions()
     package lazy var rowCells: any RowCellsHosting = SwipeActionsLink.makeRowCells?(self) ?? NoRowCells()

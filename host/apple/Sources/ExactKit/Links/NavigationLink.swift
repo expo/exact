@@ -605,7 +605,7 @@ package final class NoNavigation: NavigationHosting {
         guard #available(iOS 27.1, *) else { return }
         let views = presenter.views, hidden = presenter.arrangements.hidden.filter { views[$0] != nil }
         let changes = hidden.subtracting(told).map { ($0, HostCover.whole as HostCover?) }
-            + told.subtracting(hidden).filter { views[$0] != nil }.map { ($0, nil as HostCover?) }
+            + told.subtracting(hidden).filter(presenter.draws).map { ($0, nil as HostCover?) }
         told = hidden
         if !changes.isEmpty { presenter.onCovers?(changes) }
         #endif
