@@ -26,6 +26,11 @@ struct Bar {
     range: (f32, f32),
     /// Whether its depth is its authored size, definite, rather than its content's.
     authored_depth: bool,
+    /// Its parent's region on its edge where it lies on it (`RareStyle::bar_regions`).
+    region: Option<[f32; 3]>,
+    /// What it reserves of its parent: its depth, or a region bar's reach past what is reserved
+    /// before it, which a slot in the band the host clears may not reach at all.
+    reserve: f32,
 }
 
 /// The side of `r` on `edge`, top 0, right 1, bottom 2, left 3.
@@ -41,6 +46,13 @@ fn side(r: &mut Rect<f32>, edge: usize) -> &mut f32 {
         2 => &mut r.bottom,
         _ => &mut r.left,
     }
+}
+
+/// Where a region bar's slot begins, in from its parent's edge: on the region, `region`, unless
+/// an earlier bar on the edge, whose slots reach `reached` from it, lies further in (`before` is
+/// how far those slots reach past the parent's inset).
+fn region_start(region: f32, reached: f32, before: f32) -> f32 {
+    if before > 0.0 { region.max(reached) } else { region }
 }
 
 impl<NodeContext, MeasureFunction> TaffyView<'_, NodeContext, MeasureFunction>
@@ -67,8 +79,9 @@ where
         let inset = placed_style.rare.bar_inset;
         let rtl = placed_style.direction.is_rtl();
         let known = inputs.known_dimensions;
+        let regions = placed_style.rare.bar_regions;
         let (bars, taken, mut contribution, held) =
-            self.measure_bars(key, known, inputs.available_space, border, inset, rtl);
+            self.measure_bars(key, known, inputs.available_space, border, inset, &regions, rtl);
         // A scroller's bars lie on its scrollport and do not scroll: its content keeps its own
         // padding and extent, and the bars are its inset, not its content's (LLP 1123 D12)
         let scrollport = placed_style.rare.bar_scrollport;
@@ -165,6 +178,7 @@ where
         available: Size<AvailableSpace>,
         border: Rect<f32>,
         inset: Rect<f32>,
+        regions: &[Option<[f32; 3]>; 4],
         rtl: bool,
     ) -> (Vec<Bar>, Rect<f32>, Size<f32>, Size<f32>) {
         let children: Vec<NodeId> = self.taffy.children[parent].iter().copied().collect();
@@ -185,9 +199,13 @@ where
             let edge = edge as usize;
             barred[edge] = true;
             let horizontal = edge % 2 == 0;
-            let sides = match horizontal {
-                true => border.left + border.right + inset.left + inset.right + taken.left + taken.right,
-                false => border.top + border.bottom + inset.top + inset.bottom + taken.top + taken.bottom,
+            let region = self.taffy.nodes[child.into()].style.rare.bar_region.then(|| regions[edge]).flatten();
+            // The slot runs inside the earlier bars beside it, and a region's within its sides too
+            let reached = |e: usize| at(&border, e) + at(&inset, e) + at(&taken, e);
+            let (a, b) = if horizontal { (3, 1) } else { (0, 2) };
+            let sides = match region {
+                Some(r) => reached(a).max(r[1]) + reached(b).max(r[2]),
+                None => reached(a) + reached(b),
             };
             let length = if horizontal { known.width } else { known.height };
             let extent = length.map(|l| (l - sides).max(0.0));
@@ -262,7 +280,11 @@ where
                 true => contribution.width = contribution.width.max(outer),
                 false => contribution.height = contribution.height.max(outer),
             }
-            *side(&mut taken, edge) += depth;
+            let reserve = match region {
+                Some(r) => (region_start(r[0], reached(edge), at(&taken, edge)) + depth - reached(edge)).max(0.0),
+                None => depth,
+            };
+            *side(&mut taken, edge) += reserve;
             // The slot's cross axis runs along the edge: its start is the inline start for a top
             // or bottom bar, the top for a side one; `left` and `right` are physical
             let (align, physical) = match keyword {
@@ -279,7 +301,7 @@ where
                 (false, true) => 0.0,
                 (false, false) => align,
             };
-            bars.push(Bar { node: child, edge, order: order as u32, size, margin, depth, stretch, align, range, authored_depth });
+            bars.push(Bar { node: child, edge, order: order as u32, size, margin, depth, stretch, align, range, authored_depth, region, reserve });
         }
         // Across their edges the slots lie past the inset too, which the parent's padding holds
         // only where it is the parent's own reservations: a view sized by its content grows to
@@ -305,10 +327,15 @@ where
         let mut overflow = Rect { left: 0.0, right: 0.0, top: 0.0, bottom: 0.0 };
         for bar in bars {
             let horizontal = bar.edge % 2 == 0;
-            let x0 = border.left + inset.left + before.left;
-            let x1 = size.width - border.right - inset.right - before.right;
-            let y0 = border.top + inset.top + before.top;
-            let y1 = size.height - border.bottom - inset.bottom - before.bottom;
+            // How far in from each edge the slot may run, and a region's within its sides
+            let mut start: [f32; 4] = core::array::from_fn(|e| at(&border, e) + at(&inset, e) + at(&before, e));
+            if let Some(r) = bar.region {
+                let (a, b) = if horizontal { (3, 1) } else { (0, 2) };
+                start[a] = start[a].max(r[1]);
+                start[b] = start[b].max(r[2]);
+                start[bar.edge] = region_start(r[0], start[bar.edge], at(&before, bar.edge));
+            }
+            let (x0, x1, y0, y1) = (start[3], size.width - start[1], start[0], size.height - start[2]);
             let slot = match bar.edge {
                 0 => Rect { left: x0, right: x1, top: y0, bottom: y0 + bar.depth },
                 1 => Rect { left: x1 - bar.depth, right: x1, top: y0, bottom: y1 },
@@ -363,7 +390,7 @@ where
             layout.padding = style.padding.map(resolve);
             layout.margin = bar.margin;
             self.set_unrounded_layout(bar.node, &layout);
-            self.taffy.bar_depths.insert(bar.node.into(), bar.depth);
+            self.taffy.bar_depths.insert(bar.node.into(), bar.reserve);
             // A slot that moves or resizes is a changed layout to the caller, though the bar's own
             // layout may be the same (a fixed-width bar at its start as its parent widens)
             let key = bar.node.into();
@@ -371,7 +398,9 @@ where
                 self.taffy.changed_layout_indices.insert(key, self.taffy.changed_layouts.len());
                 self.taffy.changed_layouts.push(bar.node);
             }
-            *side(&mut before, bar.edge) += bar.depth;
+            // The next slot on the edge lies past this one's inner side, a region's included
+            let inner = start[bar.edge] + bar.depth - at(&border, bar.edge) - at(&inset, bar.edge);
+            *side(&mut before, bar.edge) = at(&before, bar.edge).max(inner);
             let origin = match rtl {
                 true => Point { x: size.width - (location.x + out.size.width) - border.right, y: location.y - border.top },
                 false => Point { x: location.x - border.left, y: location.y - border.top },

@@ -168,6 +168,36 @@ fn bar_slots(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [f32; 4] {
     std::array::from_fn(|e| (untaken[e] - clear[e]).max(0.0))
 }
 
+/// Where a region bar of `held`'s root lies on each edge (LLP 1123 D12,
+/// "Region"), in Taffy patch 81's terms: how far in from the root's edge its
+/// slot begins, less than 0 where UIKit's bar layout region lies in the band
+/// the host clears, and how far in from the two edges beside it the slot
+/// runs, as its host reported the region on the owner's view less the
+/// clearance `clear` there. On the bottom of a root that clears the
+/// keyboard the slot rests on the deeper of the region and the keyboard's
+/// top, the region's sides kept, since the owner view's region does not
+/// follow the keyboard (D7). `None` on an edge with no region, and for a
+/// root that is no owner or has no bars.
+fn region_slots(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [Option<[f32; 3]>; 4] {
+    let regions = arena.observations.bars.regions.get(&held.slot);
+    let Some(regions) =
+        regions.filter(|_| is_owner(arena, held) && super::bar::has_bars(arena, held.slot))
+    else {
+        return [None; 4];
+    };
+    let cover = super::keyboard::cover(arena, held.slot);
+    std::array::from_fn(|e| {
+        regions[e].map(|r| {
+            let (a, b) = if e % 2 == 0 { (3, 1) } else { (0, 2) };
+            [
+                r.distance.max(cover[e]) - clear[e],
+                r.sides[0] - clear[a],
+                r.sides[1] - clear[b],
+            ]
+        })
+    })
+}
+
 /// [`cleared`] with the edges its root takes of the container region taken,
 /// where `taking`, or none of them.
 fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
@@ -270,6 +300,9 @@ pub(crate) struct Held {
     /// How far past its content root's edge its bars' slots began when it
     /// was last laid out (`bar_slots`).
     slots: [f32; 4],
+    /// Where its region bars' slots lay on each edge when it was last laid
+    /// out (`region_slots`).
+    regions: [Option<[f32; 3]>; 4],
     /// Its content root's width and height where its host fixes them, as
     /// they were when it was last laid out: what container units below read
     /// (`owner::container_at`, LLP 1123 D16).
@@ -295,6 +328,11 @@ impl Blocks {
     /// takes.
     pub(crate) fn bar_slots(&self, slot: u32) -> [f32; 4] {
         self.held(slot).map_or([0.0; 4], |b| b.slots)
+    }
+
+    /// Where `slot`'s region bars' slots lay when it was last laid out (`region_slots`).
+    pub(crate) fn region_slots(&self, slot: u32) -> [Option<[f32; 3]>; 4] {
+        self.held(slot).map_or([None; 4], |b| b.regions)
     }
 
     /// Whether `slot`'s bars' slots would begin elsewhere than at its last
@@ -419,6 +457,7 @@ impl Blocks {
                 shown: BlockShown::InStack,
                 cleared: [0.0; 4],
                 slots: [0.0; 4],
+                regions: [None; 4],
                 content: [None; 2],
                 read_off: Default::default(),
             }),
@@ -1047,10 +1086,12 @@ impl Kernel {
     fn clear_block(&mut self, i: usize, clear: [f32; 4]) -> (u32, Offer) {
         let content = fixed_lengths(&self.arena, &self.arena.blocks.0[i], clear);
         let slots = bar_slots(&self.arena, &self.arena.blocks.0[i], clear);
+        let regions = region_slots(&self.arena, &self.arena.blocks.0[i], clear);
         let held = &mut self.arena.blocks.0[i];
         let (slot, inner) = (held.slot, held.block.less(clear));
         let was = std::mem::replace(&mut held.cleared, clear);
         let slotted = std::mem::replace(&mut held.slots, slots) != slots;
+        let slotted = (std::mem::replace(&mut held.regions, regions) != regions) || slotted;
         // Derive the container readers again where the content root's fixed lengths
         // moved, or where one was derived against others since the last layout
         let moved = std::mem::replace(&mut held.content, content) != content;

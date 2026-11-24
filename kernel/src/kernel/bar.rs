@@ -8,11 +8,13 @@
 //! keeps its padding and observes none of it, and the scroller's inset clears it
 //! (`scroll_terms.rs`).
 use super::block::reservation::Reserved;
+use super::owner_update::BarRegion;
 use crate::arena::NodeArena;
+use crate::error::{KernelError, LayoutError};
 use crate::generated::SafeAreaBar;
 use crate::id::IdMap;
 use crate::sorted::SlotSet;
-use crate::{Display, PositionType};
+use crate::{Display, PositionType, ViewId};
 
 /// The bars a document has, which D9's area and the solve read.
 #[derive(Debug, Clone, Default)]
@@ -31,6 +33,9 @@ pub(crate) struct Bars {
     /// Whether a scroller's child that names an edge is a bar on its scrollport; else it stays in
     /// its scroller's flow (`Kernel::set_scrollport_bars`).
     pub(crate) scrollport: bool,
+    /// Each owner root's bar layout regions, top right bottom left, as its host last reported
+    /// them (`Kernel::set_owner_bar_regions`).
+    pub(crate) regions: IdMap<u32, [Option<BarRegion>; 4]>,
 }
 
 impl Bars {
@@ -38,7 +43,30 @@ impl Bars {
         self.styled.remove(slot);
         self.slots.remove(&slot);
         self.observed.remove(&slot);
+        self.regions.remove(&slot);
     }
+}
+
+/// Why `regions` are refused, where they are: each length must be finite and at least 0, as
+/// UIKit gives a layout region's insets.
+pub(super) fn check_regions(regions: &[Option<BarRegion>; 4]) -> Result<(), KernelError> {
+    let lengths = regions
+        .iter()
+        .flatten()
+        .flat_map(|r| [r.distance, r.sides[0], r.sides[1]]);
+    match lengths.into_iter().all(|v| v.is_finite() && v >= 0.0) {
+        true => Ok(()),
+        false => Err(LayoutError::BarRegion(
+            "a bar region's length is not finite or is negative: report each edge's region as \
+             UIKit's `edgeInsets(for: .bar(onEdge:extent:))` gives it on the owner's view, in points",
+        )
+        .into()),
+    }
+}
+
+/// Whether `slot`, a bar, asks for its parent's bar layout region (`region`, D12).
+pub(crate) fn wants_region(arena: &NodeArena, slot: u32) -> bool {
+    arena.style(slot).rare.safe_area_bar & SafeAreaBar::Region.keyword_bits() != 0
 }
 
 /// A bar's slot: its depth, what it reserves of its parent, and its rectangle, x, y, width and
@@ -106,6 +134,27 @@ pub(crate) fn edges(arena: &NodeArena, parent: u32) -> [bool; 4] {
 }
 
 impl crate::Kernel {
+    /// Set the bar layout regions of the owner whose root is `view` (D12, "Region"), top right
+    /// bottom left, `None` on an edge its host has none. Refused for a negative or nonfinite
+    /// length (`check_regions`). Returns whether a layout is owed: they changed and the root has
+    /// bars, which `region` places on them (`block::region_slots`).
+    pub fn set_owner_bar_regions(
+        &mut self,
+        view: ViewId,
+        regions: [Option<BarRegion>; 4],
+    ) -> Result<bool, KernelError> {
+        let slot = (self.arena)
+            .slot_of(view)
+            .ok_or(LayoutError::UnknownView(view))?;
+        check_regions(&regions)?;
+        let stored = &mut self.arena.observations.bars.regions;
+        let was = match regions.iter().all(Option::is_none) {
+            true => stored.remove(&slot),
+            false => stored.insert(slot, regions),
+        };
+        Ok(was.unwrap_or_default() != regions && has_bars(&self.arena, slot))
+    }
+
     /// Lays a scroller's bars out on its scrollport (D12) where `on`, or, off, leaves a
     /// scroller's child that names an edge in its flow, as no bar: off until stage 5 makes the
     /// hosts' stationary mount and the scroller's inset live together (LLP 1123 stage 3b-7), and
@@ -182,6 +231,7 @@ pub(crate) fn lay_out(arena: &NodeArena, slot: u32, reserved: Reserved, s: &mut 
     if let Some(e) = edge(arena, slot) {
         s.position = taffy::style::Position::Absolute;
         s.rare.bar = Some(e as u8);
+        s.rare.bar_region = wants_region(arena, slot);
     }
     if has_bars(arena, slot) {
         // An owner's root begins its slots at its content root, past what its host clears,
@@ -202,6 +252,7 @@ pub(crate) fn lay_out(arena: &NodeArena, slot: u32, reserved: Reserved, s: &mut 
         };
         s.rare.bars = true;
         s.rare.bar_scrollport = super::area::scroll_view(arena, slot);
+        s.rare.bar_regions = arena.blocks.region_slots(slot);
         s.rare.bar_inset = taffy::geometry::Rect {
             top,
             right,

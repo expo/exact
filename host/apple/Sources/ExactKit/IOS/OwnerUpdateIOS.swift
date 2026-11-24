@@ -69,6 +69,17 @@ package struct OwnerUpdateIOS: Equatable {
     /// The owner's segments (D16): its active division regions split as the document's
     /// are (`Segments.split`); `nil` where it lies on one.
     var segments: ViewportFold?
+    /// UIKit's bar layout region on each edge of the owner's view, top, right, bottom, left (D12,
+    /// "Region"): `nil` before iOS 27.1, which has none, and out of a window.
+    package var barRegions: [BarRegion?] = [nil, nil, nil, nil]
+
+    /// A bar layout region on one edge: how far in from that edge it begins, and how far in from
+    /// the two edges beside it it runs, left and right for the top or bottom, top and bottom for a side.
+    package struct BarRegion: Equatable {
+        package var distance: CGFloat
+        package var sides: (CGFloat, CGFloat)
+        package static func == (a: Self, b: Self) -> Bool { a.distance == b.distance && a.sides == b.sides }
+    }
 
     /// The update of the owner whose controller is `controller` and whose view is `view` (its
     /// surface), in a session shown by `session`. `controller` manages `view`: for a route shown
@@ -127,7 +138,26 @@ package struct OwnerUpdateIOS: Equatable {
         let active = (ReservedRegions.divisions(of: view) ?? []).filter(\.active).map { $0.frame.offsetBy(dx: -origin.x, dy: -origin.y) }
         let fold = Segments.split(viewport: view.bounds.size, dividers: active)
         update.segments = fold.cols * fold.rows > 1 ? fold : nil
+        if #available(iOS 27.1, *) { update.barRegions = barRegions(of: view) }
         return update
+    }
+
+    /// `view`'s bar layout regions, read after the ledger's writes, so each lies past the owner's own
+    /// additional insets and safe-area padding as UIKit places it on the safe area they make (measured
+    /// on an iPhone Duo, iOS 27.1). The extent changes only the region's depth, which a bar's slot does
+    /// not take from it: UIKit gives a 50- and a 120-point bottom region the same insets.
+    @available(iOS 27.1, *)
+    private static func barRegions(of view: UIView) -> [BarRegion?] {
+        let edges: [UIRectEdge] = [.top, .right, .bottom, .left]
+        return edges.map { edge in
+            let i = view.edgeInsets(for: .bar(onEdge: edge, extent: 50))
+            switch edge {
+            case .top: return BarRegion(distance: i.top, sides: (i.left, i.right))
+            case .right: return BarRegion(distance: i.right, sides: (i.top, i.bottom))
+            case .bottom: return BarRegion(distance: i.bottom, sides: (i.left, i.right))
+            default: return BarRegion(distance: i.left, sides: (i.top, i.bottom))
+            }
+        }
     }
 
     /// `view` as a target, unavailable while it is out of a window; a window is in itself,
@@ -141,7 +171,8 @@ package struct OwnerUpdateIOS: Equatable {
     /// The update in the kernel's wire form (`OwnerUpdate::encode`): each field in order, an
     /// optional one after a presence byte, a list after its `u32` length, little-endian;
     /// insets top, right, bottom, left. A contribution is its node, its operation and its
-    /// effect. The keyboard is absent: its executor samples it.
+    /// effect. The keyboard is absent: its executor samples it. Each edge's bar region, top, right,
+    /// bottom, left, follows the segments.
     package func encode() -> Data {
         var out = Data()
         func u8(_ v: UInt8) { out.append(v) }
@@ -182,6 +213,9 @@ package struct OwnerUpdateIOS: Equatable {
             u8(UInt8(fold.cols))
             u8(UInt8(fold.rows))
             for r in fold.rects { [r.minX, r.minY, r.width, r.height].forEach(f32) }
+        }
+        for region in barRegions {
+            optional(region) { r in [r.distance, r.sides.0, r.sides.1].forEach(f32) }
         }
         return out
     }

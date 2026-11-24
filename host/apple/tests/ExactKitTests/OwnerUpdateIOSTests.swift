@@ -58,6 +58,17 @@ final class OwnerUpdateIOSTests: XCTestCase {
         probe.removeFromSuperview()
         let minimum = route.systemMinimumLayoutMargins
         XCTAssertEqual([margins.minimum.left, margins.minimum.right], [minimum.leading, minimum.trailing])
+        // Each edge's bar region, its distance from that edge and its sides in order, as UIKit gives it
+        if #available(iOS 27.1, *) {
+            for (i, edge) in [UIRectEdge.top, .right, .bottom, .left].enumerated() {
+                let u = view.edgeInsets(for: .bar(onEdge: edge, extent: 50)), region = try XCTUnwrap(update.barRegions[i])
+                let (distance, sides) = edge == .top ? (u.top, (u.left, u.right)) : edge == .right ? (u.right, (u.top, u.bottom))
+                    : edge == .bottom ? (u.bottom, (u.left, u.right)) : (u.left, (u.top, u.bottom))
+                XCTAssertEqual(region, .init(distance: distance, sides: sides), "edge \(i)")
+            }
+        } else {
+            XCTAssertTrue(update.barRegions.allSatisfy { $0 == nil }, "no bar region before iOS 27.1")
+        }
     }
 
     func testTheKernelTakesAnEncodedUpdateAndRefusesATruncatedOne() throws {
@@ -126,6 +137,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(update.band)
         XCTAssertNil(update.margins)
         XCTAssertNil(update.segments)
+        XCTAssertTrue(update.barRegions.allSatisfy { $0 == nil })
         XCTAssertEqual(update.chain.count, 1)
         XCTAssertNil(update.chain[0].target.insets)
     }
@@ -193,6 +205,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         update.relations = [.init(relation: OwnerUpdateIOS.Relation.window, target: .init(id: 7, generation: 1, insets: UIEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)))]
         update.margins = .init(root: UIEdgeInsets(top: 9, left: 12, bottom: 11, right: 10), plain: UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8),
                                minimum: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16), readableWidth: 672)
+        update.barRegions = [nil, nil, .init(distance: 24, sides: (16, 8.5)), nil]
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
         func u32(_ v: UInt32) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
@@ -204,6 +217,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         w.append(1); f(9, 10, 11, 12); f(8, 8, 8, 8); f(0, 16, 0, 16); f(672)
         w.append(0)
         w.append(0)
+        w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
         XCTAssertEqual([UInt8](update.encode()), w)
         // A registration: the name's length and bytes, then the target after a presence byte
         let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))

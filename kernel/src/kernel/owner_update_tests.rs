@@ -1,7 +1,7 @@
 //! The owner update (LLP 1123 D2): one entry per owner, applied whole or refused whole, in
 //! the hosts' shared wire form.
 use super::*;
-use crate::kernel::{Contribution, Keyboard, Operation, OwnerMargins, OwnerUpdate};
+use crate::kernel::{BarRegion, Contribution, Keyboard, Operation, OwnerMargins, OwnerUpdate};
 use crate::style::env::{Rect, SegmentGrid};
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
@@ -15,7 +15,7 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 
 /// An update with every field: a 47-point top band holding a 10-point contribution, a
 /// navigation controller (20) above the owner's own (10) and its window (44), margins, a
-/// docked keyboard and two columns.
+/// docked keyboard, two columns and a bottom bar region.
 fn full() -> OwnerUpdate {
     let mut targets = controller(1, 10.0);
     targets.chain.push(entry(2, 20.0, Some(Kind::Navigation)));
@@ -43,6 +43,15 @@ fn full() -> OwnerUpdate {
             rows: 1,
             rects: vec![rect(0.0, 0.0, 190.0, 844.0), rect(210.0, 0.0, 180.0, 844.0)],
         }),
+        bar_regions: [
+            None,
+            None,
+            Some(BarRegion {
+                distance: 24.0,
+                sides: [16.0, 8.67],
+            }),
+            None,
+        ],
     }
 }
 
@@ -139,6 +148,10 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.push(1);
     w.extend([1, 2, 1]);
     f(&mut w, &[0.0, 0.0, 190.0, 844.0, 210.0, 0.0, 180.0, 844.0]);
+    // No region on the top or right, the bottom's, none on the left
+    w.extend([0, 0, 1]);
+    f(&mut w, &[24.0, 16.0, 8.67]);
+    w.push(0);
     assert_eq!(full().encode(), w);
 }
 

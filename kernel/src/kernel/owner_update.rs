@@ -30,6 +30,18 @@ pub struct OwnerUpdate {
     pub keyboard: Option<Keyboard>,
     /// Its segments (D16), `None` where it lies on one.
     pub segments: Option<SegmentGrid>,
+    /// UIKit's bar layout region on each edge of its view, top right bottom left (D12), `None`
+    /// where its host has none.
+    pub bar_regions: [Option<BarRegion>; 4],
+}
+
+/// UIKit's bar layout region on one edge of an owner's view (D12, "Region"): how far in from
+/// that edge it begins, and how far in from the two edges beside it it runs, in their order
+/// (left and right for the top or bottom, top and bottom for a side), all in points.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BarRegion {
+    pub distance: f32,
+    pub sides: [f32; 2],
 }
 
 impl Kernel {
@@ -44,6 +56,7 @@ impl Kernel {
         owed |= self.set_owner_segments(view, update.segments)?;
         owed |= self.set_owner_band(view, update.band, &update.contributions)?;
         owed |= self.set_owner_keyboard(view, update.keyboard)?;
+        owed |= self.set_owner_bar_regions(view, update.bar_regions)?;
         Ok(owed)
     }
 
@@ -74,10 +87,10 @@ impl Kernel {
         if let Some(k) = &update.keyboard {
             super::keyboard::check(k)?;
         }
-        match update.segments.as_ref().and_then(SegmentGrid::refusal) {
-            Some(why) => Err(LayoutError::OwnerSegments(why).into()),
-            None => Ok(()),
+        if let Some(why) = update.segments.as_ref().and_then(SegmentGrid::refusal) {
+            return Err(LayoutError::OwnerSegments(why).into());
         }
+        super::bar::check_regions(&update.bar_regions)
     }
 }
 
@@ -107,7 +120,8 @@ impl OwnerUpdate {
     /// index in [`Relation::ALL`] (`u8`) and a target; the margins their
     /// root, plain and minimum insets and the readable width (`f32`); a
     /// keyboard its frame and a docked byte, 0 or 1; segments their columns
-    /// and rows (`u8` each) and the `cols × rows` rects, row-major.
+    /// and rows (`u8` each) and the `cols × rows` rects, row-major; then each edge's bar region,
+    /// top right bottom left, its distance and its two sides (`f32` each).
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         optional(&mut w, self.band.as_ref(), |w, b| floats(w, b));
@@ -144,6 +158,13 @@ impl OwnerUpdate {
                 floats(w, &[r.x, r.y, r.width, r.height]);
             }
         });
+        for region in &self.bar_regions {
+            optional(&mut w, region.as_ref(), |w, r| {
+                w.f32(r.distance);
+                w.f32(r.sides[0]);
+                w.f32(r.sides[1]);
+            });
+        }
         w.into_vec()
     }
 }
@@ -235,6 +256,16 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         }
         false => None,
     };
+    let mut bar_regions = [None; 4];
+    for region in &mut bar_regions {
+        if present(r)? {
+            let [distance, a, b] = [r.f32().ok()?, r.f32().ok()?, r.f32().ok()?];
+            *region = Some(BarRegion {
+                distance,
+                sides: [a, b],
+            });
+        }
+    }
     Some(OwnerUpdate {
         band,
         contributions,
@@ -242,6 +273,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         margins,
         keyboard,
         segments,
+        bar_regions,
     })
 }
 

@@ -370,6 +370,8 @@ pub enum LayoutError {
     Keyboard(&'static str),
     /// A host's report of an owner's margins refused (LLP 1123 D8).
     Margins(&'static str),
+    /// A host's report of an owner's bar layout regions refused (LLP 1123 D12).
+    BarRegion(&'static str),
     /// A definite available-space offer is infinite or NaN.
     InvalidOffer,
     /// The id is not live.

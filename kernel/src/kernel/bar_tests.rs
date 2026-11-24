@@ -1138,3 +1138,6 @@ fn a_parent_with_a_ratio_and_hairline_borders_keeps_its_content_floor() {
 // A scroller beside bars takes them in D14's `reserved` term (D12)
 #[path = "scroll_terms_tests.rs"]
 mod scroll_terms;
+
+#[path = "bar_region_tests.rs"]
+mod region;
