@@ -1266,6 +1266,7 @@ for(;;){
     // From the build the page booted (host/web/generations.mjs): a document names its generation in its base, and
     // its scripts, chunks and plan are read from that build while the next one is put in place.
     const served = await servedFile(dist, url.pathname, req.headers.accept);
+    if (served.status === 301) { res.writeHead(301, { location: served.location + url.search, 'cache-control': 'no-store' }); res.end(); return; }
     if (served.status === 410 || served.status === 400 || served.status === 503) { res.writeHead(served.status, { 'cache-control': 'no-store', ...(served.status === 503 ? { 'retry-after': '1' } : {}) }); res.end(); return; }
     // A miss is a 404, with the build's page for one where it has one (serve.mjs `buildTreeFile`).
     const found = served.body ? served : null;

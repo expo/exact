@@ -137,6 +137,40 @@ engineTest.chromium('build, request and cached pages, generation assets and inst
   } finally { await browser?.close(); rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
 
+// LLP 1048.000 D11: one URL per page, so a path with an empty segment redirects to the page's own, its query kept. A
+// directory's own page keeps its slash, whose relative references need it, though a route's parameter takes its name.
+test('a page at a path with a trailing or repeated slash redirects to its own, under the mount', async () => {
+  for (const base of ['/', '/app/']) {
+    const dir = workspace(), dist = resolve(dir, 'dist'), at = path => base.slice(0, -1) + path;
+    try {
+      mkdirSync(resolve(dist, 'built'), { recursive: true }); mkdirSync(resolve(dist, 'plain'), { recursive: true });
+      for (const [file, text] of [['shell.html', 'shell'], ['index.html', 'home'], ['built/index.html', 'built'], ['plain/index.html', 'plain']]) save(dist, file, `<p>${text}</p>`);
+      save(dist, 'routes.json', JSON.stringify({ ...(base === '/' ? {} : { base }), routes: [{ name: 'home', pattern: '/', render: 'build' }, { name: 'built', pattern: '/built', render: 'build' }, { name: 'live', pattern: '/live/:id', render: 'client' }, { name: 'named', pattern: '/:name', render: 'client' }] }));
+      save(dist, '.exact-build.json', JSON.stringify({ exactBuild: 1, target: 'js', files: [] }));
+      const server = createServer((req, res) => serveBuildTree(dist, req, res, { pages: async () => null }));
+      await new Promise(ok => server.listen(0, '127.0.0.1', ok));
+      try {
+        const get = async (path, accept = 'text/html') => {
+          const r = await fetch(`http://127.0.0.1:${server.address().port}${at(path)}`, { headers: { accept }, redirect: 'manual' });
+          return [r.status, r.headers.get('location') ?? (await r.text()).replace(/<[^>]*>/g, '')];
+        };
+        for (const accept of ['text/html', '*/*']) {
+          expect(await get('/built/', accept)).toEqual([301, at('/built')]);
+        }
+        expect(await get('/live//7/?q=1')).toEqual([301, at('/live/7?q=1')]);
+        expect(await get('/built')).toEqual([200, 'built']);
+        expect(await get('/live/7')).toEqual([200, 'shell']);
+        expect(await get('/')).toEqual([200, 'home']);
+        expect(await get('/plain/')).toEqual([200, 'plain']);
+        expect(await get('/any/')).toEqual([301, at('/any')]);
+        expect((await get('/no/such/'))[0]).toBe(404);
+        const posted = await fetch(`http://127.0.0.1:${server.address().port}${at('/any/')}`, { method: 'POST', headers: { accept: 'text/html' }, redirect: 'manual' });
+        expect(posted.status).toBe(404);
+      } finally { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }
+});
+
 engineTest.chromium.each([false, true])('bundled fetches without a network grant stay in the mounted generation (production: %s)', async production => {
   const dir = workspace(); let browser;
   try {

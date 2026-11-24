@@ -878,7 +878,8 @@ export function jsTargetBuild(dist) {
  * index.html (a page rendered at build); else, for an HTML navigation (`acceptsHTML`) whose path a route in the
  * build's `routes.json` matches, `shell.html`. With `miss`, a request the rule finds nothing for gets the build's
  * `404.html`, else, for a navigation to a page, the shell, whose client draws the notfound route; either marked
- * `status: 404`. The previous build answers during a rebuild's rename. */
+ * `status: 404`; and a navigation's other spelling of a page's path gets `status: 301` and the page's `location`. The
+ * previous build answers during a rebuild's rename. */
 export function buildTreeFile(dist, pathname, accept = '', { miss = false } = {}) { return runReads(treeFile(dist, pathname, accept, miss)); }
 export function buildTreeFileAsync(dist, pathname, accept = '', { miss = false } = {}) { return runReadsAsync(treeFile(dist, pathname, accept, miss)); }
 function* treeFile(dist, pathname, accept, miss) {
@@ -925,6 +926,9 @@ function* treeFile(dist, pathname, accept, miss) {
       // A route table that cannot be read is no answer yet (503 when serving), never "no route" (a 404 for a page).
       if (routes === null) return miss ? { status: 503 } : null;
       const at = appDocumentPath(pathname, true, routes) ? matchPattern(routes, canonical(pathname)) : -1;
+      // One URL per page: a path with an empty segment redirects to the page's (LLP 1048.000 D11), except a directory's own page.
+      const one = '/' + pathname.split('/').filter(Boolean).join('/'), own = routes[matchPattern(routes, canonical(one))];
+      if (miss && at < 0 && one !== pathname && own && (!index || own.render === 'build') && appDocumentPath(one, true, routes)) return { status: 301, location: one };
       const render = at >= 0 ? routes[at].render : null, shell = file('/shell.html'), served = (policy) => policy === 'request' || policy === 'cached';
       // The shell, with its route's render policy, which `serve` renders in its place (`render=request` or `cached`):
       // before a directory's index.html for such a route, since the root's is the shell too; a page built for its
@@ -977,12 +981,13 @@ export async function serveBuildTree(dist, req, res, { base = buildBase(dist), p
   // server rendering pages answers it; a route the client draws stays a browser's.
   if (pages && target && r !== markdown && asksPage(req, path) && !acceptsHTML(req.headers.accept)) {
     const page = await servedFile(dist, target.pathname, 'text/html', { pinned, base });
-    if (page.route === '/shell.html' && ['request', 'cached'].includes(page.render)) r = page;
+    if (page.status === 301 || page.route === '/shell.html' && ['request', 'cached'].includes(page.render)) r = page;
   }
   if (markdown && r.status === 404 && (await servedFile(dist, target.pathname, 'text/html', { pinned, base })).status === 404) {
     const missing = await servedFile(dist, `${prefix}/404.md`, req.headers.accept, { pinned, base });
     if (missing.status === 200 && missing.route === '/404.md') r = { ...missing, status: 404 };
   }
+  if (r.status === 301) { res.writeHead(...(['GET', 'HEAD'].includes(req.method) ? [301, { location: r.location + target.search, 'cache-control': 'no-store' }] : [404])); res.end(); return; }
   if (r.status === 410) { res.writeHead(410, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(`build generation ${r.id} is no longer kept here: load the page again\n`); return; }
   if (pages && [200, 404].includes(r.status) && r.route === '/shell.html' && ['request', 'cached'].includes(r.render) && ['GET', 'HEAD'].includes(req.method)) {
     let page = null;
