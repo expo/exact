@@ -45,8 +45,8 @@ extension GroupedListView {
     /// pushed nothing, or opened a sheet, lets go once its press has run.
     func collectionView(_ view: UICollectionView, didSelectItemAt path: IndexPath) {
         let letGo = { for selected in view.indexPathsForSelectedItems ?? [] { view.deselectItem(at: selected, animated: !ExactEnv.agentFreezes) } }
-        guard let id = source.itemIdentifier(for: path), pressable(id) else { return letGo() }
-        host.presenter.endEditing()
+        guard let id = source.itemIdentifier(for: path), pressable(id), let node = host.presenter.views[id] else { return letGo() }
+        if !host.presenter.retainsFocus(node) { host.presenter.endEditing() }
         // The screen the list is on, read before the press can change it.
         let screen = sequence(first: owner as UIResponder, next: { $0.next }).lazy.compactMap { $0 as? UIViewController }.first
         // A radio's row checks its radio, as a click on the radio does:
