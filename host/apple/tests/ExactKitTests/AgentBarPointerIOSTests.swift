@@ -22,13 +22,7 @@ final class AgentBarPointerIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func until(_ ready: () -> Bool) {
-        let deadline = Date(timeIntervalSinceNow: 5)
-        while !ready(), Date() < deadline {
-            RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.02))
-        }
-        XCTAssertTrue(ready(), "navigation reached its observable ready state")
-    }
+    private func until(_ ready: () -> Bool) { waitFor("navigation reaches its observable ready state", ready) }
 
     private func fixture(_ key: String = "EXACT_FIXTURE_PLAN") throws -> ExactSession {
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment[key])))
@@ -136,8 +130,15 @@ final class AgentBarPointerIOSTests: XCTestCase {
             XCTAssertEqual(presses, [], "\(e.name), \(why)")
         }
 
-        // More items than fit: UIKit shows the first and lists the rest under its overflow button
+        // More items than fit: UIKit shows the first and lists the rest under its overflow button. It lays the bar out
+        // again some frames after a push: start once no item's answer has changed for a while
         bar.layoutIfNeeded()
+        var answers: [String] = [], since = Date()
+        until {
+            let now = ((try? entries()) ?? []).map { aim($0.node)["error"] as? String ?? "" }
+            if now != answers { (answers, since) = (now, Date()) }
+            return Date().timeIntervalSince(since) > 0.5 && navigationItem.overflowPresentationSource != nil && !agent.nativeInFlight()
+        }
         var placed: [String] = [], overflowed: [String] = []
         for e in try entries() {
             if aim(e.node)["error"] == nil { placed.append(e.name); try assertPlaced(e) } else { overflowed.append(e.name); assertRefused(e, overflowed: true, "crowded") }

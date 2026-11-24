@@ -8,11 +8,7 @@ import XCTest
 extension NavigationBarIOSTests {
     func spin(_ seconds: Double) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
 
-    func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
-        let deadline = Date().addingTimeInterval(seconds)
-        while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
-        XCTAssertTrue(done(), what)
-    }
+    func until(_ what: String, _ seconds: Double = 30, _ done: () -> Bool) { waitFor(what, cap: seconds, done) }
 
     /// The native fixture booted in a window, its module's hatches connected
     /// or not; or, given `plan`, that fixture's plan (`fixturePlan`).

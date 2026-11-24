@@ -39,9 +39,10 @@ final class UpdateRecorderIOSTests: XCTestCase {
             XCTAssertEqual(r.interval, periods * r.period, accuracy: 0.5, "a whole number of periods")
             XCTAssertEqual(r.missed, Int(periods) - 1)
             XCTAssertGreaterThanOrEqual(u.work + 0.05, (r.commit ?? 0) + u.events + u.links, "its work holds its phases, each rounded to 0.01 ms")
-            XCTAssertGreaterThan(u.own, 0)
             XCTAssertNotNil(r.main)
         }
+        // Rounded to 0.01 ms, which a warm update's can be below
+        XCTAssertGreaterThan(recording.records.compactMap(\.update?.own).max() ?? 0, 0)
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(recorder.probe).presentations, 4)
         #if targetEnvironment(simulator)
         XCTAssertEqual(recording.records.filter(\.probed).count, 0, "the simulator's Metal reports nothing")
@@ -114,10 +115,11 @@ final class UpdateRecorderIOSTests: XCTestCase {
         until("updates are kept") { recording.records.count >= 4 }
         var blocked = false
         DispatchQueue.main.async { Thread.sleep(forTimeInterval: 0.03); blocked = true }
-        let before = recording.records.count
+        let before = recording.records.count, last = try XCTUnwrap(recording.records.last).t
         until("updates after the block are kept") { blocked && recording.records.count > before + 2 }
         let report = FrameSampler.report(recording, identity: [:])
-        let causes = try XCTUnwrap(report["late"] as? [[String: Any]]).compactMap { $0["cause"] as? String }
+        // Leave out a frame late before the block, as one can be while the window shows
+        let causes = try XCTUnwrap(report["late"] as? [[String: Any]]).filter { ($0["t"] as? Double ?? 0) > last }.compactMap { $0["cause"] as? String }
         XCTAssertTrue(causes.contains("main"), "\(causes)")
         XCTAssertFalse(causes.contains("rate"), "the main thread was busy through the gap")
     }
@@ -134,13 +136,19 @@ final class UpdateRecorderIOSTests: XCTestCase {
         let recording = try XCTUnwrap(sampler.recording)
         sampler.stop()
         let view = try XCTUnwrap(window.rootViewController?.view)
+        // UIKit can update at every frame for a while as a window shows: start once it is at rest
+        var kept = -1, since = Date()
+        waitFor("no update for 0.1 s") {
+            if recording.records.count != kept { (kept, since) = (recording.records.count, Date()) }
+            return Date().timeIntervalSince(since) > 0.1
+        }
         for color in [UIColor.red, .blue, .green] {
             sampler.batch((1, 1), ms: 0.1)
             view.backgroundColor = color
             let wait = Date().addingTimeInterval(0.2)
             while Date() < wait { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
         }
-        let gaps = recording.records.filter { $0.missed > 0 && $0.overrun <= 0 && $0.screenLate == nil && !$0.unshown }
+        let gaps = recording.records.dropFirst(kept).filter { $0.missed > 0 && $0.overrun <= 0 && $0.screenLate == nil && !$0.unshown }
         XCTAssertFalse(gaps.isEmpty, "the recording sees an idle gap without a late commit")
         XCTAssertTrue(gaps.allSatisfy(\.quiet), "an idle gap owes no frame")
         let late = try XCTUnwrap(FrameSampler.report(recording, identity: [:])["late"] as? [[String: Any]])
