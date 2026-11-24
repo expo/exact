@@ -641,7 +641,7 @@ impl<'k> Resolver<'k, '_> {
         );
         let scale = self
             .value(key, Property::Scale)
-            .map_or(style.scale, |v| v.x as f32);
+            .map_or(style.scale.x, |v| v.x as f32); // #1384: native SVG fallback until per-axis presentation lands.
         let matrix = style.transform.matrix();
         // An animated element keeps its transform (its origin) even at the
         // identity: a host that plays the animation itself needs somewhere

@@ -253,7 +253,7 @@ fn geometry_keeps_running_transforms_when_the_transition_is_unset() {
         host.tick(ends.unwrap() * 1000.);
         assert_eq!(
             current(&host, node),
-            [MotionValue::new(100., 0.), MotionValue::scalar(2.)]
+            [MotionValue::new(100., 0.), MotionValue::new(2., 2.)]
         );
         assert!(host.engine().quiescent());
     }
@@ -426,7 +426,7 @@ fn geometry_retarget_and_new_none_declaration_arrive_while_held_before_cancellat
     accepted(&p.send(&mut host));
     assert_eq!(
         current(&host, p.identity[2]),
-        [MotionValue::new(99.0, 0.0), MotionValue::scalar(2.0)]
+        [MotionValue::new(99.0, 0.0), MotionValue::new(2.0, 2.0)]
     );
     assert_eq!(host.engine().now(), 0.2);
     assert!(tokens.into_iter().all(|token| !host.has_hold(token)));
@@ -445,15 +445,8 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
     let (mut host, mut p) = held();
     let before = current(&host, p.identity[2]);
     press(&mut host, "zoom", 105.0);
-    assert_eq!(
-        host.runner()
-            .kernel()
-            .node(id(&host, "photo"))
-            .unwrap()
-            .style
-            .scale,
-        2.0
-    );
+    let photo = host.runner().kernel().node(id(&host, "photo")).unwrap();
+    assert_eq!(photo.style.scale, exact_kernel::Vec2 { x: 2.0, y: 2.0 });
     assert_eq!(current(&host, p.identity[2]), before);
     p.op = 13;
     p.values = [23.75, -8.25, 1.375, 30.0, -10.0, 0.0];
@@ -484,7 +477,10 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
     assert!(p.tokens.into_iter().all(|token| host.has_hold(token)));
     assert_eq!(
         current(&host, p.identity[2]),
-        [MotionValue::new(23.75, -8.25), MotionValue::scalar(1.375)]
+        [
+            MotionValue::new(23.75, -8.25),
+            MotionValue::new(1.375, 1.375)
+        ]
     );
     assert!(p.send(&mut host).contains("\"accepted\":false"));
     for (token, velocity) in p
@@ -502,7 +498,7 @@ fn zoom_action_changes_latest_target_but_not_pair_presentation_and_release_fires
             .spring_descriptor(p.identity[2], Property::Scale)
             .unwrap()
             .target,
-        MotionValue::scalar(2.0)
+        MotionValue::new(2.0, 2.0)
     );
 }
 
@@ -512,14 +508,14 @@ fn replacing_one_property_cleans_old_survivor_without_cancelling_successor() {
     let target = id(&host, "photo");
     let batch = host.hold_begin(target, Property::Scale, 110.0);
     let replacement = quoted(&batch, "token");
-    host.hold_update(replacement, MotionValue::scalar(1.8), 110.0);
+    host.hold_update(replacement, MotionValue::new(1.8, 1.8), 110.0);
     p.now = 1e9;
     p.values = [f64::NAN; 6];
     assert!(p.send(&mut host).contains("\"accepted\":false"));
     assert!(host.has_hold(replacement));
     assert!(!host.has_hold(p.tokens[0]));
     assert_eq!(host.engine().now(), 0.11);
-    assert_eq!(current(&host, p.identity[2])[1], MotionValue::scalar(1.8));
+    assert_eq!(current(&host, p.identity[2])[1], MotionValue::new(1.8, 1.8));
     assert_eq!(count(&host, "released"), 0.0);
 }
 

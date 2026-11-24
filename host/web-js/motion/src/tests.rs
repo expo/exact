@@ -12,7 +12,7 @@ fn a_released_hold_springs_home_as_frames_once() {
     assert!(m.transitions(7, "translate -exact-spring(180, 12, 1)"));
     m.observe(
         7,
-        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0., 0., 0.],
         None,
         0.0,
     )
@@ -68,7 +68,7 @@ fn an_unknown_node_takes_no_hold_and_a_removed_one_forgets_its_holds() {
         .is_none());
     m.observe(
         3,
-        [5.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        [5.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0., 0., 0.],
         None,
         0.0,
     )
@@ -89,14 +89,14 @@ fn a_new_target_under_an_eased_transition_lowers_nothing() {
     assert!(m.transitions(1, "translate 300ms ease-out"));
     m.observe(
         1,
-        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0., 0., 0.],
         None,
         0.0,
     )
     .unwrap();
     m.observe(
         1,
-        [100.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        [100.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0., 0., 0.],
         None,
         0.5,
     )
@@ -123,7 +123,7 @@ fn declaration_only_changes_cancel_browser_springs_before_their_end() {
         for delay in ["", " 0s 500ms"] {
             let mut m = Motion::new();
             assert!(m.transitions(7, &format!("translate -exact-spring(){delay}")));
-            let mut values = [0., 0., 0., 0., 1., 0., 1., 0., 0., 0.];
+            let mut values = [0., 0., 0., 0., 1., 1., 0., 1., 0., 0., 0.];
             m.observe(7, values, None, 0.).unwrap();
             lowered(&mut m, 0.);
             values[0] = 100.;
@@ -191,7 +191,7 @@ fn a_transform_pair_moves_together_and_ends_apart() {
     ));
     m.observe(
         9,
-        [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0., 0., 0.],
+        [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0., 0., 0.],
         None,
         0.0,
     )
@@ -211,8 +211,8 @@ fn a_transform_pair_moves_together_and_ends_apart() {
 
 #[test]
 fn authored_translate_velocity_is_per_axis_and_only_changes_a_new_target() {
-    let initial = [0., 0., 0., 0., 1., 0., 1., 0., 0., 0.];
-    let target = [100., 100., 0., 0., 1., 0., 1., 0., 0., 0.];
+    let initial = [0., 0., 0., 0., 1., 1., 0., 1., 0., 0., 0.];
+    let target = [100., 100., 0., 0., 1., 1., 0., 1., 0., 0., 0.];
     for velocity in [
         Value::new(800., -600.),
         Value::new(-800., 600.),
@@ -279,7 +279,7 @@ fn authored_translate_velocity_is_per_axis_and_only_changes_a_new_target() {
 
 #[test]
 fn enabling_a_spring_releases_nonzero_velocity_at_an_unchanged_endpoint() {
-    let initial = [0., 0., 0., 0., 1., 0., 1., 0., 0., 0.];
+    let initial = [0., 0., 0., 0., 1., 1., 0., 1., 0., 0., 0.];
     for velocity in [
         Value::new(800., -600.),
         Value::new(-800., 600.),
@@ -323,7 +323,7 @@ fn a_held_spring_waits_for_its_ready_time() {
     m.start_on_frame(true).unwrap();
     assert!(m.transitions(7, "translate -exact-spring(180, 12, 1), opacity 300ms"));
     let at = |m: &mut Motion, x: f64, opacity: f64, now: f64| {
-        let values = [x, 0.0, 0.0, 0.0, 1.0, 0.0, opacity, 0., 0., 0.];
+        let values = [x, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, opacity, 0., 0., 0.];
         m.observe(7, values, None, now).unwrap();
     };
     at(&mut m, 0.0, 1.0, 0.0);
@@ -349,4 +349,20 @@ fn a_held_spring_waits_for_its_ready_time() {
     m.presentable(false).unwrap();
     at(&mut m, 0.0, 1.0, 0.3);
     assert_eq!(lowered(&mut m, 0.3)[..4], [1.0, 7.0, 0.0, 0.3]);
+}
+
+#[test]
+fn scale_spring_frames_keep_x_and_y() {
+    let mut m = Motion::new();
+    assert!(m.transitions(1, "scale -exact-spring(180, 12, 1)"));
+    m.observe(1, [0., 0., 0., 0., 1., 1., 0., 1., 0., 0., 0.], None, 0.)
+        .unwrap();
+    m.observe(1, [0., 0., 0., 0., 3., 0., 0., 1., 0., 0., 0.], None, 0.)
+        .unwrap();
+    let out = lowered(&mut m, 0.);
+    assert_eq!(&out[..3], &[1., 1., 1.]);
+    assert_eq!(&out[out.len() - 4..], &[3., 0., 0., 0.]);
+    assert!(out[7..]
+        .chunks_exact(4)
+        .all(|v| (v[0] + 2. * v[1] - 3.).abs() < 1e-9));
 }

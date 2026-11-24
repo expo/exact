@@ -341,9 +341,12 @@ impl StaticStyle {
         if self.known(StyleId::Rotate) && s.rotate != 0.0 {
             out.push("has rotation; write `rotate=0` and put the rotation on a child outside the handle's path".into());
         }
-        if self.known(StyleId::Scale) && (s.scale <= 0.0 || !target && s.scale != 1.0) {
+        if self.known(StyleId::Scale)
+            && ((s.scale.x <= 0.0 || s.scale.x != s.scale.y)
+                || !target && (s.scale.x != 1.0 || s.scale.y != 1.0))
+        {
             out.push(if target {
-                "needs a positive scale; write `scale=1`".into()
+                "needs a positive uniform scale; write `scale=1`".into()
             } else {
                 "must have an identity transform; write `scale=1`".into()
             });

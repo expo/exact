@@ -82,7 +82,7 @@ impl Presented {
             dark: None,
             translate: (s.translate.x, s.translate.y),
             translate_percent: (s.translate_percent.x, s.translate_percent.y),
-            scale: s.scale,
+            scale: s.scale.x, // #1384: temporary uniform fallback; native presentation is the next phase.
             press: 1.0,
             press_translate: [0.; 4],
             press_background: 0.0,

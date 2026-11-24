@@ -694,7 +694,7 @@ pub struct Picture {
     pub opacity: f64,
     /// Points, x then y.
     pub translate: (f64, f64),
-    /// Uniform; one is the natural size.
+    /// Uniform native fallback using x until per-axis route presentation (#1384).
     pub scale: f64,
     /// Degrees clockwise.
     pub rotate: f64,

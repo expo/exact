@@ -902,6 +902,8 @@ const AUTOCAPITALIZE: &str = "`words` for a person's name, `none` for a username
 /// `anywhere` broke their words.
 const OVERFLOW_WRAP: &str = "text wraps between words by default; at a large text size give the row room (flex-wrap=\"wrap\" with a flex-basis in rem) rather than breaking words. `break-word` breaks only a word wider than its line (a pasted link); `anywhere` breaks inside any word (\"Octo/ber\"), which verify names on prose: it is for a URL or a token on a `link` or in a monospace face. `word-break` is not admitted";
 
+const SCALE: &str = "one or two factors, x then y, as CSS scale: `scale=\"1 0.5\"` keeps width and halves height; one value applies to both axes. Numbers and percentages work on rows and in keyframes, transitions and springs. `none` is `1 1`.";
+
 const TRANSLATE: &str = "one or two lengths, x then y, and an optional z in px, as CSS's `translate`: each of x and y px, a percentage of the box's own border box, or a `calc()` of the two (`translate=\"calc(50% - 12px) 0\"`); transitions and keyframes interpolate the px and the percentage separately, as CSS does a `calc()`. A `rem`, viewport or `env()` length is refused";
 /// Charlie, 2026-11-10 (issues/20261021-scroll-drag-events-and-hit-slop.md).
 const HIT_SLOP: &str = "not CSS: how far past its box a pointer still reaches the node, one to four nonnegative lengths as `padding` takes them (React Native's `hitSlop`): `-exact-hit-slop=\"8px\"` on a 28px icon button takes a tap 8px outside it. Layout, paint and accessibility never see it, and `tap <target>` still aims at the box's middle. Where boxes overlap the front one takes the pointer, slop and all; an `overflow` other than `visible` on the node or an ancestor clips it. On the web a positioned pseudo-element is the slop: it reaches from the padding edge, so a border's width comes off it, and a node that says no `position` becomes `position: relative`. An `image`, `input` or other replaced element refuses it (`lower-hit-slop`): give the slop to the box or button that holds it";
@@ -1128,11 +1130,11 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
     if name == "overflow-wrap" {
         doc["note"] = OVERFLOW_WRAP.into();
     }
-    if name == "transform" {
-        doc["note"] = vocab::BOX_TRANSFORM_REFUSAL.into();
-    }
-    if name == "translate" {
-        doc["note"] = TRANSLATE.into();
+    match name {
+        "transform" => doc["note"] = vocab::BOX_TRANSFORM_REFUSAL.into(),
+        "scale" => doc["note"] = SCALE.into(),
+        "translate" => doc["note"] = TRANSLATE.into(),
+        _ => {}
     }
     if matches!(name, "reachstart" | "reachend") {
         doc["note"] = vocab::collection_edge_refusal(name).into();
@@ -1294,11 +1296,11 @@ fn attr_detail(name: &str, a: &AttrTarget) -> Vec<String> {
             if matches!(name, "-exact-min-zoom" | "-exact-max-zoom") {
                 lines.push(ZOOM.into());
             }
-            if name == "transform" {
-                lines.push(vocab::BOX_TRANSFORM_REFUSAL.into());
-            }
-            if name == "translate" {
-                lines.push(TRANSLATE.into());
+            match name {
+                "transform" => lines.push(vocab::BOX_TRANSFORM_REFUSAL.into()),
+                "scale" => lines.push(SCALE.into()),
+                "translate" => lines.push(TRANSLATE.into()),
+                _ => {}
             }
             lines
         }

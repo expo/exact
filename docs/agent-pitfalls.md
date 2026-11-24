@@ -316,10 +316,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   so the binding can skip unrelated changes. Found in the harness's matrix
   animation, 2026-10-10; LLP 1017.003 D6 describes the field mask.
 
-- **`scale` accepts one factor for both axes.** A keyframe with `scale="0 1"`
-  is refused. To grow a progress bar horizontally, translate a full-width fill
-  inside an `overflow="hidden"` box. Verified by the heavy-list benchmark's
-  Contract build (2026-10-29).
+- **`scale` takes x then y.** `scale="1 0.5"` keeps the width and halves the
+  height. A single value applies to both axes. Rows, keyframes and transitions
+  use the same factors; percentages work too (`scale="100% 50%"`).
 
 - **A tap that changes one row of a long list takes ~80 ms on the web.** Cause: the
   mutation answers the whole list (10,000 rows), and on the JS target a Rust

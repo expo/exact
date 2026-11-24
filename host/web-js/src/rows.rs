@@ -441,7 +441,7 @@ impl Em<'_> {
                     (
                         "scale".into(),
                         String::new(),
-                        Some("v=>v==null||v===1||/^\\s*unset\\s*$/i.test(v)?null:\"calc(var(--exact-scale,1) * var(--exact-press-factor,1))\"".into()),
+                        Some("v=>v==null||v===1||/^\\s*unset\\s*$/i.test(v)?null:\"calc(var(--exact-scale,1) * var(--exact-press-factor,1)) calc(var(--exact-scale-y,1) * var(--exact-press-factor,1))\"".into()),
                     ),
                 ]
             }
@@ -473,7 +473,10 @@ impl Em<'_> {
                     r#"v=>{{const text=String(v??'').trim();if(!CSS.supports('translate',text))return '0px';const p=text.match(/calc\([^)]*\)|[^\s]+/g)??[];return !p.length||/^(none|unset|initial)$/i.test(p[0])?'0px':p[{i}]??'0px'}}"#
                 ))
             )).chain(one("translate", None)).chain(one("--exact-base-translated", Some("v=>CSS.supports('translate',String(v))&&!/^(none|unset|initial|revert|revert-layer)$/i.test(String(v).trim())?'1':null".into()))).collect(),
-            StyleId::Scale if press => one("--exact-scale", None),
+            StyleId::Scale if press => ["--exact-scale", "--exact-scale-y"]
+                .into_iter().enumerate()
+                .map(|(i, name)| (name.into(), String::new(), Some(scale_axis(i))))
+                .collect(),
             StyleId::Animation if press || shift => {
                 let names: Vec<String> = self.press_keyframes.clone();
                 let names = serde_json::to_string(&names).unwrap();
@@ -1089,6 +1092,13 @@ fn sandboxed_source<'a>(
             && !navigable(v)
             && frame_navigable(v, Some(""))
     })
+}
+
+/// A scale factor for a registered numeric press base, including percentages.
+fn scale_axis(axis: usize) -> String {
+    format!(
+        r#"v=>{{const t=String(v??'').trim();if(!CSS.supports('scale',t)||/^(none|unset|initial|revert|revert-layer)$/i.test(t))return '1';const p=t.split(/\s+/),n=p[{axis}]??p[0];return n.endsWith('%')?parseFloat(n)/100:n}}"#
+    )
 }
 
 #[cfg(test)]

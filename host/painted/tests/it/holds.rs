@@ -146,7 +146,7 @@ fn invalid_live_samples_leave_host_and_engine_clocks_and_presentation_unchanged(
     let row = view(&h, "row");
     let start = h.hold_begin(row, Property::Scale, 10.).unwrap().unwrap();
     for (value, time) in [
-        (Value::new(0.5, 1.), 100.),
+        (Value::four(0.5, 1., 1., 0.), 100.),
         (Value::scalar(0.5), 9.),
         (Value::scalar(f64::NAN), 100.),
     ] {
@@ -175,7 +175,7 @@ fn zero_distance_spring_keeps_release_velocity_and_no_transition_snaps() {
     h.tick(10.);
     assert!(h.presented(row).translate.0 > 0.);
     let opacity = h.hold_begin(row, Property::Scale, 10.).unwrap().unwrap();
-    h.hold_update(opacity.token, Value::scalar(0.5), 10.)
+    h.hold_update(opacity.token, Value::new(0.5, 0.5), 10.)
         .unwrap();
     h.hold_end(opacity.token, HoldEnd::Cancel, 10.).unwrap();
     assert_eq!(h.presented(row).scale, 1.);

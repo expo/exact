@@ -308,3 +308,53 @@ fn delayed_lights_keep_independent_timing_through_patches_and_clears() {
     k.motion_sync(&receipt).apply(&mut engine).unwrap();
     assert_eq!(sample(&engine, b), 0.25, "rejoins the live clock");
 }
+
+#[test]
+fn per_axis_scale_rows_and_keyframes_round_trip() {
+    use exact_kernel::{StyleCodec, Vec2};
+    use exact_motion::{Property, Value};
+    assert_eq!(StyleId::Scale.codec(), StyleCodec::Vec2);
+    assert_eq!(StyleProps::default().scale, Vec2 { x: 1., y: 1. });
+    for (text, pair) in [
+        ("1 0.5", (1., 0.5)),
+        ("2", (2., 2.)),
+        ("100% -50%", (1., -0.5)),
+        ("0 1", (0., 1.)),
+        ("none", (1., 1.)),
+    ] {
+        let mut style = StyleProps::default();
+        style
+            .set_dynamic(StyleId::Scale, &StyleValue::Text(text.into()))
+            .unwrap();
+        assert_eq!(
+            style.scale,
+            Vec2 {
+                x: pair.0,
+                y: pair.1
+            }
+        );
+        let ops = [Op::SetStyle {
+            id: 1,
+            patch: Box::new(style),
+        }];
+        let bytes = wire::encode(0, 1, &ops);
+        assert_eq!(wire::frame::decode(&bytes).unwrap().ops, ops);
+    }
+    for text in ["1 2 3", "1px", "NaN", "1 inf", "1e40"] {
+        assert!(
+            StyleProps::default()
+                .set_dynamic(StyleId::Scale, &StyleValue::Text(text.into()))
+                .is_err(),
+            "{text}"
+        );
+    }
+    let mut row = Animations::parse("flip 1s linear both").unwrap();
+    let frames = Keyframes::parse("from{scale:1 0.5}to{scale:-2 0}").unwrap();
+    row.resolve(|_| Some(&frames));
+    let decoded = through_the_wire(&row);
+    assert_eq!(decoded, row);
+    assert_eq!(
+        decoded.0[0].keyframes.0[1].values,
+        vec![(Property::Scale, Value::new(-2., 0.))]
+    );
+}

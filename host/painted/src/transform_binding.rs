@@ -24,7 +24,7 @@ fn valid_values(values: [Value; 2]) -> bool {
         .all(|v| v.x.is_finite() && v.y.is_finite())
         && values[0].x.abs() <= f32::MAX as f64
         && values[0].y.abs() <= f32::MAX as f64
-        && values[1].y == 0.
+        && values[1].y == values[1].x
         && values[1].x > 0.
         && values[1].x <= f32::MAX as f64
         && (values[1].x as f32) > 0.
@@ -33,7 +33,7 @@ fn valid_velocities(values: [Value; 2]) -> bool {
     values
         .into_iter()
         .all(|v| v.x.is_finite() && v.y.is_finite())
-        && values[1].y == 0.
+        && values[1].y == values[1].x
 }
 impl<D: DataSource> Host<D> {
     pub(super) fn discover_transform_handles(&mut self) {
@@ -167,7 +167,7 @@ impl<D: DataSource> Host<D> {
             self.played_value(node, Property::Translate, now_ms / 1000.)
                 .unwrap_or_else(|| Value::new(p.translate.0 as f64, p.translate.1 as f64)),
             self.played_value(node, Property::Scale, now_ms / 1000.)
-                .unwrap_or_else(|| Value::scalar(p.scale as f64)),
+                .unwrap_or_else(|| Value::new(p.scale as f64, p.scale as f64)),
         ];
         if !valid_values(values) || !now_ms.is_finite() || now_ms < self.now_ms {
             return Err("invalid transform presentation or clock".into());

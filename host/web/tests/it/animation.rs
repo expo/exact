@@ -212,3 +212,51 @@ component App
     }
     assert!(css(&revealed, ids[3]).is_none_or(|css| css.contains(" paused Draw")));
 }
+
+#[test]
+fn per_axis_scale_reaches_css_keyframes_press_bases_and_spring_wire() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let plan = contract::compile(
+        r#"keyframes flip
+  from scale="1 1"
+  to scale="1 0"
+component App
+  state flat = false
+  action toggle
+    flat = not flat
+  view
+    column
+      view testId="row" scale="1 0.5" animation="flip 1s linear both"
+      view testId="pressed" press=toggle -exact-press-scale=0.5 scale="1 0.5"
+      button "Toggle" testId="toggle" press=toggle
+      view testId="spring" scale=(flat ? "3 0" : "1 1") transition="scale -exact-spring(180, 12, 1)"
+"#,
+    )
+    .unwrap();
+    let (mut host, first) = Host::boot(&plan.encode(), NoData, Default::default(), "/").unwrap();
+    assert!(first.contains("scale:1 0.5;"), "{first}");
+    assert!(first.contains("100%{scale:1 0;}"), "{first}");
+    assert!(
+        first.contains("--exact-scale:1;--exact-scale-y:0.5;"),
+        "{first}"
+    );
+    let k = host.runner().kernel();
+    let toggle = k.node_by_key(k.find_by_test_id("toggle")[0]).unwrap().id;
+    let batch = host.dispatch_at(toggle, Event::Press, 0.);
+    let json: serde_json::Value = serde_json::from_str(&batch).unwrap();
+    let op = json["ops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|op| op["op"] == "animate" && op["property"] == "scale")
+        .unwrap();
+    assert_eq!(
+        op["values"].as_array().unwrap().last().unwrap(),
+        &serde_json::json!([3, 0])
+    );
+    assert!(op["values"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|v| v.as_array().unwrap().len() == 2));
+}

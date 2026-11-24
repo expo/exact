@@ -24,7 +24,10 @@ impl LookMotion {
         engine.observe(Change {
             node: motion_node(node.key),
             property: Property::Scale,
-            value: Value::scalar(scale(node, states) as f64),
+            value: {
+                let s = scale(node, states);
+                Value::new(s.x as f64, s.y as f64)
+            },
             velocity: None,
         })
     }
@@ -41,14 +44,17 @@ impl LookMotion {
             let key = node_key(change.node);
             if let Some(states) = self.0.get(&key) {
                 if let Some(node) = kernel.node_by_key(key) {
-                    change.value = Value::scalar(scale(&node, *states) as f64);
+                    change.value = {
+                        let s = scale(&node, *states);
+                        Value::new(s.x as f64, s.y as f64)
+                    };
                 }
             }
         }
     }
 }
 
-fn scale(node: &NodeRef<'_>, states: u8) -> f32 {
+fn scale(node: &NodeRef<'_>, states: u8) -> crate::style::Vec2 {
     let mut value = node.style.scale;
     if node.props.bool(PropId::Disabled) == Some(true) {
         return value;
@@ -63,7 +69,7 @@ fn scale(node: &NodeRef<'_>, states: u8) -> f32 {
             value = if look.mask.has(StyleId::Scale) {
                 look.scale
             } else {
-                1.
+                crate::style::Vec2 { x: 1., y: 1. }
             };
         }
     }

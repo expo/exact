@@ -268,7 +268,10 @@ pub fn targets(style: &StyleProps) -> [(Property, Value); 4] {
                 style.translate_percent.y as f64,
             ),
         ),
-        (Property::Scale, Value::scalar(style.scale as f64)),
+        (
+            Property::Scale,
+            Value::new(style.scale.x as f64, style.scale.y as f64),
+        ),
         (
             Property::Rotate,
             exact_motion::rotation::value(style.rotate as f64, style.rotate_axis.0.map(f64::from)),

@@ -397,7 +397,7 @@ fn released_curve_keeps_seek_determinism() {
 }
 
 #[test]
-fn scalar_shape_errors_cannot_replace_a_hold_or_move_the_clock() {
+fn value_shape_errors_cannot_replace_a_hold_or_move_the_clock() {
     for property in [Property::Scale, Property::Opacity] {
         let mut e = engine();
         e.observe(Change {
@@ -409,7 +409,10 @@ fn scalar_shape_errors_cannot_replace_a_hold_or_move_the_clock() {
         .unwrap();
         let held = e.begin_hold(NODE, property, 0.1, None).unwrap().unwrap();
         e.frame();
-        let malformed = Value::new(0.5, 1.0);
+        let malformed = match property {
+            Property::Scale => Value::four(0.5, 1.0, 1.0, 0.0),
+            _ => Value::new(0.5, 1.0),
+        };
         assert_eq!(
             e.begin_hold(NODE, property, 9.0, Some(malformed)),
             Err(EngineError::InvalidValueShape)

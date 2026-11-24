@@ -82,7 +82,7 @@ fn holds_retire_reader_tracks_before_presentation() {
         .hold_begin(target, Property::Scale, 250.)
         .unwrap()
         .unwrap();
-    assert_eq!(held.value, Value::scalar(1.5));
+    assert_eq!(held.value, Value::new(1.5, 1.5));
     assert!(!h.played.contains_key(&node));
     assert_eq!(h.lowered_mask(binding.target), 0);
     assert!(h.lowered_changed[&node] > epoch);
@@ -109,7 +109,10 @@ fn transform_drag_catches_reader_easing() {
             Value::new(100. * progress, -40. * progress),
             "{transition} at {at}"
         );
-        assert_eq!(held.scale().value, Value::scalar(1. + 2. * progress));
+        assert_eq!(
+            held.scale().value,
+            Value::new(1. + 2. * progress, 1. + 2. * progress)
+        );
         assert_eq!(
             h.presented(target).translate,
             ((100. * progress) as f32, (-40. * progress) as f32)
@@ -136,7 +139,7 @@ fn transform_drag_catches_reader_spring_frames() {
     let held = h.transform_drag_begin(binding, at).unwrap().unwrap();
     assert!((held.translate().value.x - expected.x).abs() < 1e-9);
     assert!((held.translate().value.y - expected.y).abs() < 1e-9);
-    assert_eq!(held.scale().value, Value::scalar(3.));
+    assert_eq!(held.scale().value, Value::new(3., 3.));
     assert_eq!(
         h.presented(target).translate,
         (expected.x as f32, expected.y as f32)

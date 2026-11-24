@@ -178,13 +178,13 @@ fn zoom_control_during_pair_hold_survives_final_sample_and_release() {
         p.host()
             .engine()
             .target(motion_node(target), Property::Scale),
-        Some(Value::scalar(1.))
+        Some(Value::new(1., 1.))
     );
     assert_eq!(
         p.host()
             .engine()
             .value(motion_node(target), Property::Scale),
-        Some(Value::scalar(2.))
+        Some(Value::new(2., 2.))
     );
     assert!(p.pointer_up(106., 86., 30.).unwrap());
     assert_eq!(text(&p, "seenScale"), "2");
@@ -193,7 +193,7 @@ fn zoom_control_during_pair_hold_survives_final_sample_and_release() {
         p.host()
             .engine()
             .value(motion_node(target), Property::Scale),
-        Some(Value::scalar(1.))
+        Some(Value::new(1., 1.))
     );
 }
 #[test]

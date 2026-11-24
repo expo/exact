@@ -147,16 +147,16 @@ impl Motion {
     pub fn observe(
         &mut self,
         node: u64,
-        values: [f64; 10],
+        values: [f64; 11],
         velocity: Option<Value>,
         now: f64,
     ) -> Result<(), EngineError> {
         self.seek(now)?;
         let enabled = self.enabled_translate.remove(&node);
-        let [x, y, px, py, scale, rotate, opacity, ax, ay, az] = values;
+        let [x, y, px, py, sx, sy, rotate, opacity, ax, ay, az] = values;
         let targets = [
             Value::four(x, y, px, py),
-            Value::scalar(scale),
+            Value::new(sx, sy),
             Value::four(rotate, ax, ay, az),
             Value::scalar(opacity),
         ];
@@ -244,7 +244,10 @@ impl Motion {
         values: [f64; 3],
         now: f64,
     ) -> Result<Option<(u64, u64, [f64; 3])>, EngineError> {
-        let presented = [Value::new(values[0], values[1]), Value::scalar(values[2])];
+        let presented = [
+            Value::new(values[0], values[1]),
+            Value::new(values[2], values[2]),
+        ];
         let Some(pair) = self
             .engine
             .begin_transform_hold(node, now, Some(presented))?
@@ -278,7 +281,10 @@ impl Motion {
         let Some(pair) = self.pairs.get(&serial).copied() else {
             return Ok(false);
         };
-        let values = [Value::new(values[0], values[1]), Value::scalar(values[2])];
+        let values = [
+            Value::new(values[0], values[1]),
+            Value::new(values[2], values[2]),
+        ];
         self.engine.update_transform_hold(pair, now, values)
     }
 

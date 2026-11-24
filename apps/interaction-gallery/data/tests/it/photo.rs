@@ -87,10 +87,11 @@ fn targets(r: &Runner<CountedGallery>) -> [f64; 3] {
         .node_by_key(key(r, "viewer-transform"))
         .unwrap()
         .style;
+    assert_eq!(style.scale.x, style.scale.y);
     [
         style.translate.x as f64,
         style.translate.y as f64,
-        style.scale as f64,
+        style.scale.x as f64,
     ]
 }
 

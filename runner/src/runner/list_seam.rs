@@ -687,7 +687,7 @@ impl<D: DataSource> Runner<D> {
         let mut at = node;
         loop {
             if at.style.rotate != 0.0
-                || at.style.scale != 1.0
+                || (at.style.scale.x != 1.0 || at.style.scale.y != 1.0)
                 || (at.key != binding.wrapper
                     && (at.style.translate.x != 0.0
                         || at.style.translate.y != 0.0

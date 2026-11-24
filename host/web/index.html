@@ -401,7 +401,7 @@
   @property --exact-symbol-position { syntax: "*"; inherits: false; }
   @property --exact-symbol-size-authored { syntax: "*"; inherits: false; }
   @property --exact-symbol-weight-authored { syntax: "*"; inherits: false; }
-  /* LLP 1061: a press multiplies the scale row's current number, including
+  /* LLP 1061: a press multiplies each scale factor, including
      during a CSS transition. Keep it local to the node, as `scale` is. */
   @property --exact-press-factor { syntax: "<number>"; inherits: false; initial-value: 1; }
   @property --exact-press-scale-progress { syntax: "<number>"; inherits: false; initial-value: 0; }
@@ -419,6 +419,7 @@
   @property --exact-press-x { syntax: "<length-percentage>"; inherits: false; initial-value: 0px; }
   @property --exact-press-y { syntax: "<length-percentage>"; inherits: false; initial-value: 0px; }
   @property --exact-scale { syntax: "<number>"; inherits: false; initial-value: 1; }
+  @property --exact-scale-y { syntax: "<number>"; inherits: false; initial-value: 1; }
   /* LLP 1061 D7: each press paint property uses its own animation progress.
      The registered copies of the targets resolve tokens and light-dark() on the pressed node. */
   @property --exact-press-background-progress { syntax: "<number>"; inherits: false; initial-value: 0; }

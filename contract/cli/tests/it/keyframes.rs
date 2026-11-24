@@ -95,7 +95,7 @@ fn a_named_animation_reaches_the_row_with_its_keyframes_and_a_condition_can_stop
         a.keyframes.0[0].values,
         [
             (Property::Opacity, Value::scalar(0.4)),
-            (Property::Scale, Value::scalar(0.9)),
+            (Property::Scale, Value::new(0.9, 0.9)),
         ]
     );
     // From a `style`, through `class`: the keyframe's own easing and a
@@ -968,8 +968,7 @@ fn translate_takes_percentages_of_the_box_everywhere_it_takes_lengths() {
 
 /// A design token in a colour keyframe is the colour it stands for, a
 /// `light-dark()` pair whole (euxy's chip relight, `c.chipDim`), as a row's
-/// colour is; one that varies by an app axis, and a two-value `scale`, are
-/// refused by name.
+/// colour is; one that varies by an app axis is refused by name.
 #[test]
 fn a_colour_keyframe_takes_the_designs_tokens() {
     let source = "theme\n  chipDim=\"light-dark(#cfced4, #45454b)\"\n  glow=\"#ff000080\"\nkeyframes relight\n  from background-color=\"chipDim\" box-shadow=\"0 0 6px glow\"\n  to background-color=\"transparent\" box-shadow=\"none\"\ncomponent App\n  view\n    text \"a\" testId=\"a\" animation=\"relight 1s\"\n";
@@ -1031,15 +1030,6 @@ fn a_colour_keyframe_takes_the_designs_tokens() {
         error.message.contains("`c.chip` varies by an app axis"),
         "{error}"
     );
-    let scale = contract::compile(
-        "keyframes fill\n  from scale=\"0 1\"\ncomponent App\n  view\n    text \"a\" animation=\"fill 1s\"\n",
-    )
-    .unwrap_err();
-    assert_eq!(scale.id, "lower-keyframes");
-    assert!(
-        scale.message.contains("one factor for both axes") && scale.message.contains("-90deg x"),
-        "{scale}"
-    );
 }
 
 /// A class choice whose one side sets animation longhands and whose other
@@ -1098,4 +1088,47 @@ fn a_keyframes_declaration_reads_in_any_ascii_case() {
     assert!(a.keyframes.0[0]
         .values
         .contains(&(Property::Rotate, Value::scalar(45.0))));
+}
+
+#[test]
+fn scale_rows_keyframes_and_transitions_keep_both_axes() {
+    use exact_motion::Value;
+    let r = booted(
+        r#"keyframes flip
+  from scale="1 1"
+  to scale="1 0"
+component App
+  state flat = true
+  view
+    column
+      view testId="row" scale="1 0.5" transition="scale 1s linear" animation="flip 1s linear both"
+      view testId="choice" scale=(flat ? "0 1" : "1 0")
+      view testId="transform" transform="scale(2, 0.5)"
+      view testId="x" transform="scaleX(25%)"
+      view testId="y" transform="scaleY(-2)"
+      view testId="uniform" scale=2
+"#,
+    );
+    let k = r.kernel();
+    for (id, pair) in [
+        ("row", (1., 0.5)),
+        ("choice", (0., 1.)),
+        ("transform", (2., 0.5)),
+        ("x", (0.25, 1.)),
+        ("y", (1., -2.)),
+        ("uniform", (2., 2.)),
+    ] {
+        let s = k.node_by_key(k.find_by_test_id(id)[0]).unwrap().style;
+        assert_eq!((s.scale.x, s.scale.y), pair, "{id}");
+    }
+    let (_, row) = animation(&r, "row");
+    assert_eq!(
+        row.0[0].sample(0.5, Property::Scale, Value::new(1., 1.)),
+        Some(Value::new(1., 0.5))
+    );
+    let s = k.node_by_key(k.find_by_test_id("row")[0]).unwrap().style;
+    assert_eq!(
+        s.transition,
+        exact_motion::Transitions::parse("scale 1s linear").unwrap()
+    );
 }

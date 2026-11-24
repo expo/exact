@@ -913,7 +913,7 @@ component App
             (s.translate.x, s.translate.y),
             (s.translate_percent.x, s.translate_percent.y),
             s.rotate,
-            s.scale,
+            s.scale.x,
         )
     };
     let none = ((0.0, 0.0), (0.0, 0.0), 0.0, 1.0);
@@ -945,7 +945,7 @@ component App
     let k = r.kernel();
     let svg = k.node_by_key(k.find_by_test_id("svg")[0]).unwrap();
     assert_eq!(svg.style.transform.matrix(), [0.8, 0.0, 0.0, 0.8, 0.0, 0.0]);
-    assert_eq!(svg.style.scale, 1.0);
+    assert_eq!(svg.style.scale, exact_kernel::Vec2 { x: 1., y: 1. });
     r.act("change", vec![]).unwrap();
     for (id, expected) in [
         ("class-choice", shifted),
@@ -973,13 +973,8 @@ fn box_transforms_are_refused_inline_and_through_classes() {
             "`skewX(…)` has no individual property",
         ),
         (
-            "transform=\"scale(2, 1)\"",
-            "`scale(2, 1)` scales the axes differently",
-        ),
-        ("transform=\"scaleX(2)\"", "`scaleX(…)` scales one axis"),
-        (
             "transform=\"scale3d(1, 1, 1)\"",
-            "`scale3d(…)` scales one axis",
+            "`scale3d(…)` is a 3D function",
         ),
         (
             "transform=\"translate3d(1px, 1px, 1px)\"",

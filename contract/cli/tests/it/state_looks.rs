@@ -321,10 +321,10 @@ fn hover_scale_is_a_presentation_row_and_leaves_the_base_unchanged() {
     let r = booted(contract::compile(source).unwrap());
     let k = r.kernel();
     let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
-    assert_eq!(node.style.scale, 1.);
+    assert_eq!(node.style.scale, exact_kernel::Vec2 { x: 1., y: 1. });
     let look = &node.looks()[0].1;
     assert!(look.mask.has(exact_kernel::StyleId::Scale));
-    assert!((look.scale - 1.08).abs() < 1e-6);
+    assert!((look.scale.x - 1.08).abs() < 1e-6);
 }
 
 /// Issue #151: `:focus-visible` takes its own `scale` beside `:hover`'s, and
@@ -339,11 +339,12 @@ fn a_focus_scale_stands_beside_the_hovers_and_a_computed_one_is_refused() {
     let scale = |state: u8| {
         let (_, look) = node.looks().iter().find(|(s, _)| *s == state).unwrap();
         assert!(look.mask.has(exact_kernel::StyleId::Scale), "{look:?}");
-        look.scale
+        assert_eq!(look.scale.x, look.scale.y);
+        look.scale.x
     };
     assert_eq!(scale(LOOK_HOVER), 1.08);
     assert_eq!(scale(exact_kernel::LOOK_FOCUS_VISIBLE), 1.12);
-    assert_eq!(node.style.scale, 1.0);
+    assert_eq!(node.style.scale, exact_kernel::Vec2 { x: 1., y: 1. });
     for (part, id) in [
         (":hover\n        scale=k", "lower-state-literal"),
         (":disabled\n        scale=0.9", "lower-state-row"),

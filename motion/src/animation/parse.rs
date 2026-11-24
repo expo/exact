@@ -454,7 +454,9 @@ pub fn value_css(property: Property, v: Value) -> String {
         | Property::Y
         | Property::Rx
         | Property::Ry => format!("{}px", Shortest(v.x)),
-        Property::Scale | Property::Opacity | Property::StrokeDashoffset | Property::FontWeight => {
+        Property::Scale if v.x == v.y => format!("{}", Shortest(v.x)),
+        Property::Scale => format!("{} {}", Shortest(v.x), Shortest(v.y)),
+        Property::Opacity | Property::StrokeDashoffset | Property::FontWeight => {
             format!("{}", Shortest(v.x))
         }
         Property::FontStretch => format!("{}%", Shortest(v.x)),
@@ -806,7 +808,8 @@ fn keyframe_value(property: Property, value: &str) -> Result<Value, ParseError> 
         // (chess diary #4): lengths in x and y, percentages in z and w.
         Property::Translate => crate::length::translate(value, false).ok_or_else(bad)?,
         Property::Rotate => crate::rotation::parse(value).ok_or_else(bad)?,
-        Property::Scale | Property::Opacity => {
+        Property::Scale => crate::property::scale(value).ok_or_else(bad)?,
+        Property::Opacity => {
             let v = match value.strip_suffix('%') {
                 Some(n) => exact_num::parse_f64(n.trim()).map_err(|_| bad())? / 100.0,
                 None => exact_num::parse_f64(value).map_err(|_| bad())?,

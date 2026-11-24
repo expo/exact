@@ -59,7 +59,7 @@ fn a_removed_row_leaves_with_its_exit_and_its_sibling_declares_a_layout_transiti
         a.keyframes.0.last().unwrap().values,
         [
             (Property::Opacity, Value::scalar(0.0)),
-            (Property::Scale, Value::scalar(0.96)),
+            (Property::Scale, Value::new(0.96, 0.96)),
         ]
     );
     assert!(r.kernel().node(first_view).is_none());

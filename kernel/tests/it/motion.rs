@@ -491,7 +491,7 @@ fn a_created_node_takes_its_style_without_a_transition() {
     );
     assert_eq!(
         engine.value(node, Property::Scale),
-        Some(Value::scalar(1.0))
+        Some(Value::new(1.0, 1.0))
     );
     assert_eq!(engine.value(node, Property::Translate), Some(Value::ZERO));
 }
@@ -789,7 +789,7 @@ fn the_transition_row_round_trips_through_exwf_bytes() {
                 s.mask.set(StyleId::Transition);
                 s.translate = Vec2 { x: 10.0, y: -4.0 };
                 s.mask.set(StyleId::Translate);
-                s.scale = 1.5;
+                s.scale = exact_kernel::Vec2 { x: 1.5, y: 1.5 };
                 s.mask.set(StyleId::Scale);
                 s.rotate = 45.0;
                 s.mask.set(StyleId::Rotate);
@@ -803,7 +803,7 @@ fn the_transition_row_round_trips_through_exwf_bytes() {
     let node = kernel.node(1).unwrap();
     assert_eq!(node.style.transition, rows);
     assert_eq!(node.style.translate, Vec2 { x: 10.0, y: -4.0 });
-    assert_eq!(node.style.scale, 1.5);
+    assert_eq!(node.style.scale, Vec2 { x: 1.5, y: 1.5 });
     assert_eq!(node.style.rotate, 45.0);
 }
 

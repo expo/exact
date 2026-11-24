@@ -1026,14 +1026,14 @@ function photoFixture(native=false) {
     if(r.op==='transform-invalidate') {return {accepted:true,batch:{ops:[]}};}
     if(r.op==='transform-begin') {
       const [x,y,s]=r.values;
-      const translateToken=start('translate',[x,y]),scaleToken=start('scale',[s,0]);
+      const translateToken=start('translate',[x,y]),scaleToken=start('scale',[s,s]);
       return {accepted:true,runtime:r.runtime,geometrySequence:r.geometrySequence,translateToken,scaleToken,value:[x,y,s],batch:{ops:f.beginOps??[]}};
     }
     if(r.op==='transform-move'||r.op==='transform-action') {
       if(!held.has(r.translateToken)||!held.has(r.scaleToken))return {accepted:false};
-      const [x,y,s]=r.values;held.get(r.translateToken).value=[x,y];held.get(r.scaleToken).value=[s,0];
+      const [x,y,s]=r.values;held.get(r.translateToken).value=[x,y];held.get(r.scaleToken).value=[s,s];
       if(r.op==='transform-action') {f.actions++;f.onAction?.(r);}
-      return {accepted:true,dispatched:r.op==='transform-action',committed:true,batch:{ops:[]}};
+      return {accepted:true,dispatched:r.op==='transform-action',committed:true,velocity:f.releaseVelocity,batch:{ops:[]}};
     }
     if(r.op==='begin') {const token=start(r.property,[r.x,r.y]);return {token,value:[r.x,r.y],batch:{ops:[]}};}
     if(!held.has(r.token))return {accepted:false};
@@ -1058,17 +1058,17 @@ test('photo geometry reports fractional untransformed dimensions and ignores own
 });
 
 test('photo catch adopts current Translate and Scale at zero displacement and preserves latest controls',async()=>{
-  const result=await evaluate(`(async()=>{const f=(${photoFixture})();await f.settle();const m=f.motion,e=f.events;
+  const result=await evaluate(`(async()=>{const f=(${photoFixture})();await f.settle();const m=f.motion,e=f.events;f.releaseVelocity=[30,-10,2];
     const t=f.target.animate([{translate:'0px 0px'},{translate:'80px 0px'}],{duration:1000,fill:'both'}),s=f.target.animate([{scale:1},{scale:2}],{duration:1000,fill:'both'});
     t.pause();s.pause();t.currentTime=250;s.currentTime=250;e.pointerdown(f.event('pointerdown',100));t.currentTime=500;s.currentTime=500;e.pointermove(f.event('pointermove',110));
     const began=f.calls.find(c=>c.op==='transform-begin'),caught={t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale};
     f.advance(20);e.pointermove(f.event('pointermove',130,112));const moved={t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale};
     m.style(2,'width:100%;height:100%;box-sizing:border-box;padding:0;border:0;translate:100px 20px;scale:2;opacity:.7;transition:none');
     const held={t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale};f.advance(20);e.pointerup(f.event('pointerup',130,112));
-    const action=f.calls.find(c=>c.op==='transform-action');return {began:began.values.slice(0,3),caught,moved,held,action:action.values.slice(0,3),end:{t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale,opacity:getComputedStyle(f.target).opacity},tokens:f.held.size,actions:f.actions};})()`);
+    const action=f.calls.find(c=>c.op==='transform-action'),release=f.calls.find(c=>c.op==='release'&&c.property==='scale');return {began:began.values.slice(0,3),caught,moved,held,action:action.values.slice(0,3),velocity:[release.x,release.y],end:{t:getComputedStyle(f.target).translate,s:getComputedStyle(f.target).scale,opacity:getComputedStyle(f.target).opacity},tokens:f.held.size,actions:f.actions};})()`);
   expect(result.began).toEqual([40,0,1.5]);expect(result.caught).toEqual({t:'40px',s:'1.5'});
   expect(result.moved).toEqual({t:'60px 12px',s:'1.5'});expect(result.held).toEqual(result.moved);
-  expect(result.action).toEqual([60,12,1.5]);expect(result.end).toEqual({t:'100px 20px',s:'2',opacity:'0.7'});expect(result.tokens).toBe(0);expect(result.actions).toBe(1);
+  expect(result.action).toEqual([60,12,1.5]);expect(result.velocity).toEqual([2,2]);expect(result.end).toEqual({t:'100px 20px',s:'2',opacity:'0.7'});expect(result.tokens).toBe(0);expect(result.actions).toBe(1);
 });
 
 test('photo eligibility refuses 3D, nonuniform, offcenter, perspective and pending ancestor curves',async()=>{
@@ -1113,7 +1113,7 @@ test('photo resize publishes latest fractional dimensions once and becomes idle 
 
 test('photo token-qualified retirement cannot erase a replacement or unrelated animation',async()=>{
   const result=await evaluate(`(async()=>{const f=(${photoFixture})();await f.settle();f.events.pointerdown(f.event('pointerdown',100));f.events.pointermove(f.event('pointermove',110));
-    const began=f.calls.find(c=>c.op==='transform-begin');const old=[...f.held.keys()];const replacement=f.motion.begin(2,'scale');f.motion.move(replacement,[1.8,0]);
+    const began=f.calls.find(c=>c.op==='transform-begin');const old=[...f.held.keys()];const replacement=f.motion.begin(2,'scale');f.motion.move(replacement,[1.8,1.8]);
     const opacity=f.target.animate([{opacity:1},{opacity:.5}],{duration:10000});f.motion.retire(2,'scale',old[1],began.runtime);f.motion.commit();
     return {scale:getComputedStyle(f.target).scale,newHeld:f.held.has(replacement.token),oldHeld:f.held.has(old[0]),opacity:opacity.playState,actions:f.actions};})()`);
   expect(result.scale).toBe('1.8');expect(result.newHeld).toBe(true);expect(result.oldHeld).toBe(false);expect(result.opacity).not.toBe('idle');expect(result.actions).toBe(0);

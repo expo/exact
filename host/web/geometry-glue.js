@@ -22,7 +22,7 @@ const PAINT_ONLY = new Set(['transform', 'translate', 'scale', 'rotate', 'opacit
   'color', 'background-color', 'background-image', 'box-shadow', 'clip-path', 'visibility',
   'border-color', 'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
   'fill', 'stroke', 'stroke-dashoffset', 'r', 'cx', 'cy', 'x', 'y', 'rx', 'ry',
-  '--exact-tint', '--exact-scale', '--exact-translate-x', '--exact-translate-y', '--exact-translate-z',
+  '--exact-tint', '--exact-scale', '--exact-scale-y', '--exact-translate-x', '--exact-translate-y', '--exact-translate-z',
   '--exact-press-paint', '--exact-press-opacity', '--exact-press-color', '--exact-press-background-color',
   'offset', 'easing', 'composite', 'computed-offset']);
 const kebab = name => name.replace(/[A-Z]/g, c => '-' + c.toLowerCase());

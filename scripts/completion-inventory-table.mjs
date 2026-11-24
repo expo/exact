@@ -629,7 +629,7 @@ export const classifications = [
     ["painted:host/painted/src/press.rs", "Host::look_motion Host::retarget_press Host::retire_presses"],
     ["painted:host/painted/src/surfaces.rs", "Presenter::retier_surfaces Presenter::surface_lifecycle Presenter::sync_surfaces"],
     ["painted:host/painted/src/surfaces/window.rs", "Presenter::collect_painter_retirement Presenter::reset_painter_present_deadline"],
-    ["web-js:host/web-js/motion/src/abi.rs", "m_gesture m_in m_out m_scratch m_translate"],
+    ["web-js:host/web-js/motion/src/abi.rs", "m_gesture m_in m_out m_scale m_scratch m_translate"],
     ["painted:host/painted/src/presenter/zoom.rs", "Presenter::move_zoom Presenter::port_point Presenter::reported_zoom Presenter::zoom_layout Presenter::zoom_now"],
     ["painted:host/painted/src/snapshot.rs", "error_json render Session::tree"],
     ["painted:host/painted/src/snapshot/jni.rs", "Java_dev_exact_widgets_Native_render"],

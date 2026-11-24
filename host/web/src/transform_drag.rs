@@ -187,7 +187,7 @@ impl Input {
     fn samples(&self) -> [Value; 2] {
         [
             Value::new(self.values[0], self.values[1]),
-            Value::scalar(self.values[2]),
+            Value::new(self.values[2], self.values[2]),
         ]
     }
 }

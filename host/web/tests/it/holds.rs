@@ -48,12 +48,12 @@ fn actual_browser_sample_survives_commits_and_releases_to_latest_target() {
     let mut host = boot();
     let row = id(&host, "row");
     let (hold, _) = host
-        .begin_hold(row, Property::Scale, MotionValue::new(83.0, 0.0), 100.0)
+        .begin_hold(row, Property::Scale, MotionValue::new(83.0, 83.0), 100.0)
         .unwrap()
         .unwrap();
     assert_eq!(hold.value.x, 83.0);
     assert!(host
-        .update_hold(hold.token.serial(), MotionValue::new(91.0, 0.0), 110.0)
+        .update_hold(hold.token.serial(), MotionValue::new(91.0, 91.0), 110.0)
         .unwrap()
         .is_some());
     let retarget = id(&host, "retarget");
@@ -67,14 +67,14 @@ fn actual_browser_sample_survives_commits_and_releases_to_latest_target() {
         .end_hold(
             hold.token.serial(),
             HoldEnd::Release {
-                velocity: MotionValue::new(-50.0, 0.0),
+                velocity: MotionValue::new(-50.0, -50.0),
             },
             130.0,
         )
         .unwrap()
         .unwrap();
-    assert!(release.contains("\"values\":[91,"), "{release}");
-    assert!(release.contains(",24]}"), "{release}");
+    assert!(release.contains("\"values\":[[91,91],"), "{release}");
+    assert!(release.contains(",[24,24]]}"), "{release}");
     assert!(!host.has_hold(hold.token.serial()));
     assert!(host
         .end_hold(hold.token.serial(), HoldEnd::Cancel, f64::NAN)
@@ -151,7 +151,7 @@ fn equal_target_takeover_cancels_and_same_clock_velocity_release_is_not_deduplic
     let retarget = id(&host, "retarget");
     host.dispatch_at(retarget, Event::Press, 100.0);
     let (held, cancel) = host
-        .begin_hold(row, Property::Scale, MotionValue::scalar(24.0), 100.0)
+        .begin_hold(row, Property::Scale, MotionValue::new(24.0, 24.0), 100.0)
         .unwrap()
         .unwrap();
     assert!(cancel.contains("\"values\":[]"), "{cancel}");
@@ -159,14 +159,14 @@ fn equal_target_takeover_cancels_and_same_clock_velocity_release_is_not_deduplic
         .end_hold(
             held.token.serial(),
             HoldEnd::Release {
-                velocity: MotionValue::scalar(17.0),
+                velocity: MotionValue::new(17.0, 17.0),
             },
             100.0,
         )
         .unwrap()
         .unwrap();
     assert!(release.contains("\"op\":\"animate\""), "{release}");
-    assert!(release.contains("\"values\":[24,"), "{release}");
+    assert!(release.contains("\"values\":[[24,24],"), "{release}");
 }
 
 #[test]
@@ -185,10 +185,10 @@ fn overdue_timer_retargets_live_hold_without_rewinding_its_clock() {
     .unwrap();
     let row = id(&host, "row");
     let (hold, _) = host
-        .begin_hold(row, Property::Scale, MotionValue::scalar(83.0), 150.0)
+        .begin_hold(row, Property::Scale, MotionValue::new(83.0, 83.0), 150.0)
         .unwrap()
         .unwrap();
-    host.update_hold(hold.token.serial(), MotionValue::scalar(91.0), 175.0)
+    host.update_hold(hold.token.serial(), MotionValue::new(91.0, 91.0), 175.0)
         .unwrap()
         .unwrap();
     // The runner still owes the 100ms timer; the hold is already at 175ms.
@@ -202,14 +202,14 @@ fn overdue_timer_retargets_live_hold_without_rewinding_its_clock() {
         host.springs()
             .engine()
             .value(hold.token.node(), Property::Scale),
-        Some(MotionValue::scalar(91.0))
+        Some(MotionValue::new(91.0, 91.0))
     );
     let release = host
         .end_hold(hold.token.serial(), HoldEnd::Cancel, 180.0)
         .unwrap()
         .unwrap();
-    assert!(release.contains("\"values\":[91,"), "{release}");
-    assert!(release.contains(",24]}"), "{release}");
+    assert!(release.contains("\"values\":[[91,91],"), "{release}");
+    assert!(release.contains(",[24,24]]}"), "{release}");
 }
 
 #[test]

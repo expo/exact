@@ -69,7 +69,7 @@ fn values(held: TransformHold) -> [Value; 2] {
 
 #[test]
 fn malformed_second_sample_preserves_both_curves_clock_and_pending_frame() {
-    for bad in [Value::scalar(f64::NAN), Value::new(2.0, 1.0)] {
+    for bad in [Value::scalar(f64::NAN), Value::four(2.0, 1.0, 1.0, 0.0)] {
         let mut e = moving();
         let before = snapshot(&e);
         assert!(e
@@ -114,7 +114,11 @@ fn failed_rebegin_preserves_both_existing_tokens_and_presentations() {
     e.frame();
     let before = snapshot(&e);
     assert_eq!(
-        e.begin_transform_hold(NODE, 0.3, Some([Value::ZERO, Value::new(1.0, 1.0)])),
+        e.begin_transform_hold(
+            NODE,
+            0.3,
+            Some([Value::ZERO, Value::four(1.0, 1.0, 1.0, 0.0)])
+        ),
         Err(EngineError::InvalidValueShape)
     );
     assert_eq!(snapshot(&e), before);
@@ -218,7 +222,11 @@ fn supplied_presentations_preserve_bits_and_scale_remains_generic() {
 #[test]
 fn paired_update_validates_both_values_and_time_before_mutation() {
     for (time, value, error) in [
-        (0.3, Value::new(2.0, 1.0), EngineError::InvalidValueShape),
+        (
+            0.3,
+            Value::four(2.0, 1.0, 1.0, 0.0),
+            EngineError::InvalidValueShape,
+        ),
         (0.3, Value::scalar(f64::INFINITY), EngineError::NonFinite),
         (f64::NAN, Value::scalar(2.0), EngineError::NonFinite),
         (0.0, Value::scalar(2.0), EngineError::ClockWentBackwards),

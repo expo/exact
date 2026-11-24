@@ -350,7 +350,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let (scale, _) = host
-            .begin_hold(other, Property::Scale, Value::scalar(2.0), 0.0)
+            .begin_hold(other, Property::Scale, Value::new(2.0, 2.0), 0.0)
             .unwrap()
             .unwrap();
         // Manufacture a pending release at the Springs seam, before lowering.
@@ -365,7 +365,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(batch.contains("\"property\":\"scale\""), "{batch}");
-        assert!(batch.contains("\"values\":[2,"), "{batch}");
+        assert!(batch.contains("\"values\":[[2,2],"), "{batch}");
         assert!(host.has_hold(height.token.serial()));
     }
 }

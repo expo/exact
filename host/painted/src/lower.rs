@@ -477,7 +477,10 @@ impl<D: DataSource> Host<D> {
                         Value::new(base.translate.0 as f64, base.translate.1 as f64),
                         &[(TX, 0), (TY, 1)],
                     ),
-                    Property::Scale => (Value::scalar(base.scale as f64), &[(SCALE, 0)]),
+                    Property::Scale => (
+                        Value::new(base.scale as f64, base.scale as f64),
+                        &[(SCALE, 0)],
+                    ),
                     Property::Rotate => (
                         self.engine.target(node_u64(key), p).unwrap_or(Value::ZERO),
                         &[(ROTATE, 0)],

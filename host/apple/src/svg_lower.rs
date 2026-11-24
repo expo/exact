@@ -1029,7 +1029,8 @@ fn circle_moves(n: &exact_kernel::NodeRef<'_>, props: &[Property]) -> bool {
         && s.translate.x == 0.0
         && s.translate.y == 0.0
         && s.rotate == 0.0
-        && s.scale == 1.0
+        && s.scale.x == 1.0
+        && s.scale.y == 1.0
         && exact_kernel::svg::transform::is_identity(s.transform.matrix())
         && s.vector_effect != exact_kernel::VectorEffect::NonScalingStroke
         && s.rare.clip_path.url().is_none()

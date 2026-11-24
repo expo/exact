@@ -156,11 +156,15 @@ fn centered_fill_sources_refuse_offsets_insets_nonclip_and_nonpositive_scale() {
             s.mask.set(StyleId::OverflowY);
         }),
         style(3, |s| {
-            s.scale = 0.0;
+            s.scale = exact_kernel::Vec2 { x: 0.0, y: 0.0 };
             s.mask.set(StyleId::Scale);
         }),
         style(3, |s| {
-            s.scale = -1.0;
+            s.scale = exact_kernel::Vec2 { x: -1.0, y: -1.0 };
+            s.mask.set(StyleId::Scale);
+        }),
+        style(3, |s| {
+            s.scale = exact_kernel::Vec2 { x: 1.0, y: 0.5 };
             s.mask.set(StyleId::Scale);
         }),
     ];
@@ -174,7 +178,10 @@ fn centered_fill_sources_refuse_offsets_insets_nonclip_and_nonpositive_scale() {
         &mut k,
         &[style(3, |s| {
             s.translate = Vec2 { x: -50.0, y: 25.0 };
-            s.scale = f32::from_bits(1);
+            s.scale = exact_kernel::Vec2 {
+                x: f32::from_bits(1),
+                y: f32::from_bits(1),
+            };
             s.mask.set(StyleId::Translate);
             s.mask.set(StyleId::Scale);
         })],
@@ -205,7 +212,7 @@ fn rotation_everywhere_and_transform_outside_target_are_unsupported() {
                     &mut k,
                     &[style(id, |s| {
                         if scale {
-                            s.scale = 2.0;
+                            s.scale = exact_kernel::Vec2 { x: 2.0, y: 2.0 };
                             s.mask.set(StyleId::Scale);
                         } else {
                             s.translate = Vec2 { x: 1.0, y: 0.0 };

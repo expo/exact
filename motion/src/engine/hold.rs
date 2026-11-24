@@ -98,7 +98,7 @@ impl Engine {
     /// Time and BOTH resulting values are validated, then TWO process-unique
     /// serials reserved together, before any clock, curve or hold changes.
     /// Failure leaves the entire engine unchanged. Authored targets survive.
-    /// Scale retains its generic scalar semantics; positive-scale eligibility
+    /// Scale retains its two-factor semantics; positive-scale eligibility
     /// is host policy. This pair alone creates no idle animation work.
     pub fn begin_transform_hold(
         &mut self,
@@ -605,7 +605,7 @@ mod tests {
             e.begin_transform_hold_with_counter(
                 7,
                 0.1,
-                Some([Value::ZERO, Value::new(2.0, 1.0)]),
+                Some([Value::ZERO, Value::four(2.0, 1.0, 1.0, 0.0)]),
                 &counter
             ),
             Err(EngineError::InvalidValueShape)
