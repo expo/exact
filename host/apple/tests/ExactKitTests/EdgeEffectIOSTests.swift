@@ -219,6 +219,31 @@ final class EdgeEffectIOSTests: XCTestCase {
         XCTAssertEqual(page.topEdgeEffect.style, .automatic, "UIKit's again once the list says nothing")
     }
 
+    /// The bar's top edge can take a route's list before the page has a
+    /// viewport, as at a launch onto the route. The viewport follows that list
+    /// once made: hidden at rest, and the list's own soft once scrolled.
+    func testAViewportMadeAfterItsListWasTakenFollowsIt() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("scroll edge effects require iOS 26") }
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
+        let session = try fixture(in: scene), p = session.presenter, agent = Agent(session: session)
+        let list = try XCTUnwrap(try node("content-large").scrollView)
+        let route = try XCTUnwrap(p.navigationHost.primaryNavigation?.topViewController as? RouteController)
+        XCTAssertNil(route.contentViewport)
+        XCTAssertTrue(route.contentScrollView(for: .top) === list, "the bar took the list before there was a viewport")
+        p.apply(wireBatch([["op": "props", "id": Int(try node("app").id), "set": ["interactiveWidget": "resizes-visual"]]]))
+        XCTAssertNil(agent.tap(["id": Int(try node("tab-inline").id)])["error"])
+        try waitForRoute("inline")
+        XCTAssertNil(agent.tap(["id": Int(try node("tab-large").id)])["error"])
+        try waitForRoute("large")
+        let page = try XCTUnwrap(route.contentViewport, "the visual policy scrolls the route's page in a viewport")
+        XCTAssertTrue(route.contentScrollView(for: .top) === list)
+        list.contentOffset.y = -list.adjustedContentInset.top
+        XCTAssertTrue(page.topEdgeEffect.isHidden, "no effect over the list at rest")
+        list.contentOffset.y = -list.adjustedContentInset.top + 200
+        XCTAssertFalse(page.topEdgeEffect.isHidden)
+        XCTAssertEqual(page.topEdgeEffect.style, .soft, "the list's own soft")
+    }
+
     func testADocumentScrollerRevealsContentOutsideItsInnerScroller() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "the bar and its edge effect are shown in a scene's window") }
         let session = try fixture(in: scene)

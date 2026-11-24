@@ -254,6 +254,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             scroll.delegate = self
             view.addSubview(scroll)
             contentViewport = scroll
+            // The bar's top edge may have taken its list before the page had this viewport: a launch
+            // projects once before `interactiveWidget` is read. `select` follows a list taken later
+            followTopEdge(contentScrollView(for: .top))
         } else if !usesPageViewport, let scroll = contentViewport {
             contentViewport = nil
             keyboardInset.apply(0, to: scroll)
