@@ -94,33 +94,33 @@ component DragDrop
     dragOn = not dragOn
   view
     column row-gap=8 testId="drag-drop"
-      text (host == "ios" ? "Hold a card until it lifts, then drag it into another app: on iPad, one beside UI Gallery; on iPhone, keep holding and, with another finger, swipe up to go Home and open the app." : host == "android" ? "Hold a card until it lifts, then drag it into another app beside this in split screen." : host == "macos" ? "Drag a card into another app's window: Finder, Notes, Mail, Messages, TextEdit, Preview or Safari." : "Drag a card to the desktop, into another app's window, or into a page in another tab.") class=DragCaption
-      text (host == "web" ? "In a browser a file goes as its URL, an image also as HTML, and Chrome saves the first file when it is dropped in Finder or File Explorer; a page that reads dataTransfer.files gets none." : "Each file goes as it is: its own bytes, name and type, with whatever metadata it holds.") class=DragCaption
+      text (host == "ios" ? "On iPad, open the other app beside UI Gallery. Then hold a card until it lifts and drag it across. On iPhone, hold a card until it lifts, keep holding it, swipe up from the bottom with another finger to go Home, then open the other app." : host == "android" ? "Open another app beside this one. Then hold a card until it lifts and drag it there." : host == "macos" ? "Drop it in Finder, Notes, Mail, Safari or another app." : "Drop it on the desktop, in another app or in another tab.") class=DragCaption
+      text (host == "web" ? "File cards share links, and some pages can show the photo. To save a copy, drag a file card from Chrome to Finder or File Explorer. Chrome saves only the first file." : "UI Gallery offers the original files, with their names and details.") class=DragCaption
 
       text "Text and links" class=DragHeading
-      DragCard(name="text", title="Plain text", carries=(host == "web" or host == "android" ? "text/plain: accents, scripts and emoji" : "text: accents, scripts and emoji"), picture="", symbol="article", text="Dragged out of UI Gallery. Café, naïve and Ångström keep their accents; so do 日本語, العربية and 🧭.", files=[])
-      LinkCard(name="link", title="A link", carries=(host == "android" ? "text/plain: https://example.com/" : host == "web" ? "text/uri-list: https://example.com/" : "a link: https://example.com/"), picture="", symbol="link", text="", url="https://example.com/", files=[])
-      LinkCard(name="link-title", title="A link and its title", carries=(host == "android" ? "two text/plain items, the link and then its title: which one an app reads" : host == "web" ? "text/uri-list and text/plain: which one an app reads" : "a link and its title as text: which one an app reads"), picture="", symbol="link", text="Example Domain", url="https://example.com/", files=[])
+      DragCard(name="text", title="Plain text", carries="Text with accents and emoji", picture="", symbol="article", text="Hello from UI Gallery: café, naïve, 日本語, العربية and 🧭.", files=[])
+      LinkCard(name="link", title="A link", carries=(host == "android" ? "example.com, sent as text" : "example.com"), picture="", symbol="link", text="", url="https://example.com/", files=[])
+      LinkCard(name="link-title", title="A link and its title", carries="example.com and its title", picture="", symbol="link", text="Example Domain", url="https://example.com/", files=[])
 
-      text "Photos, video, sound and documents" class=DragHeading
-      DragCard(name="jpeg", title="A JPEG photo", carries="drag-photo.jpg: camera, date, location, caption and keywords", picture="assets/drag-photo.jpg", symbol="", text="", files=["assets/drag-photo.jpg"])
-      DragCard(name="heic", title="A HEIC photo", carries="drag-photo.heic: the same photo and metadata", picture="assets/drag-photo.jpg", symbol="", text="", files=["assets/drag-photo.heic"])
-      DragCard(name="png", title="A PNG", carries="p3-primaries.png: Display P3 primaries", picture="assets/p3-primaries.png", symbol="", text="", files=["assets/p3-primaries.png"])
-      DragCard(name="video", title="A video", carries="sdr.mp4: a three-second clip", picture="", symbol="play", text="", files=["assets/sdr.mp4"])
-      DragCard(name="sound", title="A sound", carries="drag-chord.m4a: a three-second chord", picture="", symbol="play", text="", files=["assets/drag-chord.m4a"])
-      DragCard(name="pdf", title="A PDF", carries="drag-notes.pdf: a page with a title, author and subject", picture="", symbol="document", text="", files=["assets/drag-notes.pdf"])
+      text "Photos, video, sound and PDFs" class=DragHeading
+      DragCard(name="jpeg", title="A JPEG photo", carries="With sample camera details, a date, a place and a caption", picture="assets/drag-photo.jpg", symbol="", text="", files=["assets/drag-photo.jpg"])
+      DragCard(name="heic", title="A HEIC photo", carries="The same photo, as HEIC", picture="assets/drag-photo.jpg", symbol="", text="", files=["assets/drag-photo.heic"])
+      DragCard(name="png", title="A PNG image", carries="A row of color samples", picture="assets/p3-primaries.png", symbol="", text="", files=["assets/p3-primaries.png"])
+      DragCard(name="video", title="A video", carries="Three seconds long", picture="", symbol="play", text="", files=["assets/sdr.mp4"])
+      DragCard(name="sound", title="A sound", carries="A three-second chord", picture="", symbol="play", text="", files=["assets/drag-chord.m4a"])
+      DragCard(name="pdf", title="A PDF", carries="One page, with a title and author", picture="", symbol="document", text="", files=["assets/drag-notes.pdf"])
 
       text "Several at once" class=DragHeading
-      DragCard(name="files", title="Three files", carries=(host == "web" ? "the three files' URLs; Chrome saves the first in Finder or File Explorer" : "drag-photo.jpg, drag-notes.pdf and drag-chord.m4a"), picture="", symbol="copy", text="", files=["assets/drag-photo.jpg", "assets/drag-notes.pdf", "assets/drag-chord.m4a"])
-      LinkCard(name="photo-caption", title="A photo with a caption and a link", carries=(host == "web" ? "a link, the photo's URL and text; Chrome saves the photo in Finder or File Explorer" : "drag-photo.jpg, a link and text: which ones an app keeps"), picture="assets/drag-photo.jpg", symbol="", text="Glasshouse, a generated test photograph", url="https://example.com/", files=["assets/drag-photo.jpg"])
+      DragCard(name="files", title="Three files", carries=(host == "web" ? "Links to a photo, a PDF and a sound" : "A photo, a PDF and a sound"), picture="", symbol="copy", text="", files=["assets/drag-photo.jpg", "assets/drag-notes.pdf", "assets/drag-chord.m4a"])
+      LinkCard(name="photo-caption", title="A photo with a caption and a link", carries="The photo, its caption and a link", picture="assets/drag-photo.jpg", symbol="", text="Glasshouse, a generated test photograph", url="https://example.com/", files=["assets/drag-photo.jpg"])
 
       text "From the app" class=DragHeading
-      DragCard(name="written", title="A file the app wrote", carries=(host == "web" ? "drag-note.txt: refused on the web, which cannot read an app file while a drag begins" : note.path != "" ? "drag-note.txt: an app:/ file the app wrote as this section opened" : note.why != "" ? `drag-note.txt: not written: ${note.why}` : "drag-note.txt: being written"), picture="", symbol="compose", text="", files=[note.path])
+      DragCard(name="written", title="A file the app made", carries=(host == "web" ? "This note isn't available in the browser" : note.path != "" ? "A short text note" : note.why != "" ? "Couldn't make the note" : "Making the note…"), picture="", symbol="compose", text="", files=[note.path])
       row draggable=true dataTransfer=DataTransfer(files=["assets/drag-photo.jpg"]) contextPopover="drag-menu" aria-label="A card with a menu" testId="drag-menu-card" class=DragPanel column-gap=12 align-items="center"
         image "assets/drag-photo.jpg" width=56 height=56 object-fit="cover" border-radius=8 flex-shrink=0 aria-hidden=true
         column flex=1 min-width=0 row-gap=2
           text "A card with a menu" class=DragTitle
-          text (picked != "" ? `Picked: ${picked}.` : touch ? "Hold it still until the menu opens, or move it as it lifts to drag the photo." : "Right-click or Control-click it for the menu, or drag the photo.") class=DragCaption testId="drag-picked"
+          text (picked != "" ? `Picked: ${picked}.` : touch ? "Hold still for the menu. To drag the photo, hold and then move." : "Right-click it for the menu, or drag it.") class=DragCaption testId="drag-picked"
       column id="drag-menu" popover="auto" role="menu"
         button press=pick("Favorite") popovertarget="drag-menu" popovertargetaction="hide"
           text "Favorite"
@@ -131,18 +131,18 @@ component DragDrop
           image "symbol:checkmark" font-size=28 color="-exact-secondary-label" aria-hidden=true
         column flex=1 min-width=0 row-gap=2
           text "A card you can tap" class=DragTitle
-          text (taps == 0 ? "Tap it, or drag its text." : `Tapped ${taps} ${taps == 1 ? "time" : "times"}.`) class=DragCaption testId="drag-taps"
-      row draggable=dragOn dataTransfer=DataTransfer(text="A card whose drag turns off") aria-label="A card whose drag turns off" testId="drag-switch-card" class=DragPanel column-gap=12 align-items="center"
+          text (taps == 0 ? "Tap it or drag its text." : `Tapped ${taps} ${taps == 1 ? "time" : "times"}.`) class=DragCaption testId="drag-taps"
+      row draggable=dragOn dataTransfer=DataTransfer(text="Turn dragging on or off") aria-label="Turn dragging on or off" testId="drag-switch-card" class=DragPanel column-gap=12 align-items="center"
         column flex=1 min-width=0 row-gap=2
-          text "A card whose drag turns off" class=DragTitle
-          text (dragOn ? "It drags its text." : "It does not drag.") class=DragCaption testId="drag-switch-state"
+          text "Turn dragging on or off" class=DragTitle
+          text (dragOn ? "Dragging is on." : "Dragging is off.") class=DragCaption testId="drag-switch-state"
         button (dragOn ? "Turn off" : "Turn on") buttonStyle="bordered" press=toggleDrag testId="drag-switch"
 
-      text "Drop into the app" class=DragHeading
+      text "File drops" class=DragHeading
       column dragenter=entered dragleave=left drop=took testId="drop-zone" min-height=120 padding=16 row-gap=6 border-radius=14 border-width=2 border-style="dashed" border-color=(over ? "AccentColor" : "-exact-separator") background-color=(over ? "-exact-secondary-background" : "transparent") align-items="center" justify-content="center"
         image "symbol:download" font-size=28 color="-exact-secondary-label" aria-hidden=true
-        text (not drops ? "This host takes no drops yet: the Mac, the web and Windows do." : over ? "Drop to list the files" : "Drop files here") class=DragTitle text-align="center" testId="drop-prompt"
+        text (not drops ? "You can't drop files into UI Gallery on this device yet." : over ? "Let go to drop" : "Drop a file from another app here") class=DragTitle text-align="center" testId="drop-prompt"
         if dropCount > 0
-          text `Drop ${dropCount}: ${dropped.length} ${dropped.length == 1 ? "file" : "files"}` class=DragCaption testId="drop-count"
+          text `Got ${dropped.length} ${dropped.length == 1 ? "file" : "files"}` class=DragCaption testId="drop-count"
           for f in dropped key=f
             text f class=DragCaption font-family="monospace" max-width="100%" overflow-wrap="anywhere"

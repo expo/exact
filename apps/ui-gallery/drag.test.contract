@@ -3,7 +3,7 @@ test "the drag section's cards carry their text, links and files"
   tap "sidebar-drag"
   clock settle
   clock data
-  expect drag "drag-text" has "text/plain" == "Dragged out of UI Gallery. Café, naïve and Ångström keep their accents; so do 日本語, العربية and 🧭."
+  expect drag "drag-text" has "text/plain" == "Hello from UI Gallery: café, naïve, 日本語, العربية and 🧭."
   expect drag "drag-text" missing "text/uri-list"
   expect drag "drag-link" has "text/uri-list" == "https://example.com/"
   expect drag "drag-link" missing "text/plain"
@@ -28,14 +28,14 @@ test "the drag section's cards carry their text, links and files"
 test "a card's drag turns off and on, and a tap on a draggable card is a tap"
   tap "sidebar-drag"
   clock settle
-  expect drag "drag-switch-card" has "text/plain" == "A card whose drag turns off"
+  expect drag "drag-switch-card" has "text/plain" == "Turn dragging on or off"
   tap "drag-switch"
   clock settle
   expect drag "drag-switch-card" none
-  expect text "drag-switch-state" == "It does not drag."
+  expect text "drag-switch-state" == "Dragging is off."
   tap "drag-switch"
   clock settle
-  expect drag "drag-switch-card" has "text/plain" == "A card whose drag turns off"
+  expect drag "drag-switch-card" has "text/plain" == "Turn dragging on or off"
   tap "drag-tap-card"
   clock settle
   expect text "drag-taps" == "Tapped 1 time."

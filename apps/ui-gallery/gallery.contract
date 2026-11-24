@@ -390,7 +390,7 @@ component GalleryDemo
               button press=pickLift("favorite") popovertarget="lift-menu" popovertargetaction="hide"
                 text "Favorite"
           if section == "drag"
-            text "Text, links, photos, video, sound and documents dragged out of the app." font="-exact-subheadline" color="-exact-secondary-label" padding-bottom=8 testId=`intro-${section}`
+            text "Try dragging a card into another app." font="-exact-subheadline" color="-exact-secondary-label" padding-bottom=8 testId=`intro-${section}`
             DragDrop(host=os, note=dragNote)
 
 component LimitControl
