@@ -114,6 +114,8 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     var card: (Int) -> NodeView? = { _ in nil }
     /// Each section's outer-shadow reach as the layout last decorated it.
     private var decorated: [Int: CGFloat] = [:]
+    /// The sections' inset regions as the layout last took them (`insetsReferences`).
+    private var referred: [UIContentInsetsReference?] = [nil, nil, nil]
     private var insets: [(clip: CALayer, caster: InsetShadowCaster)] = []
 
     override func layoutSubviews() {
@@ -132,6 +134,8 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     /// cells and supplementary views of every section, at whatever index
     /// reuse leaves each view.
     func decorate(_ layout: NSCollectionLayoutSection, at section: Int) {
+        referred = insetsReferences
+        referInsets(of: layout, referred)
         decorated[section] = outerReach(section)
         guard let reach = decorated[section] else { return }
         let item = NSCollectionLayoutDecorationItem.background(elementKind: CardShadowView.kind)
@@ -143,9 +147,11 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     }
 
     /// After a commit: lays the list out again where a card's outer shadow
-    /// came, went or changed its reach, then casts every card's shadows.
+    /// came, went or changed its reach, or the regions the list's insets
+    /// are measured from changed, then casts every card's shadows.
     func castCardShadows() {
-        if (0..<numberOfSections).contains(where: { outerReach($0) != decorated[$0] }) {
+        let references = insetsReferences
+        if referLayoutInsets(references[0]) || references != referred || (0..<numberOfSections).contains(where: { outerReach($0) != decorated[$0] }) {
             collectionViewLayout.invalidateLayout()
             layoutIfNeeded()
         }
