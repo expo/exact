@@ -283,15 +283,22 @@ package final class ContributionsIOS {
 
 /// Exact's reactions to a safe-area change, held while a ledger writes in steps (LLP 1123 D11), so
 /// each reads only the settled result. The stepping's end releases them: each held reaction runs
-/// once, in the order first held, with what its last call carried.
+/// once, in the order first held, with what its last call carried. A reaction is its owner's at
+/// one call site, so an owner's reactions to different changes are held apart.
 package enum SafeAreaSteps {
+    private struct Reaction: Hashable {
+        var owner: ObjectIdentifier
+        var file: String
+        var line: UInt
+    }
+
     nonisolated(unsafe) private static var depth = 0
-    nonisolated(unsafe) private static var held: [(ObjectIdentifier, () -> Void)] = []
+    nonisolated(unsafe) private static var held: [(Reaction, () -> Void)] = []
 
     /// Run `reaction` for `owner` now, or once when the stepping under way ends.
-    package static func react(_ owner: AnyObject, _ reaction: @escaping () -> Void) {
+    package static func react(_ owner: AnyObject, file: StaticString = #fileID, line: UInt = #line, _ reaction: @escaping () -> Void) {
         guard depth > 0 else { return reaction() }
-        let id = ObjectIdentifier(owner)
+        let id = Reaction(owner: ObjectIdentifier(owner), file: "\(file)", line: line)
         if let i = held.firstIndex(where: { $0.0 == id }) {
             held[i].1 = reaction
         } else {
