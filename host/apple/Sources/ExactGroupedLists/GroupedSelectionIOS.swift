@@ -46,7 +46,9 @@ extension GroupedListView {
     func collectionView(_ view: UICollectionView, didSelectItemAt path: IndexPath) {
         let letGo = { for selected in view.indexPathsForSelectedItems ?? [] { view.deselectItem(at: selected, animated: !ExactEnv.agentFreezes) } }
         guard let id = source.itemIdentifier(for: path), pressable(id), let node = host.presenter.views[id] else { return letGo() }
-        if !host.presenter.retainsFocus(node) { host.presenter.endEditing() }
+        // For `retainFocus`, selecting a carried row follows its authored parent
+        let retains = host.presenter.retainsFocus(node, through: { self.host.logicalParent(of: $0) ?? self.host.presenter.eventParent(of: $0) })
+        if !retains { host.presenter.endEditing() }
         // The screen the list is on, read before the press can change it.
         let screen = sequence(first: owner as UIResponder, next: { $0.next }).lazy.compactMap { $0 as? UIViewController }.first
         // A radio's row checks its radio, as a click on the radio does:
