@@ -379,6 +379,7 @@ fn agent_state_reports_the_current_painter_and_device() {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "android"))]
 #[test]
 fn a_list_row_paints_its_caret_at_the_ime_cursor_area() {
     let source = r##"component App

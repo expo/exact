@@ -193,8 +193,10 @@ fn a_held_request_the_runner_let_go_is_not_kept() {
     assert!(p.parked.is_empty(), "a request released runs");
 }
 
+#[cfg(unix)]
 struct Oversized;
 
+#[cfg(unix)]
 impl DataSource for Oversized {
     fn grants(&self) -> &str {
         "net.fetch https://held.test"

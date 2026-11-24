@@ -73,7 +73,7 @@ impl SubmittedFrame {
         &self.pixels
     }
 }
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 impl AsRef<Pixmap> for SubmittedFrame {
     fn as_ref(&self) -> &Pixmap {
         &self.pixels
