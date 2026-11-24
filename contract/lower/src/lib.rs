@@ -545,6 +545,7 @@ fn lower_with_sites(
                 }
             }
             all.truncate(MAX_REFUSALS);
+            values::name_template_holes(checked, &mut all);
             Err(all)
         }
     }
@@ -1388,6 +1389,7 @@ impl<'a> Lowerer<'a> {
             }
             tags::AttrTarget::Prop(prop) => {
                 let glass;
+                values::check_numeric_prop(a, prop, scope, &self.types.shapes)?;
                 let aria_bool = values::aria_bool_literal(&a.name, prop, &a.value);
                 let value = if prop == exact_kernel::PropId::GlassGroup {
                     glass = values::glass_group(&a.value)?;

@@ -9,8 +9,9 @@
 //! element may sit only in an `svg` or `g`, takes only what applies to it,
 //! and handles no events (its `svg` is the one hit and accessibility box).
 
-use crate::{err, tags, LowerError, Lowerer};
+use crate::{err, tags, values, LowerError, Lowerer};
 use contract_syntax::{Attr, BinOp, Expr, File, Span, TemplatePart};
+use contract_types::{Scope, Shapes};
 use exact_motion::animation::LONGHANDS;
 use exact_motion::{Animation, Animations, Keyframes, Property};
 use std::cell::Cell;
@@ -1263,17 +1264,27 @@ fn check_length_text(name: &str, text: &str, span: Span) -> Result<(), LowerErro
 /// SVG length props take text (LLP 1055.000 D4): a number literal becomes
 /// its text and any other expression is interpolated, so `x1=10`,
 /// `x1="50%"` and `x1=gridX` all lower. `None` when nothing changes.
-pub(crate) fn coerce_lengths(tag: &str, in_svg: bool, attrs: &[Attr]) -> Option<Vec<Attr>> {
+pub(crate) fn coerce_lengths(
+    tag: &str,
+    in_svg: bool,
+    attrs: &[Attr],
+    typing: Option<(&Scope, &Shapes)>,
+) -> Option<Vec<Attr>> {
     // Only an SVG element's attributes are SVG lengths: on a box or a
     // native module's tag (LLP 1024 D8) a same-named attribute is left as
     // written (`mode=` on `exact-fixture` is the module's, not feBlend's).
     if !(is_element(tag) || tag == "svg" || (tag == "text" && in_svg)) {
         return None;
     }
-    coerce(tag, in_svg, attrs)
+    coerce(tag, in_svg, attrs, typing)
 }
 
-fn coerce(tag: &str, in_svg: bool, attrs: &[Attr]) -> Option<Vec<Attr>> {
+fn coerce(
+    tag: &str,
+    in_svg: bool,
+    attrs: &[Attr],
+    typing: Option<(&Scope, &Shapes)>,
+) -> Option<Vec<Attr>> {
     // SVG text's `x`, `y`, `dx`, `dy` are position lists, not geometry
     // rows (LLP 1055.000 D11): they lower to their own props.
     let text = tag == "tspan" || (tag == "text" && in_svg);
@@ -1303,7 +1314,7 @@ fn coerce(tag: &str, in_svg: bool, attrs: &[Attr]) -> Option<Vec<Attr>> {
                 }
             })
             .collect();
-        let coerced = coerce("g", in_svg, &renamed);
+        let coerced = coerce("g", in_svg, &renamed, typing);
         return Some(coerced.unwrap_or(renamed));
     }
     if text {
@@ -1323,36 +1334,34 @@ fn coerce(tag: &str, in_svg: bool, attrs: &[Attr]) -> Option<Vec<Attr>> {
                 }
             })
             .collect();
-        let coerced = coerce("", false, &renamed);
+        let coerced = coerce("", false, &renamed, typing);
         return Some(coerced.unwrap_or(renamed));
     }
     let svg = is_element(tag) || tag == "svg";
     // A geometry property's presentation attribute is a unitless number
     // (`y="46"`), which CSS's grammar for the row would refuse.
-    let unitless = |a: &Attr| {
-        svg && matches!(
-            a.name.as_str(),
-            "x" | "y" | "rx" | "ry" | "cx" | "cy" | "r" | "width" | "height"
-        ) && matches!(&a.value, Expr::Str(t, _) if exact_num::parse_f64(t.trim()).is_ok_and(f64::is_finite))
+    let coordinate = |a: &Attr| {
+        if !svg
+            || !matches!(
+                a.name.as_str(),
+                "x" | "y" | "rx" | "ry" | "cx" | "cy" | "r" | "width" | "height"
+            )
+        {
+            return None;
+        }
+        coordinate_value(&a.value, typing)
     };
-    if !attrs
-        .iter()
-        .any(|a| unitless(a) || (is_length_prop(&a.name) && !matches!(a.value, Expr::Str(..))))
-    {
+    if !attrs.iter().any(|a| {
+        coordinate(a).is_some() || (is_length_prop(&a.name) && !matches!(a.value, Expr::Str(..)))
+    }) {
         return None;
     }
     Some(
         attrs
             .iter()
             .map(|a| {
-                if unitless(a) {
-                    let Expr::Str(t, span) = &a.value else {
-                        unreachable!("unitless is a string")
-                    };
-                    return Attr {
-                        value: Expr::Number(exact_num::parse_f64(t.trim()).unwrap_or(0.0), *span),
-                        ..a.clone()
-                    };
+                if let Some(value) = coordinate(a) {
+                    return Attr { value, ..a.clone() };
                 }
                 if !is_length_prop(&a.name) {
                     return a.clone();
@@ -1366,6 +1375,63 @@ fn coerce(tag: &str, in_svg: bool, attrs: &[Attr]) -> Option<Vec<Attr>> {
             })
             .collect(),
     )
+}
+
+fn coordinate_value(value: &Expr, typing: Option<(&Scope, &Shapes)>) -> Option<Expr> {
+    match value {
+        Expr::Str(t, span) => exact_num::parse_f64(t.trim())
+            .ok()
+            .filter(|n| n.is_finite())
+            .map(|n| Expr::Number(n, *span)),
+        Expr::Template(parts, span) => {
+            let (scope, shapes) = typing?;
+            let holes = values::number_holes(parts, scope, shapes)?;
+            if let [number] = holes.as_slice() {
+                return Some((**number).clone());
+            }
+            let mut parts: Vec<_> = holes.into_iter().cloned().map(TemplatePart::Expr).collect();
+            parts.push(TemplatePart::Text("px".into()));
+            Some(Expr::Template(parts, *span))
+        }
+        Expr::Ternary(test, yes, no, span) => {
+            let a = coordinate_value(yes, typing);
+            let b = coordinate_value(no, typing);
+            (a.is_some() || b.is_some()).then(|| {
+                Expr::Ternary(
+                    test.clone(),
+                    a.map(Box::new).unwrap_or_else(|| yes.clone()),
+                    b.map(Box::new).unwrap_or_else(|| no.clone()),
+                    *span,
+                )
+            })
+        }
+        Expr::Match {
+            subject,
+            var,
+            some,
+            none,
+            span,
+        } => {
+            let (outer, shapes) = typing?;
+            let mut inner = outer.clone();
+            if let Ok(contract_types::Ty::Option(ty)) =
+                contract_types::infer(subject, outer, shapes)
+            {
+                inner.push(vec![(var.clone(), contract_types::Ref::Local(0), *ty)]);
+            }
+            let a = coordinate_value(some, Some((&inner, shapes)));
+            let b = coordinate_value(none, typing);
+            (a.is_some() || b.is_some()).then(|| Expr::Match {
+                subject: subject.clone(),
+                var: var.clone(),
+                some: a.map(Box::new).unwrap_or_else(|| some.clone()),
+                none: b.map(Box::new).unwrap_or_else(|| none.clone()),
+                span: *span,
+            })
+        }
+        Expr::Typed(inner, ..) => coordinate_value(inner, typing),
+        _ => None,
+    }
 }
 
 /// One longhand's text from an animation (for a composed template).

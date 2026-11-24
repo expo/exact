@@ -253,8 +253,8 @@ fn prepared(
                 .into_iter()
                 .chain(attrs.iter().filter(|a| a.name != "class").cloned())
                 .collect();
-            rejoined =
-                crate::svg::coerce_lengths(tag, in_svg, &joined).unwrap_or_else(|| joined.clone());
+            rejoined = crate::svg::coerce_lengths(tag, in_svg, &joined, None)
+                .unwrap_or_else(|| joined.clone());
             match crate::box_transform::lower(tag, in_svg, &rejoined) {
                 Ok(Some(rows)) => {
                     reboxed = rows;
@@ -369,7 +369,7 @@ impl Read {
                 } => {
                     attrs(a);
                     let in_svg = crate::svg::in_svg(svg, parent);
-                    let coerced = crate::svg::coerce_lengths(tag, in_svg, a);
+                    let coerced = crate::svg::coerce_lengths(tag, in_svg, a, None);
                     // A box's `transform` as the rows lowering checks
                     // instead (`box_transform::lower`); refused, the build's.
                     let boxed =

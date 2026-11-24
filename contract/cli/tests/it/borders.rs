@@ -380,10 +380,13 @@ fn a_computed_shorthand_list_is_refused_naming_the_longhands() {
     if let Err(e) = contract::compile(&src("padding=`calc(${\"10px + 2px\"})`")) {
         panic!("{e}");
     }
+    contract::compile(&src("padding=`10px ${\"\"} 20px`")).unwrap();
+    let invalid =
+        contract::compile(&src("border-radius=`${\"calc(100%\"} - 10px) auto`")).unwrap_err();
+    let literal = contract::compile(&src("border-radius=\"calc(100% - 10px) auto\"")).unwrap_err();
+    assert_eq!((invalid.id, invalid.message), (literal.id, literal.message));
     for attr in [
         "padding=`calc(${pad}px + 2px) 0`",
-        "padding=`10px ${\"\"} 20px`",
-        "border-radius=`${\"calc(100%\"} - 10px) auto`",
         "padding=`${pad} ${pad}`",
     ] {
         let e = contract::compile(&src(attr)).unwrap_err();

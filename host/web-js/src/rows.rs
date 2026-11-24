@@ -172,6 +172,11 @@ impl Em<'_> {
             .is_some_and(|t| style::can_be(plan, plan.code(t.expr), &|s| !clock(s)));
         let id = StyleId::from_bit(b.id as u32).ok_or("unknown style row")?;
         let kind = NodeType::from_wire(row.node_type).ok_or("unknown node type")?;
+        let leading = (id == StyleId::LineHeight).then(|| {
+            let read = self.uses.rt("lineHeight");
+            format!("()=>{read}({e},({f})())")
+        });
+        let f = leading.as_deref().unwrap_or(f);
         let checked_animation = self.svg_animation(i, id, e, f, scope)?;
         let f = checked_animation.as_deref().unwrap_or(f);
         // @ref LLP 1115.002 D6 — a metric the binding may name is its value

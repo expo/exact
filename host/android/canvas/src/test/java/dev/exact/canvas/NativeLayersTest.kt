@@ -49,6 +49,7 @@ class NativeLayersTest {
         val reader = ExactView(activity, false) {}.also { it.natives = natives }
         private val apply = ExactView::class.java.getDeclaredMethod("applyStream", IntBuffer::class.java).apply { isAccessible = true }
         private val player = ExactView::class.java.getDeclaredField("main").apply { isAccessible = true }.get(reader) as Player
+        val layers = ExactView::class.java.getDeclaredField("layers").apply { isAccessible = true }.get(reader) as Layers
         init { player.width = 64; player.height = 64 }
         fun ingest(ops: IntArray) { apply.invoke(reader, IntBuffer.wrap(ops)) }
         fun pixel(ops: IntArray, x: Int = 16, y: Int = 16): Int {
@@ -68,11 +69,49 @@ class NativeLayersTest {
         }
     }
 
-    @Test fun drawsTheLayerFromTheRustRecorder() {
-        val bytes = javaClass.getResourceAsStream("/red-layer.ops")!!.use { it.readBytes() }
+    private fun recorded(name: String): IntArray {
+        val bytes = javaClass.getResourceAsStream("/$name.ops")!!.use { it.readBytes() }
         val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asIntBuffer()
-        val ops = IntArray(buffer.remaining()).also { buffer.get(it) }
-        assertEquals(Color.RED, Fixture().pixel(ops))
+        return IntArray(buffer.remaining()).also { buffer.get(it) }
+    }
+
+    @Test fun drawsTheLayerFromTheRustRecorder() {
+        assertEquals(Color.RED, Fixture().pixel(recorded("red-layer")))
+    }
+
+    // A blue box, 32 x 16 at (8, 16) in layer 1, whose scale goes from 2 2 to 1 0.5 about (24, 24) in one second.
+    @Test fun drawsTheScaledLayerFromTheRustRecorder() {
+        with(Fixture()) {
+            ingest(recorded("scaled-layer"))
+            val node = layers.node(1)
+            assertTrue(node.hasDisplayList())
+            layers.sample(2_000_000_000L)
+            assertEquals(1f, node.scaleX, 0f)
+            assertEquals(0.5f, node.scaleY, 0f)
+            val ref = intArrayOf(29, 1)
+            assertEquals("the middle", Color.BLUE, pixel(ref, 24, 24))
+            assertEquals("above half the height", Color.WHITE, pixel(ref, 24, 18))
+            assertEquals("below half the height", Color.WHITE, pixel(ref, 24, 30))
+            assertEquals("the whole width", Color.BLUE, pixel(ref, 10, 24))
+            assertEquals("left of the width", Color.WHITE, pixel(ref, 6, 24))
+        }
+    }
+
+    @Test fun playsEachScaleTrackFromTheRustRecorder() {
+        with(Fixture()) {
+            // The clock's zero is later than the sample the reader takes at the stream's end.
+            val zero = Long.MAX_VALUE / 2
+            ingest(recorded("scaled-layer") + intArrayOf(33, zero.toInt(), (zero ushr 32).toInt()))
+            val node = layers.node(1)
+            assertEquals(2f, node.scaleX, 0f)
+            assertEquals(2f, node.scaleY, 0f)
+            layers.sample(zero + 500_000_000L)
+            assertEquals(1.5f, node.scaleX, 1e-3f)
+            assertEquals(1.25f, node.scaleY, 1e-3f)
+            layers.sample(zero + 2_000_000_000L)
+            assertEquals(1f, node.scaleX, 0f)
+            assertEquals(0.5f, node.scaleY, 0f)
+        }
     }
 
     private val ref = intArrayOf(29, 7)

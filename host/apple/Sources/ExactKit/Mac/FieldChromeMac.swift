@@ -164,7 +164,8 @@ extension TextEngine {
         return weight >= NSFont.Weight.bold.rawValue ? 700 : weight >= NSFont.Weight.semibold.rawValue ? 600 : 400
     }
     static let controlText: ExactControlTextFn = { ctx, kind in
-        guard let ctx else { return ExactControlFont() }
+        // The toolbar hosts no readout: no bar item font (kind 5).
+        guard let ctx, kind <= 4 else { return ExactControlFont() }
         let engine = Unmanaged<TextEngine>.fromOpaque(ctx).takeUnretainedValue()
         guard let cache = engine.fieldChrome else { return ExactControlFont() }
         let font = Owner.shared.callMain {

@@ -58,6 +58,10 @@ a `keyframes` or `font` block, and a component need at least one entry.
 - Templates use backticks and `${expression}`. Spaces around the expression are
   optional: `${ a }` and `${a}` mean the same. Interpolation scanning balances
   nested braces, strings, and templates. A template is one physical source line.
+  An attribute template made of literal strings and constant numbers is checked as
+  the resulting string. Write `line-height=(28 / 17)` for a multiplier. For a
+  length, write `width=n` in pixels or give the template a unit, as in
+  `` width=`${n}rem` ``. A template containing only number holes still produces text.
   Template text takes a string's escapes (`` `${a}\t${b}` `` is a tab), and
   `\${` is literal text, not an interpolation.
 - A hex color may be written bare, as CSS writes it: `#` and 3, 4, 6 or 8 hex

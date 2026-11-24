@@ -140,6 +140,7 @@ class Natives(
     }
 
     private class Element(val id: Int, val kind: Int, var view: View, val node: RenderNode, val audio: Boolean = false) {
+        val frameWindow = if (kind == 1) FrameWindow() else null
         var props = ""
         /** An iframe's `partition`, the profile its view was made in ([Partitions.profile]), and what its refusal
          * was last sent for ([refuseFrame]). */
@@ -405,7 +406,7 @@ class Natives(
     private var placing = false
     private val placeMatrix = android.graphics.Matrix()
     private val placePoint = FloatArray(2)
-    private val placer = android.view.ViewTreeObserver.OnPreDrawListener { HostFacts.onScreen(display); placeControls(); true }
+    private val placer = android.view.ViewTreeObserver.OnPreDrawListener { HostFacts.onScreen(display); placeControls(); placeFrames(); true }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
@@ -428,15 +429,7 @@ class Natives(
         try {
             for (e in elements.values) {
                 if (e.kind != 0 || e.parked || players[e.view]?.lendable != false) continue
-                val drawn = !e.hidden && origins?.transform(e.node, placeMatrix) == true
-                val x: Float; val y: Float
-                if (drawn) {
-                    placePoint[0] = 0f; placePoint[1] = 0f
-                    placeMatrix.mapPoints(placePoint)
-                    x = placePoint[0].roundToInt().toFloat(); y = placePoint[1].roundToInt().toFloat()
-                } else { x = -(e.w + 100000f); y = 0f }
-                if (e.view.translationX != x) e.view.translationX = x
-                if (e.view.translationY != y) e.view.translationY = y
+                val drawn = position(e)
                 val access = if (drawn) IMPORTANT_FOR_ACCESSIBILITY_AUTO else IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
                 if (e.view.importantForAccessibility != access) e.view.importantForAccessibility = access
             }
@@ -487,7 +480,10 @@ class Natives(
                 c.drawBitmap(bmp, src, dst, bitmapPaint)
             }
         } else if (e.view is SurfaceView && e.presentation.ready) c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR)
-        else if (!e.stale) {
+        else if (e.kind == 1 && !e.stale) {
+            // WebView records its hardware drawing through its own display list. The page supplies the placement.
+            e.frameWindow!!.draw(c, e.view) { local -> drawChild(local, e.view, drawingTime) }
+        } else if (!e.stale) {
             // What a parent's drawing does (`View.updateDisplayListIfDirty`): a WebView's fling and a scroller's move
             // on in computeScroll, and ask to be drawn again while they last; the view's scroll offset (a WebView keeps
             // its page's there) is taken off the canvas before it draws.
@@ -592,7 +588,51 @@ class Natives(
         e.rows.add(row)
     }
 
+    private val frameElements = HashSet<Element>()
+    private var placedVersion = -1L
     internal var origins: PaintedOrigins? = null
+        set(value) {
+            field?.tracksFrames = false
+            field = value
+            value?.tracksFrames = frameElements.isNotEmpty()
+            placedVersion = -1
+        }
+
+    /** Position the real WebViews at their painted origins so WebView can compute its visible window between touches. */
+    internal fun placeFrames() {
+        if (frameElements.isEmpty()) return
+        val graph = origins ?: return
+        val version = graph.version
+        if (graph.publishing || version == placedVersion) return
+        val since = placedVersion
+        placedVersion = version
+        placing = true
+        try {
+            for (e in frameElements) {
+                if (!e.parked && graph.needsPlacement(e.node, since) && e.frameWindow!!.place(e.view, e.node, graph, e.hidden)) record(e)
+            }
+        } finally { placing = false }
+    }
+    private fun position(e: Element): Boolean {
+        val drawn = !e.hidden && origins?.transform(e.node, placeMatrix) == true
+        placePoint.fill(0f)
+        if (drawn) placeMatrix.mapPoints(placePoint) else placePoint[0] = -(e.w + 100000f)
+        val x = placePoint[0].roundToInt().toFloat()
+        val y = placePoint[1].roundToInt().toFloat()
+        if (e.view.translationX != x) e.view.translationX = x
+        if (e.view.translationY != y) e.view.translationY = y
+        return drawn
+    }
+
+    internal fun placesFrame(view: View) = byView[view]?.frameWindow != null
+
+    override fun getChildVisibleRect(child: View, r: android.graphics.Rect, offset: android.graphics.Point?): Boolean {
+        if (child is WebView && child.visibility != View.VISIBLE) return false
+        val frame = byView[child]?.frameWindow
+        if (frame?.placed == true) return frame.toReader(r, offset) && (parent?.getChildVisibleRect(this, r, offset) ?: true)
+        return super.getChildVisibleRect(child, r, offset)
+    }
+
     internal fun transform(view: View, matrix: android.graphics.Matrix): Boolean =
         byView[view]?.let { origins?.transform(it.node, matrix) } == true
 
@@ -642,6 +682,7 @@ class Natives(
             if (created.profile != null) created.browser = browser(created).also { b -> carried?.let(b.automation::adopt) }
             e = created
             elements[id] = e
+            if (e.kind == 1) { frameElements.add(e); origins?.tracksFrames = true }
             nodes = null
             if (!e.parked) {
                 byView[e.view] = e
@@ -663,6 +704,7 @@ class Natives(
         if (layer == null) e.directRows.add(row) else inLayer(layer, e, row)
         e.rows.add(row)
         e.wanted = props
+        if (e.kind == 1 && e.hidden != hidden) placedVersion = -1
         if (hidden) {
             // Its size and view stay as they were shown, so showing it again only places the same player. A module's
             // view is invisible meanwhile, out of touch and accessibility, as iOS hides it.
@@ -691,7 +733,8 @@ class Natives(
     }
 
     private fun place(e: Element) {
-        e.view.layoutParams = LayoutParams(e.w, e.h)
+        if (e.kind == 1) { e.frameWindow!!.reset(); placedVersion = -1 }
+        e.view.layoutParams = if (e.kind == 1) LayoutParams(e.w, e.h, android.view.Gravity.TOP or android.view.Gravity.LEFT) else LayoutParams(e.w, e.h)
         e.view.measure(MeasureSpec.makeMeasureSpec(e.w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(e.h, MeasureSpec.EXACTLY))
         e.view.layout(0, 0, e.w, e.h)
         e.dirty = true
@@ -939,7 +982,7 @@ class Natives(
         // A partitioned frame's profile is set before its view does anything (`WebViewCompat.setProfile`): never a lent one.
         1 -> if (json.partition() != null) webView(Partitions.profile(json), partitioned = true)
         else readyWeb().takeIf { it >= 0 }?.let { webPool.removeAt(it) }
-            ?.apply { settings.javaScriptEnabled = true; onResume() } ?: webView()
+            ?.apply { visibility = View.VISIBLE; settings.javaScriptEnabled = true; onResume() } ?: webView()
         else -> {
             val name = json.optString("module")
             val module = modules[name]
@@ -1369,6 +1412,7 @@ class Natives(
 
     private fun release(e: Element, reuse: Boolean = true, forget: Boolean = true) {
         elements.remove(e.id)
+        if (frameElements.remove(e) && frameElements.isEmpty()) origins?.tracksFrames = false
         e.browser?.close()
         nodes = null
         // The node is gone; a reader made again keeps the records of the nodes it will make again (LLP 1042.001 D1).
@@ -1408,6 +1452,7 @@ class Natives(
         } else if (e.kind == 1 && e.partition == null && reuse && webPool.size < WEB_POOL && webs) {
             val web = e.view as WebView
             webPool.add(web)
+            web.visibility = View.INVISIBLE
             web.apply {
                 // onPause alone keeps JavaScript running; a lent view must hold no active guest.
                 val cleanup = (webViewClient as FrameClient).beginCleanup()

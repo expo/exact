@@ -209,9 +209,30 @@ impl<D: DataSource> Host<D> {
     /// frames and scroll content sizes that changed. One that fails is
     /// owed (`layout_owed`) until one succeeds.
     pub(super) fn layout(&mut self, batch: &mut Batch) -> Result<(), String> {
+        // Before the pass, which emits the frames of what the re-send queues
+        self.send_bar_text(batch);
         let laid = self.layout_pass(batch);
         self.layout_owed = laid.is_err();
         laid
+    }
+
+    /// The readouts that came to take a bar's type, or stopped, outside the
+    /// commit that styled them (LLP 1141.004 D3): their subtrees' rows and
+    /// paragraphs sent again.
+    fn send_bar_text(&mut self, batch: &mut Batch) {
+        let roots = self.runner.kernel_mut().take_bar_text_flips();
+        if roots.is_empty() {
+            return;
+        }
+        let mut stack = roots;
+        while let Some(id) = stack.pop() {
+            let Some(children) = self.runner.kernel().node(id).map(|n| n.children()) else {
+                continue;
+            };
+            stack.extend(children);
+            self.update(id, batch);
+        }
+        self.emit_paragraphs(batch);
     }
 
     fn layout_pass(&mut self, batch: &mut Batch) -> Result<(), String> {

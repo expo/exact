@@ -148,7 +148,7 @@ fn a_part_is_refused_where_it_cannot_play_and_names_what_to_write() {
             "admits only `animation`",
         ),
         (
-            route(&part("`fade-in ${180}ms`")),
+            route(&part("`fade-in ${still ? 180 : 200}ms`")),
             "lower-route-part",
             "built at run time",
         ),

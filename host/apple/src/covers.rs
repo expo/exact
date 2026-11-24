@@ -41,6 +41,9 @@ pub struct OwnerReports {
     /// Targets native code registered by name, `None` disposing of one
     /// (D9, "Registration").
     pub registrations: Vec<(String, Option<NativeTarget>)>,
+    /// Given blocks a navigation bar shows as its items, or no longer does
+    /// (LLP 1141.004 D3, `Kernel::set_bar_item`).
+    pub bar_items: Vec<(ViewId, bool)>,
 }
 
 impl<D: DataSource> Host<D> {
@@ -250,6 +253,15 @@ impl<D: DataSource> Host<D> {
         }
         self.runner.place_blocks(placements);
         let mut owed = false;
+        for (view, item) in owners.bar_items {
+            if refused.contains(&view) {
+                continue;
+            }
+            match self.runner.kernel_mut().set_bar_item(view, item) {
+                Ok(changed) => owed |= changed,
+                Err(e) => drop(error.get_or_insert(format!("bar item: {e:?}"))),
+            }
+        }
         for (name, target) in owners.registrations {
             match self
                 .runner

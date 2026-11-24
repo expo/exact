@@ -207,10 +207,13 @@ internal class Layers(
     /** Not a function type: `(Int) -> Boolean` boxes the row and the answer at every call. */
     fun interface RowShows { fun shows(row: Int): Boolean }
     var rowShows: RowShows? = null
+    var origins: PaintedOrigins? = null
 
     /** Layer [id]'s node over [r] (the stream's pixels), clipped to it, or (null) over everything, unclipped. */
     fun place(id: Int, r: android.graphics.Rect?) {
         val l = layers[id] ?: return
+        if ((r != null) != l.bounded || r != null && (r.left != l.node.left || r.top != l.node.top ||
+            r.right != l.node.right || r.bottom != l.node.bottom)) origins?.moved(l.node)
         if (r == null) { l.node.setPosition(0, 0, 1 shl 14, 1 shl 14); l.node.setClipToBounds(false); l.ox = 0f; l.oy = 0f }
         else { l.node.setPosition(r); l.node.setClipToBounds(true); l.ox = r.left.toFloat(); l.oy = r.top.toFloat() }
         l.bounded = r != null
@@ -442,6 +445,7 @@ internal class Layers(
                 val dy = v[1] + (if (v[8].isNaN()) 0f else v[8] - l.py)
                 val tx = m[0] * dx + m[1] * dy
                 val ty = m[3] * dx + m[4] * dy
+                if (px != l.pivX || py != l.pivY || tx != l.tx || ty != l.ty || v[3] != l.rot || s != l.sc || sy != l.scY) origins?.moved(l.node)
                 if (px != l.pivX || py != l.pivY) { l.pivX = px; l.pivY = py; l.node.pivotX = px - l.ox; l.node.pivotY = py - l.oy }
                 if (tx != l.tx || ty != l.ty) { l.tx = tx; l.ty = ty; l.node.translationX = tx; l.node.translationY = ty }
                 if (v[3] != l.rot) { l.rot = v[3]; l.node.rotationZ = v[3] }

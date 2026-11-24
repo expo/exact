@@ -252,6 +252,9 @@ pub(crate) struct Held {
     /// Whether a box above it was replaced whole when it was last styled
     /// (`apply` makes it `display: none` then).
     buried: bool,
+    /// Whether its host shows it as a navigation bar's item, a readout that
+    /// takes the bar's type (`Kernel::set_bar_item`; LLP 1141.004 D3).
+    pub(crate) bar_item: bool,
     /// How its host shows it against its stack's top.
     shown: BlockShown,
     /// What the host cleared of it for its content root when it was last
@@ -383,7 +386,7 @@ impl Blocks {
         &self.2
     }
 
-    fn held(&self, slot: u32) -> Option<&Held> {
+    pub(crate) fn held(&self, slot: u32) -> Option<&Held> {
         self.0.iter().find(|b| b.slot == slot)
     }
 
@@ -405,6 +408,7 @@ impl Blocks {
                 given,
                 implied,
                 buried: false,
+                bar_item: false,
                 shown: BlockShown::InStack,
                 cleared: [0.0; 4],
                 slots: [0.0; 4],
@@ -655,6 +659,7 @@ impl Kernel {
             }
         }
         let before = self.arena.blocks.get(slot);
+        let hosted = self.arena.hosted_readout(slot);
         // Measure the readers under a box that gains or gives back a block again, which
         // changes the band they observe; a reader elsewhere that this moves has a frame
         // that moved
@@ -663,7 +668,16 @@ impl Kernel {
             self.arena.observations.moved(slot);
         }
         self.arena.blocks.set(slot, block);
+        if block.is_none() {
+            // A bar item is a block the host gives: one implied in its place is not
+            if let Some(held) = self.arena.blocks.held_mut(slot) {
+                held.bar_item = false;
+            }
+        }
         self.block_changed(slot, before);
+        if hosted && !self.arena.hosted_readout(slot) {
+            self.bar_text_changed(slot);
+        }
         // Derive the owner segments' readers below a box whose host starts or stops placing
         // it while its implied block stands
         if placed && before.is_some() && self.arena.blocks.get(slot).is_some() {
@@ -748,6 +762,48 @@ impl Kernel {
     fn resize_content_root(&mut self, slot: u32) {
         let sized = super::readers::container_readers(&self.arena, slot);
         self.restyle_readers(&sized);
+    }
+
+    /// Whether the host shows `view`, a block it gave, as a navigation bar's
+    /// item (LLP 1141.004 D3): a readout that takes the bar's type for what
+    /// it leaves unsaid. A block taken back is no item. Returns whether that
+    /// changed, which a layout then owes; refused for a view with no given
+    /// block.
+    pub fn set_bar_item(&mut self, view: ViewId, item: bool) -> Result<bool, KernelError> {
+        let slot = self
+            .arena
+            .slot_of(view)
+            .ok_or(LayoutError::UnknownView(view))?;
+        let Some(held) = (self.arena.blocks.held_mut(slot)).filter(|b| b.given.is_some()) else {
+            return match item {
+                true => Err(LayoutError::HostBlock("a bar item is a block its host gives").into()),
+                false => Ok(false),
+            };
+        };
+        if held.bar_item == item {
+            return Ok(false);
+        }
+        held.bar_item = item;
+        self.bar_text_changed(slot);
+        Ok(true)
+    }
+
+    /// The readouts that came to take a bar's type, or stopped, since the
+    /// last call (LLP 1141.004 D3). Their rows changed outside the commit
+    /// that styled them, so a host sends their subtrees' rows again.
+    pub fn take_bar_text_flips(&mut self) -> Vec<ViewId> {
+        std::mem::take(&mut self.arena.bar_text.flips)
+    }
+
+    /// `slot`'s text and symbol measured again in the type a bar gives it,
+    /// or no longer gives it, and its descendants that inherit it, the
+    /// lengths that read its font included (LLP 1141.004 D3).
+    fn bar_text_changed(&mut self, slot: u32) {
+        let mut unmirrored = crate::layout::Unmirrored;
+        let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
+        crate::arena::bar_text::bar_type_changed(&mut self.arena, layout, slot);
+        let mut receipt = crate::CommitReceipt::default();
+        crate::txn::relative::resolve(&mut self.arena, layout, &mut Vec::new(), &mut receipt);
     }
 
     /// `slot`'s block root styled again, as its block or what is above it

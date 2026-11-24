@@ -83,6 +83,7 @@ pub(super) fn place(
         arena.set_content(image, geometry.size);
         let (padding, border) = geometry.inset;
         let inset = Some(crate::id::BoxInset {
+            scrollbar: [0.0; 2],
             text_offset: 0.0,
             text_item: None,
             padding,

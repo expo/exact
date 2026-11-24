@@ -306,6 +306,34 @@ engineTest.chromium('JS: built platform lengths resolve on every length row that
 
 for (const runtime of ['JS', 'wasm']) {
   const check = runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? need('fixture', 'name a wasm web build with EXACT_WEB_DIST') : engineTest.chromium;
+  check(`${runtime}: a numeric string clears line-height and journals its value`, () => fixture(runtime, async evaluate => {
+    const leading = () => evaluate(`getComputedStyle(document.querySelector('[data-testid="child"]')).lineHeight`);
+    expect(await leading()).toBe('24px');
+    await evaluate(`document.querySelector('[data-testid="change"]').click()`);
+    expect(await leading()).toBe('36px');
+    for (const id of ['comment', 'percent']) {
+      await evaluate(`document.querySelector('[data-testid="${id}"]').click()`);
+      expect(await leading()).toBe('36px');
+    }
+    const lines = runtime === 'JS' ? await evaluate(`import('/rt.js').then(m => m.journal)`)
+      : (await evaluate(`exact.agent({op:'logs',since:0})`)).lines;
+    for (const value of ['1.5', '1.5/**/', '150%'])
+      expect(lines.filter(l => l.endsWith(`invalid line-height value "${value}"; unset`))).toHaveLength(1);
+  }, `component App
+  state leading = "24px"
+  action change
+    leading = "1.5"
+  action comment
+    leading = "1.5/**/"
+  action percent
+    leading = "150%"
+  view
+    column line-height="36px"
+      text "Child" testId="child" font-size=16 line-height=leading
+      button "Change" press=change testId="change"
+      button "Comment" press=comment testId="comment"
+      button "Percent" press=percent testId="percent"
+`));
   check(`${runtime}: authored auto, blank and invalid z-index override the sheet's integer`, () => fixture(runtime, async evaluate => {
     await evaluate(`(() => {
       for (const id of ['pushed', 'literal', 'unsaid']) document.querySelector('[data-testid="' + id + '"]').setAttribute('data-exact-in-sheet', '');

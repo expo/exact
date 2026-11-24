@@ -39,56 +39,10 @@ pub(crate) fn grid_tokens(a: &Attr, rows: &[StyleId]) -> Option<Attr> {
 /// text is unknown here. `varying` takes the first length token with more
 /// than one value, which nothing binds where a value is read at run time.
 pub(crate) fn call_tokens(e: &mut Expr, varying: &mut Option<String>) -> bool {
-    fold_literal_templates(e);
     texts(e, &mut |text, whole| {
         let explicit = token_calls(text, varying);
         explicit | whole && written_tokens(text, Some(varying))
     })
-}
-
-/// Each template in `e`, through choices, bindings and typed values, whose
-/// holes are all literal strings, written as the one string it makes.
-fn fold_literal_templates(e: &mut Expr) {
-    let literal = |e: &Expr| match e {
-        Expr::Str(s, _) => Some(s.clone()),
-        Expr::Typed(inner, ..) => match &**inner {
-            Expr::Str(s, _) => Some(s.clone()),
-            _ => None,
-        },
-        _ => None,
-    };
-    match e {
-        Expr::Template(parts, span) => {
-            // A hole that is itself a literal template is its literal first
-            for part in parts.iter_mut() {
-                if let TemplatePart::Expr(hole) = part {
-                    fold_literal_templates(hole);
-                }
-            }
-            let mut text = String::new();
-            for part in parts.iter() {
-                match part {
-                    TemplatePart::Text(t) => text.push_str(t),
-                    TemplatePart::Expr(hole) => match literal(hole) {
-                        Some(s) => text.push_str(&s),
-                        None => return,
-                    },
-                }
-            }
-            *e = Expr::Str(text, *span);
-        }
-        Expr::Ternary(_, yes, no, _)
-        | Expr::Match {
-            some: yes,
-            none: no,
-            ..
-        } => {
-            fold_literal_templates(yes);
-            fold_literal_templates(no);
-        }
-        Expr::Let { body, .. } | Expr::Typed(body, ..) => fold_literal_templates(body),
-        _ => {}
-    }
 }
 
 /// A length row's value with each token `var()` in it written as the

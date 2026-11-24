@@ -527,6 +527,11 @@ final class NavigationBasicsIOSTests: XCTestCase {
         until("laid out in its block") { readout.frame.width > 7 + 6 && words.frame.width > 0 }
         XCTAssertEqual(view.intrinsicContentSize.width, readout.frame.maxX, accuracy: 0.5, "the item is the element's size")
         XCTAssertEqual(readout.accessibilityLabel, "0 composed", "its `aria-label`")
+        // What it leaves unsaid is the bar's: a plain bar item title's size and weight (D3); what it writes wins.
+        let unsaid = try node(session, "readout-unsaid"), bar = FieldChromeCache.barItemFont(plain.traitCollection)
+        XCTAssertEqual(unsaid.style["font_size"]?.number ?? 0, Double(bar.pointSize), accuracy: 0.01, "the bar item's size")
+        XCTAssertEqual(unsaid.style["font_weight"]?.number, 500, "and weight")
+        XCTAssertEqual(words.style["font_size"]?.number, 12, "a size it writes")
         // The bar's, not the page's: the agent does not call it unshown.
         let unshown = session.presenter.navigationHost.unshownByBar()
         for shown in ["readout-plain", "readout-text"] { XCTAssertNil(unshown[try node(session, shown).id], "\(shown) is the bar's") }
@@ -562,6 +567,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         spin(0.2)
         XCTAssertTrue(plain.navigationItem.rightBarButtonItems?.contains { $0.customView === view } == true, "still the bar's")
         XCTAssertTrue(readout.superview === view.stand)
+        XCTAssertEqual(unsaid.style["font_size"]?.number ?? 0, Double(bar.pointSize), accuracy: 0.01, "and in the bar's type")
     }
 
     /// Whether the tab bar insets a tab's content from below: a phone's (and

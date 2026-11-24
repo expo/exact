@@ -94,22 +94,27 @@ impl Lowerer<'_> {
         // `class=` expands its style's rows first; the node's own
         // attribute of the same name replaces the style's (LLP 1017 P6).
         // @ref LLP 1084 D7 — a grouped list's sheet, under its classes.
+        let constant =
+            |e: &Expr, string_only| self.constants(scope).template_constant(e, string_only);
+        let mut authored = std::borrow::Cow::Borrowed(attrs.as_slice());
+        values::fold_attr_templates(&mut authored, &constant);
+        let attrs = authored.as_ref();
         let button_context = grouped::button_context(attrs);
         let separated = grouped::row_separator(attrs);
         let acting = grouped::actions::said(attrs);
         let shadow_part = grouped::shadow::part(attrs);
         let (mut sheet, unmarked) = grouped::split(attrs);
         sheet.retain(|a| grouped::shadow::part(std::slice::from_ref(a)).is_none());
-        let attrs = unmarked.as_ref().unwrap_or(attrs);
+        let attrs = unmarked.as_deref().unwrap_or(attrs);
         // A `delete=` no list row expanded does nothing (`lower-delete-row`).
         let kept = swipe_rows::stray(attrs);
-        let attrs = kept.as_ref().unwrap_or(attrs);
+        let attrs = kept.as_deref().unwrap_or(attrs);
         // The props the tag's package declares, written on the tag, are the
         // module's; nothing below sees them, so a class's rows of the same
         // names stay its box's (LLP 1024 D1).
         let split = native::split_declared(tag, attrs);
         let (declared, attrs) = match &split {
-            Some((declared, rest)) => (declared.as_slice(), rest),
+            Some((declared, rest)) => (declared.as_slice(), rest.as_slice()),
             None => (&[][..], attrs),
         };
         // A class choice's side that sets no row leaves it as the node has
@@ -125,6 +130,9 @@ impl Lowerer<'_> {
             .collect();
         let styles = |name: &str| self.styles.get(name).map(Vec::as_slice);
         let (class_label, mut expanded) = crate::class::rows(attrs, &styles, &unwritten)?.unzip();
+        for a in expanded.iter_mut().flatten() {
+            values::fold_attr_template(a, &constant);
+        }
         if let (Some(rows), Some(card)) = (&mut expanded, shadow_part) {
             grouped::shadow::class_rows(rows, card);
         }
@@ -171,7 +179,7 @@ impl Lowerer<'_> {
                 expanded = Some([sheet.clone(), attrs.to_vec()].concat());
                 expanded.as_deref().expect("just set")
             }
-            None => attrs.as_slice(),
+            None => attrs,
         };
         let face = self.button_context == Some("a native button");
         let inked = crate::symbols::symbol_ink(
@@ -217,7 +225,7 @@ impl Lowerer<'_> {
         }
         let expanded = composed.as_deref().unwrap_or(expanded);
         let in_svg = svg::in_svg(self.svg_depth > 0, parent_tag);
-        let lengths = svg::coerce_lengths(tag, in_svg, expanded);
+        let lengths = svg::coerce_lengths(tag, in_svg, expanded, Some((scope, &self.types.shapes)));
         let expanded = lengths.as_deref().unwrap_or(expanded);
         svg::check_svg_content(tag, in_svg, parent_tag, *span)?;
         // Keep a rejected transform out of the remaining attribute checks,

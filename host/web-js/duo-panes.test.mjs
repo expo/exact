@@ -106,6 +106,6 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     expect(await page.getByTestId('fact-h').textContent()).toBe('1');
     expect(errors).toEqual([]);
     // The runtime journals a style the browser refuses without throwing
-    expect(await page.evaluate(() => exact.journal.filter(line => line.includes(' is not a value it takes')))).toEqual([]);
+    expect(await page.evaluate(() => exact.journal.filter(line => /invalid .* value .*; unset/.test(line) || line.includes(' is not a value it takes')))).toEqual([]);
   } finally { await suite?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
 }, 180000);

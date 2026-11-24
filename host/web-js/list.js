@@ -8,6 +8,7 @@
 // `scrollIntoView` (LLP 1070.000, into_view.rs) is carried, and Arrange's
 // preview (reorder.rs) by reorder.js, which the motion piece loads for a
 // reorder drag; not carried (refused at build): a dynamic `virtualized`.
+import { scrollPadding } from "./navigation.js";
 import { inactive } from "./document.js";
 import { rt as runtime } from './rt-link.js';
 import { sig, effect, scope, end, untracked, write, writeItem, owner, onEnd, viewId, Views, inflight, Before, After, rev, ticket, journal, Resources, Mutations, unadopted, adopting, adoptRow, settled, Refusal, Hosts, exitView, clock, eq, presentRows } from "./rt.js";
@@ -967,7 +968,8 @@ class Collection {
   }
   /** The list's scroll-padding at each end on this axis, read when it aligns, as CSSOM View reads it. */
   scrollPadding() {
-    const cs = getComputedStyle(this.el), n = v => Math.max(0, parseFloat(v) || 0);
+    const cs = getComputedStyle(this.el), basis = this.axis === "y" ? this.el.clientHeight : this.el.clientWidth;
+    const n = v => scrollPadding(v, basis);
     return this.axis === "y" ? [n(cs.scrollPaddingTop), n(cs.scrollPaddingBottom)] : [n(cs.scrollPaddingLeft), n(cs.scrollPaddingRight)];
   }
   // Within the port less its scroll-padding (into_view.rs `aligned`), down to the padding before the first row.

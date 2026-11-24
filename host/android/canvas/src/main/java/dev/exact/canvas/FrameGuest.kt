@@ -32,6 +32,7 @@ internal object Partitions {
     /** `exactPage().iframePartition`, asked by the host at boot (`canvas/frame_partitions.rs`), with what the
      * WebView supports in the log. */
     @JvmStatic fun keeps(): Boolean {
+        PaintedOrigins.planHasFrames = true
         val supported = FEATURES.associateWith { WebViewFeature.isFeatureSupported(it) }
         android.util.Log.i("exact", "iframe partitions: WebView ${WebView.getCurrentWebViewPackage()?.versionName}; $supported")
         return kept

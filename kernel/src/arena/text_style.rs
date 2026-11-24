@@ -275,11 +275,15 @@ impl NodeArena {
 
     /// Whether a symbol image here would draw in its author's `color`
     /// ([`crate::NodeRef::symbol_color_said`]) but for its source: the colour
-    /// is said, and the node is no native button's face.
+    /// is said, or is the label colour a readout the bar hosts gives what it
+    /// leaves unsaid (LLP 1141.004 D3), and the node is no native button's face.
     pub(crate) fn ink_said(&self, slot: u32) -> bool {
+        let bar = self.bar_text.start.as_deref().is_some_and(|start| {
+            std::ptr::eq(self.computed_source(slot, StyleId::TextColor), start)
+        });
         self.parents[slot as usize]
             .is_none_or(|p| self.node_type(p) != crate::generated::NodeType::Control)
-            && self.says(slot, StyleId::TextColor)
+            && (bar || self.says(slot, StyleId::TextColor))
     }
 }
 

@@ -1129,7 +1129,7 @@ fn compile_file_warned(
         .and_then(|built| {
             // A component nothing uses is not lowered; its literal values
             // are checked as the lint checks them (LLP 1156.005 D3).
-            let unused = contract_lower::lint_unused(file);
+            let unused = contract_lower::lint_unused(file, &checked.types.shapes);
             if !unused.is_empty() {
                 return Err(each(unused, |e| e));
             }

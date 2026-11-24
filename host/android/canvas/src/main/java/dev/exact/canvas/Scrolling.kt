@@ -633,8 +633,7 @@ internal class Scrolling(private val view: ExactView) {
         for (s in scrollers.values) {
             if (!s.own || !s.node || !s.told) continue
             val g = view.group(s.id) ?: continue
-            g.translationX = s.drawnX - predictedPixel(s, true)
-            g.translationY = s.drawnY - predictedPixel(s, false)
+            view.nativeOrigins.translate(g, s.drawnX - predictedPixel(s, true), s.drawnY - predictedPixel(s, false))
         }
     }
 

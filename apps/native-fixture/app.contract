@@ -470,11 +470,13 @@ component NativeFixture
                       image "symbol:compose" width=20 height=20
                     // A readout after the buttons: an item nothing presses,
                     // its dot and monospaced count drawn as written, which
-                    // follows the count in place (LLP 1141.004).
+                    // follows the count in place, and a word in the bar's
+                    // own type, which it leaves unsaid (LLP 1141.004).
                     if e.name == "plain"
                       row role="status" testId="readout-plain" aria-label=`${composed} composed` display="flex" align-items="center" gap=6
                         column width=7 height=7 border-radius=3.5 background-color=(composed > 0 ? "#16a34a" : "#9ca3af")
                         text `${composed} sent` testId="readout-text" font-family="Menlo" font-size=12 color="#6b7280"
+                        text "live" testId="readout-unsaid"
                 if e.name == "plain"
                   column id="plain-about" popover="auto" testId="plain-about" padding=12 width=220
                     text "A route with no Back control of its own." font-size=13

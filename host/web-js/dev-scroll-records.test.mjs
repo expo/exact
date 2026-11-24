@@ -74,6 +74,28 @@ test.each(['answer', 'focus', 'scroll', 'expire'])('replacement records survive 
   } finally { await browser?.close(); server.stop(true); }
 }, 30000);
 
+test('replacement chooses an anchor inside the percentage scroll padding', async () => {
+  const server = recordsServer(), browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const path = await page.evaluate(async () => {
+      const { prepareDev } = await import('/checkpoint.js');
+      const root = document.getElementById('exact-root');
+      root.innerHTML = '<div data-carry-type="Column" style="height:300px;box-sizing:border-box;border:solid;border-width:8px 0 12px;overflow:auto;scroll-padding-top:max(10%, 20px)"></div>';
+      const port = root.firstChild;
+      for (const height of [127, 2, 300]) {
+        const row = document.createElement('div');
+        row.dataset.carryType = 'Column'; row.style.height = height + 'px'; port.append(row);
+      }
+      prepareDev()();
+      port.scrollTop = 100;
+      return __exactDevRecords().scrolls[0].axes.top.anchor.nodes[0].path;
+    });
+    expect(path).toEqual([0, 1]);
+  } finally { await browser.close(); server.stop(true); }
+});
+
 test('replacement records match browser SVG anchoring through display contents', async () => {
   const server = recordsServer();
   let browser;

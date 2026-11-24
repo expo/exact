@@ -725,7 +725,7 @@ fn a_bound_string_on_a_number_row_is_refused_as_its_literal_is() {
     };
     // No native host reads text on these rows; a browser would apply it.
     for (node, name) in [
-        ("text \"a\" opacity=`${size / 20}`", "opacity"),
+        ("text \"a\" opacity=label", "opacity"),
         ("column flex-grow=label", "flex-grow"),
         ("text \"a\" font-weight=`${size}0`", "font-weight"),
         ("view column-count=label", "column-count"),

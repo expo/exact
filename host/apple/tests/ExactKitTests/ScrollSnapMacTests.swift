@@ -58,8 +58,9 @@ final class ScrollSnapMacTests: XCTestCase {
             let (node, _) = try strip((0..<4).map { ("start", 96.0 + Double($0) * 300, 80.0) },
                                       type: vertical ? "y mandatory" : "x mandatory", vertical: vertical)
             let (first, last) = vertical ? ("top", "bottom") : ("left", "right")
-            for (lead, trail, padLead, padTrail, starts, centers, ends): (Double, Double, Double, Double, CGFloat, CGFloat, CGFloat) in [
+            for (lead, trail, padLead, padTrail, starts, centers, ends): (Double, Double, Any, Any, CGFloat, CGFloat, CGFloat) in [
                 (0, 0, 0, 0, 96, 286, 176), (8, 12, 0, 0, 88, 288, 188), (8, 12, 10, 6, 78, 286, 194),
+                (8, 12, ["pct": 10], 6, 60, 277, 194), (8, 12, ["pct": 10], ["pct": 10], 60, 288, 216),
             ] {
                 presenter?.apply(wireBatch([["op": "style", "id": 1, "style": [
                     "overflow_x": vertical ? "hidden" : "scroll", "overflow_y": vertical ? "scroll" : "hidden",

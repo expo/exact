@@ -3,6 +3,7 @@ import UIKit
 import XCTest
 @testable import ExactKit
 @testable import ExactNavigation
+@testable import ExactControls
 
 /// A header's bar items (LLP 1141.004 D1) over hand-built routes: every
 /// button UIKit's own item, the readouts hosted, nothing else an item, what
@@ -606,6 +607,82 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertNil(try item("note-button", on: history).customView, "UIKit's own item")
         try XCTUnwrap(item("about-link", on: history).target as? BarPress).press()
         until("a tap on the item followed the link") { nav.viewControllers.count == 3 }
+    }
+
+    /// LLP 1141.004 D3: at the accessibility text sizes a long press shows a readout in the Large Content
+    /// Viewer by what VoiceOver says: its name, then its words where they differ.
+    func testTheLargeContentViewerShowsWhatVoiceOverSays() throws {
+        let p = route([status(4, ["accessibilityLabel": "Battery"]), text(5, "42%"), text(6, "Ready", ["accessibilityRole": "status"]),
+                       status(7), progress(8)],
+                      kids: [4, 6, 7], more: [["op": "children", "id": 4, "ids": [5]], ["op": "children", "id": 7, "ids": [8]]])
+        let route = RouteController(try XCTUnwrap(p.views[1]))
+        let views = try p.navigationHost.barItems(try bar(p).trailing, route).map { try XCTUnwrap($0.customView as? HostedItemView) }
+        XCTAssertEqual(views.map(\.node.id), [4, 6, 7])
+        let (labelled, words, nameless) = (views[0], views[1], views[2])
+        XCTAssertTrue(labelled.interactions.contains { $0 is UILargeContentViewerInteraction })
+        XCTAssertTrue(labelled.showsLargeContentViewer)
+        XCTAssertEqual(labelled.largeContentTitle, "Battery, 42%")
+        p.apply(wireBatch([["op": "props", "id": 5, "set": ["text": "43%"]]]))
+        XCTAssertEqual(labelled.largeContentTitle, "Battery, 43%", "it follows the readout")
+        p.apply(wireBatch([["op": "props", "id": 5, "set": ["text": "Battery"]]]))
+        XCTAssertEqual(labelled.largeContentTitle, "Battery", "words the same as the name are said once")
+        XCTAssertEqual(words.largeContentTitle, "Ready", "an unlabelled readout by its words")
+        XCTAssertFalse(nameless.showsLargeContentViewer, "a readout with no name shows nothing")
+    }
+
+    /// LLP 1141.004 D3: a readout's spinner is UIKit's own grey unless the readout says otherwise. An accent
+    /// it only inherits from above the readout does not reach it; one written on the readout does; a colour
+    /// written on the spinner wins; and UIKit's own returns when the written ones go.
+    func testAReadoutsSpinnerTakesOnlyWhatTheReadoutSays() throws {
+        let red = [255, 0, 0, 255], green = [0, 204, 0, 255], blue = [0, 0, 255, 255]
+        let spinner: [String: Any] = ["op": "create", "id": 5, "kind": "control", "props": ["type": "progress"], "style": ["accent_color": red]]
+        let p = route([status(4), spinner, text(6, "Updating")], kids: [4],
+                      more: [["op": "children", "id": 4, "ids": [5, 6]], ["op": "frame", "id": 5, "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0]])
+        let route = RouteController(try XCTUnwrap(p.views[1]))
+        let item = try XCTUnwrap(p.navigationHost.barItems(try bar(p).trailing, route).first?.customView as? HostedItemView)
+        // In a window of its own tint, as a bar's item is
+        window.addSubview(item)
+        window.tintColor = .systemOrange
+        p.apply(wireBatch([]))
+        XCTAssertTrue(p.views[5]?.barReadout === p.views[4], "the spinner is in the hosted readout")
+        let indicator = try XCTUnwrap(p.controls.spinners[5])
+        func rgba() -> [CGFloat] {
+            var (r, g, b, a) = (CGFloat(0), CGFloat(0), CGFloat(0), CGFloat(0))
+            indicator.color.resolvedColor(with: indicator.traitCollection).getRed(&r, green: &g, blue: &b, alpha: &a)
+            return [r, g, b, a]
+        }
+        XCTAssertEqual(indicator.color, ControlHost.platformInk, "an accent from above the readout does not reach it")
+        p.apply(wireBatch([["op": "style", "id": 4, "style": ["accent_color": green, "written": ["accent_color"]]],
+                           ["op": "style", "id": 5, "style": ["accent_color": green]]]))
+        XCTAssertEqual(rgba(), [0, 0.8, 0, 1], "an accent written on the readout reaches it")
+        p.apply(wireBatch([["op": "style", "id": 5, "style": ["accent_color": green, "text_color": blue, "written": ["text_color"]]]]))
+        XCTAssertEqual(rgba(), [0, 0, 1, 1], "a colour written on it wins")
+        p.apply(wireBatch([["op": "style", "id": 4, "style": [:]], ["op": "style", "id": 5, "style": ["accent_color": red]]]))
+        XCTAssertEqual(indicator.color, ControlHost.platformInk, "UIKit's own returns when the written ones go")
+        // An accent written on a box between them reaches it
+        p.apply(wireBatch([["op": "create", "id": 7, "kind": "view"], ["op": "children", "id": 4, "ids": [7, 6]], ["op": "children", "id": 7, "ids": [5]],
+                           ["op": "frame", "id": 7, "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0],
+                           ["op": "style", "id": 7, "style": ["accent_color": green, "written": ["accent_color"]]],
+                           ["op": "style", "id": 5, "style": ["accent_color": green]]]))
+        XCTAssertEqual(rgba(), [0, 0.8, 0, 1], "an accent written on a box between them")
+        // One the spinner writes as the tint (`AccentColor`) is the design's accent, not the readout's green
+        let tint: [String: Any] = ["sys": "@tint", "c": [[0, 136, 255, 255], [0, 145, 255, 255]]]
+        p.apply(wireBatch([["op": "style", "id": 4, "style": ["accent_color": green, "written": ["accent_color"]]],
+                           ["op": "style", "id": 7, "style": ["accent_color": green]],
+                           ["op": "style", "id": 5, "style": ["accent_color": tint, "written": ["accent_color"]]]]))
+        // With no theme's accent here, the design's is the window's tint
+        let design = try XCTUnwrap(ThemeRoles.color("AccentColor", in: indicator) ?? indicator.window?.tintColor, "in a window")
+        XCTAssertNotEqual(design, ControlHost.platformInk)
+        XCTAssertEqual(indicator.color.resolvedColor(with: indicator.traitCollection), design.resolvedColor(with: indicator.traitCollection), "the design's accent")
+        XCTAssertNotEqual(rgba(), [0, 0.8, 0, 1], "not the readout's")
+        // `Highlight` is a fifth of it
+        let highlight: [String: Any] = ["sys": "@tint/0.2", "c": [[0, 136, 255, 51], [0, 145, 255, 51]]]
+        p.apply(wireBatch([["op": "style", "id": 5, "style": ["accent_color": highlight, "written": ["accent_color"]]]]))
+        XCTAssertEqual(indicator.color.resolvedColor(with: indicator.traitCollection),
+                       design.withAlphaComponent(0.2).resolvedColor(with: indicator.traitCollection), "`Highlight`'s share of the accent")
+        // `auto` is UIKit's own colour
+        p.apply(wireBatch([["op": "style", "id": 5, "style": ["accent_color": "auto", "written": ["accent_color"]]]]))
+        XCTAssertEqual(indicator.color, ControlHost.platformInk, "`auto` leaves UIKit's")
     }
 }
 #endif

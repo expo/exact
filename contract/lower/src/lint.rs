@@ -586,14 +586,14 @@ fn known_arms(v: &Expr, names: &Substituted, budget: &mut usize) -> Option<Expr>
 /// rows. The driver runs this when an earlier pass refused, so a misspelled
 /// tag or a bad colour is reported in the same run as a type error.
 pub fn lint(file: &File) -> Vec<LowerError> {
-    lint_components(file, |_| true)
+    lint_components(file, |_| true, &Default::default())
 }
 
 /// A bad literal value (`color="notacolor"`) in a component of the root's
 /// file that nothing the root renders uses (LLP 1156.005 D3). Lowering walks
 /// from the root, so without this it built clean and was refused only at the
 /// component's first use, far from the edit.
-pub fn lint_unused(file: &File) -> Vec<LowerError> {
+pub fn lint_unused(file: &File, shapes: &contract_types::Shapes) -> Vec<LowerError> {
     let Some(root) = file.components.first() else {
         return Vec::new();
     };
@@ -643,7 +643,11 @@ pub fn lint_unused(file: &File) -> Vec<LowerError> {
                     ..
                 } if tag != "svg" => {
                     out.extend(attrs.iter().filter_map(|a| {
-                        matches!(a.value, Expr::Str(..) | Expr::Number(..)).then_some(a.span)
+                        matches!(
+                            a.value,
+                            Expr::Str(..) | Expr::Number(..) | Expr::Template(..)
+                        )
+                        .then_some(a.span)
                     }));
                     literal(children, out);
                 }
@@ -665,17 +669,26 @@ pub fn lint_unused(file: &File) -> Vec<LowerError> {
     if spans.is_empty() {
         return Vec::new();
     }
-    let mut errors = lint_components(file, unused);
+    let mut errors = lint_components(file, unused, shapes);
     errors.retain(|e| e.id == "lower-attr-value" && spans.contains(&e.span));
     errors
 }
 
-fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerError> {
+fn lint_components(
+    file: &File,
+    checked: impl Fn(usize) -> bool,
+    shapes: &contract_types::Shapes,
+) -> Vec<LowerError> {
     // A theme's names are colours (LLP 1095 D4); the lint asks only whether a
     // row's value is one, so each stands for any.
     crate::theme::bind_axes(file);
     let _theme = crate::theme::lint_scope(file);
-    fn walk(nodes: &[Node], names: &Substituted, errors: &mut Vec<LowerError>) {
+    fn walk(
+        nodes: &[Node],
+        names: &Substituted,
+        errors: &mut Vec<LowerError>,
+        constants: &crate::keyframes::Context,
+    ) {
         for n in nodes {
             match n {
                 Node::Element {
@@ -685,10 +698,15 @@ fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerErr
                     span,
                     ..
                 } => {
+                    let mut attrs = std::borrow::Cow::Borrowed(attrs.as_slice());
+                    values::fold_attr_templates(&mut attrs, &|e, string_only| {
+                        constants.template_constant(e, string_only)
+                    });
+                    let attrs = attrs.as_ref();
                     if tags::tag(tag).is_none() && !native::is_module_tag(tag) {
                         errors.push(unknown_tag(tag, *span));
                     } else {
-                        let coerced = svg::coerce_lengths(tag, false, attrs);
+                        let coerced = svg::coerce_lengths(tag, false, attrs, None);
                         let attrs = coerced.as_deref().unwrap_or(attrs);
                         // Activity compilation consumes `slot` before lowering (LLP 1126.001 WP8).
                         // `delete=` is lowering's, a list row's swipe (`swipe_rows.rs`).
@@ -792,14 +810,14 @@ fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerErr
                             }
                         }
                     }
-                    walk(children, names, errors);
+                    walk(children, names, errors, constants);
                 }
                 node => {
                     for (list, binds) in node.scoped_child_lists() {
                         if binds.is_empty() {
-                            walk(list, names, errors);
+                            walk(list, names, errors, constants);
                         } else {
-                            walk(list, &names.hiding(binds.iter()), errors);
+                            walk(list, &names.hiding(binds.iter()), errors, constants);
                         }
                     }
                 }
@@ -838,7 +856,9 @@ fn lint_components(file: &File, checked: impl Fn(usize) -> bool) -> Vec<LowerErr
                 imported: imported.clone(),
             },
         };
-        walk(&c.view, &names, &mut errors);
+        let scope = Scope::default();
+        let constants = crate::keyframes::Context::new(&file.fns, &scope, shapes);
+        walk(&c.view, &names, &mut errors, &constants);
     }
     // A component's anatomy, which no type is needed to check (LLP 1139 D2).
     for (_, c) in
