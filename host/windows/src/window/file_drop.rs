@@ -1,8 +1,10 @@
-//! Explorer's OLE file drag delivers the entire selection in one drop (LLP 1069.010).
+//! OLE drags from other apps over the window: Explorer's files in one drop
+//! (LLP 1069.010), and any app's plain text and link (LLP 1094.001 D3).
 #![allow(unsafe_code)]
 
 use super::{App, DataSource};
 use crate::accessibility::Event;
+use exact_painted::Dropped;
 use exact_runner::KeyModifiers;
 use std::{
     cell::{Cell, RefCell},
@@ -18,12 +20,16 @@ use windows::{
         Graphics::Gdi::ScreenToClient,
         System::{
             Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, STGMEDIUM, TYMED_HGLOBAL},
+            DataExchange::RegisterClipboardFormatW,
+            Diagnostics::Debug::ReadProcessMemory,
+            Memory::{GlobalLock, GlobalSize, GlobalUnlock},
             Ole::{
                 IDropTarget, IDropTarget_Impl, OleInitialize, OleUninitialize, RegisterDragDrop,
-                ReleaseStgMedium, RevokeDragDrop, CF_HDROP, DROPEFFECT, DROPEFFECT_COPY,
-                DROPEFFECT_NONE, MK_ALT,
+                ReleaseStgMedium, RevokeDragDrop, CF_HDROP, CF_UNICODETEXT, DROPEFFECT,
+                DROPEFFECT_COPY, DROPEFFECT_NONE, MK_ALT,
             },
             SystemServices::{MK_CONTROL, MK_SHIFT, MODIFIERKEYS_FLAGS},
+            Threading::GetCurrentProcess,
         },
         UI::{
             Input::KeyboardAndMouse::{GetKeyState, VK_LWIN, VK_RWIN},
@@ -34,7 +40,7 @@ use windows::{
 use winit::{
     application::ApplicationHandler,
     event::{StartCause, WindowEvent},
-    event_loop::ActiveEventLoop,
+    event_loop::{ActiveEventLoop, EventLoopProxy},
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::WindowId,
 };
@@ -42,18 +48,25 @@ use winit::{
 enum Drag {
     Over(POINTL, MODIFIERKEYS_FLAGS),
     Leave,
-    Drop(POINTL, MODIFIERKEYS_FLAGS, Vec<PathBuf>),
+    Drop(POINTL, MODIFIERKEYS_FLAGS, Dropped),
 }
 
 #[implement(IDropTarget)]
 struct Target {
-    files: Cell<bool>,
+    /// Whether the drag carries files, text or a link.
+    carries: Cell<bool>,
     dispatch: Box<dyn Fn(Drag) -> bool>,
 }
 
-fn format() -> FORMATETC {
+/// The shell's URL format (`CFSTR_INETURLW`), which a browser's link drag
+/// offers: registered by name, as every app that reads it does.
+fn url_format() -> u16 {
+    unsafe { RegisterClipboardFormatW(windows::core::w!("UniformResourceLocatorW")) as u16 }
+}
+
+fn format(format: u16) -> FORMATETC {
     FORMATETC {
-        cfFormat: CF_HDROP.0,
+        cfFormat: format,
         dwAspect: DVASPECT_CONTENT.0,
         lindex: -1,
         tymed: TYMED_HGLOBAL.0 as u32,
@@ -70,7 +83,7 @@ impl Drop for Medium {
 }
 
 fn paths(data: &IDataObject) -> Result<Vec<PathBuf>> {
-    let medium = Medium(unsafe { data.GetData(&format())? });
+    let medium = Medium(unsafe { data.GetData(&format(CF_HDROP.0))? });
     if medium.0.tymed != TYMED_HGLOBAL.0 as u32 {
         return Ok(Vec::new());
     }
@@ -88,6 +101,74 @@ fn paths(data: &IDataObject) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
+/// The text a format's global memory holds as UTF-16, up to the NUL that
+/// ends it; none when the drag does not offer the format, the text has no end
+/// within the memory, or it cannot be held. The system copies the locked
+/// bytes into a buffer of ours (`ReadProcessMemory`), a chunk at a time until
+/// the NUL, and only the units it reports transferred are decoded.
+fn wide(data: &IDataObject, kind: u16) -> Option<String> {
+    let medium = Medium(unsafe { data.GetData(&format(kind)) }.ok()?);
+    if medium.0.tymed != TYMED_HGLOBAL.0 as u32 {
+        return None;
+    }
+    let global = unsafe { medium.0.u.hGlobal };
+    let units = unsafe { GlobalSize(global) } / 2;
+    let start = unsafe { GlobalLock(global) }.cast::<u16>();
+    if start.is_null() {
+        return None;
+    }
+    let (mut text, mut chunk, mut done) = (Vec::new(), [0u16; 1024], 0);
+    let ended = loop {
+        let want = (units - done).min(chunk.len());
+        let mut read = 0;
+        let copied = want > 0
+            && unsafe {
+                ReadProcessMemory(
+                    GetCurrentProcess(),
+                    start.add(done).cast::<std::ffi::c_void>(),
+                    chunk.as_mut_ptr().cast::<std::ffi::c_void>(),
+                    want * 2,
+                    Some(&mut read),
+                )
+            }
+            .is_ok();
+        let got = &chunk[..if copied { read / 2 } else { 0 }];
+        let end = got.iter().position(|&unit| unit == 0);
+        let kept = &got[..end.unwrap_or(got.len())];
+        if got.is_empty() || text.try_reserve(kept.len()).is_err() {
+            break false;
+        }
+        text.extend_from_slice(kept);
+        if end.is_some() {
+            break true;
+        }
+        done += got.len();
+    };
+    let _ = unsafe { GlobalUnlock(global) };
+    // Decoded into room reserved first, a UTF-16 unit being at most three UTF-8 bytes, so a long text that cannot be
+    // held is none rather than an abort
+    let mut out = String::new();
+    if !ended || out.try_reserve(text.len().checked_mul(3)?).is_err() {
+        return None;
+    }
+    out.extend(char::decode_utf16(text).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER)));
+    Some(out)
+}
+
+/// What the drag drops: Explorer's files, the plain text, and the link
+/// unless it names a file (LLP 1094.001 D1).
+fn dropped(data: &IDataObject) -> Dropped {
+    let url = wide(data, url_format()).filter(|url| {
+        !url.get(..5)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"))
+    });
+    Dropped {
+        paths: paths(data).unwrap_or_default(),
+        text: wide(data, CF_UNICODETEXT.0).unwrap_or_default(),
+        url: url.unwrap_or_default(),
+    }
+}
+
 #[allow(non_snake_case)]
 impl IDropTarget_Impl for Target_Impl {
     fn DragEnter(
@@ -97,10 +178,11 @@ impl IDropTarget_Impl for Target_Impl {
         pt: &POINTL,
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
-        self.files.set(
-            data.as_ref()
-                .is_some_and(|data| unsafe { data.QueryGetData(&format()).is_ok() }),
-        );
+        self.carries.set(data.as_ref().is_some_and(|data| {
+            [CF_HDROP.0, CF_UNICODETEXT.0, url_format()]
+                .into_iter()
+                .any(|kind| unsafe { data.QueryGetData(&format(kind)).is_ok() })
+        }));
         self.DragOver(keys, pt, effect)
     }
 
@@ -111,7 +193,7 @@ impl IDropTarget_Impl for Target_Impl {
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         let effect = unsafe { effect.as_mut() }.ok_or(E_POINTER)?;
-        let accepts = self.files.get() && (self.dispatch)(Drag::Over(*pt, keys));
+        let accepts = self.carries.get() && (self.dispatch)(Drag::Over(*pt, keys));
         *effect = if accepts {
             *effect & DROPEFFECT_COPY
         } else {
@@ -121,7 +203,7 @@ impl IDropTarget_Impl for Target_Impl {
     }
 
     fn DragLeave(&self) -> Result<()> {
-        self.files.set(false);
+        self.carries.set(false);
         (self.dispatch)(Drag::Leave);
         Ok(())
     }
@@ -136,17 +218,17 @@ impl IDropTarget_Impl for Target_Impl {
         let effect = unsafe { effect.as_mut() }.ok_or(E_POINTER)?;
         let allowed = *effect & DROPEFFECT_COPY;
         *effect = DROPEFFECT_NONE;
-        let offered = self.files.replace(false);
+        let offered = self.carries.replace(false);
         if offered && allowed != DROPEFFECT_NONE {
-            if let Some(files) = data
+            if let Some(dropped) = data
                 .as_ref()
-                .and_then(|data| paths(data).ok())
-                .filter(|v| !v.is_empty())
+                .map(dropped)
+                .filter(|dropped| *dropped != Dropped::default())
             {
-                if (self.dispatch)(Drag::Drop(*pt, keys, files)) {
+                if (self.dispatch)(Drag::Drop(*pt, keys, dropped)) {
                     *effect = allowed;
+                    return Ok(());
                 }
-                return Ok(());
             }
         }
         (self.dispatch)(Drag::Leave);
@@ -168,21 +250,32 @@ impl Drop for Registration {
 pub(super) struct Window<D: DataSource> {
     app: Rc<RefCell<App<D>>>,
     registration: Option<Registration>,
+    /// A drag ended while the presenter was busy, so its leave waits for the next turn.
+    owed: Rc<Cell<bool>>,
+    /// Wakes the event loop for that turn.
+    wake: EventLoopProxy<Event>,
 }
 
 impl<D: DataSource + Default + 'static> Window<D> {
     pub(super) fn new(app: Rc<RefCell<App<D>>>) -> Self {
+        let wake = app.borrow().proxy.clone();
         Self {
             app,
             registration: None,
+            owed: Rc::default(),
+            wake,
         }
     }
 
     fn target(&self, hwnd: HWND) -> IDropTarget {
-        let app = Rc::downgrade(&self.app);
+        let (app, owed, wake) = (
+            Rc::downgrade(&self.app),
+            self.owed.clone(),
+            self.wake.clone(),
+        );
         Target {
-            files: Cell::new(false),
-            dispatch: Box::new(move |drag| dispatch(&app, hwnd, drag)),
+            carries: Cell::new(false),
+            dispatch: Box::new(move |drag| dispatch(&app, hwnd, drag, &owed, &wake)),
         }
         .into()
     }
@@ -201,20 +294,34 @@ impl Registration {
     }
 }
 
-fn dispatch<D: DataSource>(app: &Weak<RefCell<App<D>>>, hwnd: HWND, drag: Drag) -> bool {
+fn dispatch<D: DataSource>(
+    app: &Weak<RefCell<App<D>>>,
+    hwnd: HWND,
+    drag: Drag,
+    owed: &Cell<bool>,
+    wake: &EventLoopProxy<Event>,
+) -> bool {
     let Some(app) = app.upgrade() else {
         return false;
     };
     let Ok(mut app) = app.try_borrow_mut() else {
+        // A presenter busy in a nested modal loop takes no event: a drag that ends now owes its leave, paid at the
+        // event loop's next turn, which this wakes
+        if matches!(drag, Drag::Leave | Drag::Drop(..)) && !owed.replace(true) {
+            let _ = wake.send_event(Event::Wake);
+        }
         return false;
     };
     let scale = app.scale as f32;
     let Some(p) = app.presenter.as_mut() else {
         return false;
     };
+    if owed.replace(false) {
+        p.drag_left();
+    }
     let result = match drag {
         Drag::Leave => {
-            p.files_left();
+            p.drag_left();
             false
         }
         Drag::Over(pt, keys) | Drag::Drop(pt, keys, _) => {
@@ -232,8 +339,8 @@ fn dispatch<D: DataSource>(app: &Weak<RefCell<App<D>>>, hwnd: HWND, drag: Drag) 
                 },
             };
             match drag {
-                Drag::Drop(_, _, files) => p.files_dropped(at, held, &files).is_some(),
-                _ => p.files_over(at, held).is_some(),
+                Drag::Drop(_, _, dropped) => p.dropped(at, held, &dropped).is_some(),
+                _ => p.drag_over(at, held).is_some(),
             }
         }
     };
@@ -247,7 +354,18 @@ fn dispatch<D: DataSource>(app: &Weak<RefCell<App<D>>>, hwnd: HWND, drag: Drag) 
 
 impl<D: DataSource + Default + 'static> ApplicationHandler<Event> for Window<D> {
     fn new_events(&mut self, events: &ActiveEventLoop, cause: StartCause) {
-        self.app.borrow_mut().new_events(events, cause);
+        let mut app = self.app.borrow_mut();
+        app.new_events(events, cause);
+        if self.owed.replace(false) {
+            if let Some(p) = app.presenter.as_mut() {
+                p.drag_left();
+                if p.dirty() {
+                    if let Some(window) = &app.window {
+                        window.request_redraw();
+                    }
+                }
+            }
+        }
     }
     fn resumed(&mut self, events: &ActiveEventLoop) {
         self.app.borrow_mut().resumed(events);

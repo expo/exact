@@ -619,6 +619,28 @@ impl Parser {
                         }
                     }
                     TokenKind::Ident(w) if w == "mediasession" => self.tap_media_session()?,
+                    TokenKind::Ident(w) if w == "drop" => {
+                        self.next();
+                        let (mut files, mut text, mut url) = (Vec::new(), None, None);
+                        loop {
+                            if self.at_ident("file") {
+                                self.next();
+                                files.push(self.str_lit("the dropped file's path")?);
+                            } else if self.at_ident("text") && text.is_none() {
+                                self.next();
+                                text = Some(self.str_lit("the dropped text")?);
+                            } else if self.at_ident("url") && url.is_none() {
+                                self.next();
+                                url = Some(self.str_lit("the dropped link")?);
+                            } else {
+                                break;
+                            }
+                        }
+                        if files.is_empty() && text.is_none() && url.is_none() {
+                            return self.err("syntax-expected-step", "`drop` takes what the drag carries: `file \"path\"` (from the test file's folder), `text \"…\"` or `url \"…\"`, as `tap \"zone\" drop text \"Mount Fuji\"`");
+                        }
+                        TapForm::Drop { files, text, url }
+                    }
                     TokenKind::Ident(w) if w == "history" => {
                         self.next();
                         let delta = self.step_number("the history delta, a nonzero integer")?;

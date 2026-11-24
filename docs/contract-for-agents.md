@@ -5348,9 +5348,10 @@ and forward buttons go Back and Forward at their release, as a browser's do,
 unless a `pointerup` handler calls `preventDefault()`. `wheel` hands a `WheelEvent` (deltas,
 modifiers; a trackpad pinch is a Control-held wheel) and `preventDefault()` keeps
 the scroll from happening; `drop` hands a `DragEvent` whose `files` are `doc:`
-handles of any type, a folder's included, and takes a file drag over a field
-inside its node; `dragenter` and `dragleave` bracket the drag for a drop
-overlay; a `paste`'s `ClipboardEvent` carries `files` too. See
+handles of any type, a folder's included, with the drag's `text` and `url`,
+and takes a file drag over a field inside its node; an app can show a drop
+overlay at `dragenter`, which the `drop` action clears when the drop lands
+and `dragleave` clears otherwise; a `paste`'s `ClipboardEvent` carries `files` too. See
 [Pointer](contract-grammar.md#pointer) and [Clipboard](contract-grammar.md#clipboard).
 
 Use `keycapture=shortcut` on a container when its shortcut must run before

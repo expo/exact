@@ -891,7 +891,7 @@ async function openWebUnlocked({
         if (kind === 'wheel') await cdpWheel(call, frame, { ...opts, x, y, modifiers });
         else if (kind === 'drop' || kind === 'dragenter' || kind === 'dragleave')
           // Chrome's own drag (agent-drag.mjs)
-          dragged = await fileDrag({ kind, opts, id, x, y, dragged, call, evaluate });
+          dragged = await fileDrag({ kind, opts, id, x, y, dragged, call, evaluate }).catch((e) => { if ('dragged' in e) dragged = e.dragged; throw e; });
         else if (kind === 'hover') await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
         else if (kind === 'dblclick' && opts.touch)
           // a finger's double tap (LLP 1057.001.000 §6): two touches 80 ms apart

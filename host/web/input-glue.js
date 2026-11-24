@@ -1,4 +1,5 @@
 import { focusStack, viewChildren, viewParent } from './navigation.js';
+import { receive, takes } from './drag-in.js';
 // Input-only glue: loaded after the baked first pixel, independently of data readiness.
 import "./prompt-glue.js"; // a prompt's Return
 import "./alert-message.js"; // a grouped alert's message box
@@ -144,7 +145,7 @@ function draggableAround(target) {
   return source ?? null;
 }
 
-export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null, pick = null }) {
+export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, track = (p) => p, documents = null, pick = null }) {
   // A press stops bubbling at its nearest handler; otherwise the click reaches the root.
   // Append the default there so the handler's updates and showPicker run first.
   // A successful showPicker consumes the activation, even for another input.
@@ -1268,8 +1269,8 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
       },
       // Studio diary R22, R3, R19, R17: a `contextmenu` with its point (10),
       // `dblclick` (11), a `wheel` (37, its record; a prevented one does not
-      // scroll), files and folders dropped from outside (38, each minted a
-      // `doc:` handle, documents-glue.js), a file drag's enter and leave (55, 56, documents-glue.js
+      // scroll), what a drag drops (38: its files, each minted a `doc:` handle,
+      // documents-glue.js, its text and its link, drag-in.js), a drag's enter and leave (55, 56, documents-glue.js
       // `hearDrags`) and the window's `beforeunload` (36), as the JS target's
       // rt.js and files.js hear them. `fire(kind, line)` dispatches.
       mouse(el, kind, e, fire) {
@@ -1277,18 +1278,14 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         if (kind === "beforeunload") return el.isConnected && fire(36, "");
         if (el.matches(":disabled") || inertAncestor(el)) return;
         if (kind === "wheel") return e.exactStopped || fire(37, `${pointerLine(el, e).split(",").slice(0, 2)},${e.deltaX},${e.deltaY},${e.deltaMode},${modifiers(e)}`);
-        if (kind === "dragover") { if (e.dataTransfer?.types?.includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } return; }
+        if (kind === "dragover") { if (takes(el, e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } return; }
         if (kind === "dragenter" || kind === "dragleave") return fire(kind === "dragenter" ? 55 : 56, `${pointerLine(el, e).split(",").slice(0, 2)},${modifiers(e)}`);
         if (kind === "drop") {
-          const dt = e.dataTransfer;
-          if (!dt?.types?.includes("Files")) return;
-          e.preventDefault(); e.stopPropagation();
-          const at = `${pointerLine(el, e).split(",").slice(0, 2)},${modifiers(e)}`, files = [...dt.files], items = [...dt.items].filter(i => i.kind === "file");
-          const handles = items.map(i => i.getAsFileSystemHandle?.().catch(() => null) ?? null), entries = items.map(i => i.webkitGetAsEntry?.() ?? null);
-          return documents?.().then(async (glue) => {
-            const found = await glue.dropped(await Promise.all(handles), files, entries);
-            if (found.length) fire(38, `${at}\n${found.join("\n")}`); else log("drop: refused: the browser handed over no file");
-          });
+          if (!takes(el, e)) return;
+          e.preventDefault(); e.stopPropagation(); e.exactTaken = true;
+          const at = `${pointerLine(el, e).split(",").slice(0, 2)},${modifiers(e)}`;
+          const live = () => el.isConnected && !retiredViews.has(el);
+          return track(receive(e, documents, (found, text, url) => live() && (fire(38, `${at}\n${JSON.stringify([found, text, url])}`), true), log));
         }
         // A field keeps the browser's own double-click, and a text field its edit menu (navigation.js `editMenu`); a control's input has no edit menu, so its node's `contextmenu` runs.
         if (kind === "contextmenu" ? editMenu(e.target) : e.target.closest("input,textarea,[contenteditable]")) return;

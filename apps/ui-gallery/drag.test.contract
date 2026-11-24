@@ -57,3 +57,23 @@ test "the web carries no app file" on web
   clock settle
   clock data
   expect drag "drag-written" none
+
+test "the drop zone shows the text, link and files dropped on it" on macos, web
+  at "/"
+  tap "sidebar-drag"
+  clock settle
+  tap "drop-zone" drop text "Mount Fuji" url "https://example.com/fuji"
+  clock settle
+  expect text "drop-count" == "Got 0 files"
+  expect text "drop-text" == "Text: Mount Fuji"
+  expect text "drop-link" == "Link: https://example.com/fuji"
+  tap "drop-zone" drop file "assets/drag-notes.pdf" file "assets/drag-photo.jpg"
+  clock settle
+  expect text "drop-count" == "Got 2 files"
+  expect tree missing "drop-text"
+  expect tree missing "drop-link"
+  tap "drop-zone" drop file "assets/drag-notes.pdf" text "Notes" url "https://example.com/notes"
+  clock settle
+  expect text "drop-count" == "Got 1 file"
+  expect text "drop-text" == "Text: Notes"
+  expect text "drop-link" == "Link: https://example.com/notes"

@@ -96,6 +96,71 @@ test('a column hears a file drag over its textarea, its drop and a paste of file
   }
 }, 60000);
 
+// A drag of text and a link (LLP 1094.001 D1, D2): the column takes it over its own box, and a link alone or with
+// files over its textarea; text over the textarea is the field's, which inserts it, and is a leave at the column.
+test('a column takes dropped text and links, and a text drag over its textarea is the field\'s', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/drop-words-test-'));
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Drop Words Test', app: { id: 'test.drop-words', name: 'Drop Words Test' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), `component DropWords
+  state enters = 0
+  state leaves = 0
+  state drops = 0
+  state text = ""
+  state url = ""
+  state files = 0
+  action entered(e: DragEvent)
+    enters = enters + 1
+  action left
+    leaves = leaves + 1
+  action dropped(e: DragEvent)
+    drops = drops + 1
+    text = e.text
+    url = e.url
+    files = e.files.length
+  view
+    column testId="column" width=400 height=400 padding=16 dragenter=entered dragleave=left drop=dropped
+      textarea testId="composer"
+      text "label" testId="label"
+`);
+    const file = resolve(dir, 'notes.txt');
+    writeFileSync(file, 'notes');
+    const dist = resolve(dir, 'dist');
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'drop-words-test', '--out', dist, '--render', 'none'], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path.startsWith('/shared/')) return new Response(Bun.file(resolve(root, 'host/web', path.slice('/shared/'.length))));
+      const at = resolve(dist, path === '/' ? 'index.html' : path.slice(1));
+      return existsSync(at) ? new Response(Bun.file(at)) : new Response('Not found', { status: 404 });
+    } });
+    browser = await open({ host: 'web', url: server.url.href, size: [800, 800] });
+    const slots = async () => (await browser.state()).slots;
+    const composer = () => browser.carrier.evaluate('document.querySelector("[data-testid=composer]").value');
+    await browser.tap('label', { drop: [], text: 'Mount Fuji', url: 'https://example.com/fuji' });
+    await browser.clock('settle');
+    expect(await slots()).toMatchObject({ enters: 1, leaves: 0, drops: 1, text: 'Mount Fuji', url: 'https://example.com/fuji', files: 0 });
+    await browser.tap('composer', { drop: [], text: 'typed' });
+    await browser.clock('settle');
+    expect(await composer()).toBe('typed');
+    expect(await slots()).toMatchObject({ enters: 2, leaves: 1, drops: 1 });
+    await browser.tap('composer', { drop: [], url: 'https://example.com/only' });
+    await browser.tap('composer', { drop: [file], text: 'with a file' });
+    await browser.clock('settle');
+    expect(await slots()).toMatchObject({ enters: 4, leaves: 1, drops: 3, text: 'with a file', url: '', files: 1 });
+    expect(await composer()).toBe('typed');
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 60000);
+
 for (const runtime of ['JS', 'wasm']) {
   const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
   check(`${runtime}: tapping a file input holds one picker for a choice or cancellation`, async () => {

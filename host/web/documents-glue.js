@@ -12,6 +12,7 @@
 // browser's do.
 import { coversPath } from './grant-admission.js';
 import { storageKey } from './storage-environment.js';
+import { carries } from './drag-in.js';
 const handles = new Map(); // n → FileSystemHandle
 const names = new Map(); // n → the name its path was given (a kept entry's, the name at the choice)
 let next = 0;
@@ -482,35 +483,73 @@ function entryHandle(entry) {
     async queryPermission() { return 'granted'; } };
 }
 
-// File drags over the elements that hear `dragenter` or `dragleave`, for
-// both targets: the chain of those holding the element under the drag,
-// kept from the document's own events, so moving between an element's own
-// descendants is no leave (what T3 Code's `currentTarget.contains(
+// Drags over the elements that hear `dragenter` or `dragleave`, for both
+// targets: the chain of those holding the element under the drag, kept from
+// the document's own events, so moving between an element's own descendants
+// is no leave (what a drop overlay's `currentTarget.contains(
 // relatedTarget)` test does, without relying on `relatedTarget`, which
 // Safari leaves null). HTML fires the new target's dragenter before the old
 // one's dragleave (HTML §6.11.5), so a dragleave at the element last entered
-// is the drag leaving the page or cancelled. A drop ends the drag with no
-// dragleave, as the DOM's does: the drop's own action clears what the enter
-// drew. Each hearing element keeps its handlers itself (`exactDrags`), so
-// one gone from the page is forgotten with it.
+// is the drag leaving the page or cancelled. A drop a node takes ends the
+// drag with no dragleave, as the DOM's does: the drop's own action clears
+// what the enter drew. A drop no node takes, a field's included, and one
+// that carried nothing that arrived (`exactLeave`, files.js, input-glue.js)
+// is a leave at each element the drag was over when it dropped
+// (LLP 1094.001 D2). Each hearing element keeps its handlers itself
+// (`exactDrags`), so one gone from the page is forgotten with it.
 let over = [], last = null, at = null, tracking = false;
-const fileDrag = (ev) => ev.dataTransfer?.types?.includes('Files');
+// An element a drop still waiting for its files was over (each to its count of such drops) holds a newer drag's
+// `dragenter` (`held`) until those drops land, or until the newer drag drops, so a waiting drop's action cannot
+// clear what the newer drag drew; a leave of the held drag cancels its enter
+const waiting = new Map(), held = new Set();
+const dragged = (ev) => carries(ev.dataTransfer);
+const enter = (el) => el.exactDrags?.kinds.get('dragenter')?.(at);
+// A held enter is heard, unless the element has since stopped hearing it (the waiting drop's action disabled it or
+// made it inert): then the drag is over it no longer, with no leave for an enter it never heard
+function release(el) {
+  if (el.isConnected && el.exactDrags?.allowed()) enter(el);
+  else over = over.filter((o) => o !== el);
+}
 function retarget(target) {
   const now = []; // the innermost first, as the DOM's events bubble
   for (let el = target; el; el = el.parentNode) if (el.exactDrags?.allowed()) now.push(el);
   const was = over;
   over = now;
-  for (const el of now) if (!was.includes(el)) el.exactDrags.kinds.get('dragenter')?.(at);
-  for (const el of was) if (!now.includes(el) && el.isConnected) el.exactDrags?.kinds.get('dragleave')?.(at);
+  for (const el of now) if (!was.includes(el)) waiting.has(el) ? held.add(el) : enter(el);
+  for (const el of was) if (!now.includes(el) && !held.delete(el) && el.isConnected) el.exactDrags?.kinds.get('dragleave')?.(at);
 }
 function hearDrags(el, kind, allowed, fire) {
   (el.exactDrags ??= { kinds: new Map(), allowed }).kinds.set(kind, fire);
   if (tracking) return;
   tracking = true;
-  document.addEventListener('dragenter', (ev) => { if (fileDrag(ev)) { at = ev; last = ev.target; retarget(ev.target); } }, true);
-  document.addEventListener('dragover', (ev) => { if (fileDrag(ev)) at = ev; }, true);
-  document.addEventListener('dragleave', (ev) => { if (fileDrag(ev) && ev.target === last) { at = ev; last = null; retarget(null); } }, true);
-  document.addEventListener('drop', (ev) => { if (fileDrag(ev)) { last = null; over = []; } }, true);
+  document.addEventListener('dragenter', (ev) => { if (dragged(ev)) { at = ev; last = ev.target; retarget(ev.target); } }, true);
+  document.addEventListener('dragover', (ev) => { if (dragged(ev)) at = ev; }, true);
+  document.addEventListener('dragleave', (ev) => { if (dragged(ev) && ev.target === last) { at = ev; last = null; retarget(null); } }, true);
+  document.addEventListener('drop', (ev) => {
+    if (!dragged(ev)) return;
+    // A held enter comes before the drop of its own drag
+    for (const el of over) if (held.delete(el)) release(el);
+    const dropped = over, point = at;
+    last = null; over = [];
+    let left = false;
+    ev.exactLeave = () => {
+      if (left) return;
+      left = true;
+      for (const el of dropped) if (el.isConnected) el.exactDrags?.kinds.get('dragleave')?.(point);
+    };
+    // A drop waiting for its files (drag-in.js `receive`) holds the enters at the elements it was over until it lands
+    ev.exactWaits = () => { for (const el of dropped) waiting.set(el, (waiting.get(el) ?? 0) + 1); };
+    ev.exactLands = () => {
+      for (const el of dropped) {
+        const still = waiting.get(el) - 1;
+        if (still) { waiting.set(el, still); continue; }
+        waiting.delete(el);
+        if (held.delete(el) && over.includes(el)) release(el);
+      }
+    };
+    // The node that takes the drop marks it as the event reaches it, after this capturing listener
+    setTimeout(() => { if (!ev.exactTaken) ev.exactLeave(); });
+  }, true);
 }
 
 // The manifest's `file_handlers`, the only types a picker offers (D2), each
@@ -568,13 +607,16 @@ globalThis.exact.documents = {
       return Promise.all(found.map(choose)).then((paths) => dispatch(view, 1, paths.join('\n')));
     };
     const api = {
-      /** Files and folders dropped on the page (studio diary R19), of any
-       * type (the any-file waiver, rules/DEFERRED.md): each handle the
-       * browser gave, else a folder's entry, else its File, read-only. */
+      /** Files and folders dropped on the page, of any type (the any-file
+       * waiver, rules/DEFERRED.md): each handle the browser gave, else a
+       * folder's entry, else its File, read-only. */
       async dropped(handles, files, entries = []) {
         await kept?.ready;
-        return Promise.all(files.map(async (file, i) => kept?.loaded && handles[i] && await declaredFile(handles[i]) ? choose(handles[i])
+        // Each file is minted alone, in order, so one that cannot be read leaves the others
+        const minted = await Promise.allSettled(files.map(async (file, i) => kept?.loaded && handles[i] && await declaredFile(handles[i]) ? choose(handles[i])
           : numbered(handles[i] ?? (entries[i] ? entryHandle(entries[i]) : copied(file)))));
+        for (const [i, m] of minted.entries()) if (m.status === 'rejected') host.log(`drop: ${files[i]?.name ?? 'a file'} could not be read: ${m.reason?.message ?? m.reason}`);
+        return minted.filter((m) => m.status === 'fulfilled').map((m) => m.value);
       },
       /** A picker command's ruling `r`: call the browser's picker (the
        * press's activation is still live), then report what was chosen. */

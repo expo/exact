@@ -164,7 +164,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/picker.rs", "Presenter::open_document"],
     ["painted:host/painted/src/presenter/pan_release.rs", "Presenter::release_pan"],
     ["painted:host/painted/src/presenter/file_drop.rs",
-      "Presenter::file_crossings Presenter::file_event Presenter::files_dropped Presenter::files_left Presenter::files_over"],
+      "Presenter::drag_crossings Presenter::drag_event Presenter::drag_left Presenter::drag_over Presenter::dropped"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
     ["painted:host/painted/src/presenter/radio.rs", "Presenter::activate_radio"],
     ["painted:host/painted/src/presenter/replacement.rs", "Presenter::buttons_released Presenter::pointer_released Presenter::reader_touch Presenter::set_touching"],

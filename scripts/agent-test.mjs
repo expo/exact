@@ -1080,6 +1080,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
               : st.form === 'pinch' ? { pinch: st.scale, ...(st.at ? { at: st.at } : {}) }
               : st.form === 'wheel' ? { wheel: st.wheel }
               : st.form === 'history' ? { history: st.history }
+              : st.form === 'drop' ? { drop: st.files.map((f) => resolve(dirname(file), f)), ...(st.text != null ? { text: st.text } : {}), ...(st.url != null ? { url: st.url } : {}) }
               : st.form === 'mediasession' ? { mediaSession: st.action, ...(st.seconds != null ? { seconds: st.seconds } : {}) }
               : st.form !== 'press' ? { [st.form]: true }
               : st.modifiers ? { modifiers: st.modifiers } : undefined;

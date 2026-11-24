@@ -556,10 +556,10 @@ extension NodeView {
     }
 
     /// A node that hears `drop`, `dragenter` or `dragleave` is a destination
-    /// for files dragged over it (FileDragMac.swift); one that no longer does
-    /// gives them back to whatever is under it.
+    /// for files, text and links dragged over it (FileDragMac.swift); one
+    /// that no longer does gives them back to whatever is under it.
     func syncDropTypes() {
-        if !handlers.isDisjoint(with: FileDrag.events) { registerForDraggedTypes([.fileURL]) } else { unregisterDraggedTypes() }
+        if !handlers.isDisjoint(with: FileDrag.events) { registerForDraggedTypes(FileDrag.types) } else { unregisterDraggedTypes() }
     }
 
     package override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { held ? [] : FileDrag.moved(self, sender) ?? [] }
@@ -579,17 +579,21 @@ extension NodeView {
         return nil
     }
 
-    /// Files and folders dropped at a window point, of any type: each minted
-    /// for this session and delivered with the `DragEvent`'s line.
-    func drop(_ urls: [URL], at windowPoint: NSPoint) -> Bool {
+    /// What a drag drops (LLP 1094.001 D1): its files and folders, of any
+    /// type, each minted for this session, its plain text and its link,
+    /// delivered with the `DragEvent`'s point line (`dragLine`, taken as it
+    /// dropped) and the line `[files, text, url]`. A promised file's copy is
+    /// minted, never kept. False, and nothing heard, when nothing it carried
+    /// arrived.
+    func drop(_ urls: [URL], text: String = "", url: String = "", line: String) -> Bool {
         guard let presenter, let session = presenter.session else { return false }
-        let docs = Self.droppedDocuments(urls, accepts: { ExactDocuments.accepts($0) },
+        let staged = FileDrag.stagingRoot.standardizedFileURL.path + "/"
+        let docs = Self.droppedDocuments(urls, accepts: { ExactDocuments.accepts($0) && !$0.standardizedFileURL.path.hasPrefix(staged) },
                                          keep: { session.keepDocument($0, noting: true) }, mint: session.mintDocument)
-        guard !docs.isEmpty else {
-            session.log("drop: refused: no file could be opened")
-            return false
-        }
-        presenter.mouseEvent(id, 38, dragLine(windowPoint) + "\n" + docs.joined(separator: "\n"))
+        if docs.isEmpty, !urls.isEmpty { session.log("drop: no file could be opened") }
+        guard !docs.isEmpty || !text.isEmpty || !url.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: [docs, text, url]) else { return false }
+        presenter.mouseEvent(id, 38, line + "\n" + String(decoding: data, as: UTF8.self))
         return true
     }
 

@@ -1244,6 +1244,12 @@ momentum, so a Mac's scroll can be tested where a drag selects text instead.
 a nonzero 32-bit integer, negative for Back and positive for Forward. It uses
 the browser's `history.go`, including entries kept across `reload`; other hosts
 report unsupported. Scope these tests with `on web`.
+`tap "zone" drop file "a.pdf" text "Mount Fuji" url "https://example.com/"` is
+the driver's drop (the agent's `tap <t> drop`) at the node's middle: a drag
+from another app carrying the files, each `file` once and its path from the
+test file's folder, the plain text and the link, at least one of them
+([Pointer](#pointer), `drop`). It runs where drops do: the web, macOS and
+Windows.
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
@@ -2479,31 +2485,49 @@ action wheeled(e: WheelEvent)
 scroll wheel=wheeled …
 ```
 
-`drop` is DOM's `drop` of files dragged in from outside the app (Finder, Explorer
-or the desktop) onto the innermost node that declares it: its `DragEvent` is
-`offsetX`, `offsetY`, `files` (a `string[]` of `doc:` handles minted as a
-picker's are, LLP 1069.010
-D1, readable under `fs.read doc:/`) and the modifiers. Files of any type are
-taken, and a dropped folder is a folder's handle (`fs.stat` says
+`drop` is DOM's `drop` of what another app drags in (Finder, Explorer, Photos,
+a browser, another Exact app) onto the innermost node that declares it, when
+the drag carries files, plain text or a link and its source allows a copy
+(LLP 1094.001): its `DragEvent` is `offsetX`, `offsetY`, `files` (a
+`string[]` of `doc:` handles minted as a picker's are, LLP 1069.010 D1,
+readable under `fs.read doc:/`), `text`, `url` and the modifiers. `text` is
+the drag's plain text, its items' joined by line breaks; `url` is its first
+link that is not a file (a `file:` URL is a file), of any scheme, so check
+it before following it. Each is `""` when the drag has none, and neither is
+made from the other: a link whose source gives no plain text has `text` `""`. Files of any type
+are taken, and a dropped folder is a folder's handle (`fs.stat` says
 `isDirectory`, `fs.readdir` lists it); the app never learns an absolute
-path. A file drag over an `input` or a `textarea` inside such a node (or
-declaring `drop` itself) is the node's, as on the web, where its listener
-prevents the field's own drop: the field inserts no path text. A text drag,
-and a file drag over a field with no `drop` above it, stay the field's. Web,
-macOS and Windows deliver files in the order the source supplies them. A
-browser without `getAsFileSystemHandle` hands the app read-only copies.
-iOS, Linux, Android and the terminal have no external file drops. The
-driver's `tap <target> drop <path…>` drags files and folders in.
+path. A drag with files over an `input` or a `textarea` inside such a node
+is the node's, as on the web, where its listener prevents the field's own
+drop: the field inserts no path text. A drag of text over a field is the
+field's, which inserts it, unless the field itself declares `drop`. On the
+web a field takes only plain text, as HTML inserts it, so a link with no
+plain text goes to the `drop` above; a macOS field takes links too. On
+Windows a field takes no drag, so any drag goes to the `drop` above unless
+the field itself declares `drop`. While a drop waits for its files, the
+nodes it was over defer the next drag's `dragenter`, so the waiting drop's
+action cannot clear what the next drag drew: it is heard when the waiting
+drops land or when the next drag drops, and the next drag's leave cancels it. Web, macOS
+and Windows deliver files in the order the source supplies them, and macOS
+receives a promised file (Photos', an Exact app's) before the action runs.
+A browser without `getAsFileSystemHandle` hands the app read-only copies.
+iOS, tvOS, Linux, Android and the terminal take no drop yet. The driver's
+`tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
+folders, text and a link, at least one of them, as a test's `tap "zone"
+drop …` step does.
 
 `dragenter` and `dragleave` are DOM's, as a node hears them when it ignores
 moves between its own descendants (the `currentTarget.contains(relatedTarget)`
 test a drop overlay makes): a node that declares one hears `dragenter` when
-a drag of files from outside the app comes over its box, and `dragleave` when
-it leaves the box or is cancelled. A drop sends `drop` and no `dragleave`, as
-the DOM's does: the drop's action clears what the enter drew. Their
-`DragEvent` has the point and the modifiers and no `files`, which the DOM
-keeps from a page until the drop. They are heard whether or not a `drop`
-will take the files, so an overlay can say where they would land:
+a drag from another app comes over its box, and `dragleave` when it leaves
+the box or is cancelled. A drop a node takes sends `drop` and no
+`dragleave`, as the DOM's does: the drop's action clears what the enter drew,
+an ancestor's overlay included, since it is the app's state. A drop no node
+takes, one a field takes, and one that carried nothing that arrived send
+`dragleave` instead. Their `DragEvent` has the point and the modifiers and
+no data (`files` `[]`, `text` and `url` `""`), which the DOM keeps from a page
+until the drop. They are heard whether or not a `drop` will take the drag, so
+an overlay can say where it would land:
 
 ```text
 state over = false
@@ -2523,8 +2547,8 @@ column dragenter=entered dragleave=left drop=took position="relative"
 ```
 
 Web, macOS and Windows support these events. The driver's
-`tap <target> dragenter <path…>` brings a drag of those files over the target and leaves it there (for a
-screenshot); `tap <target> drop <path…>` drops it, and `tap <target>
+`tap <target> dragenter [<path…>] [--text "…"] [--url "…"]` brings that drag over the target and leaves it there (for a
+screenshot); `tap <target> drop …` drops it, and `tap <target>
 dragleave` takes it away undropped.
 
 `draggable` is HTML's attribute: a node a person can lift and drop into

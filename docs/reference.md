@@ -6147,17 +6147,23 @@ component Reopen
 ### Files dropped or pasted
 
 A `drop` hands its action a `DragEvent` whose `files` are `doc:` handles of
-any type, a folder's included; a `paste`'s `ClipboardEvent` has `files` too,
-image data with no file (a screenshot) as one `image.png`. Read them as any
-`doc:` path, under `fs.read doc:/`; `storage.fs.stat(path).isDirectory` tells
-a folder. A file drag over a `textarea` or `input` whose node or an ancestor
-declares `drop` lands there, not as path text in the field. `dragenter` and
-`dragleave` bracket the drag over a node, for a drop overlay
-([grammar](contract-grammar.md#pointer)):
+any type, a folder's included, whose `text` is the drag's plain text and
+whose `url` is its link, each `""` when it has none; a `paste`'s
+`ClipboardEvent` has `files` too, image data with no file (a screenshot) as
+one `image.png`. Read files as any `doc:` path, under `fs.read doc:/`;
+`storage.fs.stat(path).isDirectory` tells a folder. A file drag over a
+`textarea` or `input` whose node or an ancestor declares `drop` lands there,
+not as path text in the field; a drag of plain text over a field is the
+field's unless the field declares `drop`, and on Windows, where a field takes
+no drag, it lands on the `drop` above. An app can show an overlay at
+`dragenter`; the `drop` action clears it when the drop lands, and
+`dragleave` otherwise ([grammar](contract-grammar.md#pointer)):
 
 ```text
 action took(e: DragEvent)
   paths = e.files
+  if e.url != ""
+    links = links.concat([e.url])
 action pasted(e: ClipboardEvent)
   if e.files.length > 0
     paths = e.files
@@ -6168,16 +6174,18 @@ column dragenter=entered dragleave=left drop=took
 
 | Host | `drop`, `dragenter`, `dragleave` | `ClipboardEvent.files` |
 | --- | --- | --- |
-| Web (JS and wasm targets) | yes: Chromium's handles, else read-only copies; a folder's entry as a read-only folder | `clipboardData.files`, read-only copies |
-| macOS | yes: every file URL Finder drags, a field forwarding the drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
+| Web (JS and wasm targets) | yes: Chromium's handles, else read-only copies; a folder's entry as a read-only folder; `text/plain` and `text/uri-list` | `clipboardData.files`, read-only copies |
+| macOS | yes: file URLs, promised files (Photos', an Exact app's), strings and links, a field forwarding a file drag to its `drop` node | file URLs, else PNG or TIFF data written as `image.png` |
 | iOS | none (declared; the driver's drag forms answer `unsupported`) | file URLs, else the pasteboard's image as `image.png` |
 | tvOS | none | empty: tvOS has no pasteboard |
-| Windows | yes, files and folders in Explorer selection order, including over an editable field | empty (text only) |
+| Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
 | Linux, Android, terminal | none | empty (text only) |
 
-The driver: `tap <target> drop <path…>` (files and folders), `tap <target>
-dragenter <path…>` and `tap <target> dragleave`, `type <target> paste --file
-<path…>` and `type <target> paste --image <png>`.
+The driver: `tap <target> drop [<path…>] [--text "…"] [--url "…"]` (files,
+folders, text and a link), `tap <target> dragenter …` and `tap <target>
+dragleave`, `type <target> paste --file <path…>` and `type <target> paste
+--image <png>`. A test drops with `tap "zone" drop file "a.pdf" text "…" url
+"…"`, with at least one of those parts.
 
 ### Shares from other apps (`share_target`)
 
