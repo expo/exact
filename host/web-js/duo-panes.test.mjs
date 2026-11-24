@@ -62,8 +62,8 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     expect(title.x).toBeGreaterThanOrEqual(56);
     expect(activity.x).toBeGreaterThanOrEqual(56);
     expect(activity.x + activity.width).toBeLessThanOrEqual(760);
-    // On a book fold the panes pad their sides by the route's insets, which an agent's explicit size can leave nonzero
-    // where the browser's are 0: with those at 40 and 24 CSS pixels, the panes' content keeps 16 CSS pixels inside each
+    // On a book fold the panes pad their sides by the route's insets and not the browser's, which are 0 here: their
+    // content keeps 16 CSS pixels inside insets of 40 and 24
     await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 0, left: 0, right: 0, bottom: 0 } });
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false,
       displayFeature: { orientation: 'vertical', offset: 620, maskLength: 40 } });

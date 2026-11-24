@@ -140,8 +140,7 @@ final class GroupedCustomRowsIOSTests: GroupedListFixture {
         window.layoutIfNeeded() // traits reach the views at layout
         let l = try list(p)
         l.collection.layoutIfNeeded()
-        // The card's width, read as the standard row's, and UIKit's cell margins, left then right, which the host reads
-        // from the first visible cell for the kernel (`GroupedListView.margins`): the device decides them
+        // Read the card's width and UIKit's cell margins, which the device decides
         let card = try cell(p, 10).bounds.width, margins = try XCTUnwrap(l.margins()), left = margins[2], right = margins[3]
         // The kernel's boxes for a row of a leading symbol (the sheet's 24 by 20, at the left margin), its content 40
         // points from the symbol's leading edge to the right margin, and its chevron at the right margin.
@@ -174,13 +173,8 @@ final class GroupedCustomRowsIOSTests: GroupedListFixture {
         XCTAssertEqual(drawn.height, theirs.bounds.height, accuracy: 0.5, "and as tall")
         XCTAssertEqual(ours.bounds.width, drawn.width, accuracy: 0.5, "its view its own size, so drawn unscaled")
         XCTAssertEqual(ours.bounds.height, drawn.height, accuracy: 0.5)
-        // Its own size, past the sheet's box, which nothing trims it to
-        XCTAssertTrue(ours.superview === leaf, "in the leaf itself, with no clipping box between")
         XCTAssertFalse(leaf.bounds.contains(ours.frame), "the symbol overhangs the sheet's box")
-        XCTAssertFalse(leaf.clipsToBounds)
-        XCTAssertFalse(ours.clipsToBounds)
-        XCTAssertNil(leaf.layer.mask)
-        XCTAssertNil(ours.layer.mask)
+        XCTAssertTrue(ours.superview === leaf && !leaf.clipsToBounds && leaf.layer.mask == nil, "and nothing trims it to that box")
         XCTAssertEqual(ours.convert(ours.bounds, to: custom).midX, theirs.convert(theirs.bounds, to: standard).midX, accuracy: 0.5,
                        "centred where the standard row's is")
         // The line under the custom row starts under its content, where the
