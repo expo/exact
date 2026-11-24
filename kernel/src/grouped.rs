@@ -395,7 +395,10 @@ impl Kernel {
                 .iter()
                 .find_map(|t| text_of(t).map(|text| (text, TextLook::of(t))))
         };
-        let shown = nodes(&list);
+        // A bar on the list's scrollport is no section: it stays in place over them (LLP 1123 D12)
+        let shown: Vec<NodeRef<'_>> = (nodes(&list).into_iter())
+            .filter(|s| !self.arena().on_scrollport(s.key.index))
+            .collect();
         let sections = shown
             .iter()
             .map(|section| {

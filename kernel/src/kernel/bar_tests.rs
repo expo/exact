@@ -12,6 +12,7 @@ fn root(rows: &[(StyleId, &'static str)], ops: Vec<Op>) -> Kernel {
     let mut ops = ops;
     ops.insert(0, style(2, vec![], &all));
     let mut k = owner(390.0, 844.0, ops);
+    k.set_scrollport_bars(true);
     k.set_owner_band(2, Some([47.0, 0.0, 34.0, 0.0]), &[])
         .unwrap();
     lay_out(&mut k);
@@ -407,10 +408,10 @@ fn a_bar_is_measured_in_the_space_its_parent_is_offered() {
 }
 
 #[test]
-fn order_moves_no_bar_until_it_rejoins_its_flow() {
+fn order_moves_no_bar_whether_its_parent_scrolls_or_not() {
     // In the column 5, 3, a top bar with `order: 1`, comes before the top bar 6 in the tree and
-    // lies on the edge, 6 inside it and 4 in flow below both; when 5 starts scrolling neither is
-    // a bar, and `order` puts 3 last
+    // lies on the edge, 6 inside it and 4 in flow below both; when 5 starts scrolling both lie on
+    // its scrollport in tree order, and 4 keeps its place at the top of the content
     let mut ops = create(3..=6);
     ops.push(style(
         3,
@@ -440,7 +441,7 @@ fn order_moves_no_bar_until_it_rejoins_its_flow() {
     )
     .unwrap();
     lay_out(&mut k);
-    assert_eq!(tops(&k), [107.0, 47.0, 77.0]);
+    assert_eq!(tops(&k), [47.0, 97.0, 47.0]);
 }
 
 #[test]
@@ -667,13 +668,187 @@ fn a_child_becomes_a_bar_and_stops_being_one() {
     )
     .unwrap();
     lay_out(&mut k);
-    assert_eq!(frame(&k, 4).1, 97.0);
+    // A scroller's child that names an edge lies on its scrollport, and its content keeps its place
+    assert_eq!((frame(&k, 3).1, frame(&k, 4).1), (47.0, 47.0));
+}
+
+#[test]
+fn a_scrollers_content_observes_nothing_on_its_bars_edge_and_its_extent_none_of_the_bars_overflow()
+{
+    // 3 scrolls, ignoring the container's top, so it lies under the 47-point band; its 50-point
+    // bar lies past the band, and its inset clears both, 97. So it passes the band to its content
+    // there no more: its content, 5, 10 down, observes none of the band or the bar. The bar's
+    // 300-point child adds nothing to its extent
+    let mut ops = create(3..=7);
+    let scroller = [
+        (StyleId::OverflowY, "scroll"),
+        (StyleId::Height, "600"),
+        (StyleId::SafeAreaIgnore, "container top"),
+        (StyleId::PaddingTop, "10"),
+    ];
+    ops.push(style(3, vec![], &scroller));
+    ops.push(style(4, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    let reads = vec![(StyleId::PaddingLeft, observed(Edge::Top, None))];
+    ops.push(style(5, reads, &[(StyleId::Height, "40")]));
+    ops.push(style(6, vec![], &[(StyleId::Height, "300")]));
+    ops.push(style(7, vec![], &[(StyleId::Height, "40")]));
+    ops.extend([
+        children(1, &[2]),
+        children(2, &[3]),
+        children(3, &[4, 5]),
+        children(4, &[6]),
+    ]);
+    let k = root(&[], ops);
+    assert_eq!(
+        (frame(&k, 3).1, frame(&k, 4).1, frame(&k, 5).1),
+        (0.0, 47.0, 10.0)
+    );
+    assert_eq!(k.observation(5).unwrap()[0], Some(0.0));
+    assert_eq!(
+        k.node(3).unwrap().content.1,
+        50.0,
+        "its padding and its content alone"
+    );
+}
+
+#[test]
+fn a_scrollers_inset_clears_what_it_reserves_on_its_bars_edges_and_its_content_none_of_it() {
+    // 3 scrolls, 47 down, reaching the band, which it takes, and pads its safe area by 20 on top
+    // and 10 at its foot. Its 50-point bar lies past the 20, and its inset clears the band, the 20
+    // and the bar, 117: its content, 5, lies at its top, neither padding by nor observing the 20. Its
+    // foot has no bar, and its content pads by the 10 there, which scrolls with it. A bar with
+    // no depth lies past the 20 all the same
+    let scroller = |depth: &'static str| {
+        let mut ops = create(3..=5);
+        let rows = [
+            (StyleId::OverflowY, "scroll"),
+            (StyleId::Height, "600"),
+            (StyleId::SafeAreaPaddingTop, "20"),
+            (StyleId::SafeAreaPaddingBottom, "10"),
+        ];
+        ops.push(style(3, vec![], &rows));
+        ops.push(style(4, vec![], &[bar("top"), (StyleId::Height, depth)]));
+        let reads = vec![(StyleId::PaddingLeft, observed(Edge::Top, None))];
+        ops.push(style(5, reads, &[(StyleId::Height, "40")]));
+        ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+        root(&[], ops)
+    };
+    let reserved = |k: &Kernel| k.scroll_terms(k.arena.key(slot(k, 3))).unwrap().reserved[0];
+    let k = scroller("50");
+    assert_eq!(
+        (frame(&k, 3).1, frame(&k, 4).1, frame(&k, 5).1),
+        (47.0, 67.0, 47.0)
+    );
+    assert_eq!(k.observation(5).unwrap()[0], Some(0.0));
+    assert_eq!(
+        k.node(3).unwrap().content.1,
+        50.0,
+        "its content and the 10 at its foot"
+    );
+    assert_eq!(reserved(&k), Some(117.0));
+    assert_eq!(reserved(&scroller("0")), Some(67.0));
+}
+
+#[test]
+fn a_scrollers_child_stays_in_its_flow_unless_the_kernel_lays_scrollport_bars_out() {
+    // 3 scrolls under the 47-point band and passes it to its content; 4 names its top edge. Off,
+    // 4 stays in its flow, first, and 5 below it; on, 4 is a bar past the band and 5 keeps its
+    // place; and off again, as it was
+    let mut ops = create(3..=5);
+    let rows = [
+        (StyleId::OverflowY, "scroll"),
+        (StyleId::Height, "600"),
+        (StyleId::SafeAreaIgnore, "container top"),
+    ];
+    ops.push(style(3, vec![], &rows));
+    ops.push(style(4, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.push(style(5, vec![], &[(StyleId::Height, "40")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+    let mut k = root(&[], ops);
+    let at = |k: &Kernel| (frame(k, 4).1, frame(k, 5).1);
+    assert_eq!(at(&k), (47.0, 0.0));
+    k.set_scrollport_bars(false);
+    lay_out(&mut k);
+    assert_eq!(at(&k), (0.0, 50.0));
+    k.set_scrollport_bars(true);
+    lay_out(&mut k);
+    assert_eq!(at(&k), (47.0, 0.0));
+}
+
+#[test]
+fn a_bordered_scrollers_inset_clears_its_bar_from_inside_its_border() {
+    // 3 scrolls, 47 down, with a 10-point top border; its 50-point bar lies inside the border. Its
+    // content starts inside the border, so the inset clears the band and the bar alone, 97
+    let mut ops = create(3..=5);
+    let rows = [
+        (StyleId::OverflowY, "scroll"),
+        (StyleId::Height, "600"),
+        (StyleId::BorderWidthTop, "10"),
+        (StyleId::BorderStyleTop, "solid"),
+    ];
+    ops.push(style(3, vec![], &rows));
+    ops.push(style(4, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.push(style(5, vec![], &[(StyleId::Height, "40")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+    let k = root(&[], ops);
+    assert_eq!((frame(&k, 4).1, frame(&k, 5).1), (57.0, 57.0));
+    let terms = k.scroll_terms(k.arena.key(slot(&k, 3))).unwrap();
+    assert_eq!(terms.reserved[0], Some(97.0));
+}
+
+#[test]
+fn a_bar_pulled_wholly_above_a_box_that_clips_adds_nothing_to_its_extent() {
+    // 3 clips, 200 wide; its 500-point bar is pulled 100 above it, out of reach: 3's extent
+    // stays its own, as a scroll container's does for what lies wholly before it
+    let mut ops = create(3..=5);
+    let rows = [
+        (StyleId::OverflowX, "hidden"),
+        (StyleId::OverflowY, "hidden"),
+        (StyleId::Width, "200"),
+        (StyleId::Height, "300"),
+    ];
+    ops.push(style(3, vec![], &rows));
+    let pulled = [
+        bar("top"),
+        (StyleId::Height, "50"),
+        (StyleId::Width, "500"),
+        (StyleId::MarginTop, "-100"),
+    ];
+    ops.push(style(4, vec![], &pulled));
+    ops.push(style(5, vec![], &[(StyleId::Height, "40")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+    let k = root(&[], ops);
+    assert_eq!(
+        k.node(3).unwrap().content.0,
+        200.0,
+        "{:?}",
+        k.node(3).unwrap().content
+    );
+}
+
+#[test]
+fn a_clipping_parents_bar_reserves_as_padding_as_any_boxs_does() {
+    // 3 clips on both axes, which its host presents as a view that clips, no scroll view: its
+    // 50-point bar lies past the band, and its content past the bar
+    let mut ops = create(3..=5);
+    let rows = [
+        (StyleId::OverflowX, "hidden"),
+        (StyleId::OverflowY, "hidden"),
+        (StyleId::Height, "600"),
+    ];
+    ops.push(style(3, vec![], &rows));
+    ops.push(style(4, vec![], &[bar("top"), (StyleId::Height, "50")]));
+    ops.push(style(5, vec![], &[(StyleId::Height, "40")]));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4, 5])]);
+    let k = root(&[], ops);
+    assert_eq!((frame(&k, 4).1, frame(&k, 5).1), (47.0, 97.0));
 }
 
 /// A document (1), 390 by 844 and outside every owner, under the session's `band`, holding 2
 /// with `rows` and what `ops` makes. Frames are in the document's space.
 fn document(band: [f32; 4], rows: &[(StyleId, &'static str)], mut ops: Vec<Op>) -> Kernel {
     let mut k = Kernel::with_monospace();
+    k.set_scrollport_bars(true);
     ops.splice(0..0, create(1..=2));
     ops.push(style(1, vec![], &[(StyleId::Height, "844")]));
     ops.push(style(2, vec![], rows));

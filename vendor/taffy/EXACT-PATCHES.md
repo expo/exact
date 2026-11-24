@@ -2545,7 +2545,12 @@ depth and rectangle are kept for publication (`TaffyTree::bar_depth`,
 `TaffyTree::bar_slot`), the rectangle from the parent's border-box origin as a
 child's location is, which the kernel reads to choose the scroller beneath the
 bar; a slot that moves or resizes marks the bar's layout changed, though its
-own layout may be the same. A parent with bars is
+own layout may be the same. A parent whose `RareStyle::bar_scrollport` is set,
+one its host presents as a scroll view, holds its bars on its scrollport: their
+slots lie as any parent's do, but they add nothing to its padding, so its
+content keeps its own place and size, and their scrollable overflow stays out
+of its scrollable extent; the host's inset clears them, not the content. A
+parent with bars is
 no marked root's recorded algorithm and is laid out outside a trace being
 recorded, as an outset box is.
 
@@ -2557,7 +2562,9 @@ and a maximum keeping their border box under a block and a flex parent, a bar
 past its parent's reservation in a flex row, bars past their parent's
 observation, along and across their edges, two panes whose bars hold
 wrapping text, a positioned parent's bar in a scroller's content, a bar its
-host replaces, and the boxes that are no bars; `contract/cli/tests/it/duo_lab.rs`'s
+host replaces, a scroller's bars on its scrollport, its content's padding and
+extent without them, a parent that clips laying its bar out as padding, and the
+boxes that are no bars; `contract/cli/tests/it/duo_lab.rs`'s
 bars screen.
 
 ## Patch 82: a form control's natural size is not scrollable overflow — Exact only

@@ -894,7 +894,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 // outside, a scroller) is not one, but leads to them, unless
                 // hidden or refusing input: an `auto` descendant is still a target.
                 if passesThrough, !(child is NodeView) {
-                    let holder = self.container
+                    let holder = child === self.scrollportHolder ? child : self.container
                     guard holder !== self, holder === child || holder.isDescendant(of: child) else { return nil }
                     let chain = sequence(first: holder, next: { $0 === child ? nil : $0.superview })
                     guard !chain.contains(where: { $0.isHidden || !$0.isUserInteractionEnabled }) else { return nil }
@@ -1241,6 +1241,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         let ox = style["overflow_x"]?.string ?? "visible", oy = style["overflow_y"]?.string ?? "visible"
         let scrolls = !isTextControl && ((ox == "scroll" || ox == "auto") || (oy == "scroll" || oy == "auto"))
         if scrolls { syncClipBox(false) }
+        ScrollportBars.raise(in: self) // its bars' holder at its padding box as its border moves
         if scrolls && scroll == nil && !scrollWaits && !groupedOwner {
             if pageBand != .zero, extras?.nativeScrollView != nil { setPageBand(.zero) } // the list leaving keeps its scrollTop
             if reach != .zero { setReach(.zero) } // the box's own reach, or a native list's, goes as the scroll view comes
@@ -1252,7 +1253,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             GlassGroups.moving(in: self) {
                 // In the window first, as `syncClipBox` says.
                 let children = subviews.filter { $0 is NodeView }
-                addSubview(sv)
+                addSubview(sv); ScrollportBars.raise(in: self)
                 for child in children { sv.addSubview(child) }
             }
             scroll = sv

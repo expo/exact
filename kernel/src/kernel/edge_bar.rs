@@ -36,8 +36,12 @@ impl Kernel {
         let slot = *arena.observations.bars.slots.get(&bar)?;
         let parent = arena.parent(bar)?;
         let space = area::band_at(self, parent);
+        // A scroller's own bar lies on its scrollport, over that scroller (D12)
         let scroller = (space.band.filter(|_| space.placed()))
-            .and_then(|_| self.beneath(parent, e, slot, &space))
+            .and_then(|_| match area::scroll_view(arena, parent) {
+                true => Some(parent),
+                false => self.beneath(parent, e, slot, &space),
+            })
             .map(|s| arena.key(s));
         Some(BarEdgeEffect {
             edge: Edge::ALL[e],
@@ -51,7 +55,7 @@ impl Kernel {
     /// a scroller's content.
     fn beneath(&self, parent: u32, e: usize, slot: Slot, space: &Space) -> Option<u32> {
         let arena = &self.arena;
-        let ((width, height), (ox, oy)) = (space.size, space.origin);
+        let (ox, oy) = space.origin;
         let [x, y, w, h] = [
             slot.rect[0] + ox,
             slot.rect[1] + oy,
@@ -59,12 +63,7 @@ impl Kernel {
             slot.rect[3],
         ];
         // The slot's inner side, in from the space's edge, and its sides along the edge
-        let inner = match e {
-            0 => y + h,
-            1 => width - x,
-            2 => height - y,
-            _ => x + w,
-        };
+        let inner = space.slot_inner(slot.rect, e);
         let along = match e % 2 {
             0 => [x, x + w],
             _ => [y, y + h],

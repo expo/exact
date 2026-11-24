@@ -3,7 +3,10 @@
 //! measures and places it). Its slot lies past the parent's unsafe area, its observation and
 //! its own reservations, and past the earlier bars, and the bar reserves its slot's depth: the
 //! parent lays its in-flow children out clear of it, and its descendants observe it (D9,
-//! `area.rs`), the bar itself only the bars before it.
+//! `area.rs`), the bar itself only the bars before it. A scroller's bar, where the kernel lays
+//! such bars out (`Kernel::set_scrollport_bars`), lies on its scrollport instead: its content
+//! keeps its padding and observes none of it, and the scroller's inset clears it
+//! (`scroll_terms.rs`).
 use super::block::reservation::Reserved;
 use crate::arena::NodeArena;
 use crate::generated::SafeAreaBar;
@@ -25,6 +28,9 @@ pub(crate) struct Bars {
     /// measured, and one a measured parent becomes is not read: its slots
     /// begin where its block places them (`Blocks::bar_slots`).
     pub(crate) observed: IdMap<u32, [f32; 4]>,
+    /// Whether a scroller's child that names an edge is a bar on its scrollport; else it stays in
+    /// its scroller's flow (`Kernel::set_scrollport_bars`).
+    pub(crate) scrollport: bool,
 }
 
 impl Bars {
@@ -48,7 +54,9 @@ pub(crate) struct Slot {
 /// `-exact-safe-area-bar` names exactly one edge, `start` and `end` resolved against the
 /// parent's `direction`, and it is an in-flow child. An owner's authored root, any box its host
 /// gives a block, an absolutely positioned box (a top-layer one included), a box with
-/// `display: none`, and a child of a scroller or of a replaced box are no bars.
+/// `display: none`, and a child of a replaced box are no bars. A scroller's bar lies on its
+/// scrollport and does not scroll (Taffy patch 81's scrollport mode), where the kernel lays such
+/// bars out (`Kernel::set_scrollport_bars`); else a scroller's child is no bar.
 pub(crate) fn edge(arena: &NodeArena, slot: u32) -> Option<usize> {
     if !arena.observations.bars.styled.contains(slot) {
         return None;
@@ -57,9 +65,9 @@ pub(crate) fn edge(arena: &NodeArena, slot: u32) -> Option<usize> {
     let parent = arena.parent(slot)?;
     let position = crate::style::top_layer::layout_position(arena, slot);
     let out_of_flow = position == PositionType::Absolute || style.display == Display::None;
-    // A scroller's bar, on its scrollport, is not built yet (D14), and a
-    // replaced box that holds children lays out none
-    let holder = super::area::scroll_view(arena, parent) || arena.node_type(parent).is_replaced();
+    // A replaced box that holds children lays out none
+    let holder = arena.node_type(parent).is_replaced()
+        || !arena.observations.bars.scrollport && super::area::scroll_view(arena, parent);
     if out_of_flow || holder || arena.blocks.holds(slot) {
         return None;
     }
@@ -86,7 +94,7 @@ pub(crate) fn edge(arena: &NodeArena, slot: u32) -> Option<usize> {
 }
 
 /// The edges `parent` has bars on, top right bottom left, from the boxes styled as bars.
-fn edges(arena: &NodeArena, parent: u32) -> [bool; 4] {
+pub(crate) fn edges(arena: &NodeArena, parent: u32) -> [bool; 4] {
     let mut on = [false; 4];
     let styled = arena.observations.bars.styled.iter();
     for bar in styled.filter(|&b| arena.parent(b) == Some(parent)) {
@@ -95,6 +103,62 @@ fn edges(arena: &NodeArena, parent: u32) -> [bool; 4] {
         }
     }
     on
+}
+
+impl crate::Kernel {
+    /// Lays a scroller's bars out on its scrollport (D12) where `on`, or, off, leaves a
+    /// scroller's child that names an edge in its flow, as no bar: off until stage 5 makes the
+    /// hosts' stationary mount and the scroller's inset live together (LLP 1123 stage 3b-7), and
+    /// on in its tests. The next layout applies it.
+    pub fn set_scrollport_bars(&mut self, on: bool) {
+        let bars = &mut self.arena.observations.bars;
+        if bars.scrollport == on {
+            return;
+        }
+        bars.scrollport = on;
+        let (arena, Some(layout)) = (&self.arena, self.layout.as_deref_mut()) else {
+            return;
+        };
+        let styled: Vec<u32> = arena.observations.bars.styled.iter().collect();
+        let mut parents = SlotSet::default();
+        for bar in styled {
+            let scroller = arena
+                .parent(bar)
+                .filter(|&p| super::area::scroll_view(arena, p));
+            let Some(parent) = scroller else {
+                continue;
+            };
+            if let Some(node) = arena.taffy(bar) {
+                layout.restyle(arena, bar, node);
+                layout.mark_dirty(node);
+            }
+            parents.insert(parent);
+        }
+        for parent in parents.iter() {
+            if let Some(node) = arena.taffy(parent) {
+                layout.restyle(arena, parent, node);
+                layout.mark_dirty(node);
+            }
+            // A child that becomes a bar or stops being one moves in an ordered child list
+            if arena
+                .children(parent)
+                .iter()
+                .any(|&c| arena.style(c).order != 0)
+            {
+                crate::txn::sync_children(arena, layout, parent);
+            }
+        }
+    }
+}
+
+impl NodeArena {
+    /// Whether `slot` is a bar on its parent's scrollport, which stays in place as the parent's
+    /// content scrolls and is drawn above it (D12).
+    pub fn on_scrollport(&self, slot: u32) -> bool {
+        !self.observations.bars.styled.is_empty()
+            && edge(self, slot).is_some()
+            && (self.parent(slot)).is_some_and(|p| super::area::scroll_view(self, p))
+    }
 }
 
 /// Whether some child of `slot` is a bar: a walk of the boxes styled as bars, few, rather
@@ -109,7 +173,8 @@ pub(crate) fn has_bars(arena: &NodeArena, slot: u32) -> bool {
 /// `slot`'s part of its engine style: a bar is laid out `position: absolute`, out of its
 /// parent's flow, and so is the containing block of its own absolutely positioned descendants;
 /// a parent with bars has its slots begin past its unsafe area inside its border, what it
-/// observes there with what it reserves, `reserved` (Taffy patch 81).
+/// observes there with what it reserves, `reserved`, and on its scrollport where it is a scroller
+/// (Taffy patch 81).
 pub(crate) fn lay_out(arena: &NodeArena, slot: u32, reserved: Reserved, s: &mut taffy::Style) {
     if arena.observations.bars.styled.is_empty() {
         return;
@@ -136,6 +201,7 @@ pub(crate) fn lay_out(arena: &NodeArena, slot: u32, reserved: Reserved, s: &mut 
             }
         };
         s.rare.bars = true;
+        s.rare.bar_scrollport = super::area::scroll_view(arena, slot);
         s.rare.bar_inset = taffy::geometry::Rect {
             top,
             right,
@@ -147,7 +213,7 @@ pub(crate) fn lay_out(arena: &NodeArena, slot: u32, reserved: Reserved, s: &mut 
 
 /// Restyle what a change to `slot`'s rows `mask` moves of the bars: its parent, where the
 /// change can make `slot` a bar or stop it being one, and its own bar children, whose edges
-/// follow its `direction` and which are no bars while it scrolls. Returns the boxes whose
+/// follow its `direction` and whose slots lie on its scrollport while it scrolls. Returns the boxes whose
 /// child lists to sync again, where a child whose bar status may have changed has an
 /// `order`, which moves no bar.
 pub(crate) fn style_changed(
@@ -163,7 +229,7 @@ pub(crate) fn style_changed(
         return resync;
     }
     let ordered = |s: u32| arena.style(s).order != 0;
-    // A bar's edge follows its parent's direction, and a scroller's child is no bar yet
+    // A bar's edge follows its parent's direction, and its slot whether its parent scrolls
     let children = [StyleId::Direction, StyleId::OverflowX, StyleId::OverflowY];
     if children.iter().any(|&r| mask.has(r)) {
         for &child in arena.children(slot).iter().filter(|&&c| styled.contains(c)) {

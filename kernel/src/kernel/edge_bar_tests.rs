@@ -411,3 +411,21 @@ fn a_bars_end_is_the_right_edge_left_to_right() {
     assert_eq!(effect(&k, 3).map(|e| e.edge), Some(Edge::Right));
     assert_eq!(registered(&k, 3), Some(4));
 }
+
+#[test]
+fn a_scrollers_own_bar_registers_with_that_scroller() {
+    let mut list = scroller(&[]);
+    list.push((StyleId::Height, "600"));
+    let k = owner_with(
+        Some(BAND),
+        &[],
+        &[(4, list)],
+        &[
+            (4, 5, effect_bar("top edge-effect", "50")),
+            (4, 6, vec![(StyleId::Height, "2000")]),
+        ],
+        &[],
+        None,
+    );
+    assert_eq!(registered(&k, 5), Some(4));
+}

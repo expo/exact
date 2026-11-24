@@ -72,6 +72,10 @@ package final class Viewport: ScrollView {
     /// one that moved window (`ControlBars.register`, `ControlBars.moved`).
     var edgeBars: [ObjectIdentifier: ControlBars.Weak] = [:]
     var edgesOwed = false
+    /// The bars on their parents' scrollports, by id, and each parent's children as last placed
+    /// (`ScrollportBars`, LLP 1123 D12).
+    var scrollportBars: Set<UInt32> = []
+    var childLists: [UInt32: [UInt32]] = [:]
     /// Its tint as UIKit last gave it undimmed (its window's, or an embedder's), which a dimmed
     /// view cannot read (`NodeView.carriedTint`)
     private(set) var restingTint: UIColor?

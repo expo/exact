@@ -367,7 +367,7 @@ package final class Presenter {
     /// A restart: every view goes.
     func reset() {
         resetting = true; defer { resetting = false }
-        if let v = viewport as? Viewport { v.authoredBars = [:]; v.edgeBars.values.forEach { $0.value.map(ControlBars.detach) }; v.edgeBars = [:] }
+        if let v = viewport as? Viewport { v.authoredBars = [:]; v.edgeBars.values.forEach { $0.value.map(ControlBars.detach) }; v.edgeBars = [:]; v.scrollportBars = []; v.childLists = [:] }
         listRowDependencies = nil
         resetFragments()
         MainActor.assumeIsolated { HeldState.retire(self) } // before its views leave the map (HeldState.swift)
@@ -1097,7 +1097,7 @@ package final class Presenter {
                 views[id]?.applyColumns(op.payload)
             case .table: tableGrid.apply(id, op.payload)
             case .destroy:
-                (viewport as? Viewport)?.authoredBars[id] = nil
+                if let v = viewport as? Viewport { v.authoredBars[id] = nil; v.scrollportBars.remove(id); v.childLists[id] = nil }
                 listRowDependencies?.rows.removeValue(forKey: id)
                 listRowDependencies?.rowOwners.removeValue(forKey: id)
                 views[id]?.holdGone()
@@ -1297,12 +1297,13 @@ package final class Presenter {
     /// `parent`'s children, in order: its views as subviews of its container,
     /// then its flat leaves' layers among them (LLP 1068 §6.1).
     func placeChildren(_ parent: NodeView, _ ids: [UInt32]) {
-        let ids = regionPopoverChildren(ids, of: parent)
+        // The whole list is what a replay places again, a scroller's bars on its scrollport among it
+        let all = regionPopoverChildren(ids, of: parent), ids = ScrollportBars.place(parent, all, in: self)
         #if os(iOS)
-        if #available(iOS 27.1, *) { arrangements.record(parent, children: ids) }
+        if #available(iOS 27.1, *) { arrangements.record(parent, children: all) }
         #endif
         // Make any views required by this holder before assembling its list.
-        for id in flats.place(parent, ids) { flats.promote(id) }
+        for id in flats.place(parent, all) { flats.promote(id) }
         let container = parent.container
         // A row a grouped list carries stays in its cell (`GroupedLists.placing`).
         let want = groupedLists.map { $0.placing(container, ids.compactMap { views[$0] }) } ?? ids.compactMap { views[$0] }

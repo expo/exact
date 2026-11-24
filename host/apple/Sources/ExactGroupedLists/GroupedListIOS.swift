@@ -836,7 +836,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
     /// `looks`: whether a batch changed what is in the list, so that a
     /// custom row's look is read again (`refreshLooks`).
     func mount(looks: Bool = true) {
-        if collection.superview !== owner { owner.addSubview(collection) }
+        if collection.superview !== owner { owner.addSubview(collection); ScrollportBars.raise(in: owner) }
         let horizontal = UIEdgeInsets(top: 0, left: owner.padding("left"), bottom: 0, right: owner.padding("right"))
         if horizontal != horizontalPadding { horizontalPadding = horizontal; resized = true }
         // Padding is room around the sections; final footer space is below
