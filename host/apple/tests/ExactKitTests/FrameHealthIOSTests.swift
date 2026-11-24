@@ -1322,7 +1322,7 @@ final class FrameHealthIOSTests: XCTestCase {
         // The card's ground, systemBackground, is white in light mode and black in dark
         let dark = { (overlay.card.palette.background.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent,
             options: nil)?.components?.first ?? 1) < 0.5 }
-        XCTAssertFalse(dark())
+        waitFor("the card takes the window's light mode") { !dark() }
         // Only the appearance changes: nothing lays the card out or moves it
         window.overrideUserInterfaceStyle = .dark
         let followed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in dark() }, object: nil)

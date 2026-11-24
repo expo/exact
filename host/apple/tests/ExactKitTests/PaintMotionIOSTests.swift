@@ -82,6 +82,7 @@ final class PaintMotionIOSTests: XCTestCase {
         XCTAssertNil(session.boot(size: CGSize(width: 390, height: 844)).error)
         session.scheme(dark: false)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        window.overrideUserInterfaceStyle = .light // the session's, whatever the system's
         let sheet = UIView(frame: window.bounds)
         window.addSubview(sheet)
         window.makeKeyAndVisible()
@@ -107,6 +108,7 @@ final class PaintMotionIOSTests: XCTestCase {
         session.scheme(dark: false)
         let p = session.presenter
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
+        window.overrideUserInterfaceStyle = .light // the session's, whatever the system's
         p.viewport.frame = window.bounds
         window.addSubview(p.viewport)
         window.makeKeyAndVisible()
