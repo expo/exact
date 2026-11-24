@@ -2065,3 +2065,8 @@ and the Linux headless CPU renderer without claiming display frame timing.
 - Building a web JS box with `transition="translate -exact-spring()"` warns that the transition row was skipped even though the browser plays it (#1529). Report only transitions the host actually skips.
 - The rendered link and icon test times out waiting for the adoption journal entry after the first button click. Run `bun test host/web-js/dom.test.mjs -t "Bun-rendered links and icons"`.
 - The form keyboard fixture returns HTTP 404 for `drag-in.js`. Run `bun test host/web/tests/form-chrome.test.mjs -t "cancelling a prompt Return at window keydown"`.
+- On macOS, open a route with `header font-family="Georgia"`, a heading and a text button. The native window title and toolbar item keep AppKit’s fonts (#1324).
+- On Android, open a route with `header font-family="Georgia"`, a heading and a text action. The Material top app bar draws both in its own family (#1324).
+- On tvOS, open a route with `header font-family="Georgia"`, a heading and a text button. The native bar keeps its own title and item fonts (#1324).
+- On iOS 26.5 at AX-XXXL, compare a plain “Save” bar item with one that writes only `font-weight=500` in a header with no family. The stock lettering is 46 pixels high at 3× and the weighted lettering is 38. The weight-only item starts from 17 points (#1324 review).
+- On iOS 26.5, push a route with a named Back button and write `font-size=28` on that native button. The visible Back title is pixel-identical to the one with no size (#1324 review).

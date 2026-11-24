@@ -24,6 +24,7 @@ struct HeaderTitle: Equatable {
     /// The projected font for equality; the view resolves unsaid metrics
     /// again in its own traits when Dynamic Type changes.
     let font: UIFont?
+    let family: Int?
     let avatar: BadgeFace?
     let subtitle: String
     /// The nodes the title shows besides the heading: the avatar's box and
@@ -53,7 +54,7 @@ struct HeaderTitle: Equatable {
     /// `apart`: the nodes the title never reads (the items, the readouts, the
     /// search field, the tablist); `kept`: the opted-out nodes, which stay in
     /// the page.
-    init?(header: NodeView, heading: NodeView, tap: NodeView?, apart: [NodeView], kept: [NodeView] = []) {
+    init?(header: NodeView, heading: NodeView, tap: NodeView?, apart: [NodeView], kept: [NodeView] = [], family: Int? = nil) {
         // The heading's ancestors below the header, innermost first.
         var chain: [NodeView] = [], at = heading.superview
         while let view = at, view !== header {
@@ -167,6 +168,7 @@ struct HeaderTitle: Equatable {
         guard tap != nil || avatar != nil || !subtitle.isEmpty || !titleGlyphs.isEmpty else { return nil }
         id = group.id
         testId = group.props["testId"]
+        self.family = family
         self.heading = heading
         font = heading.authoredTitleFont(over: .preferredFont(forTextStyle: .headline, compatibleWith: heading.traitCollection))
         self.avatar = avatar
@@ -194,7 +196,7 @@ struct HeaderTitle: Equatable {
         let typography = font.map { "\($0.fontName)/\($0.pointSize)/\(TextEngine.controlWeight($0))" } ?? ""
         return "\(id):\(avatar?.source ?? ""):\(subtitle):\(spoken):\(rtl):\(glyphs.map { "\($0.symbol ?? "")/\($0.text)" }.joined(separator: "\u{1F}")):\(tap ?? 0):\(accessibilityDisabled):\(titleGlyphs.map(\.source).joined(separator: "\u{1F}")):\(typography)"
     }
-    static func == (a: HeaderTitle, b: HeaderTitle) -> Bool { a.source == b.source && a.font == b.font }
+    static func == (a: HeaderTitle, b: HeaderTitle) -> Bool { a.source == b.source && a.font == b.font && a.family == b.family }
 
     static func holdsHeading(_ node: NodeView) -> Bool {
         node.container.subviews.contains { child in
@@ -212,7 +214,7 @@ extension HeaderShape {
     /// does not show is no bar's (§9.10), and its route is one with no
     /// header. Both are the shared rule's (`HeaderRule`, `projected`).
     static func bar(of route: NodeView, back: String? = nil, backIsUIKits: Bool = true) -> HeaderShape? {
-        HeaderShape(route: route, back: back, backIsUIKits: backIsUIKits, projected: true)
+        HeaderShape(route: route, back: back, backIsUIKits: backIsUIKits, projected: true, routeFamily: true)
     }
 
     /// The heading's group as the bar shows it (§9.10). A tablist's
@@ -406,6 +408,11 @@ final class HeaderTitleView: UIControl {
         avatarHeight.constant = group.avatar?.size ?? 0
         let base = UIFont.preferredFont(forTextStyle: .headline, compatibleWith: traitCollection)
         title.font = group.heading.authoredTitleFont(over: base) ?? base
+        #if os(iOS)
+        if let id = group.family, let engine = group.heading.text, group.heading.authoredFontFamily == nil {
+            title.font = HeaderFamily(id: id, engine: engine).font(title.font)
+        }
+        #endif
         title.attributedText = group.titleGlyphs.isEmpty ? nil : Self.titleLine(group, text: text, font: title.font, colour: title.textColor)
         if group.titleGlyphs.isEmpty { title.text = text }
         subtitle.attributedText = Self.line(group, font: subtitle.font, colour: subtitle.textColor)
@@ -418,6 +425,18 @@ final class HeaderTitleView: UIControl {
         accessibilityIdentifier = group.testId
         invalidateIntrinsicContentSize()
     }
+
+    #if os(iOS)
+    func applyHeaderFont(_ family: HeaderFamily) {
+        guard let (group, text) = shown else { return }
+        let base = UIFont.preferredFont(forTextStyle: .headline, compatibleWith: traitCollection)
+        let authored = group.heading.authoredTitleFont(over: base) ?? base
+        title.font = group.heading.authoredFontFamily == nil ? family.font(authored) : authored
+        if !group.titleGlyphs.isEmpty {
+            title.attributedText = Self.titleLine(group, text: text, font: title.font, colour: title.textColor)
+        }
+    }
+    #endif
 
     @objc private func pressed() {
         if let tap { _ = host?.presenter.hatchAct(tap, 0, NavigationMarks.shared.personNow()) }

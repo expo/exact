@@ -157,6 +157,10 @@ final class FieldChromeCache: @unchecked Sendable {
 }
 
 extension TextEngine {
+    package static func inlineBarPointSize(_ traits: UITraitCollection) -> CGFloat {
+        FieldChromeCache.barItemFont(traits).pointSize
+    }
+
     // Register the platform descriptor alongside declared families. Its id is
     // picked after the plan catalog, so no Contract stack can collide with it.
     func registerControlFont(_ font: UIFont) -> UInt16 {

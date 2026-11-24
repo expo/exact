@@ -8066,6 +8066,8 @@ is the large title's, any other's the inline title's), on the Mac in a modal
 route's sheet title. The Mac's window title keeps AppKit's font, which no public
 API changes. A heading inside an iOS pressable title group takes the same
 authored typography over the bar's headline font.
+On an iOS route, set the inline and large title, text item and Back title fonts
+through the header's `font-family` or through a Swift hatch, choosing one per route.
 On iOS, a route's level-1 heading gives a large navigation title; other levels
 give an inline title. Set UIKit's `largeTitleDisplayMode` through a native access
 hatch to change presentation while keeping the semantic rank. Check the host's

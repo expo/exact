@@ -15,6 +15,7 @@ import ExactKit
 /// change projects it again.
 struct BarSource: Equatable {
     let bar: NavigationRules.Bar
+    var family: Int? = nil
     let authored: [UInt32], placed: [UInt32]
     let header: UInt32?, heading: UInt32?, title: String, level: Int, leading: [String], trailing: [String], group: String, canGoBack: Bool
 }
@@ -32,6 +33,13 @@ struct HatchSource: Equatable {
 /// At a transparent route's clear edge, the empty band also leaves touches
 /// to the page; the title, items and scrolled material keep theirs.
 final class RouteNavigationBar: UINavigationBar {
+    #if os(iOS)
+    var appearanceChanged: (() -> Void)?
+    override var standardAppearance: UINavigationBarAppearance { didSet { appearanceChanged?() } }
+    override var compactAppearance: UINavigationBarAppearance? { didSet { appearanceChanged?() } }
+    override var scrollEdgeAppearance: UINavigationBarAppearance? { didSet { appearanceChanged?() } }
+    override var compactScrollEdgeAppearance: UINavigationBarAppearance? { didSet { appearanceChanged?() } }
+    #endif
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         let onControl = sequence(first: hit, next: { $0 === self ? nil : $0.superview }).contains { $0 is UIControl || $0 is UISearchBar }
@@ -423,6 +431,7 @@ final class NavigationStack {
     var showsBar: Bool
     let order: Int
     let label: String
+    var observesHeaderFonts = false
     var hatched = false
     var barTint: UIColor?, hatchTintsBar = false
     init(showsBar: Bool, order: Int) { (self.showsBar, self.order, label) = (showsBar, order, "#\(order)") }
@@ -661,7 +670,7 @@ extension NavigationHost {
             let scroller = contentScroller(of: c), scroll = contentScrollView(of: c)
             let dataset = c.node.props["dataset"]
             func barSource(_ key: (HeaderShape.Item) -> String) -> BarSource {
-                BarSource(bar: bar, authored: shape?.authored.map(\.id) ?? [], placed: shape?.placed.map(\.id) ?? [], header: shape?.header.id, heading: shape?.heading?.id, title: shape?.title ?? "", level: shape?.level ?? 0, leading: shape?.leading.map(key) ?? [],
+                BarSource(bar: bar, family: shape?.family, authored: shape?.authored.map(\.id) ?? [], placed: shape?.placed.map(\.id) ?? [], header: shape?.header.id, heading: shape?.heading?.id, title: shape?.title ?? "", level: shape?.level ?? 0, leading: shape?.leading.map(key) ?? [],
                           trailing: shape?.trailing.map(key) ?? [], group: shape?.group?.source ?? "", canGoBack: canGoBack)
             }
             let source = barSource(\.source)
@@ -697,7 +706,24 @@ extension NavigationHost {
             #else
             let fonts: NavigationTitleInk.Fonts? = nil // tvOS's bar title font is not measured: its own stays.
             #endif
-            c.titleInk.update(shows ? shape?.heading?.ownUIColor("text_color") : nil, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent)
+            let color = shows ? shape?.heading?.ownUIColor("text_color") : nil
+            #if os(iOS)
+            let family = shows ? shape?.family.flatMap { id in shape?.header.text.map { HeaderFamily(id: id, engine: $0) } } : nil
+            // Give the hatch the same point in route preparation. A family that is going
+            // away releases its slots before the hatch runs; a written family paints last.
+            if family == nil && c.titleInk.hasHeaderFamily {
+                c.titleInk.updateFamily(nil, shape: shape, route: c, bar: nav?.navigationBar, color: color, fonts: fonts, transparent: transparent)
+            }
+            defer {
+                if let family {
+                    if let nav { observeHeaderTypography(in: nav) }
+                    c.titleInk.updateFamily(family, shape: shape, route: c, bar: nav?.navigationBar, color: color, fonts: fonts, transparent: transparent)
+                }
+            }
+            if family == nil { c.titleInk.update(color, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent) }
+            #else
+            c.titleInk.update(color, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent)
+            #endif
             guard c.projected != signature || !c.hatched else { continue }
             c.projected = signature
             guard presenter.session?.natives.hatchesConnected == true else { continue }

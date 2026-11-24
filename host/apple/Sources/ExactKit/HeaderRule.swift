@@ -132,6 +132,8 @@ extension NodeView {
         return childNodes
     }
 
+    package var authoredFontFamily: Int? { wrote("font_family") ? Int(number("font_family")) : nil }
+
     /// The platform's title font `base` with the typography the author
     /// wrote on this heading in its place: `font-family`, `font-weight`,
     /// `font-style` and, where `sized`, `font-size` (LLP 1115 §2, "what the
