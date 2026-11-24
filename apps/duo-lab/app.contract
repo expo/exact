@@ -419,7 +419,7 @@ component DuoLab
       // (docs/contract-for-agents.md, "Hide the tab bar on a route"). On a book
       // fold its tabs keep to the trailing segment with the panes, by a padding the web's
       // sidebar (900px and wider) overrides.
-      row role="tablist" testId="tab-bar" display=(current.name == "note" ? "none" : "flex") padding-left=(twoAcross ? "env(viewport-segment-left 1 0)" : "0px")
+      row role="tablist" testId="tab-bar" position="sticky" bottom=0 display=(current.name == "note" ? "none" : "flex") padding-left=(twoAcross ? "env(viewport-segment-left 1 0)" : "0px")
         button role="tab" aria-controls="panel-fold" aria-selected=(nav.tab == "fold") press=selectTab("fold") testId="tab-fold" flex=1
           image "symbol:book"
           text "Fold"

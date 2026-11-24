@@ -36,12 +36,9 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
   `navigationBar=(book ? "none" : "auto")`: its first-child `header` paints in
   that pane, with its own Back if pushed; otherwise UIKit makes the bar.
 - Put the first pane on the leading segment: segment 1 in RTL; indices count from the left.
-- Segment coordinates are relative to the viewport. Keep the pane container
-  at that origin and chrome inside a pane. End a bottom pane at `bottom: 0` to fit above the page's bars.
-  Book panes in a column flex container use absolute positioning, automatic
-  left/right insets and `align-self: flex-start` / `flex-end` for reading order.
-  Duo Lab uses the smaller segment width to clear unequal hinges. Inset controls
-  from safe edges too.
+- Segments are viewport-relative: start the panes' container at its left. Duo Lab's Arrangement
+  panes stay below the header: across a fold, a `space-between` row; down one, a box after the
+  container ends it at the fold, the lower `absolute`. Inset controls from safe edges.
 - In a laptop fold, put authored controls on the bottom segment. Cap a bottom
   sheet's `max-height` at the room below its header and
   `calc(100% - env(viewport-segment-top 0 1))`, from the viewport origin.
@@ -49,4 +46,6 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
   Duo Lab's note sheet then lifts the cap.
 - End panes under the keyboard at `100%` or `bottom: 0`; hosts report different segment heights.
 - Keep the same pane instances to retain field text; UIKit may end editing on a panel switch.
+- Panes move as UIKit's with `-exact-layout-transition="-exact-spring(439, 41.9, 1)"`; browsers drop
+  `env()` early on opening (fall back to `exactViewport().segments`).
 - UIKit's alerts and sheets on a fold: [Folds on iOS](../contract-for-agents.md#folds-on-ios).

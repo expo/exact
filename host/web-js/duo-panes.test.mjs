@@ -39,13 +39,14 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
         await page.waitForFunction(([axis, expected, width]) => {
           const pane = document.querySelector('[data-testid="panes-activity-pane"]');
           const rect = pane.getBoundingClientRect();
-          return getComputedStyle(pane).position === 'absolute' && Math.abs(rect[axis] - expected) < 1 && (axis !== 'left' || Math.abs(rect.width - width) < 1);
+          return Math.abs(rect[axis] - expected) < 1 && (axis !== 'left' || Math.abs(rect.width - width) < 1) && globalThis.originalPanes.every(pane => !pane.getAnimations().length);
         }, [orientation === 'vertical' ? 'left' : 'top', orientation === 'vertical' ? (direction === 'rtl' ? 0 : width - paneWidth) : offset + 40, paneWidth]);
         const bounds = await page.evaluate(() => globalThis.originalPanes.map((pane, i) => {
           const r = pane.getBoundingClientRect();
-          return { retained: pane === document.querySelector(`[data-testid="panes-${i ? 'activity' : 'workspace'}-pane"]`), left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+          return { retained: pane === document.querySelector(`[data-testid="panes-${i ? 'activity' : 'workspace'}-pane"]`), scrolls: pane.scrollHeight > pane.clientHeight,
+            left: r.left, right: r.right, top: r.top, bottom: r.bottom };
         }));
-        expect(bounds.every(b => b.retained)).toBe(true);
+        expect(bounds.every(b => b.retained && b.scrolls)).toBe(true);
         const start = orientation === 'vertical' ? 'left' : 'top', end = orientation === 'vertical' ? 'right' : 'bottom';
         const first = orientation === 'vertical' && direction === 'rtl' ? 1 : 0;
         expect(bounds[first][end]).toBeLessThanOrEqual(offset + 1);
@@ -56,10 +57,10 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     }
     await page.evaluate(() => { document.documentElement.dir = 'ltr'; });
     await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 64, left: 40, right: 24, bottom: 32 } });
-    const title = await page.getByTestId('panes-workspace-pane').getByRole('heading', { level: 1 }).boundingBox();
+    const title = await page.getByTestId('screen-panes').getByRole('heading', { level: 1 }).boundingBox();
     const activity = await page.getByTestId('panes-activity-pane').getByRole('heading', { name: 'Activity', exact: true }).boundingBox();
-    expect(title.y).toBeGreaterThanOrEqual(80);
-    expect(title.x).toBeGreaterThanOrEqual(56);
+    expect(title.y).toBeGreaterThanOrEqual(64 + 12);
+    expect(title.x).toBeGreaterThanOrEqual(40 + 12);
     expect(activity.x).toBeGreaterThanOrEqual(56);
     expect(activity.x + activity.width).toBeLessThanOrEqual(760);
     // On a book fold the panes pad their sides by the route's insets and not the browser's, which are 0 here: their
@@ -82,7 +83,7 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
       await page.evaluate(direction => { document.documentElement.dir = direction; }, direction);
       const [left, right] = direction === 'rtl' ? ['activity', 'workspace'] : ['workspace', 'activity'];
       await page.waitForFunction(right => Math.abs(document.querySelector(`[data-testid="panes-${right}-pane"]`).getBoundingClientRect().left - 660) < 1
-        && document.querySelector('[data-testid="panes-activity-echo"]').textContent.length === 90, right);
+        && document.querySelector('[data-testid="panes-activity-echo"]').textContent.length === 90 && globalThis.originalPanes.every(pane => !pane.getAnimations().length), right);
       const edges = await page.evaluate(([left, right]) => ({
         left: document.querySelector(`[data-testid="panes-${left}-draft"]`).getBoundingClientRect().left,
         right: document.querySelector(`[data-testid="panes-${right}-draft"]`).getBoundingClientRect().right,
@@ -91,7 +92,10 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     }
     await page.evaluate(() => { document.documentElement.dir = 'ltr'; });
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
-    await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-testid="panes-activity-pane"]')).position === 'relative');
+    await page.waitForFunction(() => {
+      const rect = document.querySelector('[data-testid="panes-activity-pane"]').getBoundingClientRect();
+      return Math.abs(rect.left - 646) < 1 && Math.abs(rect.right - 1280) < 1;
+    });
     expect(await echo()).toEqual({ overflow: 0, wrapped: true });
     await page.getByTestId('panes-activity-draft').fill('');
     await page.evaluate(() => {
@@ -104,6 +108,45 @@ test('Duo panes retain state and avoid book and laptop hinges in both reading di
     expect(await page.getByTestId('panes-workspace-echo').textContent()).toBe('Keep this draft');
     await page.getByTestId('tab-fold').click();
     expect(await page.getByTestId('fact-h').textContent()).toBe('1');
+    // A fold moves the panes of both screens apart, or down to the lower segment, on UIKit's spring, and back as it opens;
+    // neither the route's header nor the tab bar moves. Under Reduce Motion the panes take their places at once.
+    const screens = { panes: ['panes-workspace-pane', 'panes-activity-pane', 'screen-panes'], arrangement: ['arrangement-1-primary', 'arrangement-1-secondary', 'arrangement-1-screen'] };
+    const boxes = ids => page.evaluate(([first, second, screen]) => {
+      const box = element => { const r = element.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom].map(v => Math.round(v)); };
+      const at = id => document.querySelector(`[data-testid="${id}"]`);
+      return { first: box(at(first)), second: box(at(second)), header: box(at(screen).querySelector('header')), bar: box(at('tab-bar')) };
+    }, ids);
+    for (const [name, ids] of Object.entries(screens)) {
+      for (const reducedMotion of ['no-preference', 'reduce']) {
+        await page.emulateMedia({ reducedMotion });
+        for (const [width, height, orientation, edge] of [[960, 700, 'vertical', 'left'], [700, 960, 'horizontal', 'top']]) {
+          const pose = displayFeature => cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false, displayFeature });
+          await pose();
+          await page.getByTestId(`tab-${name}`).click();
+          const settled = start => page.waitForFunction(([id, edge, start]) => {
+            const pane = document.querySelector(`[data-testid="${id}"]`);
+            return (start == null || Math.abs(pane.getBoundingClientRect()[edge] - start) < 0.5) && !pane.getAnimations().length;
+          }, [ids[1], edge, start]);
+          await settled();
+          const flat = await boxes(ids);
+          // The folded panes' moves, as the second's animations were first seen
+          const moves = page.evaluate(id => new Promise(resolve => {
+            const pane = document.querySelector(`[data-testid="${id}"]`), before = JSON.stringify(pane.getBoundingClientRect());
+            const look = () => JSON.stringify(pane.getBoundingClientRect()) === before && !pane.getAnimations().length ? requestAnimationFrame(look) : resolve(pane.getAnimations().length);
+            look();
+          }), ids[1]);
+          await pose({ orientation, offset: 460, maskLength: 40 });
+          expect({ name, reducedMotion, moves: await moves > 0 }).toEqual({ name, reducedMotion, moves: reducedMotion === 'no-preference' });
+          await settled(500);
+          const folded = await boxes(ids);
+          expect({ name, end: folded.first[edge === 'left' ? 2 : 3], start: folded.second[edge === 'left' ? 0 : 1] }).toEqual({ name, end: 460, start: 500 });
+          expect({ name, header: folded.header, bar: folded.bar }).toEqual({ name, header: flat.header, bar: flat.bar });
+          await pose();
+          await settled(flat.second[edge === 'left' ? 0 : 1]);
+          expect(await boxes(ids)).toEqual(flat);
+        }
+      }
+    }
     expect(errors).toEqual([]);
     // The runtime journals a style the browser refuses without throwing
     expect(await page.evaluate(() => exact.journal.filter(line => /invalid .* value .*; unset/.test(line) || line.includes(' is not a value it takes')))).toEqual([]);
