@@ -223,9 +223,12 @@ public final class ExactView: UIView {
     /// It comes with the first keyboard, not before: a constraint anywhere in
     /// the window gives the window a layout engine, and every view added
     /// after joins it (`_switchToLayoutEngine:`), which a list pays for each
-    /// view of each row it builds. No node view uses a constraint.
+    /// view of each row it builds. No node view uses a constraint. The window's
+    /// own keyboard sampler comes after it (`KeyboardSampleIOS`), so this probe's
+    /// constraint is still the one whose layout lays the view out at once.
     #if !os(tvOS)
     func installKeyboardProbe() {
+        defer { if let window { KeyboardSampleIOS.install(in: window) } }
         guard keyboardProbe == nil else { return }
         keyboardLayoutGuide.usesBottomSafeArea = false
         let probe = UIView()
