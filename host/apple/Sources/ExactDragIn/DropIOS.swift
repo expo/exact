@@ -66,12 +66,13 @@ final class WindowDrops: NSObject, UIDropInteractionDelegate {
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: UIDropSession) { follower(of: session)?.ended(session) }
 
     /// The presenter under the drop is found again at its point, with no
-    /// handler run first, and takes it.
+    /// handler run first, and takes it; only then does a tracker the drag
+    /// left let it go, so no leave runs before the drop's target is taken.
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: UIDropSession) {
         guard let window else { return }
         let point = session.location(in: window), under = tracker(at: point)
-        handOff(session, to: under)
         under?.perform(session, at: point)
+        handOff(session, to: under)
     }
 
     /// The drag is over the window: the tracker of the presenter under it
@@ -188,9 +189,10 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
     func follows(_ session: UIDropSession) -> Bool { self.session == ObjectIdentifier(session) }
 
     /// The zone's drop point is one where a drop reaches the zone itself:
-    /// its middle, else the middle of the first of a grid of its parts that
-    /// a nested zone, a field or another view does not take; none when every
-    /// part is taken.
+    /// its middle, else the middle of the first of a 4 × 4 grid of its parts
+    /// that a nested zone, a field or another view does not take; none when
+    /// every part's middle is taken, though a strip narrower than a part
+    /// may still take a drop.
     func dropPoints(of view: NodeView) -> [UIAccessibilityLocationDescriptor]? {
         guard let presenter, let node = presenter.authoredNodes(from: view).first(where: { $0.handlers.contains("drop") }) else { return nil }
         guard !node.inert, !node.formDisabled else { return [] }
@@ -252,9 +254,7 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         DropItems.read(session.items.map(\.itemProvider), log: { [weak presenter] in presenter?.session?.log($0) }) { [weak self] files, text, url, folder in
             guard let self else { return }
             // A node gone, lent to another, disabled, no longer hearing `drop`, or removed by a staged batch while its items loaded takes nothing
-            let session = presenter.session
-            let live = self.view(release.target).map { $0.handlers.contains("drop") && !$0.inert && !$0.formDisabled } == true
-                && session?.admits(release.target.id) != false
+            let session = presenter.session, live = self.takes(release.target)
             // The copies become the session's only as they are delivered
             if live, let session, !files.isEmpty { PastedImages.held(folder, by: session) } else { try? FileManager.default.removeItem(at: folder) }
             let docs = live ? files.compactMap { session?.mintDocument($0) } : []
@@ -338,6 +338,11 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
         }
         guard let release = release(at: point) else { return ["error": "view \(view.id) takes no drop: nothing under it declares `drop`"] }
         defer { lands(release.over) }
+        // As a person's drop: a target its enter made inert, disabled or deaf to `drop` takes nothing
+        guard takes(release.target) else {
+            leave(release.leaves)
+            return ["error": "drop: refused: view \(release.target.id) no longer takes a drop once its `dragenter` ran"]
+        }
         let docs = paths.compactMap { presenter?.session?.mintDocument(URL(fileURLWithPath: $0)) }
         guard deliver(docs, text, url, to: release.target, line: release.line) else {
             leave(release.leaves)
@@ -462,7 +467,7 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
     /// carried nothing that arrived, its node is gone or another's, or a
     /// staged batch removed it.
     private func deliver(_ files: [String], _ text: String, _ url: String, to node: Node, line: String) -> Bool {
-        guard !files.isEmpty || !text.isEmpty || !url.isEmpty, view(node) != nil, presenter?.session?.admits(node.id) != false,
+        guard !files.isEmpty || !text.isEmpty || !url.isEmpty, takes(node),
               let data = try? JSONSerialization.data(withJSONObject: [files, text, url]) else { return false }
         return hear(node, 38, line + "\n" + String(decoding: data, as: UTF8.self))
     }
@@ -470,6 +475,13 @@ final class DropTarget: NSObject, DragInTarget, UITextDropDelegate {
     /// Node `node` hears an event of `kind`, if its view is still the one it was.
     @discardableResult private func hear(_ node: Node, _ kind: UInt32, _ line: String) -> Bool {
         view(node) != nil && presenter?.clipboard(node.id, kind, line) == true
+    }
+
+    /// Whether `node` takes a drop now: the same node, enabled, not inert,
+    /// hearing `drop`, and not removed by a staged batch.
+    private func takes(_ node: Node) -> Bool {
+        guard let view = view(node), view.handlers.contains("drop"), !view.inert, !view.formDisabled else { return false }
+        return presenter?.session?.admits(node.id) != false
     }
 
     /// The view of `node`, while the pool has not lent it to another.

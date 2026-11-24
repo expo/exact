@@ -239,6 +239,42 @@ final class DragInIOSTests: XCTestCase {
         XCTAssertEqual(heard, ["6:55"], "the agent's drop too")
     }
 
+    /// The agent's drop on a target its own enter makes inert is refused, as a person's is.
+    func testTheAgentsDropOnATargetItsEnterMakesInertIsRefused() throws {
+        let p = presenter(column: ["drop", "dragenter", "dragleave"])
+        let drag = try target(p)
+        p.onClipboard = { [unowned self] id, kind, _ in
+            heard.append("\(id):\(kind)")
+            if kind == 55 { p.apply(wireBatch([["op": "props", "id": Int(id), "set": ["inert": "true"]]])) }
+        }
+        let reply = drag.agentDrag(["drop": [String](), "text": "words", "at": [Double(below.x), Double(below.y)]], over: try XCTUnwrap(p.views[1]))
+        XCTAssertTrue((reply["error"] as? String)?.contains("no longer takes a drop") == true, "\(reply)")
+        XCTAssertEqual(heard, ["1:55", "1:56"], "its leave, and no drop")
+    }
+
+    /// A drop on one presenter's zone that another presenter followed: the
+    /// first's leave runs after the drop's target is taken, so a leave
+    /// handler that replaces that target gives the drop to nothing.
+    func testADropAcrossPresentersIsTakenBeforeTheFirstLeaves() throws {
+        let a = presenter(column: ["drop", "dragenter", "dragleave"], frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let b = presenter(column: ["drop", "dragenter", "dragleave"], in: window, frame: CGRect(x: 0, y: 400, width: 400, height: 400), tag: "b")
+        let drops = try drops(a), next = try target(b)
+        a.onClipboard = { [unowned self] id, kind, _ in
+            heard.append("\(id):\(kind)")
+            guard kind == 56 else { return }
+            b.apply(wireBatch([["op": "destroy", "id": 1],
+                               ["op": "create", "id": 6, "kind": "view", "handlers": ["drop", "dragenter", "dragleave"]],
+                               ["op": "children", "id": 6, "ids": [2, 4]], ["op": "children", "id": 9, "ids": [6]],
+                               ["op": "frame", "id": 6, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0]]))
+        }
+        let session = Session([provider(["words" as NSString])], at: try XCTUnwrap(a.views[1]).convert(below, to: nil))
+        drops.dropInteraction(interaction, sessionDidEnter: session)
+        session.point = try XCTUnwrap(b.views[1]).convert(below, to: nil)
+        drops.dropInteraction(interaction, performDrop: session)
+        until { next.waiting.isEmpty }
+        XCTAssertEqual(heard, ["1:55", "b1:55", "1:56"], "the drop's node is gone, and its replacement takes nothing")
+    }
+
     /// A presenter moved to another window lets its drag go, since the old
     /// window's end no longer reaches it, and takes a drag in the new one.
     func testAPresenterMovedToAnotherWindowLetsItsDragGo() throws {
