@@ -278,7 +278,7 @@ impl NodeArena {
     /// is said, or is the label colour a readout the bar hosts gives what it
     /// leaves unsaid (LLP 1141.004 D3), and the node is no native button's face.
     pub(crate) fn ink_said(&self, slot: u32) -> bool {
-        let bar = self.bar_start.as_deref().is_some_and(|start| {
+        let bar = self.bar_text.start.as_deref().is_some_and(|start| {
             std::ptr::eq(self.computed_source(slot, StyleId::TextColor), start)
         });
         self.parents[slot as usize]

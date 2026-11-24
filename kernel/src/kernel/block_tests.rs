@@ -1011,3 +1011,23 @@ fn only_a_hosted_readout_takes_the_bars_type() {
         "a symbol readout is measured again in the bar's size"
     );
 }
+
+/// LLP 1141.004 D3: an `em` size written on a hosted readout reads the bar's
+/// size, as one on a control reads its own type's, and follows the bar's font
+/// and whether the readout is an item.
+#[test]
+fn an_em_size_on_a_hosted_readout_reads_the_bars() {
+    let mut k = readout_page();
+    bar_font(&mut k, 17.0, 500);
+    hosted(&mut k);
+    let half = style(3, &[(StyleId::FontSize, t("0.5em"))]);
+    k.apply(0, 2, &[half]).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 8.5, "not the page's 30");
+    bar_font(&mut k, 20.0, 500);
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 10.0, "a new bar font");
+    k.set_bar_item(3, false).unwrap();
+    k.compute_layout(1, OFFER).unwrap();
+    assert_eq!(computed(&k, 4).font_size, 15.0, "no item: the page's");
+}

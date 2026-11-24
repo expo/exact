@@ -209,9 +209,10 @@ impl<D: DataSource> Host<D> {
     /// frames and scroll content sizes that changed. One that fails is
     /// owed (`layout_owed`) until one succeeds.
     pub(super) fn layout(&mut self, batch: &mut Batch) -> Result<(), String> {
+        // Before the pass, which emits the frames of what the re-send queues
+        self.send_bar_text(batch);
         let laid = self.layout_pass(batch);
         self.layout_owed = laid.is_err();
-        self.send_bar_text(batch);
         laid
     }
 

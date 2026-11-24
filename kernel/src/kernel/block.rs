@@ -792,7 +792,7 @@ impl Kernel {
     /// last call (LLP 1141.004 D3). Their rows changed outside the commit
     /// that styled them, so a host sends their subtrees' rows again.
     pub fn take_bar_text_flips(&mut self) -> Vec<ViewId> {
-        std::mem::take(&mut self.arena.bar_text_flips)
+        std::mem::take(&mut self.arena.bar_text.flips)
     }
 
     /// `slot`'s text and symbol measured again in the type a bar gives it,

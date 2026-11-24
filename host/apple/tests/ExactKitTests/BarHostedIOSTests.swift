@@ -675,6 +675,11 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertNotEqual(design, ControlHost.platformInk)
         XCTAssertEqual(indicator.color.resolvedColor(with: indicator.traitCollection), design.resolvedColor(with: indicator.traitCollection), "the design's accent")
         XCTAssertNotEqual(rgba(), [0, 0.8, 0, 1], "not the readout's")
+        // `Highlight` is a fifth of it
+        let highlight: [String: Any] = ["sys": "@tint/0.2", "c": [[0, 136, 255, 51], [0, 145, 255, 51]]]
+        p.apply(wireBatch([["op": "style", "id": 5, "style": ["accent_color": highlight, "written": ["accent_color"]]]]))
+        XCTAssertEqual(indicator.color.resolvedColor(with: indicator.traitCollection),
+                       design.withAlphaComponent(0.2).resolvedColor(with: indicator.traitCollection), "`Highlight`'s share of the accent")
         // `auto` is UIKit's own colour
         p.apply(wireBatch([["op": "style", "id": 5, "style": ["accent_color": "auto", "written": ["accent_color"]]]]))
         XCTAssertEqual(indicator.color, ControlHost.platformInk, "`auto` leaves UIKit's")

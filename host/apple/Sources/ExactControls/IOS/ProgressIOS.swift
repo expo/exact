@@ -51,10 +51,11 @@ extension ControlHost {
                 let writer = owner.authoredLine.prefix { $0 !== readout }.first { $0.wrote("accent_color") }
                     ?? (readout.wrote("accent_color") ? readout : nil)
                 assign(spinner, \.tintColor, nil)
-                let accent = writer.flatMap { w in
-                    w.style["accent_color"]?.namesTint == true
-                        ? ThemeRoles.color("AccentColor", in: spinner) ?? spinner.window?.tintColor ?? SystemColor.appTint
-                        : w.authoredAccentTint
+                let accent = writer.flatMap { w -> UIColor? in
+                    guard let share = w.style["accent_color"]?.tintAlpha else { return w.authoredAccentTint }
+                    let tint = ThemeRoles.color("AccentColor", in: spinner) ?? spinner.window?.tintColor ?? SystemColor.appTint
+                    // `Highlight` is a share of the tint
+                    return share < 1 ? tint?.withAlphaComponent(share) : tint
                 }
                 let color = owner.ownUIColor("text_color") ?? accent
                 assign(spinner, \.color, color ?? Self.platformInk)

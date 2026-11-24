@@ -80,8 +80,8 @@ final class BarItemFontIOSTests: XCTestCase {
                 for (i, text) in words.enumerated() {
                     let stock = try XCTUnwrap(ink(image, in: halves[i])), drawn = try XCTUnwrap(ink(image, in: labels[i].frame))
                     let what = "\(category.rawValue)\(bold ? ", Bold Text" : ""), \(text), \(told.size) pt at \(weight)"
-                    // Within a device pixel and a half on this 3x screen, where medium is a pixel narrower than
-                    // UIKit's title and semibold two or more wider
+                    // As wide within a device pixel and a half on this 3x screen, where medium is a pixel narrower
+                    // than UIKit's title and semibold two or more wider; as tall within two
                     XCTAssertEqual(drawn.width, stock.width, accuracy: 0.5, "\(what): as wide as UIKit's title")
                     XCTAssertEqual(drawn.height, stock.height, accuracy: 0.7, "\(what): as tall as UIKit's title")
                 }

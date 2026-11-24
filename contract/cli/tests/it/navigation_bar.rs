@@ -786,7 +786,10 @@ fn an_element_the_ios_bar_has_no_place_for_is_refused() {
         assert_eq!(said.len(), 1, "{name}: {said:?}");
         assert!(said[0].starts_with(what) && said[0].contains("has no place in the iOS navigation bar") && said[0].contains("below the `header`"), "{name}: {}", said[0]);
     }
-    // The `color` repair is named only for a symbol's `color`
+    // The `color` repair is named for a symbol's `color`, whatever is written before it, and only for it
+    let both = format!("{heading}            button press=go aria-label=\"Stop\"\n              image \"symbol:stop\" opacity=0.5 color=\"-exact-system-red\"\n");
+    let said = refused("faded red symbol", ios, &both);
+    assert!(said[0].contains("write `color` on the button"), "{said:?}");
     let faded = format!("{heading}            button press=go aria-label=\"Stop\"\n              image \"symbol:stop\" opacity=0.5\n");
     let said = refused("faded symbol", ios, &faded);
     assert!(

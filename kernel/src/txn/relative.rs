@@ -94,9 +94,12 @@ pub(super) fn after_prop(
 }
 
 fn font_basis(arena: &NodeArena, slot: u32) -> f32 {
+    // A control's own type, or the bar's for a readout it hosts, is the
+    // size an `em` written on the node reads, not its parent's.
     arena
         .control_text_start(slot)
         .filter(|s| s.mask.has(StyleId::FontSize))
+        .or_else(|| arena.bar_text_start(slot))
         .map_or_else(
             || {
                 arena
