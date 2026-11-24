@@ -27,10 +27,23 @@ extension NSView {
 extension NodeView {
     #if os(iOS) || os(tvOS)
     static let canvasOverlays = NSHashTable<PlainView>.weakObjects()
-    static let placedViews = NSHashTable<NodeView>.weakObjects()
     #else
     static let canvasOverlays = NSHashTable<FlippedView>.weakObjects()
     #endif
+
+    static let placedViews = NSHashTable<NodeView>(options: [.weakMemory, .objectPointerPersonality])
+
+    /// The node whose surface placement maps this subtree.
+    package var placedAncestor: NodeView? {
+        guard Self.placedViews.count > 0 else { return nil }
+        var view: CanvasView? = self
+        while let current = view {
+            if let node = current as? NodeView, node.placement != nil || node.placementHidden { return node }
+            if current.superview?.canvasOverlayOwner != nil { return nil }
+            view = current.superview
+        }
+        return nil
+    }
 
     /// The nearest canvas whose overlay holds this node. With no live
     /// overlays, text and input need no ancestor walk.
