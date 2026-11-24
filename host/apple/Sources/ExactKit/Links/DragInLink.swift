@@ -1,0 +1,39 @@
+// @ref LLP 1094.001 D4 — a drag into the app on UIKit is a linked capability,
+// `drag_in`: the `ExactDragIn` module, which an app's composition links when
+// its plan hears `drop`, `dragenter` or `dragleave`, and installs here.
+// Without it no node takes a drag from another app, and such a plan is
+// refused at boot (`Unlinked("drag_in")`). The Mac takes drops in its core
+// (FileDragMac.swift).
+#if os(iOS)
+import UIKit
+
+/// What the core asks of the capability.
+package protocol DragInCapability: AnyObject {
+    /// A presenter's drop target: one drop interaction on its viewport.
+    func target(_ presenter: Presenter) -> DragInTarget
+}
+
+/// A presenter's drop target.
+package protocol DragInTarget: AnyObject {
+    /// After a batch: each field's own text drop follows whether its node
+    /// declares `drop` (D2).
+    func sync()
+    func reset()
+    /// The drop points VoiceOver offers on `view` (D4).
+    func dropPoints(of view: NodeView) -> [UIAccessibilityLocationDescriptor]?
+    /// The agent's `tap <target> drop|dragenter|dragleave` over `view` (D6).
+    func agentDrag(_ req: [String: Any], over view: NodeView) -> [String: Any]
+}
+
+extension NodeView {
+    package override var accessibilityDropPointDescriptors: [UIAccessibilityLocationDescriptor]? {
+        get { super.accessibilityDropPointDescriptors ?? (handlers.contains("drop") ? presenter?.dragIn?.dropPoints(of: self) : nil) }
+        set { super.accessibilityDropPointDescriptors = newValue }
+    }
+}
+
+/// The drag-in module, installed by the composition.
+package enum DragInLink {
+    package static var installed: DragInCapability?
+}
+#endif

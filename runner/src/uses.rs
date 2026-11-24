@@ -256,11 +256,16 @@ pub enum Capability {
     /// A drag out of the app (LLP 1094.000 D3): a node with `draggable`,
     /// whose host lifts it to the system with its data.
     DragOut,
+    /// A drag into the app on UIKit (LLP 1094.001 D4): a node hearing `drop`,
+    /// `dragenter` or `dragleave`, whose host takes drags from other apps.
+    /// The Mac takes them in its core ([`Uses::MAC_CORE`]), the web in its
+    /// documents glue ([`Capability::Documents`]).
+    DragIn,
 }
 
 impl Capability {
     /// Every capability, in bit order.
-    pub const ALL: [Capability; 62] = [
+    pub const ALL: [Capability; 63] = [
         Capability::Markdown,
         Capability::Motion,
         Capability::Collections,
@@ -323,6 +328,7 @@ impl Capability {
         Capability::ContentIndex,
         Capability::Dialogs,
         Capability::DragOut,
+        Capability::DragIn,
     ];
 
     /// The name an entry, a refusal and a report use.
@@ -390,6 +396,7 @@ impl Capability {
             Capability::ContentIndex => "content_index",
             Capability::Dialogs => "dialogs",
             Capability::DragOut => "drag_out",
+            Capability::DragIn => "drag_in",
         }
     }
 
@@ -439,12 +446,16 @@ impl Uses {
         .with(Capability::TextSelection)
         .with(Capability::Widgets)
         .with(Capability::ContentIndex)
-        .with(Capability::Dialogs);
+        .with(Capability::Dialogs)
+        .with(Capability::DragIn);
 
     /// The native roster's entries the Mac's core presents itself, which a
     /// macOS set never names: a `dialog` is an entry of the top-layer stack
-    /// a sheet route presents in too.
-    pub const MAC_CORE: Uses = Uses::NONE.with(Capability::Dialogs);
+    /// a sheet route presents in too, and a drop is the core's
+    /// (`FileDragMac.swift`).
+    pub const MAC_CORE: Uses = Uses::NONE
+        .with(Capability::Dialogs)
+        .with(Capability::DragIn);
 
     /// This set and `capability`.
     pub const fn with(self, capability: Capability) -> Uses {
@@ -664,11 +675,12 @@ pub fn uses(plan: &Plan) -> Uses {
             | EventKind::Reordertargetchange => {
                 uses = uses.with(Capability::Motion).with(Capability::Drag);
             }
-            // Dropped and pasted files become `doc:` handles (studio diary
-            // R19); the web's file drag is heard beside its drop (files.js).
-            EventKind::Drop | EventKind::Dragenter | EventKind::Dragleave | EventKind::Paste => {
-                uses = uses.with(Capability::Documents)
+            // Dropped and pasted files become `doc:` handles; the web's drag
+            // is heard beside its drop (files.js), and UIKit's is a module's.
+            EventKind::Drop | EventKind::Dragenter | EventKind::Dragleave => {
+                uses = uses.with(Capability::Documents).with(Capability::DragIn)
             }
+            EventKind::Paste => uses = uses.with(Capability::Documents),
             _ => {}
         }
     }

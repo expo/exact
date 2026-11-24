@@ -1252,8 +1252,8 @@ report unsupported. Scope these tests with `on web`.
 the driver's drop (the agent's `tap <t> drop`) at the node's middle: a drag
 from another app carrying the files, each `file` once and its path from the
 test file's folder, the plain text and the link, at least one of them
-([Pointer](#pointer), `drop`). It runs where drops do: the web, macOS and
-Windows.
+([Pointer](#pointer), `drop`). It runs where drops do: the web, macOS, iOS
+and Windows.
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
@@ -2515,7 +2515,10 @@ drops land or when the next drag drops, and the next drag's leave cancels it. We
 and Windows deliver files in the order the source supplies them, and macOS
 receives a promised file (Photos', an Exact app's) before the action runs.
 A browser without `getAsFileSystemHandle` hands the app read-only copies.
-iOS, tvOS, Linux, Android and the terminal take no drop yet. The driver's
+iOS and iPadOS take a drag from another app or from the same one through
+UIKit's drop interaction, a file as a copy; a field there keeps text, links
+and text files, as UIKit's text views do. tvOS, Linux, Android and the
+terminal take no drop yet. The driver's
 `tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
 folders, text and a link, at least one of them, as a test's `tap "zone"
 drop …` step does.
@@ -2550,7 +2553,7 @@ column dragenter=entered dragleave=left drop=took position="relative"
       text "Drop files to attach" role="status"
 ```
 
-Web, macOS and Windows support these events. The driver's
+Web, macOS, iOS and Windows support these events. The driver's
 `tap <target> dragenter [<path…>] [--text "…"] [--url "…"]` brings that drag over the target and leaves it there (for a
 screenshot); `tap <target> drop …` drops it, and `tap <target>
 dragleave` takes it away undropped.

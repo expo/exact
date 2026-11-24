@@ -155,16 +155,11 @@ final class PointerRecognizer: UIGestureRecognizer {
             }
         }
     }
-    /// Up the authored tree (`Presenter.pointerParent`).
+    /// Up the authored tree (`Presenter.authoredNodes`).
     static func bubbling(from node: NodeView) -> [NodeView] {
-        var nodes: [NodeView] = []
-        var view: UIView? = node
-        let presenter = node.presenter
-        while let v = view {
-            if let n = v as? NodeView, !n.disabled, n.handlers.contains("pointerdown") || n.handlers.contains("pointerup") || n.handlers.contains("pointercancel") { nodes.append(n) }
-            view = presenter?.pointerParent(of: v) ?? v.superview
+        (node.presenter?.authoredNodes(from: node) ?? [node]).filter {
+            !$0.disabled && ($0.handlers.contains("pointerdown") || $0.handlers.contains("pointerup") || $0.handlers.contains("pointercancel"))
         }
-        return nodes
     }
     /// Still the tree's node: a handler further in may have removed it.
     private static func live(_ node: NodeView) -> Bool { node.presenter?.views[node.id] === node }
@@ -263,6 +258,18 @@ extension Presenter {
         if let parent = declaredParent(of: view) { return parent }
         if let node = view as? NodeView, let parent = dialogs.authoredParent(of: node) { return parent }
         return menus.logicalParent(of: view) ?? eventParent(of: view)
+    }
+
+    /// The nodes from `view` up the authored tree (`pointerParent`),
+    /// innermost first, as a pointer event and a drag's events bubble.
+    package func authoredNodes(from view: UIView) -> [NodeView] {
+        var nodes: [NodeView] = []
+        var next: UIView? = view
+        while let at = next {
+            if let node = at as? NodeView { nodes.append(node) }
+            next = pointerParent(of: at) ?? at.superview
+        }
+        return nodes
     }
 }
 

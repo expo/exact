@@ -71,7 +71,7 @@ component DragDrop
     host: string
     note: DragNote
   derive touch = host == "ios" or host == "android"
-  derive drops = host == "macos" or host == "web" or host == "windows"
+  derive drops = host == "macos" or host == "web" or host == "windows" or host == "ios"
   state over = false
   state dropped: string[] = []
   state droppedText = ""

@@ -58,7 +58,7 @@ test "the web carries no app file" on web
   clock data
   expect drag "drag-written" none
 
-test "the drop zone shows the text, link and files dropped on it" on macos, web
+test "the drop zone shows the text, link and files dropped on it" on macos, web, ios
   at "/"
   tap "sidebar-drag"
   clock settle

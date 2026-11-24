@@ -358,11 +358,9 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
                     ...(opts.gesture ? { gesture: true } : {}),
                     ...(opts.modifiers ? { modifiers: opts.modifiers } : {}),
                   })
-                : kind === 'drop'
-                  ? await ask({ op: 'tap', id, drop: opts.drop })
-                  : kind === 'dragenter' || kind === 'dragleave'
-                    ? await ask({ op: 'tap', id, [kind]: opts[kind] })
-                    : kind === 'hover'
+                : ['drop', 'dragenter', 'dragleave'].includes(kind)
+                  ? await ask({ op: 'tap', id, [kind]: opts[kind], text: opts.text, url: opts.url })
+                  : kind === 'hover'
                       ? await ask({ op: 'tap', id, hover: true })
                       : kind === 'press'
                         ? await ask({
