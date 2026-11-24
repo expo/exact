@@ -1,9 +1,8 @@
 //! The reader's presents (LLP 1003.001 D9). A picture painted while a
-//! present is wanted (something is held, or the page has not been
-//! presented) gets a token the reader keeps with its stream; the frame
-//! commit callback of the frame that draws it reports the token with the
-//! vsync that frame reaches, and the picture's present starts what it
-//! carried.
+//! present is wanted (something is held, a press waits for a picture to show
+//! it, or the page awaits its first present) gets a token the reader keeps
+//! with its stream. The frame commit callback reports the token with the
+//! vsync the frame reaches. The picture's present starts what it carried.
 use crate::presenter::Carried;
 use std::collections::VecDeque;
 

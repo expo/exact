@@ -25,10 +25,10 @@ pub struct Presented {
     pub press: f32,
     /// Host feedback: x px, x percent, y px, y percent.
     pub press_translate: [f32; 4],
-    /// How far a press shows its pressed paint, 0 to 1 (LLP 1061 D7): the
-    /// painter mixes the node's background and its subtree's text toward
-    /// its press colours by it.
-    pub press_paint: f32,
+    /// Progress toward the pressed background (LLP 1061 D7).
+    pub press_background: f32,
+    /// Progress toward the pressed foreground (LLP 1061 D7).
+    pub press_color: f32,
     /// Degrees.
     pub rotate: f32,
     /// The presented rotation axis, including an animated axis.
@@ -60,7 +60,8 @@ impl Presented {
         scale: 1.0,
         press: 1.0,
         press_translate: [0.; 4],
-        press_paint: 0.0,
+        press_background: 0.0,
+        press_color: 0.0,
         rotate: 0.0,
         rotate_axis: exact_kernel::style::space::RotateAxis([0.0, 0.0, 1.0]),
         opacity: 1.0,
@@ -84,7 +85,8 @@ impl Presented {
             scale: s.scale,
             press: 1.0,
             press_translate: [0.; 4],
-            press_paint: 0.0,
+            press_background: 0.0,
+            press_color: 0.0,
             rotate: rotation.x as f32,
             rotate_axis: exact_kernel::style::space::RotateAxis(
                 exact_motion::rotation::axis(rotation).map(|v| v as f32),
@@ -96,6 +98,18 @@ impl Presented {
             lowered: 0,
             looks: [false; 2],
         }
+    }
+
+    pub(crate) fn background(
+        &self,
+        node: &exact_kernel::NodeRef<'_>,
+        kernel: &exact_kernel::Kernel,
+        dark: bool,
+    ) -> [u8; 4] {
+        BoxPaint::capture(node, kernel, dark)
+            .presented(&self.colors)
+            .states(node, self, dark)
+            .background
     }
 
     /// The used translation of a `w` × `h` border box: its lengths plus
@@ -354,7 +368,7 @@ impl BoxPaint {
     /// The box with its pressed background (LLP 1061 D7) `progress` of the
     /// way over its own.
     pub(super) fn pressed(mut self, style: &StyleProps, progress: f32, dark: bool) -> BoxPaint {
-        if progress > 0.0 && style.mask.has(exact_kernel::StyleId::PressBackgroundColor) {
+        if progress != 0.0 && style.mask.has(exact_kernel::StyleId::PressBackgroundColor) {
             let pressed = super::rgba(style.press_background_color.resolve(dark));
             self.background = press_mix(self.background, pressed, progress);
         }
@@ -398,7 +412,7 @@ impl BoxPaint {
         {
             paint
         } else {
-            paint.pressed(node.style, shown.press_paint, dark)
+            paint.pressed(node.style, shown.press_background, dark)
         }
     }
 
@@ -439,13 +453,7 @@ impl BoxPaint {
 /// than darkens.
 pub(super) fn press_mix(from: [u8; 4], to: [u8; 4], t: f32) -> [u8; 4] {
     let [a, b] = [from, to].map(|c| Value::rgba8(c[0], c[1], c[2], c[3]));
-    let t = f64::from(t.clamp(0.0, 1.0));
-    let mix = |x: f64, y: f64| x + (y - x) * t;
-    let w = mix(a.w, b.w);
-    match w > 0.0 {
-        true => Value::rgba(mix(a.x, b.x) / w, mix(a.y, b.y) / w, mix(a.z, b.z) / w, w).to_rgba8(),
-        false => [0, 0, 0, 0],
-    }
+    a.lerp(b, f64::from(t)).to_rgba8()
 }
 
 #[cfg(test)]

@@ -121,7 +121,7 @@ fn a_change_back_reverses_from_the_current_shape_in_the_shortened_time() {
     e.observe_path(NODE, Some(up()));
     e.advance(0.2).unwrap();
     e.observe_path(NODE, Some(down()));
-    // CSS §3.2: half way through, the way back takes half the time.
+    // Reversing halfway takes half the time (CSS Transitions 1 §3.1).
     assert_eq!(shown(&e).as_deref(), Some("M6 12L12 12L18 12"));
     assert_eq!(e.settle_time(), Some(0.4));
     e.advance(0.3).unwrap();

@@ -19,6 +19,7 @@ impl<D: DataSource> Presenter<D> {
         }
         self.window_active = active;
         if !active {
+            self.dirty |= self.host.cancel_presses();
             self.brush.trim(self.host.runner().page().hidden);
             self.window_focus = self
                 .focus

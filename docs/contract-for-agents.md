@@ -7680,15 +7680,19 @@ under `:disabled`, and `:disabled` is your own disabled look (no default dim).
 `:active` is the host's own press of the innermost node with a `press` or a link's
 `href` (`link href=`, `button href=`, as CSS's `a:active`): it takes
 `background-color`, `color`, `opacity`, `translate` and `-exact-press-scale`, which become the
-node's pressed paint (LLP 1061 D7). On the web each pressed property follows
-the node's `transition`. With `transition="none"`, or when the transition
-doesn't cover a property, the change lands at once. With no authored transition,
-custom nodes ease over 120 ms, including under Reduce Motion. Other hosts
-continue to use their press timing until they adopt per-property timing.
-Authored pressed paint replaces the host's unsaid press on custom nodes. Native controls keep
-their native state beneath each authored override. Its `opacity` is the opacity
-it shows pressed, not a share. Its `translate` is an offset added to the node’s
-own translation: `translate="4px 4px"` moves a button onto an offset shadow
+node's pressed paint (LLP 1061 D7). Its `opacity` is the opacity it shows
+pressed, not a share. On a custom node they replace the host's default press
+and move under Reduce Motion too. On the web, Linux, Windows and Android each
+property takes its timing from the node's `transition`: a property it does not
+cover lands at once, so `transition="none"` lands all five at once. Without a
+`transition`, each moves as the platform times a property change: GTK's button
+timing on Linux, WinUI's on Windows, Compose's default spring on Android, and
+120 ms on the web, which has no platform press timing. On Apple they ease on
+the press curve. Native buttons keep their own feedback and its timing beneath
+each authored override. On Linux, Windows and Android their authored colours
+land at once, as do their authored opacity, scale and translate unless their
+`transition` covers them. The `translate` of `:active`
+is an offset added to the node’s own translation: `translate="4px 4px"` moves a button onto an offset shadow
 plate. It takes x and optional y, in pixel lengths or percentages of the
 current border box by default. A third value is refused: a press is
 a 2D offset; use transitions for 3D motion. Layout stays unchanged. On the web the hit area moves with the paint, as CSS

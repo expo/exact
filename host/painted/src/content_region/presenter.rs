@@ -79,6 +79,9 @@ impl<D: DataSource> Presenter<D> {
         #[cfg(windows)]
         let preserves_picture = preserves_picture
             || (self.surfaces.direct_window.is_some() && target != FrameTarget::Window);
+        if self.carries_press(target) {
+            self.host.release_quick_presses();
+        }
         // Its session's roles, whatever else lives on the thread (LLP 1121 stage 5).
         let _roles = self.host.runner().bind_roles();
         let frame = crate::text::cache::deferring_eviction(|| {
@@ -125,6 +128,11 @@ impl<D: DataSource> Presenter<D> {
             self.picture_dirty |= had_damage;
         } else if self.last_frame_succeeded {
             self.picture_dirty = false;
+            // A picture no display reports is shown when painted.
+            if !self.presents {
+                let painted = self.host.painted_press_generation();
+                self.dirty |= self.host.presses_presented(painted);
+            }
         }
         frame
     }
@@ -132,6 +140,15 @@ impl<D: DataSource> Presenter<D> {
     pub fn last_frame_succeeded(&self) -> bool {
         self.last_frame_succeeded
     }
+    /// Whether a frame painted for `target` is a picture a person sees, so
+    /// that it shows a press (LLP 1061 D7 "Timing" item 3): a display's
+    /// submission or a window's frame, or any frame where no display reports
+    /// its presents. A capture or a geometry query is not one.
+    fn carries_press(&self, target: FrameTarget) -> bool {
+        target != FrameTarget::Geometry
+            && (!self.presents || self.display.submitting() || target == FrameTarget::Window)
+    }
+
     fn paint_frame(
         &mut self,
         target: FrameTarget,
@@ -208,6 +225,9 @@ impl<D: DataSource> Presenter<D> {
         // Display submission temporarily takes the boxes that place the menu.
         let menu = self.menu_paint().or_else(|| self.display.menu.clone());
         let selection = self.focus.map(|id| self.field_selection(id));
+        let press_generation = self
+            .carries_press(target)
+            .then(|| self.host.press_generation());
         let host = &self.host;
         let presented = |id: ViewId| host.presented(id);
         let page = if deferred {
@@ -379,6 +399,9 @@ impl<D: DataSource> Presenter<D> {
                 .is_some_and(|r| r.publication_painted())
         {
             self.queue_collections();
+        }
+        if let Some(generation) = press_generation.filter(|_| self.last_frame_succeeded) {
+            self.host.press_painted(generation);
         }
         self.dirty = self.collection.pending();
         if self.last_frame_succeeded {

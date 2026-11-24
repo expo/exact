@@ -869,6 +869,7 @@ impl<D: DataSource> Presenter<D> {
             || self.picture_dirty
             || !self.surfaces.captures.is_empty()
             || self.host.holds_uncarried()
+            || self.host.press_picture_owed()
             || self.host.runner().canvas_owed(&|_| true)
     }
 

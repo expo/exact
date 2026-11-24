@@ -75,6 +75,7 @@ pub use path::{PathCommand, PathValue};
 pub use property::{Property, Value};
 pub use spring::{Keyframe, SpringConfig, SpringError, SpringSample};
 pub use transition::{
-    TimingFunction, Transition, TransitionError, TransitionProperty, Transitions, MAX_TRANSITIONS,
+    TimingFunction, Transition, TransitionError, TransitionProgress, TransitionProperty,
+    Transitions, MAX_TRANSITIONS,
 };
 pub use velocity::VelocityTracker;

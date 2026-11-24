@@ -1,4 +1,5 @@
 //! Linux's synchronous native button look and face layout. LLP 1069.011.001 D1–D17.
+use super::presented::press_mix;
 use super::{control, look, rgba, Painter, Rect4, Shape};
 use crate::text::{Paragraph, TextEngine};
 use exact_kernel::generated::metric;
@@ -24,11 +25,43 @@ pub(crate) fn look(name: &str) -> &'static str {
     exact_kernel::generated::button_style(name).map_or("ua", |s| s.look)
 }
 
-fn active_background(node: &NodeRef<'_>, dark: bool, down: bool) -> Option<[u8; 4]> {
-    (down
-        && node.props.bool(PropId::Disabled) != Some(true)
-        && node.style.mask.has(StyleId::PressBackgroundColor))
-    .then(|| rgba(node.style.press_background_color.resolve(dark)))
+/// A control's authored pressed background (LLP 1061 D7) and how far its
+/// press is toward it; `None` when it writes none or shows no press.
+#[derive(Clone, Copy)]
+struct PressBackground(Option<([u8; 4], f32)>);
+
+impl PressBackground {
+    fn new(node: &NodeRef<'_>, dark: bool, progress: f32) -> Self {
+        Self(
+            (progress != 0. && node.style.mask.has(StyleId::PressBackgroundColor)).then(|| {
+                (
+                    rgba(node.style.press_background_color.resolve(dark)),
+                    progress,
+                )
+            }),
+        )
+    }
+
+    /// `base` (none: transparent) with the pressed background blended over
+    /// it; none when neither shows.
+    fn mix(self, base: Option<[u8; 4]>) -> Option<[u8; 4]> {
+        match self.0 {
+            Some((pressed, progress)) => Some(press_mix(base.unwrap_or([0; 4]), pressed, progress)),
+            None => base,
+        }
+    }
+
+    /// `base` with the pressed background blended over it.
+    fn over(self, base: [u8; 4]) -> [u8; 4] {
+        self.0.map_or(base, |(pressed, progress)| {
+            press_mix(base, pressed, progress)
+        })
+    }
+
+    /// How far the authored background replaces the control's own look.
+    fn progress(self) -> f32 {
+        self.0.map_or(0., |(_, progress)| progress.clamp(0., 1.))
+    }
 }
 
 /// The neutral look's button type (LLP 1115.000 D17), as the page's sheet
@@ -612,7 +645,9 @@ pub(crate) fn measure(engine: &mut TextEngine, request: &ButtonMeasureRequest) -
 }
 
 impl Painter {
-    /// Whether `id` shows pressed: a contact's press or a held one.
+    /// Whether `id` shows pressed, for what draws from the pressed control
+    /// rather than from a press's progress (a row's wash, Material's ripple,
+    /// a field's arrival): a contact's press or a held one.
     pub(crate) fn presses(&self, id: exact_kernel::ViewId) -> bool {
         self.feedback.1 == Some(id) || self.held_press == Some(id)
     }
@@ -635,6 +670,7 @@ impl Painter {
         gray: bool,
         menu_row: bool,
         segment: bool,
+        press: super::Presented,
         ts: Transform,
     ) -> [u8; 4] {
         use look::{fade, number, role};
@@ -646,39 +682,59 @@ impl Painter {
             None if destructive => role("-exact-system-red", dark),
             _ => look::accents(authored, dark).0,
         };
-        let (hover, pressed) = (
-            !disabled && self.feedback.0 == Some(node.id),
-            !disabled && self.presses(node.id),
+        let hover = !disabled && self.feedback.0 == Some(node.id);
+        let background = PressBackground::new(node, dark, press.press_background);
+        // The button's own pressed look, where no authored background
+        // replaces it; each moves on its own track (LLP 1061 D7 "Timing").
+        let (mut background_progress, mut color_progress) = (
+            if background.0.is_some() {
+                0.
+            } else {
+                press.press_background
+            },
+            press.press_color,
         );
-        let background = active_background(node, dark, pressed);
         if let Some(palette) = look::contrast().filter(|_| authored.is_none()) {
             // A segment's chosen member is the selected item, disabled or
-            // not, and a pointer over one gives it none of that pair, as the
-            // web's sheet has it under forced colours (`SelectedItem`).
+            // not, and a pointer over one, or a press, gives it none of that
+            // pair, as the web's sheet has it under forced colours
+            // (`SelectedItem`).
             let chosen = segment && segment::chosen(node);
-            let active = chosen || (!segment && !disabled && (pressed || hover || style == "fill"));
-            let ink = if chosen {
+            if segment {
+                (background_progress, color_progress) = (0., 0.);
+            }
+            let active = chosen || (!segment && !disabled && (hover || style == "fill"));
+            let ink = if active {
                 palette.highlighted_text
             } else if disabled {
                 palette.disabled
-            } else if active {
-                palette.highlighted_text
             } else {
-                palette.button_text
+                press_mix(
+                    palette.button_text,
+                    palette.highlighted_text,
+                    color_progress,
+                )
             };
             if !node.style.written.has(StyleId::BackgroundColor) {
-                self.backend.fill(
+                let fill = if active {
+                    palette.highlight
+                } else {
+                    press_mix(palette.button, palette.highlight, background_progress)
+                };
+                self.backend.fill(shape, background.over(fill), ts);
+            }
+            if style != "text" || active || background_progress > 0. {
+                super::neutral::edge(
+                    self.backend.as_mut(),
                     shape,
-                    background.unwrap_or(if active {
-                        palette.highlight
+                    1.,
+                    if style == "text" && !active {
+                        fade(ink, background_progress)
                     } else {
-                        palette.button
-                    }),
+                        ink
+                    },
                     ts,
                 );
-            }
-            if style != "text" || active {
-                super::neutral::edge(self.backend.as_mut(), shape, 1., ink, ts);
             }
             return ink;
         }
@@ -692,7 +748,7 @@ impl Painter {
                 "bordered" | "gray"
             )
         {
-            if let Some(background) = background {
+            if let Some(background) = background.mix(None) {
                 self.backend.fill(shape, background, ts);
             }
             return if disabled {
@@ -707,40 +763,48 @@ impl Painter {
         }
         // A wash of a role where the fill is neutral, of the ink where it is
         // the accent's.
-        let neutral_wash = || match (pressed, hover) {
-            (true, _) => Some(role("-exact-tertiary-fill", dark)),
-            (_, true) => Some(role("-exact-quaternary-fill", dark)),
-            _ => None,
+        let mix_wash = |hover_wash, pressed_wash| {
+            let rest = if hover { hover_wash } else { [0; 4] };
+            let color = press_mix(rest, pressed_wash, background_progress);
+            (color[3] > 0).then_some(color)
         };
-        let ink_wash = |ink: [u8; 4], pressed_row, hover_row| match (pressed, hover) {
-            (true, _) => Some(fade(ink, number(pressed_row))),
-            (_, true) => Some(fade(ink, number(hover_row))),
-            _ => None,
+        let neutral_wash = || {
+            mix_wash(
+                role("-exact-quaternary-fill", dark),
+                role("-exact-tertiary-fill", dark),
+            )
         };
         let line = look::px(metric::CONTROL_LINE, super::neutral::em(node));
         let (fill, edge, wash, ink) = match style {
             "fill" if disabled => (Some(role("-exact-tertiary-fill", dark)), None, None, label),
-            "fill" if pressed => {
-                let alpha = number(metric::BUTTON_PRESSED_ALPHA);
-                let ink = fade(look::ink_on(accent), alpha);
-                if dark {
-                    let white = fade([255; 4], number(metric::BUTTON_PRESSED_LIGHTEN));
-                    (Some(accent), None, Some(white), ink)
-                } else {
-                    (Some(fade(accent, alpha)), None, None, ink)
-                }
-            }
             "fill" => {
                 let ink = look::ink_on(accent);
-                let wash = hover.then(|| fade(ink, number(metric::BUTTON_HOVER_FILLED)));
-                (Some(accent), None, wash, ink)
+                let alpha = number(metric::BUTTON_PRESSED_ALPHA);
+                let wash = mix_wash(
+                    fade(ink, number(metric::BUTTON_HOVER_FILLED)),
+                    if dark {
+                        fade([255; 4], number(metric::BUTTON_PRESSED_LIGHTEN))
+                    } else {
+                        [0; 4]
+                    },
+                );
+                let fill = if dark {
+                    accent
+                } else {
+                    press_mix(accent, fade(accent, alpha), background_progress)
+                };
+                (
+                    Some(fill),
+                    None,
+                    wash,
+                    press_mix(ink, fade(ink, alpha), color_progress),
+                )
             }
             "soft" if disabled => (Some(role("-exact-tertiary-fill", dark)), None, None, label),
             "soft" => {
-                let wash = ink_wash(
-                    accent,
-                    metric::BUTTON_PRESSED_TINTED,
-                    metric::BUTTON_HOVER_TINTED,
+                let wash = mix_wash(
+                    fade(accent, number(metric::BUTTON_HOVER_TINTED)),
+                    fade(accent, number(metric::BUTTON_PRESSED_TINTED)),
                 );
                 let tint = fade(accent, number(metric::BUTTON_TINT_ALPHA));
                 (Some(tint), None, wash, accent)
@@ -759,10 +823,13 @@ impl Painter {
                 (fill, edge, neutral_wash(), ink)
             }
         };
-        for color in background
-            .map_or([fill, wash], |color| [Some(color), None])
-            .into_iter()
-            .flatten()
+        for color in [
+            background.mix(fill),
+            wash.map(|c| fade(c, 1. - background.progress())),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|c| c[3] != 0)
         {
             self.backend.fill(shape, color, ts);
         }
@@ -913,8 +980,9 @@ impl Painter {
             false => rect,
         };
         let shape = Shape::new(drawn, radii);
-        let background = active_background(node, dark, self.presses(node.id));
-        let ground = |native| background.unwrap_or(native);
+        let press = (walk.scene.presented)(node.id);
+        let background = PressBackground::new(node, dark, press.press_background);
+        let ground = |native| background.over(native);
         let ink = match look {
             // Material's filled button: `primary` under `onPrimary`, and
             // disabled `onSurface` under `onSurfaceVariant`, each at its
@@ -966,10 +1034,19 @@ impl Painter {
             }
             _ if neutral && !look.contains("glass") => {
                 let segment = rows.segment.is_some();
-                self.neutral_face(node, &shape, look, name == "gray", menu_row, segment, ts)
+                self.neutral_face(
+                    node,
+                    &shape,
+                    look,
+                    name == "gray",
+                    menu_row,
+                    segment,
+                    press,
+                    ts,
+                )
             }
             "text" => {
-                if let Some(color) = background {
+                if let Some(color) = background.mix(None) {
                     self.backend.fill(&shape, color, ts);
                 }
                 accent
@@ -1105,29 +1182,10 @@ impl Painter {
                 by + (ch - sh) / 2.0,
             )
         };
-        let fade_face =
-            neutral && look == "text" && !disabled && !menu_row && self.presses(node.id);
-        let active_ink = node.style.mask.has(StyleId::PressColor)
-            && (walk.scene.presented)(node.id).press_paint > 0.;
-        let children = if active_ink {
-            node.children()
-        } else {
-            Vec::new()
-        };
-        let texts: Vec<_> = children
-            .iter()
-            .filter_map(|id| walk.scene.kernel.node(*id))
-            .filter(|n| n.node_type == exact_kernel::NodeType::Text)
-            .collect();
-        let presented_ink = |child: Option<&NodeRef<'_>>| {
-            child
-                .filter(|_| active_ink)
-                .and_then(|n| super::inline::presented_color(walk, n, dark))
-        };
-        let color = |style: &StyleProps, fallback, presented: Option<[u8; 4]>| {
-            if let Some(ink) = presented {
-                return ink;
-            }
+        let fade_face = neutral && look == "text" && !disabled && !menu_row;
+        let active_ink = (node.style.mask.has(StyleId::PressColor) && press.press_color != 0.)
+            .then(|| rgba(node.style.press_color.resolve(dark)));
+        let color = |style: &StyleProps, fallback, child: Option<&NodeRef<'_>>| {
             let resolved = if style.mask.has(StyleId::TextColor) {
                 rgba(style.text_color.resolve(dark))
             } else if authored_accent.is_some() {
@@ -1135,13 +1193,31 @@ impl Painter {
             } else {
                 dim(fallback)
             };
-            // Resolve authored ink before fading; an explicitly tinted symbol
-            // bypasses this closure and the focus ring is painted separately.
-            if fade_face {
-                look::fade(resolved, look::number(metric::BUTTON_PRESSED_ALPHA))
+            // Resolve authored ink before fading or pressing it; an explicitly
+            // tinted symbol bypasses this closure and the focus ring is
+            // painted separately.
+            if let Some(ink) = active_ink
+                .filter(|_| child.is_none_or(|c| c.source_of(StyleId::TextColor) != Some(c.id)))
+            {
+                press_mix(resolved, ink, press.press_color)
+            } else if fade_face {
+                press_mix(
+                    resolved,
+                    look::fade(resolved, look::number(metric::BUTTON_PRESSED_ALPHA)),
+                    press.press_color,
+                )
             } else {
                 resolved
             }
+        };
+        let texts: Vec<_> = if active_ink.is_some() {
+            node.children()
+                .into_iter()
+                .filter_map(|id| walk.scene.kernel.node(id))
+                .filter(|n| n.node_type == exact_kernel::NodeType::Text)
+                .collect()
+        } else {
+            Vec::new()
         };
         // Only the lone neutral symbol overhangs the face's clip. Ancestor
         // clips still apply, and hit testing keeps the button's border box.
@@ -1166,7 +1242,7 @@ impl Painter {
             let painted = super::material::FieldText::painted(p, (tx, ty), ts);
             self.row_field_text(node.id, super::material::Part::Label, painted);
             let palette = [crate::text::RunPaint {
-                color: color(&layout.title_style, ink, presented_ink(texts.first())),
+                color: color(&layout.title_style, ink, texts.first()),
                 source: node.id,
             }];
             self.backend
@@ -1182,7 +1258,7 @@ impl Painter {
                         ink[2],
                         (u16::from(ink[3]) * 180 / 255) as u8,
                     ],
-                    presented_ink(texts.get(1)),
+                    texts.get(1),
                 ),
                 source: node.id,
             }];
@@ -1211,7 +1287,7 @@ impl Painter {
                     .map(|c| rgba(c.resolve(dark)))
                     .unwrap_or(ink)
             } else {
-                color(&layout.title_style, ink, presented_ink(image.as_ref()))
+                color(&layout.title_style, ink, image.as_ref())
             };
             let rect = (
                 sx + layout.symbol_offset.0,
@@ -1250,7 +1326,7 @@ impl Painter {
             let icon = material_dp(metric::SEGMENTED_BUTTON_ICON) * scale;
             let cx = if rtl { start + cw - icon } else { start };
             let cy = by + (ch - icon) / 2.0;
-            let tint = color(&layout.title_style, ink, presented_ink(texts.first()));
+            let tint = color(&layout.title_style, ink, texts.first());
             let style = layout.title_style.clone();
             self.segment_check((cx, cy, icon, icon), &style, tint, ts);
         }

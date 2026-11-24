@@ -150,6 +150,11 @@ pub struct Host<D: DataSource> {
     presence: presence::Presence,
     pub(crate) flights: flights::Flights,
     presses: BTreeMap<NodeKey, press::Feedback>,
+    /// Each press edge a picture must show takes the next generation, and a
+    /// picture carries the latest when painted (`press::Phase`).
+    press_generation: u64,
+    /// The generation the latest picture painted carries.
+    painted_press_generation: u64,
     /// The 2D canvases' bitmaps (LLP 1056 D7).
     canvas2d: crate::canvas2d::Canvases,
     /// Views commits renewed (LLP 1078) the presenter has yet to reset.
@@ -358,6 +363,8 @@ impl<D: DataSource> Host<D> {
             presence: Default::default(),
             flights: Default::default(),
             presses: Default::default(),
+            press_generation: 0,
+            painted_press_generation: 0,
             canvas2d: Default::default(),
             renewed: Vec::new(),
             media_mounts: Default::default(),
@@ -669,7 +676,9 @@ impl<D: DataSource> Host<D> {
 
     /// Whether motion is running (the presenter runs frames).
     pub fn motion(&self) -> bool {
-        !self.engine.quiescent() || self.press_settle().is_some()
+        !self.engine.quiescent()
+            || self.press_settle().is_some()
+            || self.press_releases_next_frame()
     }
 
     /// The roots, in order.
@@ -697,7 +706,7 @@ impl<D: DataSource> Host<D> {
         .or_else(|| self.paint.view_dark(node.key));
         shown.lowered = self.lowered_mask(node.key);
         // @ref LLP 1061 D7, LLP 1121 D8 — the press and the looks that hold;
-        // the painter shows their colours from the same progress.
+        // the painter samples the background and ink independently.
         let looks = self.looks_shown.on(id);
         press::present(&node, self.press_progress(node.key), looks, &mut shown);
         shown
@@ -970,9 +979,11 @@ impl<D: DataSource> Host<D> {
     }
 
     pub(crate) fn advanced(&mut self, a: exact_runner::Advanced) -> (Option<String>, bool) {
+        let press = self.press_settle().is_some();
         self.now_ms = a.now_ms.max(self.now_ms);
         let error = a.error.map(|e| format!("{e:?}"));
-        self.commit_effects(&a.receipts, error)
+        let (error, paint) = self.commit_effects(&a.receipts, error);
+        (error, paint || press)
     }
 
     /// An image loaded: its intrinsic size in points (`None` when it failed
@@ -1222,9 +1233,9 @@ impl<D: DataSource> Host<D> {
     }
 
     pub(crate) fn tick_effects(&mut self, now_ms: f64) -> (bool, bool) {
-        let press = self.press_settle().is_some();
+        let mut press = self.press_settle().is_some();
         self.now_ms = now_ms.max(self.now_ms);
-        self.retire_presses();
+        press |= self.retire_presses();
         let seek = self.engine.advance(self.now_ms / 1000.0);
         debug_assert!(seek.is_ok(), "the clock never runs backwards here");
         let changed = match self.layout_motion() {
@@ -1290,7 +1301,7 @@ impl<D: DataSource> Host<D> {
             // A renewed node is a new mount (LLP 1078): nothing presented
             // or pressed carries over; the presenter resets the rest.
             for key in &r.renewed {
-                self.presses.remove(key);
+                self.cancel_press(*key);
                 if let Some(id) = self.keys.get(key).copied() {
                     self.presented.remove(&id);
                     self.renewed.push(id);
@@ -1326,6 +1337,11 @@ impl<D: DataSource> Host<D> {
             self.runner.log(line);
         }
         paint |= self.project_navigation();
+        // A commit that removes, hides or disables a pressed node ends its
+        // press at once (LLP 1061 D7 "Timing" item 5).
+        if !self.presses.is_empty() {
+            paint |= self.retire_presses();
+        }
         self.reconcile_height_bindings();
         self.reconcile_transform_bindings();
         // Motion observes each commit before projected layout: targets are in place

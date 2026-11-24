@@ -460,6 +460,32 @@ fn the_indicator_stands_still_while_animations_are_removed() {
     assert_eq!(h.spinner_tracks(), moving);
 }
 
+/// A press's scale multiplies the node's own where the engine samples it
+/// (`Host::presented`), so the reader, which plays the node's scale without
+/// it, takes none of the node's transform.
+#[test]
+fn a_press_scale_keeps_its_nodes_transform_from_the_reader() {
+    for (press, lowered) in [("", LOWER_TRANSFORM), (" -exact-press-scale=0.5", 0)] {
+        let source = format!("keyframes grow\n  to scale=2\ncomponent App\n  state n = 0\n  action go\n    n = n + 1\n  view\n    box press=go testId=\"t\" width=120 height=60 animation=\"grow 1s linear both\"{press}\n");
+        let (mut h, error) = Host::boot(
+            &contract::compile(&source).unwrap().encode(),
+            (),
+            Box::new(MonospaceMeasurer::default()),
+            300.,
+            300.,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        h.lowering = true;
+        let key = h.kernel().find_by_test_id("t")[0];
+        h.engine.set_lowered_properties(&LOWERED);
+        let mut sync = MotionSync::default();
+        h.kernel().motion_sync_node(key, &mut sync);
+        h.lower_eligibility(&sync);
+        assert_eq!(h.lowered_mask(key), lowered, "{press:?}");
+    }
+}
+
 /// A look's `color` leaves the node's colour track to the reader: this host
 /// paints no look's text colour, so nothing composes on the engine's sample.
 /// A look's background still takes its track.

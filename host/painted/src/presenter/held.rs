@@ -14,7 +14,7 @@
 //! when it was a hold frame's.
 use super::*;
 use crate::build_channel::HoldTarget;
-use crate::host::press::{Held, HoldState};
+use crate::host::press::{Edge, Held, HoldState};
 use serde_json::{json, Value};
 
 /// The press rows a held `active` shows, by wire name (LLP 1061 D7, which
@@ -94,10 +94,7 @@ impl<D: DataSource> Presenter<D> {
         });
         if state == HoldState::Active {
             let now = self.host.now();
-            self.host.press_feedback(key, true, now);
-            if self.agent && self.live_clock.is_none() {
-                self.host.land_presses();
-            }
+            self.press_feedback(key, Edge::Down, now);
         }
         self.repaint_looks(vec![view]);
         self.held_feedback();
@@ -113,10 +110,7 @@ impl<D: DataSource> Presenter<D> {
         };
         if held.state == HoldState::Active && self.contact_press() != Some(held.key) {
             let now = self.host.now();
-            self.host.press_feedback(held.key, false, now);
-            if self.agent && self.live_clock.is_none() {
-                self.host.land_presses();
-            }
+            self.press_feedback(held.key, Edge::Up, now);
         }
         self.repaint_looks(vec![held.view]);
         self.held_feedback();
@@ -142,7 +136,8 @@ impl<D: DataSource> Presenter<D> {
         );
     }
 
-    /// The painted control's pressed look, as the hold now stands.
+    /// The control a hold shows pressed, for what draws from the pressed
+    /// control rather than from the press's progress (`Painter::presses`).
     fn held_feedback(&mut self) {
         let pressed = self.held_press_feedback();
         if self.brush.held_press != pressed {
@@ -158,10 +153,14 @@ impl<D: DataSource> Presenter<D> {
     pub(super) fn check_hold(&mut self, at: Option<Option<ViewId>>) {
         let Some(mut held) = self.held() else { return };
         let node = self.host.kernel().node_by_key(held.key);
-        let gone = node.is_none_or(|n| n.id != held.view)
-            || held.state == HoldState::Active && !self.host.pressed(held.key);
-        if gone || self.disabled_at(held.view) {
-            return self.let_hold_go(Some(if gone { "gone" } else { "disabled" }));
+        if node.is_none_or(|n| n.id != held.view) {
+            return self.let_hold_go(Some("gone"));
+        }
+        if self.disabled_at(held.view) {
+            return self.let_hold_go(Some("disabled"));
+        }
+        if held.state == HoldState::Active && !self.host.pressed(held.key) {
+            return self.let_hold_go(Some("gone"));
         }
         let over = at.map(|at| at.is_some_and(|id| self.within(id, held.view)));
         let focused = self.focus.is_some_and(|f| self.within(f, held.view));

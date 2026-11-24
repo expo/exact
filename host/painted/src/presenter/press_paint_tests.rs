@@ -1,8 +1,8 @@
 //! LLP 1061 D7 on the Linux host (and so on Android's and Windows's, which
 //! paint through this presenter): a contact holding a node shows its
-//! pressed paint, eased on the press's curve, and lets it go when it leaves
-//! or lifts; the press colour reaches the text that takes the node's colour,
-//! not one with its own.
+//! pressed paint, each property on its own timing ("Timing"), and lets it go
+//! when it leaves or lifts; the press colour reaches the text that takes the
+//! node's colour, not one with its own.
 use super::*;
 
 const APP: &str = r##"component App
@@ -11,7 +11,7 @@ const APP: &str = r##"component App
     presses = presses + 1
   view
     column width=400 height=400 background-color="#ffffff"
-      box press=go -exact-press-opacity=0.5 background-color="#00ff00" color="#000000" width=300 height=120 testId="painted"
+      box press=go transition="all 120ms ease" -exact-press-opacity=0.5 background-color="#00ff00" color="#000000" width=300 height=120 testId="painted"
         :active
           background-color="#0000ff"
           color="#ff0000"
@@ -103,6 +103,296 @@ fn a_held_contact_shows_the_pressed_paint_and_lets_it_go() {
     assert_eq!(pixel(&mut p, ground.0, ground.1), [0, 255, 0]);
     assert!(!reddened(&mut p, inherits));
     assert!(!p.host.motion(), "the paint needs no more frames");
+}
+
+#[test]
+fn press_paint_uses_the_governing_item_for_each_property() {
+    let source = APP.replace(
+        "transition=\"all 120ms ease\"",
+        "transition=\"all 400ms linear, background-color 100ms linear, color 200ms linear 60ms, opacity 0ms 60ms, translate 0ms, scale 200ms linear -50ms\" -exact-press-scale=0.6",
+    ).replace(
+        "color=\"#ff0000\"",
+        "color=\"#ff0000\"\n          translate=\"20px 0px\"",
+    );
+    let mut p = boot_source(&source);
+    p.frame();
+    let k = p.host().kernel();
+    let id = k.node_by_key(k.find_by_test_id("painted")[0]).unwrap().id;
+    p.pointer_down(210., 35., 0.).unwrap();
+
+    p.tick(50.);
+    let sample = p.host().presented(id);
+    assert_eq!(sample.opacity, 1., "opacity is still in its delay");
+    assert_eq!(sample.press_translate, [20., 0., 0., 0.]);
+    assert!(
+        (sample.press - 0.8).abs() < 1e-6,
+        "scale is halfway through"
+    );
+    let frame = p.frame();
+    let rgb = |x, y| {
+        let c = frame.pixel(x, y).unwrap().demultiply();
+        [c.red(), c.green(), c.blue()]
+    };
+    assert_eq!(rgb(210, 35), [0, 128, 128]);
+    assert!(
+        (20..100).any(|x| (0..42).any(|y| rgb(x, y) == [0, 0, 0])),
+        "the text is still black"
+    );
+
+    p.tick(110.);
+    let sample = p.host().presented(id);
+    assert_eq!(sample.opacity, 0.5);
+    let ground = pixel(&mut p, 210., 35.);
+    assert!(
+        ground[0].abs_diff(127) <= 1 && ground[2] == 255,
+        "{ground:?}"
+    );
+    assert!(
+        p.host().motion(),
+        "the foreground and scale are still moving"
+    );
+    p.tick(260.);
+    assert!(reddened(&mut p, (20., 0., 100., 43.)));
+    assert!(!p.host().motion());
+}
+
+#[test]
+fn a_quick_tap_releases_on_the_frame_after_its_pressed_picture() {
+    let source = APP.replace("all 120ms ease", "background-color 100ms linear");
+    let mut p = boot_source(&source);
+    p.presents_pictures(true);
+    p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
+    let at = (210., 15.);
+    let submit = |p: &mut Presenter<()>| {
+        let picture = p.display_frame().unwrap();
+        assert!(p.display_complete(&picture));
+        let c = picture
+            .as_ref()
+            .pixel(at.0 as u32, at.1 as u32)
+            .unwrap()
+            .demultiply();
+        ([c.red(), c.green(), c.blue()], picture.carried())
+    };
+    let (base, old) = submit(&mut p);
+    assert_eq!(base, [0, 255, 0]);
+    p.pointer_down(at.0, at.1, 0.).unwrap();
+    p.pointer_up(at.0, at.1, 5.).unwrap();
+    assert_eq!(p.picture_presented(old, 10.), None);
+    p.tick(20.);
+    let capture = pixel(&mut p, at.0, at.1);
+    assert!(
+        p.dirty(),
+        "the pressed picture is still owed after a capture"
+    );
+    let (held, pressed) = submit(&mut p);
+    assert_eq!(held, capture);
+    assert!(held[0].abs_diff(127) <= 1 && held[2] == 255, "{held:?}");
+
+    p.tick(40.);
+    assert_eq!(
+        pixel(&mut p, at.0, at.1),
+        held,
+        "the pressed picture has yet to present"
+    );
+    assert_eq!(p.picture_presented(pressed, 40.), None);
+    assert_eq!(
+        pixel(&mut p, at.0, at.1),
+        held,
+        "a capture keeps the release deferred"
+    );
+    assert!(
+        p.dirty(),
+        "the release picture is still owed after a capture"
+    );
+    p.tick(50.);
+    assert_eq!(
+        submit(&mut p).0,
+        [0, 0, 255],
+        "opacity lands on the next frame"
+    );
+    p.tick(100.);
+    assert_eq!(
+        pixel(&mut p, at.0, at.1),
+        [0, 128, 128],
+        "the background has its own release"
+    );
+    p.tick(151.);
+    assert_eq!(pixel(&mut p, at.0, at.1), [0, 255, 0]);
+    assert!(!p.host().motion());
+
+    p.pointer_down(at.0, at.1, 200.).unwrap();
+    p.pointer_up(at.0, at.1, 205.).unwrap();
+    let (quick, obsolete) = submit(&mut p);
+    assert_eq!(quick, held);
+    p.pointer_down(at.0, at.1, 210.).unwrap();
+    assert_eq!(p.picture_presented(obsolete, 215.), None);
+    p.tick(350.);
+    assert_eq!(
+        pixel(&mut p, at.0, at.1),
+        held,
+        "a new press supersedes the deferred release"
+    );
+}
+
+#[test]
+fn a_pan_that_leaves_the_pressed_box_before_its_first_picture_shows_no_press() {
+    pan_before_the_first_pressed_picture(38.);
+}
+
+#[test]
+fn a_pan_that_stays_in_the_pressed_box_before_its_first_picture_shows_no_press() {
+    pan_before_the_first_pressed_picture(10.);
+}
+
+fn pan_before_the_first_pressed_picture(start_y: f32) {
+    let mut p = boot_source(
+        r##"component App
+  state presses = 0
+  state pan_y = 0
+  action go
+    presses = presses + 1
+  action moved(dx: number, dy: number)
+    pan_y = pan_y + dy
+  view
+    column width=400 height=400 pan=moved touch-action="none"
+      box press=go width=300 height=40 background-color="#00ff00" transition="background-color 100ms linear"
+        :active
+          background-color="#0000ff"
+"##,
+    );
+    p.presents_pictures(true);
+    p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
+    let first = p.display_frame().unwrap();
+    assert!(p.display_complete(&first));
+    assert_eq!(p.picture_presented(first.carried(), 0.), None);
+    p.set_pointer_kind(PointerKind::Touch);
+    assert!(p.pointer_down(210., start_y, 0.).unwrap());
+    assert!(p.pointer_move(210., start_y + 20., 5.).unwrap());
+    assert_eq!(
+        p.host().runner().slot("pan_y").and_then(|v| v.as_number()),
+        Some(20.)
+    );
+    p.tick(16.);
+    let frame = p.display_frame().unwrap();
+    let color = frame
+        .as_ref()
+        .pixel(210, start_y as u32)
+        .unwrap()
+        .demultiply();
+    assert_eq!([color.red(), color.green(), color.blue()], [0, 255, 0]);
+}
+
+#[test]
+fn none_lands_press_paint_at_both_edges() {
+    let mut p = boot_source(&APP.replace("all 120ms ease", "none"));
+    p.frame();
+    p.pointer_down(210., 15., 0.).unwrap();
+    let held = pixel(&mut p, 210., 15.);
+    assert!(held[0].abs_diff(127) <= 1 && held[2] == 255, "{held:?}");
+    assert!(!p.host().motion());
+    p.pointer_up(210., 15., 5.).unwrap();
+    assert_eq!(pixel(&mut p, 210., 15.), [0, 255, 0]);
+    assert!(!p.host().motion());
+}
+
+#[test]
+fn a_tap_that_disables_its_target_ends_before_the_first_frame() {
+    let source = APP.replace(
+        "press=go transition",
+        "press=go disabled=(presses > 0) transition",
+    );
+    let mut p = boot_source(&source);
+    p.frame();
+    p.pointer_down(210., 15., 0.).unwrap();
+    p.pointer_up(210., 15., 5.).unwrap();
+    assert_eq!(pixel(&mut p, 210., 15.), [0, 255, 0]);
+    assert!(!p.host().motion());
+}
+
+/// A press ends at once when the page stops presenting, and when a driver
+/// takes the clock from the display while a quick tap waits for its picture
+/// (LLP 1061 D7 "Timing" items 4 and 5).
+#[test]
+fn a_press_ends_at_once_when_the_page_or_the_clock_goes() {
+    let mut p = boot();
+    p.frame();
+    p.pointer_down(210., 15., 0.).unwrap();
+    p.clock(60.);
+    assert!(p.host().pressing());
+    p.timer_visibility(true);
+    assert!(!p.host().pressing());
+    assert_eq!(pixel(&mut p, 210., 15.), [0, 255, 0]);
+    p.timer_visibility(false);
+
+    p.presents_pictures(true);
+    p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
+    p.pointer_down(210., 15., 100.).unwrap();
+    p.pointer_up(210., 15., 105.).unwrap();
+    assert!(p.host().pressing(), "the quick tap waits for its picture");
+    p.set_live_clock(None);
+    assert!(!p.host().pressing());
+    assert!(!p.host().motion());
+}
+
+/// A press on a node that a commit removes ends with it (item 5).
+#[test]
+fn a_removed_nodes_press_ends_with_it() {
+    let mut p = boot_source(
+        r##"component App
+  state shown = true
+  action hide
+    shown = false
+  view
+    column width=400 height=400 background-color="#ffffff"
+      if shown
+        box press=hide background-color="#00ff00" width=300 height=120
+          :active
+            background-color="#0000ff"
+      box press=hide width=100 height=30 testId="hide"
+"##,
+    );
+    p.frame();
+    p.pointer_down(210., 15., 0.).unwrap();
+    p.clock(100.);
+    assert!(p.host().pressing());
+    let k = p.host().kernel();
+    let hide = k.node_by_key(k.find_by_test_id("hide")[0]).unwrap().id;
+    let error = p.host.dispatch_at(hide, exact_runner::Event::Press, 100.);
+    assert_eq!(error, None);
+    assert!(!p.host().pressing());
+}
+
+/// A press whose every track is still in its delay needs a timer for the
+/// first to start, not display frames.
+#[test]
+fn a_press_in_its_delay_wakes_on_a_timer() {
+    let mut p = boot_source(&APP.replace("all 120ms ease", "all 100ms linear 50ms"));
+    p.frame();
+    p.pointer_down(210., 15., 0.).unwrap();
+    assert_eq!(p.host().motion_due_ms(), Some(50.));
+    p.tick(50.);
+    assert_eq!(p.host().motion_due_ms(), Some(50.));
+}
+
+/// Android's unsaid timing is Compose's spring, which keeps its velocity
+/// when it is retargeted, a colour's too (`Animatable.animateTo`).
+#[test]
+fn an_android_press_retargets_its_colour_with_its_velocity() {
+    if !crate::presenter::control::material_tests::material_process() {
+        return;
+    }
+    let mut p = boot_source(&APP.replace(" transition=\"all 120ms ease\"", ""));
+    p.frame();
+    let k = p.host().kernel();
+    let id = k.node_by_key(k.find_by_test_id("painted")[0]).unwrap().id;
+    p.pointer_down(210., 15., 0.).unwrap();
+    p.tick(20.);
+    p.frame();
+    let pressing = p.host().presented(id).press_background;
+    p.pointer_up(210., 15., 20.).unwrap();
+    p.tick(22.);
+    let released = p.host().presented(id).press_background;
+    assert!(released > pressing, "{released} moves on toward the press");
 }
 
 /// Under the agent's clock the paint lands at once both ways (LLP 1061
@@ -332,7 +622,7 @@ fn active_translate_adds_to_the_base_and_releases_from_the_unpressed_box() {
     n = n + 1
   view
     view width=400 height=400 background-color="#ffffff"
-      view press=go position="absolute" left=170 top=160 translate="30px 40px" width=100 height=80 background-color="#00ff00" testId="slab"
+      view press=go position="absolute" left=170 top=160 transition="translate 120ms ease" translate="30px 40px" width=100 height=80 background-color="#00ff00" testId="slab"
         :active
           translate = "20% 14px"
 "##,
@@ -400,16 +690,17 @@ fn active_translate_release_remeasures_after_a_scroll() {
             .id;
         p.pointer_down(base.0 + 2., base.1 + 2., 0.).unwrap();
         p.clock(120.);
+        p.frame();
         assert_eq!(p.scroll_to(port, (0., 100.)), Some((0., 100.)));
         assert_eq!(rect(&mut p, "slab").1, base.1 - 96.);
         let y = base.1 + 2. - if at_new_location { 100. } else { 0. };
         p.pointer_move(base.0 + 2., y, 120.).unwrap();
-        p.clock(240.);
+        p.clock(480.);
         assert_eq!(
             rect(&mut p, "slab").1,
             base.1 - 100. + if at_new_location { 4. } else { 0. }
         );
-        p.pointer_up(base.0 + 2., y, 240.).unwrap();
+        p.pointer_up(base.0 + 2., y, 480.).unwrap();
         let state: serde_json::Value =
             serde_json::from_str(&p.host.agent(r#"{"op":"state"}"#)).unwrap();
         assert_eq!(state["slots"]["n"], u32::from(at_new_location));
@@ -677,24 +968,25 @@ fn active_translate_keeps_its_absolute_containing_block() {
   view
     view position="relative" width=400 height=400 background-color="#ffffff"
       view height=40
-      view press=go testId="slab" width=100 height=80
+      view press=go testId="slab" width=100 height=80 transition="translate 120ms linear"
         :active
           translate = {offset}
         view position="absolute" top=0 width=10 height=10 background-color="#ff0000" testId="child"
 "##
         ));
-        for time in [0., 240., 480.] {
+        for time in [0., 500., 1000.] {
             assert_eq!(rect(&mut p, "slab").1, 40.);
             assert_eq!(rect(&mut p, "child").1, 40.);
             assert_eq!(pixel(&mut p, 2., 42.), [255, 0, 0]);
             assert!(p.pointer_down(50., 60., time).unwrap());
             p.clock(time + 120.);
+            p.frame();
             assert_eq!(rect(&mut p, "child").1, rect(&mut p, "slab").1);
             let k = p.host().kernel();
             let child = k.node_by_key(k.find_by_test_id("child")[0]).unwrap();
             assert_eq!(child.frame.y, 40.);
             p.pointer_up(50., 60., time + 120.).unwrap();
-            p.clock(time + 240.);
+            p.clock(time + 340.);
         }
     }
 }

@@ -273,7 +273,7 @@ fn an_interruption_restarts_from_the_current_value() {
 #[test]
 fn a_reversal_is_shortened_by_the_css_reversing_rule() {
     exact_motion::link_transitions();
-    // CSS Transitions §3.2: reversing an ease-in-out at 25% elapsed, where the
+    // CSS Transitions 1 §3.1: reversing an ease-in-out at 25% elapsed, where the
     // curve's output is ≈0.129, yields a new transition of ≈0.129 × 1s — not a
     // full second back — so a hover-off that follows a brief hover-on is brief.
     let mut engine = engine_with(vec![ease(TransitionProperty::All, 1.0, Easing::EaseInOut)]);

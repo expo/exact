@@ -242,10 +242,10 @@ pub(super) fn own_presented_color(
 ) -> Option<[u8; 4]> {
     let presented = (walk.scene.presented)(node.id);
     let moving = presented.colors.color(exact_motion::Property::Color);
-    if node.style.mask.has(StyleId::PressColor) && presented.press_paint > 0.0 {
+    if node.style.mask.has(StyleId::PressColor) && presented.press_color != 0.0 {
         let own = moving.unwrap_or_else(|| rgba(node.text_color().resolve(dark)));
         let ink = rgba(node.style.press_color.resolve(dark));
-        return Some(super::presented::press_mix(own, ink, presented.press_paint));
+        return Some(super::presented::press_mix(own, ink, presented.press_color));
     }
     moving
 }
@@ -281,8 +281,8 @@ fn pressed_ink(
     let mut at = Some(node.id);
     while let Some(n) = at.and_then(|id| walk.scene.kernel.node(id)) {
         if n.style.mask.has(StyleId::PressColor) {
-            let progress = (walk.scene.presented)(n.id).press_paint;
-            if progress > 0.0 {
+            let progress = (walk.scene.presented)(n.id).press_color;
+            if progress != 0.0 {
                 return Some((rgba(n.style.press_color.resolve(dark)), progress));
             }
         }

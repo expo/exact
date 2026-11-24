@@ -658,37 +658,16 @@ impl Engine {
                     self.dirty.insert(key);
                     return Ok(());
                 };
-                let is_easing = matches!(
-                    declaration.timing,
-                    crate::transition::TimingFunction::Easing(_)
+                let (adjusted, factor) = running.reversal(&declaration, current.value, after, now);
+                let mut next = Running::start(
+                    &declaration,
+                    change.property,
+                    (current.value, after),
+                    inherited,
+                    now,
+                    adjusted,
+                    factor,
                 );
-                let mut next = if is_easing && after.same(running.reversing_adjusted_start) {
-                    // CSS §3.2, the reversing case.
-                    let progress = running.easing_progress(now);
-                    let factor = (progress * running.reversing_shortening
-                        + (1.0 - running.reversing_shortening))
-                        .abs()
-                        .clamp(0.0, 1.0);
-                    Running::start(
-                        &declaration,
-                        change.property,
-                        (current.value, after),
-                        inherited,
-                        now,
-                        running.to,
-                        factor,
-                    )
-                } else {
-                    Running::start(
-                        &declaration,
-                        change.property,
-                        (current.value, after),
-                        inherited,
-                        now,
-                        current.value,
-                        1.0,
-                    )
-                };
                 next.pending = pend;
                 let presented = next.sample(now).value;
                 slot.set_running(Some(next));
