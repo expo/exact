@@ -518,7 +518,8 @@ extension Agent {
                 var contact = AgentPan(node: nil, pressing: true, pointer: Agent.pointerNode(from: touched).map(HeldNode.init), path: Agent.fingerPath(from: touched),
                                        reach: fingerReach(touched, at: p), at: at, t: t, held: Agent.heldPrefix(req))
                 panPointer(contact, .down)
-                contact.reach?.rearm(presenter)
+                if presenter.navigation.holdsAgentTargets { contact.reach = nil }
+                else { contact.reach?.rearm(presenter) }
                 if let reach = contact.reach, reach.layoutHit?.isLive ?? true, reach.element == nil, reach.run == nil, reach.href == nil,
                    let target = reach.action?.live(in: presenter), !target.disabled, !target.inert,
                    target.handlers.contains("press") || target.defaultLink != nil || target.isNativeButton && presenter.invocation(of: target) != nil {
@@ -540,7 +541,8 @@ extension Agent {
             MainActor.assumeIsolated { HeldState.input(at: hit) } // where the finger lands, a held node inside the pan's included
             panContact = contact
             panPointer(contact, .down)
-            panContact?.reach?.rearm(presenter)
+            if presenter.navigation.holdsAgentTargets { panContact?.reach = nil }
+            else { panContact?.reach?.rearm(presenter) }
             return ["contact": Int(node.id), "phase": "down", "at": point(at), "delivery": "recognized"]
         }
         guard var contact = panContact else { return nil }
@@ -584,7 +586,12 @@ extension Agent {
             return ["phase": "hold", "at": point(contact.at), "delivery": "recognized"]
         case "up":
             panContact = nil
+            let moving = presenter.navigation.holdsAgentTargets
             panPointer(contact, .up)
+            if moving || presenter.navigation.holdsAgentTargets {
+                if contact.began { presenter.panRelease(node.id, 0, 0) }
+                return ["phase": "up", "cancelled": true, "at": point(contact.at), "delivery": "recognized"]
+            }
             if contact.began {
                 guard contact.node?.live(in: presenter) != nil else { return ["phase": "up", "delivery": "recognized"] }
                 // The lift is one frame after the last move, where it lands
@@ -656,6 +663,7 @@ extension Agent {
             return ["phase": "hold", "at": point(contact.at), "delivery": "recognized"]
         case "up", "cancel":
             panContact = nil
+            let moving = presenter.navigation.holdsAgentTargets
             // Released before the press runs, as `touchesEnded` releases it;
             // the pool reuses no pressed view, so this is still the one shown.
             if let node = contact.shown?.node, !node.hasPressContact { node.pressed = false; highlight(node, false) }
@@ -664,7 +672,7 @@ extension Agent {
             // The press its lift makes, against what it reached where it went
             // down: a lift beside that presses nothing, as a touch up outside
             // a control does.
-            guard phase == "up", let reach = contact.reach,
+            guard phase == "up", !moving, !presenter.navigation.holdsAgentTargets, let reach = contact.reach,
                   let start = reach.reached?.live(in: presenter),
                   let pressing = reach.action?.live(in: presenter) ?? reach.reached?.live(in: presenter),
                   pressing.window != nil else { return reply }

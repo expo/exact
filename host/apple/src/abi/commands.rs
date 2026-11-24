@@ -537,7 +537,7 @@ impl<D: DataSource> Bridge<D> {
     /// the root route asks for the split (LLP 1127 D1). `null` where
     /// `Runner::stack_split` answers `None`; each host admits a split from the
     /// answer by its own rule (LLP 1127 D22). Not a batch: nothing changes.
-    pub fn stack_split(&mut self, view: u32, retained: u32, pressed: u32) -> u32 {
+    pub fn stack_split(&mut self, view: u32, retained: u32, pressed: u32, results: u32) -> u32 {
         let json = self
             .host
             .as_ref()
@@ -547,7 +547,7 @@ impl<D: DataSource> Bridge<D> {
                     .then(|| runner.press_writes_router(pressed))
                     .flatten();
                 runner
-                    .stack_split(view, (retained != 0).then_some(retained))
+                    .stack_split_excluding(view, (retained != 0).then_some(retained), (results != 0).then_some(results))
                     .map(|split| (split, writes))
             })
             .map(|(split, writes)| {

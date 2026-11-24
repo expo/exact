@@ -54,7 +54,13 @@ final class NavigationDelegateProxy: ForwardingDelegate, UINavigationControllerD
     /// route's own part asks for (LLP 1013.001), else UIKit's.
     func navigationController(_ nav: UINavigationController, animationControllerFor operation: UINavigationController.Operation,
                               from: UIViewController, to: UIViewController) -> UIViewControllerAnimatedTransitioning? {
-        app?.navigationController?(nav, animationControllerFor: operation, from: from, to: to)
+        #if os(iOS)
+        // The animator request names both endpoints before the coordinator is available.
+        if operation == .pop, let host, let split = host.split, split.paired, split.holds(nav) {
+            host.observeSplitPop(in: split, from: nav, to: to, departing: from)
+        }
+        #endif
+        return app?.navigationController?(nav, animationControllerFor: operation, from: from, to: to)
             ?? host?.routeTransition(nav, operation: operation, from: from, to: to)
     }
 }

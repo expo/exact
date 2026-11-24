@@ -3993,13 +3993,14 @@ restart, start another drive on the same `--storage`. See [host commands](contra
   the text, so the closed bar still holds it and opening the search again shows it
   (`input type="search" value=query input=search cancel=keepQuery` with `action keepQuery`
   calling `preventDefault()`).
-- Results that are a level of their own: `aria-controls` on the header's search input names an
-  element of another route, the results route, which text in the field enters (`nav = go(nav,
-  "/search")` from `input`, and from `focus` when the field kept text) and an emptied field
-  leaves, as UIKit shows a search's results controller. iOS pushes it as any route, but over a
-  list alone in its stack it is drawn over the list, so the field stays in reach; Back, the ✕
-  or another page leaves it and the search closes, keeping its text (LLP 1127.000). Without
-  `aria-controls` the search filters its own route.
+- In an iOS split list, give the header's search input an `aria-controls` that names one
+  direct body child of its route. Use a unique ID for each visit. The child holds the
+  results in the same route, and its authored visibility determines when UIKit shows its
+  results controller over the ordinary list. An auto-sized results root fills UIKit's
+  viewport, so a `flex=1 min-height=0` list inside its flex column scrolls there.
+  An authored result link can `open` a detail
+  directly from the list visit. On web and macOS the results child stays in the authored
+  layout. See LLP 1127.000.
 - A header's buttons that press, and its disabled ones (dimmed, as UIKit's), are bar
   items; any other element is an item drawn as written ("Tabs and stacks"). Inside a box
   around the heading, what the title does not show is hidden on iOS

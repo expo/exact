@@ -63,9 +63,9 @@ extension Runtime {
     /// `stackSplit`'s answer, or nil while the runner is busy: from a callback
     /// it waits on, no runtime call runs (`Owner.sync`), and a nil there says
     /// nothing about the stack.
-    func stackSplitAnswer(_ view: UInt32, retaining list: UInt32?, pressed: UInt32? = nil) -> StackSplit?? {
+    func stackSplitAnswer(_ view: UInt32, retaining list: UInt32?, pressed: UInt32? = nil, excluding results: UInt32? = nil) -> StackSplit?? {
         on(busy: nil) {
-            let len = exact_stack_split(rt, view, list ?? 0, pressed ?? 0)
+            let len = exact_stack_split(rt, view, list ?? 0, pressed ?? 0, results ?? 0)
             return .some(StackSplit(json: Data(bytes: exact_out(rt), count: Int(len))))
         }
     }

@@ -53,7 +53,7 @@ impl<D: DataSource> Bridge<D> {
     /// 2 for a content-fit limit that an authored size may exceed, 3 for a
     /// position-area's region (`BlockAxis::Region`), 4 to fit the root's
     /// border box to the allocation, or 5 for the axis a host sizes to the
-    /// content (`BlockAxis::Content`);
+    /// content (`BlockAxis::Content`), or 6 to stretch an automatic root;
     /// then a u32 tactic: four two-bit side indices, top/right/bottom/left
     /// (28 bytes including view and kind). Kind 5 takes a block back.
     /// Kinds 6 and 13 place a block (LLP 1123 D2):
@@ -383,7 +383,7 @@ impl<D: DataSource> Bridge<D> {
 
 /// One axis of a host block from its wire length and policy: 0 a size, 1 a
 /// maximum, 2 a content-fit limit, 3 a position-area's region, 4 a pane's
-/// border box, 5 the axis a container sizes to the content.
+/// border box, 5 size to content, 6 stretch an automatic root.
 fn block_axis(length: f32, policy: f32) -> exact_kernel::BlockAxis {
     match policy {
         0.0 => exact_kernel::BlockAxis::Is(length),
@@ -391,6 +391,7 @@ fn block_axis(length: f32, policy: f32) -> exact_kernel::BlockAxis {
         3.0 => exact_kernel::BlockAxis::Region(length),
         4.0 => exact_kernel::BlockAxis::Fill(length),
         5.0 => exact_kernel::BlockAxis::Content(length),
+        6.0 => exact_kernel::BlockAxis::Stretch(length),
         _ => exact_kernel::BlockAxis::AtMost(length),
     }
 }

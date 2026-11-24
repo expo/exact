@@ -234,15 +234,22 @@ impl<D: DataSource> Host<D> {
             batch.surface(&s);
         }
         // The capabilities the actions called, after their commits, in order.
-        // @ref LLP 1038 D7 — drain once, after all commits in this batch.
-        if let Some(change) = self.runner.take_router_change() {
-            batch.router(&change);
-        }
+        self.emit_router(&mut batch);
         for c in self.runner.take_commands() {
             batch.command(&c.name, &c.args, c.source);
         }
         batch.timed(&mut self.runner, false);
         (batch, error.or(layout_error))
+    }
+
+    /// @ref LLP 1038 D7 — report the final revision even if the selected visit stayed the same.
+    pub(super) fn emit_router(&mut self, batch: &mut Batch) {
+        let revision = self.runner.router_revision();
+        let change = self.runner.take_router_change();
+        if revision != self.reported_router_revision || change.is_some() {
+            self.reported_router_revision = revision;
+            batch.router(revision, change.as_ref());
+        }
     }
 
     /// Persist, then the presentation after every commit in the batch.

@@ -95,6 +95,11 @@ extension Agent {
     }
 
     func partTap(_ req: [String: Any]) -> [String: Any] {
+        #if os(iOS)
+        if req["aim"] as? Bool == true, presenter.navigation.holdsAgentTargets {
+            return ["error": "Tap is held by a UIKit transition. Run clock settle first."]
+        }
+        #endif
         let name = req["part"] as? String ?? ""
         guard let id = (req["id"] as? NSNumber)?.uint32Value, let node = presenter.views[id] else { return ["error": "part \(name): no view \(req["id"] ?? "?")"] }
         guard let view = presenter.elements.regionPart(name, of: id) ?? Agent.packagePart(name, in: node) else { return ["error": "part \(name): view \(id) has no live part of that id"] }

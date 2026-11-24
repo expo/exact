@@ -210,10 +210,8 @@ async function suite({ open: openSession, check: record }, reset) {
     let panel = false, postured = false, split = false;
     for (let i = 0; i < reads && !(panel && postured && split); i++) {
       if (i > 0) await sleep(100);
-      const l = await s.layout();
-      panel = onCover(l) === (deg === 0);
-      postured = (l.env['device-posture'] === 'folded') === folded(deg);
-      split = segmented(l, deg);
+      const l = await s.layout().catch((e) => { if (/targets are moving/.test(e.message)) return null; throw e; });
+      if (l) [panel, postured, split] = [onCover(l) === (deg === 0), (l.env['device-posture'] === 'folded') === folded(deg), segmented(l, deg)];
     }
     const missed = [panel ? null : `the session is ${deg === 0 ? 'not ' : ''}on the cover panel`, postured ? null : `the posture is not ${folded(deg) ? 'folded' : 'continuous'}`, split ? null : `the segments are not ${folded(deg) ? 'two' : 'one'}`].filter(Boolean);
     check(!missed.length, `the hinge moved to ${deg}° and ${s.session ? `session ${s.session}` : 'the session'} missed it: ${missed.join(', ')}`);
@@ -920,6 +918,7 @@ async function suite({ open: openSession, check: record }, reset) {
     } catch (e) { check(false, `duo-lab: ${e.message}`); } finally { await s.close(); }
   }
 
+  if (leg('search')) await (await import('./duo/search.mjs')).searchDuo({ root: ROOT, out, compile, plans, open, pose, settle, check });
   // UIKit's Back, located by XCTest rather than the authored placeholder.
   if (leg('navigation') && plans['pushed-title']) {
     const s = await open({ host: 'ios', app: 'duo-lab', plan: plans['pushed-title'] });

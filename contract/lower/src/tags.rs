@@ -762,7 +762,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "keyboardDismissMode" => AttrTarget::Prop(p("keyboardDismissMode")),
         // @ref LLP 1077 D12 — what a discrete symbol effect plays on.
         "symbolEffectValue" => AttrTarget::Prop(p("symbolEffectValue")),
-        "href" | "target" => AttrTarget::Prop(p(name)),
+        "href" | "target" | "keyboardAvoidance" | "searchStyle" => AttrTarget::Prop(p(name)),
         "disabled" => AttrTarget::Prop(p("disabled")),
         "inert" => AttrTarget::Prop(p("inert")),
         "readonly" => AttrTarget::InvertedBoolProp(p("editable")),

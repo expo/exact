@@ -554,6 +554,8 @@ public final class ExactSession {
     nonisolated(unsafe) static var asyncFills = false
     #endif
     package var isApplyingPresentation: Bool { applying }
+    /// Owner work has published a batch the native hierarchy has yet to apply.
+    package var hasStagedBatches: Bool { landing || stage != nil || !pending.isEmpty || hasPublished() }
     // Weak live gesture ownership only; no historical tokens or row registry.
     private let inputHolds = NSHashTable<SwipeHold>.weakObjects()
     weak package var heightInputHold: DragInput?
@@ -944,7 +946,7 @@ public final class ExactSession {
         if batch.error == nil {
             sampler?.reset(); frameHealth.reset() // a new runner numbers its transactions afresh (LLP 1079 D3)
             // A fresh boot over a running app (the dev menu's reload from the baked plan) starts the views over; the library already replaced its host.
-            routerOp = nil; routerBeneath = nil
+            routerOp = nil; routerBeneath = nil; routerRevision = 0
             notificationHost.replaceBackgroundActions(self)
             if booted { awaitingTree = true; resetHeld(); viewsEpoch += 1; forgetAppearances(); presenter.launchAutofocusReleased = false } // a fresh boot's autofocus waits again
             booted = true; app.buildSessionBooted(self)
@@ -1036,7 +1038,7 @@ public final class ExactSession {
 
     func presentCommitted(_ batch: Batch, label: String, assetChanges: [UInt32: Set<String>] = [:]) {
         showBudgetWarning(nil)
-        routerOp = nil; routerBeneath = nil
+        routerOp = nil; routerBeneath = nil; routerRevision = 0
         let restart = booted, kept = keptFocus
         keptFocus = nil
         awaitingTree = true // the tint a reset gives back is reported with the new tree
@@ -1079,6 +1081,7 @@ public final class ExactSession {
     /// commands go to the delegate after it.
     /// @ref LLP 1038 D7/D11 — observation only; Swift never interprets slots.
     private(set) var routerOp: [String: Any]?
+    package private(set) var routerRevision: UInt64 = 0
     var routerBeneath: (visit: UInt64, location: String)? // the router's top and where Back goes from it (`locationBeneath`)
 
     /// Run `work` in the chain of covers corrections `cause` (`coversCause`)
@@ -1189,6 +1192,10 @@ public final class ExactSession {
             guard stage === plan else { return apply(batch) }
         }
         if entering { CATransaction.begin(); transaction = true }
+        let outputs = SessionBatchOps(batch.ops)
+        if let revision = outputs.routers.last?.payload["revision"] as? String, let count = UInt64(revision) {
+            routerRevision = count
+        }
         if stages(batch) { return }
         #if DEBUG
         onApplyForTests?(batch)
@@ -1204,9 +1211,8 @@ public final class ExactSession {
         if batch.facts { app.buildFactsMoved() } // the app's own `setMode` or `setRootFontSize` (LLP 1122 D4)
         if let must = batch.mustFinish { finishHold.moved(must) }
         HostLog.capabilities(self, batch)
-        let outputs = SessionBatchOps(batch.ops)
         if let beneath = batch.beneath { routerBeneath = beneath }
-        for op in outputs.routers { routerOp = op.payload; presenter.armFragment(op.payload["activation"]); NavigationMarks.shared.routerChanged(self, payload: op.payload, input: batch.input) } // a scroll to its fragment, which the runner's `scrollToFragment` makes (LLP 1153 D5)
+        for op in outputs.routers where op.payload["top"] != nil { routerOp = op.payload; presenter.armFragment(op.payload["activation"]); NavigationMarks.shared.routerChanged(self, payload: op.payload, input: batch.input) } // a scroll to its fragment, which the runner's `scrollToFragment` makes (LLP 1153 D5)
         // @ref LLP 1048.003 D1 — the head's title, for the app that owns the chrome.
         for op in outputs.titles {
             presenter.headTitle(op.title)

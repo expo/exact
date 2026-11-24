@@ -1,169 +1,228 @@
+// @ref LLP 1127.000 D1–D3 — project the list's authored results into UIKit's search viewport.
 #if os(iOS) || os(tvOS)
-import UIKit
 import ExactKit
+import UIKit
 
-/// A header search's results as a level of the stack: the route that holds the element its field names by
-/// `aria-controls`, the router's route like any other. UIKit shows it as it shows any route, pushed, a split's
-/// detail included, but where the field's own route is on top of its navigation controller as the results arrive
-/// (a closed iPhone Duo's list, a stack's root): there they are drawn in that route's controller, over its whole
-/// view, and the field stays in its bar to type in. UIKit hides that bar while its search is open
-/// (`hidesNavigationBarDuringPresentation`), so the results take its area too, as UIKit's own results controller
-/// does.
-extension NavigationHost {
-    /// The route in `stack` that holds the element `field` names by `aria-controls`, other than the field's own.
-    func resultsRoute(of field: NodeView?, in stack: [RouteController]) -> RouteController? {
-        guard let field, let name = field.props["accessibilityControls"], !name.isEmpty else { return nil }
-        return stack.first { $0.search?.field !== field && element(named: name, in: $0.node) != nil }
+#if os(iOS)
+final class HeaderSearchResults: UIViewController {
+    weak var host: NavigationHost?
+    weak var owner: RouteController?
+    private(set) weak var root: NodeView?
+    private(set) var visible = false
+    private(set) var covered: [NodeView] = []
+    private let mount = PresentationMount()
+    private let clearance = SearchClearance()
+    private var focusedBeforeChange = false
+
+    init(host: NavigationHost, owner: RouteController) {
+        self.host = host
+        self.owner = owner
+        super.init(nibName: nil, bundle: nil)
     }
 
-    /// `stack` as UIKit is to show it in `nav`: less a results route drawn in its field's route's controller.
-    /// Directly above that route, results already drawn there stay; results arriving while that route is alone in
-    /// `nav` (a stack's root on top) are drawn there, as are results over a `collapsed` split's list however they
-    /// came (a fold that collapsed the split with them as its detail); anywhere else, and wherever `inPlace` is false
-    /// (an expanded split, whose detail they are), they are UIKit's to push.
-    func placingResults(_ stack: [RouteController], on nav: UINavigationController?, inPlace: Bool, collapsed: Bool = false) -> [RouteController] {
-        var placed: RouteController?
-        if inPlace {
-            for (index, list) in stack.enumerated() where index + 1 < stack.count {
-                guard let results = resultsRoute(of: list.search?.field, in: stack), results === stack[index + 1] else { continue }
-                if results.parent === list || (collapsed && index == 0) ||
-                    (results.parent == nil && nav.map { $0.viewControllers.count == 1 && $0.viewControllers[0] === list } == true) { placed = results }
-                break
+    required init?(coder: NSCoder) { nil }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemGroupedBackground
+        view.addSubview(mount)
+        if let presenter = host?.presenter { mount.relay = MountRelay(presenter, mount: mount) }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        visibilityChanged()
+        host?.presenter.owners.publish()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        visibilityChanged()
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        visibilityChanged()
+    }
+
+    var exposed: Bool {
+        guard let owner, let search = owner.search, search.controller.isActive,
+              search.controller.showsSearchResultsController, let view = viewIfLoaded,
+              view.window != nil, !view.bounds.isEmpty else { return false }
+        return sequence(first: view, next: \.superview).allSatisfy { !$0.isHidden && $0.alpha > 0.01 }
+    }
+
+    private func visibilityChanged() {
+        if let host, visible != (exposed && host.splitPrimaryExposed) { host.scheduleSplitProjection() }
+    }
+
+    var block: (root: NodeView, view: UIView, block: CGRect, shown: Bool)? {
+        guard let root, let owner else { return nil }
+        return (root, mount, mount.bounds.isEmpty ? owner.surface.bounds : mount.bounds, visible)
+    }
+
+    private var containsFocus: Bool {
+        guard let root, let presenter = host?.presenter else { return false }
+        return [presenter.focusedNode, presenter.keyboardEditor].compactMap { $0 }.contains {
+            $0 === root || $0.isDescendant(of: root)
+        }
+    }
+
+    /// A remove or hide can resign the result's responder before the binding is updated.
+    func prepare(_ batch: Batch) {
+        guard visible, let root, let owner,
+              batch.ops.contains(where: { op in
+                  (op.id == root.id && (op.op == .style || op.op == .destroy))
+                      || (op.id == owner.search?.field?.id && op.op == .props)
+              }) else { return }
+        focusedBeforeChange = containsFocus
+    }
+
+    /// The results root is physically mounted here and keeps its authored parent for input and inheritance.
+    func bind(_ next: NodeView?) {
+        guard root !== next, let owner, let host else { return }
+        let previous = root
+        let restoreFocus = focusedBeforeChange || containsFocus
+        focusedBeforeChange = false
+        clearance.clear()
+        root = next
+        if let previous {
+            if host.presenter.views[previous.id] === previous,
+               let index = host.searchChildIDs(of: owner.node).firstIndex(of: previous.id) {
+                let parent = owner.node.container
+                let following = host.searchChildIDs(of: owner.node).dropFirst(index + 1).compactMap { host.presenter.views[$0] }.first { $0.superview === parent }
+                if let following { parent.insertSubview(previous, belowSubview: following) }
+                else { parent.addSubview(previous) }
+                host.presenter.regrid(previous)
+            } else {
+                previous.removeFromSuperview()
             }
         }
-        if let drawn = resultsInPlace, drawn !== placed { detach(drawn) }
-        if let placed, let list = stack.first(where: { $0.search?.field.map { resultsRoute(of: $0, in: stack) === placed } == true }) {
-            attach(placed, to: list)
+        if let next {
+            loadViewIfNeeded()
+            mount.addSubview(next)
+            host.presenter.regrid(next)
+            refit()
         }
-        resultsInPlace = placed
-        return placed.map { placed in stack.filter { $0 !== placed } } ?? stack
+        if restoreFocus { owner.search?.returnAccessibilityFocus() }
     }
 
-    /// The key of the route the person sees where UIKit shows `controller`: results drawn in it are on top of it.
-    func shownKey(of controller: UIViewController?) -> String? {
-        if let results = resultsInPlace, results.parent === controller { return results.key }
-        return (controller as? RouteController)?.key
+    func update(_ search: HeaderSearch) {
+        let shown = search.controller.isActive && root.map {
+            $0.style["display"]?.string != "none" && $0.style["visibility"]?.string != "hidden"
+        } == true
+        if search.controller.showsSearchResultsController != shown { search.controller.showsSearchResultsController = shown }
+        visibilityChanged()
     }
 
-    /// Whether the router's stack holds the results route `field` names.
-    func showsResults(of field: NodeView) -> Bool {
-        resultsRoute(of: field, in: controllers.values.filter { shownKeys.contains($0.key) }) != nil
-    }
-
-    /// Whether the route on top of the router's stack is the results route `field` names.
-    func selectsResults(of field: NodeView) -> Bool {
-        guard let top = controllers.values.first(where: { $0.key == selectedKey }) else { return false }
-        return resultsRoute(of: field, in: [top]) === top
-    }
-
-    /// Whether the system's Back on `route` stays hidden for the search beside it (LLP 1127.000 §1 item 9): on an
-    /// expanded split, UIKit hides the detail's bar items while the list's search field floats over the keys and shows
-    /// them again once it rests at the sidebar's foot (the keys put away, a fold), the search still open. The results
-    /// route keeps its Back hidden for as long as the search is open, so it shows as the search closes, whatever the
-    /// keys did meanwhile. A swipe back still begins.
-    func searchHidesBack(_ route: RouteController) -> Bool {
-        guard let split, !split.controller.isCollapsed, let list = split.list.viewControllers.first as? RouteController, list !== route,
-              let search = list.search,
-              resultsRoute(of: search.field, in: [route]) === route else { return false }
-        return search.presenting || (search.controller.isActive && !search.dismissing)
-    }
-
-    /// The search beside the detail opened or closed: its results route's Back follows (`searchHidesBack`). tvOS
-    /// shows no Back button.
-    func searchOpenChanged() {
-        #if os(iOS)
-        for case let route as RouteController in split?.detail.viewControllers ?? [] {
-            let hides = route.hidesBack || searchHidesBack(route)
-            if route.navigationItem.hidesBackButton != hides { route.navigationItem.setHidesBackButton(hides, animated: route.view.window != nil) }
+    /// Publish coverage together with the placed block once UIKit settles.
+    func publishVisibility() {
+        guard let host, let owner else { return }
+        let wasVisible = visible
+        visible = exposed && host.splitPrimaryExposed
+        if visible {
+            let header = HeaderShape.bar(of: owner.node)?.header
+            covered = host.searchBody(of: owner.node).filter { $0 !== root && $0 !== header }
+        } else {
+            covered = root.map { [$0] } ?? []
         }
-        #endif
-    }
-
-    /// Settles every header search after the stacks changed (`HeaderSearch.settle`): one whose results a Back or a
-    /// page took away closes, keeping its text.
-    func settleSearches() {
-        for search in controllers.values.compactMap(\.search) { search.settle() }
-    }
-
-    /// The search whose results route is `route`.
-    func search(over route: RouteController) -> HeaderSearch? {
-        controllers.values.lazy.compactMap(\.search).first { search in search.field.map { resultsRoute(of: $0, in: [route]) === route } == true }
-    }
-
-    /// The search whose results route is `route`, while its field is edited: the route takes the keys as safe area,
-    /// as the field's own route does (`RouteController.fitContentViewport`).
-    func searchEditing(over route: RouteController) -> HeaderSearch? {
-        guard let search = searchEditingRoute?.search, let field = search.field, resultsRoute(of: field, in: [route]) === route else { return nil }
-        return search
-    }
-
-    /// The route whose bar search field is being edited, as UIKit's first responder says.
-    private var searchEditingRoute: RouteController? {
-        controllers.values.first { $0.search?.editor.isFirstResponder == true }
-    }
-
-    /// The route whose bar search is in use: its field edits, or UIKit is moving its bar into search (when UIKit's own
-    /// end of editing can leave the field for a moment, RFC §1 item 7).
-    var searchInUseRoute: RouteController? {
-        controllers.values.first { c in c.search.map { $0.presenting || $0.editor.isFirstResponder } == true }
-    }
-
-    /// The search whose field's editing a write of `stack` ends: UIKit makes a bar's search field the first responder
-    /// again when its route shows after a push or a fold covered it while it edited, and ended first it stays as the
-    /// person left it, the keyboard down. So the host ends it before UIKit moves anything over the field's route: a
-    /// route written above it, its results apart; and on an expanded split, where nothing covers the list, a person's
-    /// press that changes the detail (a result, a sidebar page), as a hand-built split puts the keys away. (The
-    /// columns collapsing onto the detail is the third such move, `SplitIOS.listWillBeCovered`.) A location that comes
-    /// with no press (a link, a test's `type`) moves no keyboard. `pressed`: the write is a person's press's work.
-    func searchCovered(by stack: [RouteController], pressed: Bool) -> HeaderSearch? {
-        guard let list = searchInUseRoute, let search = list.search else { return nil }
-        let results = resultsRoute(of: search.field, in: stack)
-        let rest = stack.filter { $0 !== results }
-        guard let at = rest.firstIndex(where: { $0 === list }) else { return nil }
-        if let split, split.settledExpanded {
-            let detail = Array(rest.dropFirst()), shown = split.shown.dropFirst().filter { $0 !== results }
-            return pressed && detail.map(ObjectIdentifier.init) != shown.map(ObjectIdentifier.init) ? search : nil
+        if wasVisible && !visible, focusedBeforeChange || containsFocus {
+            owner.search?.returnAccessibilityFocus()
         }
-        return at < rest.count - 1 ? search : nil
+        focusedBeforeChange = false
     }
 
-    /// The platform's Back from a search's results ends its field's editing before the router hears it, as a push
-    /// over the field's route does; the search then closes, keeping its text (`HeaderSearch.settle`). Every Back the
-    /// host makes or hears goes through `goBack`, which asks this first.
-    func endEditingLeavingResults() {
-        guard let selected = selectedKey, let results = controllers.values.first(where: { $0.key == selected }) else { return }
-        searchEditing(over: results)?.resign()
-    }
-
-    private func attach(_ results: RouteController, to list: RouteController) {
-        guard results.parent !== list else { return }
-        // Results a collapsed split brought over the list in its detail's stack leave that stack first
-        if let nav = results.parent as? UINavigationController { nav.setViewControllers(nav.viewControllers.filter { $0 !== results }, animated: false) }
-        list.addChild(results)
-        results.view.frame = list.view.bounds
-        results.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        list.view.addSubview(results.view)
-        // The view stands for the results' route, a positioned box after the list's in the tree: it takes the positioned
-        // rank, as a navigation controller's view does for the routes it holds, so its later place paints it over the
-        // list's route, whose node is ranked (at depth 0 it would paint under it)
-        results.view.setPaintForeground(aboveAuthored: false)
-        results.didMove(toParent: list)
-    }
-
-    private func detach(_ results: RouteController) {
-        guard let parent = results.parent, !(parent is UINavigationController) else { return }
-        results.willMove(toParent: nil)
-        results.view.setPaintForeground(false)
-        results.view.removeFromSuperview()
-        results.removeFromParent()
+    func refit() {
+        // A hidden results viewport keeps the allocation that owns its scroll position.
+        guard let host, let root, let view = viewIfLoaded, exposed,
+              let occupancy = host.searchOccupancy(in: view) else { return }
+        let policy = host.presenter.keyboardPolicy
+        let safe = view.bounds.inset(by: view.safeAreaInsets)
+        var frame = occupancy.contentBlock(safe, policy: policy, ignoringKeyboard: SearchClearance.ignoresKeyboard(root))
+        frame.size.height -= clearance.fit(root, in: view, allocation: frame, occupancy: occupancy, policy: policy, enabled: true)
+        if mount.frame != frame { mount.frame = frame }
     }
 }
 
 extension NavigationHost {
-    /// Whether the bar search of the route `view` is in is open, or UIKit is moving its bar into search.
-    func barSearchOpen(around view: UIView) -> Bool {
+    var pairedSearch: HeaderSearch? {
+        split?.pairedSearch
+    }
+
+    func searchChildIDs(of owner: NodeView) -> [UInt32] {
+        if let split, split.searchOwner?.node === owner, let children = split.searchState.children { return children }
+        return presenter.flats.children(of: owner.id) ?? mountedChildIDs(of: owner)
+    }
+
+    func searchBody(of owner: NodeView) -> [NodeView] {
+        searchChildIDs(of: owner).compactMap { presenter.views[$0] }
+    }
+
+    /// Find the authored results child before projecting the header or asking for the split rule.
+    func candidateSearchResult(in owner: RouteController) -> NodeView? {
+        let field = HeaderShape.bar(of: owner.node)?.search
+        return searchResult(named: field?.props["accessibilityControls"], in: owner.node)
+    }
+
+    func searchResult(named controls: String?, in owner: NodeView) -> NodeView? {
+        let ids = (controls ?? "").split { $0.isWhitespace }
+        guard ids.count == 1, let name = ids.first else { return nil }
+        let matches = presenter.carrying("id").filter {
+            $0.props["id"] == String(name) && presenter.logicalAncestry(of: $0).contains { $0 === owner }
+        }
+        guard matches.count == 1, let root = matches.first,
+              searchBody(of: owner).contains(where: { $0 === root }),
+              ["view", "scroll", "list"].contains(root.kind), root.props["semanticTag"] != "header",
+              root.props["navigationKey"] == nil, root.props["popover"] == nil,
+              root.props["navigationSplit"] != "placeholder",
+              !["dialog", "alertdialog"].contains(root.props["accessibilityRole"] ?? "") else { return nil }
+        return root
+    }
+
+    func searchOwns(_ node: NodeView, under parent: NodeView) -> Bool {
+        guard let results = pairedSearch?.results else { return false }
+        return results.root === node && results.owner?.node === parent
+    }
+}
+
+extension RouteController {
+    func detachSearch() {
+        guard let search else { return }
+        search.field = nil
+        search.results?.bind(nil)
+        search.close()
+        navigationItem.searchController = nil
+        self.search = nil
+    }
+}
+#endif
+
+extension NavigationHost {
+    func mountedChildIDs(of node: NodeView) -> [UInt32] {
+        node.container.subviews.compactMap { ($0 as? NodeView)?.id }
+    }
+
+    package func barSearchOpen(around view: UIView) -> Bool {
         guard let search = ViewPresentation.controllers(for: view).lazy.compactMap({ ($0 as? RouteController)?.search }).first else { return false }
-        return search.presenting || search.controller.isActive
+        // A paired search leaves the fallback's grouped padding to UIKit.
+        return !search.paired && (search.presenting || search.controller.isActive)
+    }
+
+    var searchInUseRoute: RouteController? {
+        controllers.values.first { c in c.search.map { $0.presenting || $0.editor.isFirstResponder } == true }
+    }
+
+    func searchCovered(by stack: [RouteController], pressed: Bool) -> HeaderSearch? {
+        guard let route = searchInUseRoute, let search = route.search, let index = stack.firstIndex(of: route) else { return nil }
+        if search.paired { return nil }
+        if let split, split.settledExpanded {
+            return pressed && !stack.elementsEqual(split.shown, by: ===) ? search : nil
+        }
+        return index < stack.count - 1 ? search : nil
+    }
+
+    func settleSearches() {
+        for search in controllers.values.compactMap(\.search) { search.settle() }
     }
 }
 #endif

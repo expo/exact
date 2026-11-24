@@ -49,6 +49,8 @@ pub enum BlockAxis {
     Is(f32),
     /// The host sizes the root's border box to this allocation, as a resizable pane does.
     Fill(f32),
+    /// Size an automatic root to the allocation, respecting its margins.
+    Stretch(f32),
     /// The block is at most this long, and as long as its content: a sheet's.
     AtMost(f32),
     /// An automatic size fits its content under this limit. An authored
@@ -76,10 +78,19 @@ impl BlockAxis {
         match self {
             Self::Is(v)
             | Self::Fill(v)
+            | Self::Stretch(v)
             | Self::AtMost(v)
             | Self::Fit(v)
             | Self::Region(v)
             | Self::Content(v) => v,
+        }
+    }
+
+    /// A definite host allocation, also used by container units.
+    pub fn fixed_length(self) -> Option<f32> {
+        match self {
+            Self::Is(v) | Self::Fill(v) | Self::Stretch(v) => Some(v),
+            _ => None,
         }
     }
 
@@ -89,6 +100,7 @@ impl BlockAxis {
         match self {
             BlockAxis::Is(_) => BlockAxis::Is(v),
             BlockAxis::Fill(_) => BlockAxis::Fill(v),
+            BlockAxis::Stretch(_) => BlockAxis::Stretch(v),
             BlockAxis::AtMost(_) => BlockAxis::AtMost(v),
             BlockAxis::Fit(_) => BlockAxis::Fit(v),
             BlockAxis::Region(_) => BlockAxis::Region(v),
@@ -231,7 +243,9 @@ fn cleared_taking(arena: &NodeArena, held: &Held, taking: bool) -> [f32; 4] {
 fn fixed_lengths(arena: &NodeArena, held: &Held, clear: [f32; 4]) -> [Option<f32>; 2] {
     let given = held.given.filter(|_| is_owner(arena, held));
     let fixed = |axis: Option<BlockAxis>, by: f32| match axis {
-        Some(BlockAxis::Is(length) | BlockAxis::Fill(length)) => Some((length - by).max(0.0)),
+        Some(BlockAxis::Is(length) | BlockAxis::Fill(length) | BlockAxis::Stretch(length)) => {
+            Some((length - by).max(0.0))
+        }
         _ => None,
     };
     [
@@ -275,6 +289,8 @@ pub(crate) struct Blocks(
     crate::sorted::SlotSet,
     /// The window's aspect-fit guide a host fits the first root to (LLP 1123 D16, `root_fit.rs`).
     super::root_fit::RootFits,
+    // Visibility can also cover an in-flow subtree under a native search.
+    Vec<(u32, BlockShown)>,
 );
 
 /// One node's block: the one in force, the host's or else the one the
@@ -294,8 +310,6 @@ pub(crate) struct Held {
     /// Whether its host shows it as a navigation bar's item, a readout that
     /// takes the bar's type (`Kernel::set_bar_item`; LLP 1141.004 D3).
     pub(crate) bar_item: bool,
-    /// How its host shows it against its stack's top.
-    shown: BlockShown,
     /// What the host cleared of it for its content root when it was last
     /// laid out (`clearance`).
     cleared: [f32; 4],
@@ -395,27 +409,31 @@ impl Blocks {
         implied.map(|b| b.slot).collect()
     }
 
-    /// How `slot`'s host shows it against its stack's top (`Held::shown`).
+    /// How the host shows `slot` against its stack's top.
     pub(crate) fn shown(&self, slot: u32) -> BlockShown {
-        self.held(slot).map_or(BlockShown::InStack, |b| b.shown)
+        self.4
+            .iter()
+            .find(|(s, _)| *s == slot)
+            .map_or(BlockShown::InStack, |(_, shown)| *shown)
     }
 
-    /// Say how `slot`'s block is shown against its stack's top; whether that
-    /// changed. A slot with no block is shown in the page, and keeps none.
+    /// Update liveness even for in-flow content covered by a native surface.
     pub(crate) fn set_shown(&mut self, slot: u32, shown: BlockShown) -> bool {
-        match self.held_mut(slot) {
-            Some(held) if held.shown != shown => {
-                held.shown = shown;
-                true
-            }
-            _ => false,
+        if self.shown(slot) == shown {
+            return false;
         }
+        self.4.retain(|(s, _)| *s != slot);
+        if shown != BlockShown::InStack {
+            self.4.push((slot, shown));
+        }
+        true
     }
 
     /// `slot` gone: neither block stands, nor its local insets.
     pub(crate) fn remove(&mut self, slot: u32) {
         self.0.retain(|b| b.slot != slot);
         self.set_local(slot, None);
+        self.4.retain(|(s, _)| *s != slot);
     }
 
     /// The local insets a host gave the owner whose root is `slot`.
@@ -463,7 +481,6 @@ impl Blocks {
                 implied,
                 buried: false,
                 bar_item: false,
-                shown: BlockShown::InStack,
                 cleared: [0.0; 4],
                 slots: [0.0; 4],
                 regions: [None; 4],
@@ -622,9 +639,11 @@ pub(crate) fn apply(
     let capped = |axis: BlockAxis, auto: bool| match axis {
         BlockAxis::AtMost(_) => true,
         BlockAxis::Fit(_) => auto,
-        BlockAxis::Is(_) | BlockAxis::Fill(_) | BlockAxis::Region(_) | BlockAxis::Content(_) => {
-            false
-        }
+        BlockAxis::Is(_)
+        | BlockAxis::Fill(_)
+        | BlockAxis::Stretch(_)
+        | BlockAxis::Region(_)
+        | BlockAxis::Content(_) => false,
     };
     if let BlockAxis::AtMost(most)
     | BlockAxis::Fit(most)
@@ -651,6 +670,28 @@ pub(crate) fn apply(
         if capped(block.height, s.size.height.is_auto()) {
             s.max_size.height = ceiling(most, edges.vertical_axis_sum(), s.max_size.height, most);
         }
+    }
+    if matches!(block.width, BlockAxis::Stretch(_)) || matches!(block.height, BlockAxis::Stretch(_))
+    {
+        let margins = s.margin.resolve_or_zero(basis, resolve_calc);
+        let stretch = |axis: BlockAxis, size: &mut taffy::Dimension, edges: f32, margins: f32| {
+            if let (BlockAxis::Stretch(length), true) = (axis, size.is_auto()) {
+                let edges = if content_box { edges } else { 0.0 };
+                *size = taffy::Dimension::length((length - edges - margins).max(0.0));
+            }
+        };
+        stretch(
+            block.width,
+            &mut s.size.width,
+            edges.horizontal_axis_sum(),
+            margins.horizontal_axis_sum(),
+        );
+        stretch(
+            block.height,
+            &mut s.size.height,
+            edges.vertical_axis_sum(),
+            margins.vertical_axis_sum(),
+        );
     }
 }
 
@@ -1420,7 +1461,7 @@ pub struct BlockMeasure {
 fn used_in(block: HostBlock, clear: [f32; 4], l: &taffy::tree::Layout) -> (f32, f32) {
     let [top, right, bottom, left] = clear;
     let axis = |axis: BlockAxis, end: f32| match axis {
-        BlockAxis::Is(length) | BlockAxis::Fill(length) => length,
+        BlockAxis::Is(length) | BlockAxis::Fill(length) | BlockAxis::Stretch(length) => length,
         BlockAxis::AtMost(most) => end.clamp(0.0, most),
         BlockAxis::Fit(_) | BlockAxis::Region(_) | BlockAxis::Content(_) => end.max(0.0),
     };

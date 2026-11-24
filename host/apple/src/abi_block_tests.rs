@@ -195,8 +195,11 @@ fn a_split_says_how_each_block_shows_against_its_stacks_top() {
         send(&mut bridge, vec![route, 23, size(float), 0, 0, 0]);
         assert_eq!(shown(&bridge, route), expected, "{float}");
     }
-    // A box with no block shows in its page, whatever is said of it
+    // A box with no block takes what is said of it too: a native search's results cover an in-flow subtree that
+    // has no block of its own, which goes inactive meanwhile
     send(&mut bridge, vec![loose, 23, size(1.0), 0, 0, 0]);
+    assert_eq!(shown(&bridge, loose), BlockShown::Beside);
+    send(&mut bridge, vec![loose, 23, size(0.0), 0, 0, 0]);
     assert_eq!(shown(&bridge, loose), BlockShown::InStack);
 }
 

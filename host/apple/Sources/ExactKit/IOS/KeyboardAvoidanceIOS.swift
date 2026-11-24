@@ -17,7 +17,7 @@ import UIKit
 
 /// One keyboard contribution to a scroll view's shared bottom insets.
 package final class KeyboardInset {
-    private var amount: CGFloat = 0
+    package private(set) var amount: CGFloat = 0
     package init() {}
     package func apply(_ desired: CGFloat, to scroll: UIScrollView) {
         let change = desired - amount
@@ -189,6 +189,19 @@ extension Presenter {
             let high = sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height
             if o.y > high + 0.5 { pinnedRoom.grow(sv, by: o.y - high) }
         }
+        // Undocked search keyboards obstruct a rectangle. Reveal a covered caret
+        // without adding bottom clearance to any scrollport.
+        if let floating = navigation.floatingSearchKeyboard(in: sv), floating.intersects(field), visible.intersects(floating) {
+            let above = field.maxY - floating.minY + 8, below = floating.maxY - field.minY + 8
+            let left = field.maxX - floating.minX + 8, right = floating.maxX - field.minX + 8
+            let candidates = [
+                CGPoint(x: o.x, y: o.y + above), CGPoint(x: o.x, y: o.y - below),
+                CGPoint(x: o.x + left, y: o.y), CGPoint(x: o.x - right, y: o.y),
+            ].map { PixelGrid.offset($0, in: sv) }.filter {
+                !floating.intersects(field.offsetBy(dx: sv.contentOffset.x - $0.x, dy: sv.contentOffset.y - $0.y))
+            }
+            o = candidates.min { hypot($0.x - o.x, $0.y - o.y) < hypot($1.x - o.x, $1.y - o.y) } ?? o
+        }
         let insets = sv.adjustedContentInset
         guard abs(o.y - sv.contentOffset.y) > 0.5 || abs(o.x - sv.contentOffset.x) > 0.5 else { return false }
         o = PixelGrid.offset(o, in: sv)
@@ -293,8 +306,6 @@ extension NodeView {
             #if os(iOS)
             let route = ViewPresentation.controllers(for: self, layout: true).lazy.compactMap { $0 as? any RouteSurface }.first
             if route?.searchBarEditing == true { return .onDrag }
-            // A search's results too, while its field edits
-            if let route, presenter?.navigation.searchEdits(over: route) == true { return .onDrag }
             #endif
             return .interactive
         }
@@ -381,20 +392,15 @@ extension Presenter {
     }
 }
 
-#if os(iOS)
 extension Presenter {
-    /// How far above the docked keys the bar of a search field UIKit floats on them while it edits reaches over
-    /// `route` (LLP 1127.000 D9; iOS 26: out of every navigation bar, across the window), which covers what lies under it
-    /// as the keys do. The bar is the field's first container taller than it. UIKit places it above the route's safe
-    /// area, so it is a scroll inset, not safe area: counted there, the bar would rise with every inset it gave.
-    package func fieldBarInset(over route: UIViewController, editor: UIView?) -> CGFloat {
-        guard let top = keyboardTop, let field = editor as? UISearchTextField, field.window != nil, field.window === route.view.window,
-              !sequence(first: field as UIView, next: \.superview).contains(where: { $0 is UINavigationBar }),
-              let bar = sequence(first: field as UIView, next: \.superview).first(where: { $0.bounds.height > field.bounds.height + 1 }) else { return 0 }
-        let frame = bar.convert(bar.bounds, to: nil), over = route.view.convert(route.view.bounds, to: nil)
-        return frame.maxY <= top + 1 && frame.minX < over.maxX && frame.maxX > over.minX ? max(0, top - frame.minY) : 0
+    package func searchCancelPreventsReset(_ id: UInt32) -> Bool {
+        guard let session else { return false }
+        let previous = defaultPrevented
+        defaultPrevented = false
+        defer { defaultPrevented = previous }
+        session.applyInput(session.runtime.cancel(id, now: session.now()))
+        return defaultPrevented
     }
 }
-#endif
 
 #endif

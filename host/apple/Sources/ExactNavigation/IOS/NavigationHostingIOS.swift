@@ -65,8 +65,93 @@ extension NavigationHost: NavigationHosting {
     func padsTop(_ route: any RouteSurface) -> Bool {
         (route as? RouteController).map { padsTop($0) } ?? false
     }
-    func searchEdits(over route: any RouteSurface) -> Bool {
-        (route as? RouteController).map { searchEditing(over: $0) != nil } ?? false
+    func searchResultsParent(of view: UIView) -> NodeView? {
+        #if os(iOS)
+        if let results = pairedSearch?.results, results.root === view { return results.owner?.node }
+        #endif
+        return nil
+    }
+
+    func measureSearchResults() -> (root: NodeView, view: UIView, block: CGRect, shown: Bool)? {
+        #if os(iOS)
+        let results = pairedSearch?.results
+        results?.refit()
+        return results?.block
+        #else
+        return nil
+        #endif
+    }
+
+    var searchResultsSurface: UIView? {
+        #if os(iOS)
+        guard let results = pairedSearch?.results, results.visible else { return nil }
+        return results.viewIfLoaded
+        #else
+        return nil
+        #endif
+    }
+
+    var searchCoveredNodes: [UInt32] {
+        #if os(iOS)
+        pairedSearch?.results?.covered.map(\.id) ?? []
+        #else
+        []
+        #endif
+    }
+
+    func searchCovers(_ view: UIView) -> Bool {
+        #if os(iOS)
+        guard let results = pairedSearch?.results else { return false }
+        return results.covered.contains { view === $0 || view.isDescendant(of: $0) }
+        #else
+        return false
+        #endif
+    }
+
+    func beginSearchActivation(from node: NodeView) -> (() -> Void)? {
+        #if os(iOS)
+        startPairedActivation(from: node)
+        #else
+        nil
+        #endif
+    }
+
+    func beginSearchNavigation() -> (() -> Void)? {
+        #if os(iOS)
+        guard let split, split.paired else { return nil }
+        return startPairedActivation(.incoming, in: split)
+        #else
+        return nil
+        #endif
+    }
+
+    var holdsAgentTargets: Bool {
+        #if os(iOS)
+        guard let split, split.paired else { return false }
+        return split.searchState.pending || split.searchState.pop != nil || splitSearchTransition || presenter.modalHost.inTransition
+        #else
+        return false
+        #endif
+    }
+
+    func floatingSearchKeyboard(in view: UIView) -> CGRect? {
+        #if os(iOS)
+        guard presenter.keyboardPolicy != "overlays-content", let occupancy = searchOccupancy(in: view),
+              !occupancy.docked, !occupancy.keyboard.isEmpty else { return nil }
+        return occupancy.keyboard
+        #else
+        return nil
+        #endif
+    }
+    func searchContentBlock(in view: UIView) -> CGRect? {
+        #if os(iOS)
+        guard let split, presenter.keyboardPolicy == "resizes-content",
+              let route = ViewPresentation.controller(for: view) as? RouteController, route.surface === view,
+              let nav = route.navigationController, split.holds(nav), let occupancy = searchOccupancy(in: view) else { return nil }
+        return occupancy.contentBlock(view.bounds, policy: presenter.keyboardPolicy, ignoringKeyboard: SearchClearance.ignoresKeyboard(route.node))
+        #else
+        return nil
+        #endif
     }
     func resignSearch() -> Bool {
         guard let search = searchInUseRoute?.search else { return false }
@@ -367,40 +452,171 @@ extension NavigationHost: NavigationHosting {
         return boxes
     }
 
-    /// The search field a shown route projects into UIKit's search bar.
-    func drawnSearch(_ node: NodeView) -> UITextField? {
-        #if os(iOS)
-        guard !ExactEnv.authoredChrome else { return nil }
-        for c in controllers.values {
-            guard let nav = c.navigationController, nav.topViewController === c, barShows(nav),
-                  c.viewIfLoaded?.window != nil, let search = c.search, search.field === node else { continue }
-            return search.controller.searchBar.searchTextField
+    /// The editor and collapsed button both belong to the top route's search controller.
+    #if os(iOS)
+    private func searchRoute(for node: NodeView) -> (RouteController, UINavigationController, HeaderSearch)? {
+        guard node.headerSearch != nil, !ExactEnv.authoredChrome, !holdsAgentTargets, !isInactiveRoute(containing: node) else { return nil }
+        for route in controllers.values {
+            guard let nav = route.navigationController, nav.topViewController === route, barShows(nav),
+                  route.viewIfLoaded?.window != nil, let search = route.search, search.field === node else { continue }
+            return (route, nav, search)
         }
-        #endif
         return nil
     }
 
-    /// The control UIKit shows in place of a shown route's search field while the field is collapsed into it (iOS
-    /// 26 integrates a compact width's search into the toolbar as a button drawn over the field, centred on it): the
-    /// control a finger at the field's middle reaches, when it is centred on the field, and its box. Nil while the
-    /// finger reaches the field itself.
-    func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect)? {
+    private func hitCenter(of view: UIView) -> UIView? {
+        guard let window = view.window, !view.bounds.isEmpty,
+              sequence(first: view, next: \.superview).allSatisfy({ !$0.isHidden && $0.alpha > 0.01 }) else { return nil }
+        let point = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: window)
+        guard let hit = window.hitTest(point, with: nil), hit.isDescendant(of: view) else { return nil }
+        return hit
+    }
+    #endif
+
+    func drawnSearch(_ node: NodeView) -> UITextField? {
         #if os(iOS)
-        guard !ExactEnv.authoredChrome else { return nil }
-        for c in controllers.values {
-            guard let nav = c.navigationController, nav.topViewController === c, let window = c.viewIfLoaded?.window,
-                  let search = c.search, search.field === node else { continue }
-            let field = search.controller.searchBar.searchTextField, box = field.convert(field.bounds, to: nil)
-            guard field.window === window, !box.isEmpty,
-                  let hit = window.hitTest(CGPoint(x: box.midX, y: box.midY), with: nil),
-                  hit !== field, !hit.isDescendant(of: field),
-                  let control = sequence(first: hit, next: \.superview).first(where: { $0 is UIControl }) else { return nil }
-            let drawn = control.convert(control.bounds, to: nil)
-            guard abs(drawn.midX - box.midX) <= 1, abs(drawn.midY - box.midY) <= 1 else { return nil }
-            return (control, control.bounds)
-        }
-        #endif
+        guard let (_, _, search) = searchRoute(for: node) else { return nil }
+        let field = search.bindEditor()
+        return hitCenter(of: field) == nil && !field.isFirstResponder ? nil : field
+        #else
         return nil
+        #endif
+    }
+
+    func searchChrome(_ node: NodeView) -> [String: Any]? {
+        #if os(iOS)
+        guard let (route, _, search) = searchRoute(for: node) else { return nil }
+        let editor = search.bindEditor()
+        let placement = route.navigationItem.searchBarPlacement
+        let name: String
+        switch placement {
+        case .automatic: name = "automatic"
+        case .inline: name = "inline"
+        case .stacked: name = "stacked"
+        default:
+            if #available(iOS 26.0, *) {
+                switch placement {
+                case .integrated: name = "integrated"
+                case .integratedButton: name = "integratedButton"
+                case .integratedCentered: name = "integratedCentered"
+                default: name = "unknown"
+                }
+            } else { name = "unknown" }
+        }
+        var facts: [String: Any] = ["placement": name, "minimized": node.props["searchStyle"] == "minimized"]
+        if editor.window != nil {
+            let container = sequence(first: editor as UIView, next: \.superview).lazy.compactMap { view -> String? in
+                if view is UINavigationBar { return "navigationBar" }
+                if view is UIToolbar { return "toolbar" }
+                if view is UITabBar { return "tabBar" }
+                return nil
+            }.first
+            facts["container"] = container ?? "content"
+        } else if let button = collapsedSearch(node) {
+            facts["container"] = sequence(first: button.view, next: \.superview).contains { $0 is UINavigationBar } ? "navigationBar" : "toolbar"
+        }
+        return facts
+        #else
+        return nil
+        #endif
+    }
+
+    func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect, activate: () -> Bool)? {
+        #if os(iOS)
+        guard #available(iOS 26.0, *), let (route, nav, search) = searchRoute(for: node), !searching(route),
+              let content = route.viewIfLoaded, let window = content.window, let owner = nav.viewIfLoaded else { return nil }
+        let editor = search.bindEditor()
+        guard !editor.isFirstResponder, hitCenter(of: editor) == nil else { return nil }
+        let navigationItem = route.navigationItem
+        let item = navigationItem.searchBarPlacementBarButtonItem
+        guard item.isEnabled else { return nil }
+        let identifier = item.accessibilityIdentifier
+        let labels = Set([item.accessibilityLabel, item.title, editor.accessibilityLabel, editor.placeholder, "Search"].compactMap { $0 }.filter { !$0.isEmpty })
+        let bars: [UIView] = [nav.navigationBar, nav.toolbar].filter { $0.window === window && !$0.isHidden }
+        let spaces = [window as UIView] + bars
+        func frames(of item: UIBarButtonItem) -> [CGRect] {
+            spaces.compactMap { space in
+                guard let frame = item.frame(in: space), !frame.isEmpty, !frame.isInfinite else { return nil }
+                return space.convert(frame, to: window)
+            }
+        }
+        let placementFrames = frames(of: item)
+        let otherItems = (route.toolbarItems ?? []) + (navigationItem.leftBarButtonItems ?? [])
+            + (navigationItem.rightBarButtonItems ?? [])
+            + (navigationItem.leadingItemGroups + navigationItem.centerItemGroups + navigationItem.trailingItemGroups).flatMap(\.barButtonItems)
+        let otherFrames = otherItems.filter { $0 !== item }.flatMap { frames(of: $0) }
+        let canFloat = navigationItem.searchBarPlacementAllowsToolbarIntegration
+            && [.integrated, .integratedButton, .integratedCentered].contains(navigationItem.searchBarPlacement)
+        var visited = Set<ObjectIdentifier>()
+        typealias Target = (view: UIView, box: CGRect, activate: () -> Bool)
+        var identified: [ObjectIdentifier: Target] = [:], labelled: [ObjectIdentifier: Target] = [:]
+
+        func add(_ object: NSObject, frame: CGRect, matchesIdentifier: Bool) {
+            guard !frame.isEmpty, !frame.isInfinite else { return }
+            let center = CGPoint(x: frame.midX, y: frame.midY)
+            guard window.bounds.contains(center), let hit = window.hitTest(center, with: nil),
+                  hit !== owner, hit.isDescendant(of: owner), !hit.isDescendant(of: content),
+                  !otherFrames.contains(where: { $0.contains(center) }) else { return }
+            let ancestors = sequence(first: hit, next: \.superview).prefix { $0 !== owner }
+            let matchesItem = matchesIdentifier || placementFrames.contains { $0.contains(center) }
+            // UIKit can draw the implicit toolbar outside the two bars the controller exposes.
+            // When the placement item has no frame, the unique Search button in this stack's chrome owns the tap.
+            guard matchesItem || (placementFrames.isEmpty && (canFloat || ancestors.contains(where: { v in bars.contains { $0 === v } }))) else { return }
+            let control = ancestors.first { $0 is UIControl } as? UIControl
+            let target = control ?? (object as? UIView) ?? hit
+            guard hit.isDescendant(of: target), control?.isEnabled != false else { return }
+            let key = ObjectIdentifier(target)
+            let action: Target = (target, target.convert(frame, from: window), {
+                if object.accessibilityActivate() { return true }
+                guard let control, let event = [UIControl.Event.primaryActionTriggered, .touchUpInside].first(where: {
+                    control.allControlEvents.contains($0)
+                }) else { return false }
+                control.sendActions(for: event)
+                return true
+            })
+            if matchesItem { identified[key] = action }
+            else { labelled[key] = action }
+        }
+
+        func find(_ object: NSObject) {
+            guard visited.insert(ObjectIdentifier(object)).inserted else { return }
+            if let view = object as? UIView, view !== window,
+               view.window !== window || view.isHidden || view.alpha < 0.01 || view.isDescendant(of: content) { return }
+            let id = (object as? UIAccessibilityIdentification)?.accessibilityIdentifier
+            let matchesIdentifier = identifier != nil && id == identifier
+            let namedButton = (id?.isEmpty ?? true) && object.accessibilityTraits.contains(.button)
+                && !object.accessibilityTraits.contains(.notEnabled) && labels.contains(object.accessibilityLabel ?? "")
+            if matchesIdentifier || namedButton {
+                let local = window.convert(object.accessibilityFrame, from: window.screen.coordinateSpace)
+                add(object, frame: local, matchesIdentifier: matchesIdentifier)
+            }
+            if let children = object.accessibilityElements {
+                for case let child as NSObject in children { find(child) }
+            } else {
+                let count = object.accessibilityElementCount()
+                if count != NSNotFound, count > 0 {
+                    for index in 0..<count {
+                        if let child = object.accessibilityElement(at: index) as? NSObject { find(child) }
+                    }
+                }
+            }
+            if let view = object as? UIView {
+                for child in view.subviews { find(child) }
+            }
+        }
+
+        for frame in placementFrames {
+            if let hit = window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil),
+               let control = sequence(first: hit, next: \.superview).prefix(while: { $0 !== owner }).first(where: { $0 is UIControl }) {
+                add(control, frame: frame, matchesIdentifier: false)
+            }
+        }
+        find(window)
+        let candidates = identified.isEmpty ? labelled : identified
+        return candidates.count == 1 ? candidates.values.first : nil
+        #else
+        return nil
+        #endif
     }
     #endif
 }

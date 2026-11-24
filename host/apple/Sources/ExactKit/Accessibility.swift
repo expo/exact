@@ -1399,6 +1399,9 @@ extension Agent {
                 #if os(iOS) || os(tvOS)
                 if let why = unshown[node.id] { row["unshown"] = why }
                 #endif
+                #if os(iOS)
+                if let search = presenter.navigation.searchChrome(node) { row["search"] = search }
+                #endif
             }
             return row
         }

@@ -225,6 +225,7 @@ pub struct Host<D: DataSource> {
     preload_content: Vec<String>,
     preload_accepted: bool,
     runner: Runner<D>,
+    reported_router_revision: u64,
     admitting_frame: bool,
     font_hook: Option<(crate::measure::FontsFn, *mut std::ffi::c_void, usize)>,
     /// Whether the plan declares a `head`, and the title the presenter was
@@ -660,6 +661,7 @@ impl<D: DataSource> Host<D> {
             hatches: paragraph::HatchWords::of(runner.plan()),
             flat: flat::Flat::new(layout.flat_nodes, runner.plan()),
             runner,
+            reported_router_revision: 0,
             admitting_frame: false,
             font_hook,
             mirror: IdMap::default(),
@@ -772,10 +774,7 @@ impl<D: DataSource> Host<D> {
         for s in host.runner.take_surface_updates() {
             batch.surface(&s);
         }
-        // @ref LLP 1038 D7 — drain once, after all commits in this batch.
-        if let Some(change) = host.runner.take_router_change() {
-            batch.router(&change);
-        }
+        host.emit_router(&mut batch);
         for c in host.runner.take_commands() {
             batch.command(&c.name, &c.args, c.source);
         }

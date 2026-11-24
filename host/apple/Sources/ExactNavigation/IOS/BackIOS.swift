@@ -24,10 +24,30 @@ extension NavigationHost {
     /// beneath its top (a sheet's own root is the sheet's); "" when it went,
     /// else why not.
     func agentBack() -> String? {
-        // At a search's results with no Back button of UIKit's (drawn in their list, or the detail's first route), the
-        // way out is the search's close, as the ✕ makes it
-        if let results = controllers.values.first(where: { $0.key == selectedKey }), let search = search(over: results), search.controller.isActive,
-           resultsInPlace === results || (split?.controller.isCollapsed == false && split?.detail.viewControllers.first === results) {
+        #if os(iOS)
+        if let split, let search = split.pairedSearch, modalNavigation == nil {
+            if let inspector = split.inspecting, inspector.key == selectedKey {
+                guard back != nil else { return backRefusal }
+                split.inspectorClosed()
+                return ""
+            }
+            if split.searchState.primaryForeground {
+                guard splitPrimaryExposed, search.controller.isActive else { return "the list has no Back action" }
+                search.closeFromAgent()
+                return ""
+            }
+            let nav = split.controller.isCollapsed && split.detail.viewControllers.count == 1 ? split.list : split.detail
+            let bar = split.nested ? split.list.navigationBar : split.detail.navigationBar
+            guard split.searchState.detailExposed, nav.viewControllers.count > 1, bar.window != nil, !bar.isHidden, bar.alpha > 0.01,
+                  (split.detail.topViewController as? RouteController)?.navigationItem.hidesBackButton == false else {
+                return "the detail has no visible Back action"
+            }
+            guard back != nil else { return backRefusal }
+            nav.popViewController(animated: !ExactEnv.agentFreezes)
+            return ""
+        }
+        #endif
+        if modalNavigation == nil, let search = activeRoute?.search, search.controller.isActive {
             search.controller.isActive = false
             return ""
         }
@@ -66,7 +86,6 @@ extension NavigationHost {
     /// The platform's Back, completed: the authored control pressed, else
     /// the root's `navigate` with the location beneath (LLP 1115 D5).
     func goBack() {
-        endEditingLeavingResults()
         switch back {
         case .press(let id)?: presenter.press(id)
         case .navigate(let location)?:

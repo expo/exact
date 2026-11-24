@@ -88,12 +88,6 @@ extension UIViewController {
         return ((self as? BootHolding)?.routeSurface).map { [$0] } ?? []
     }
 
-    /// The routes the stack shows: `stackRoutes`, which UIKit holds, each with the search results drawn in its
-    /// controller on top of it (`placingResults`).
-    package var shownStackRoutes: [UIViewController] {
-        stackRoutes.flatMap { c in [c] + (c is RouteSurface ? c.children.filter { $0 is RouteSurface } : []) }
-    }
-
     /// What UIKit keeps before a navigation controller's routes in
     /// `viewControllers`: More's list, and a plain tab More pushed over it
     /// (iOS). Every write of the routes keeps it.
@@ -406,6 +400,15 @@ package protocol NavigationHosting: AnyObject {
     func placeOwner()
     func retainsRemovedView(_ node: NodeView) -> Bool
     func logicalParent(of route: NodeView) -> NodeView?
+    func searchResultsParent(of view: UIView) -> NodeView?
+    func measureSearchResults() -> (root: NodeView, view: UIView, block: CGRect, shown: Bool)?
+    var searchResultsSurface: UIView? { get }
+    var searchCoveredNodes: [UInt32] { get }
+    func searchCovers(_ view: UIView) -> Bool
+    func beginSearchActivation(from node: NodeView) -> (() -> Void)?
+    func beginSearchNavigation() -> (() -> Void)?
+    var holdsAgentTargets: Bool { get }
+    func floatingSearchKeyboard(in view: UIView) -> CGRect?
     func routeKey(containing view: UIView, layout: Bool) -> String?
     func isInactiveRoute(containing view: UIView, layout: Bool) -> Bool
     func resolve(route key: String, id: String) -> NodeView?
@@ -462,8 +465,8 @@ package protocol NavigationHosting: AnyObject {
     func clearanceInset(of scroll: UIScrollView) -> UIEdgeInsets
     /// Whether the kernel pads `route`'s top by its cover: a route whose title's scroller goes under the bar does not.
     func padsTop(_ route: any RouteSurface) -> Bool
-    /// Whether a header search's field edits over `route`, its results among the stack's levels.
-    func searchEdits(over route: any RouteSurface) -> Bool
+    /// The block a paired search leaves for this route under the keyboard policy.
+    func searchContentBlock(in view: UIView) -> CGRect?
     /// Ends the editing of the search in use, through its search, which holds the end back while UIKit moves the bar
     /// into search (`HeaderSearch.resign`); whether there was one.
     func resignSearch() -> Bool
@@ -545,8 +548,9 @@ package protocol NavigationHosting: AnyObject {
     func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox]
     func backButtonBar(_ node: NodeView) -> UINavigationBar?
     func drawnSearch(_ node: NodeView) -> UITextField?
+    func searchChrome(_ node: NodeView) -> [String: Any]?
     /// The control a shown route's search field is collapsed into, and its box; nil while the field itself shows.
-    func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect)?
+    func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect, activate: () -> Bool)?
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)?
     #if os(iOS)
     func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)?
@@ -738,6 +742,15 @@ package final class NoNavigation: NavigationHosting {
     package func placeOwner() {}
     package func retainsRemovedView(_ node: NodeView) -> Bool { false }
     package func logicalParent(of route: NodeView) -> NodeView? { nil }
+    package func searchResultsParent(of view: UIView) -> NodeView? { nil }
+    package func measureSearchResults() -> (root: NodeView, view: UIView, block: CGRect, shown: Bool)? { nil }
+    package var searchResultsSurface: UIView? { nil }
+    package var searchCoveredNodes: [UInt32] { [] }
+    package func searchCovers(_ view: UIView) -> Bool { false }
+    package func beginSearchActivation(from node: NodeView) -> (() -> Void)? { nil }
+    package func beginSearchNavigation() -> (() -> Void)? { nil }
+    package var holdsAgentTargets: Bool { false }
+    package func floatingSearchKeyboard(in view: UIView) -> CGRect? { nil }
     package func routeKey(containing view: UIView, layout: Bool) -> String? { nil }
     package func isInactiveRoute(containing view: UIView, layout: Bool) -> Bool { false }
     package func resolve(route key: String, id: String) -> NodeView? { nil }
@@ -790,7 +803,7 @@ package final class NoNavigation: NavigationHosting {
         return false
     }
     package func padsTop(_ route: any RouteSurface) -> Bool { false }
-    package func searchEdits(over route: any RouteSurface) -> Bool { false }
+    package func searchContentBlock(in view: UIView) -> CGRect? { nil }
     package func resignSearch() -> Bool { false }
     package func barSearchOpen(around view: UIView) -> Bool { false }
 
@@ -853,7 +866,8 @@ package final class NoNavigation: NavigationHosting {
     package func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox] { [:] }
     package func backButtonBar(_ node: NodeView) -> UINavigationBar? { nil }
     package func drawnSearch(_ node: NodeView) -> UITextField? { nil }
-    package func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect)? { nil }
+    package func searchChrome(_ node: NodeView) -> [String: Any]? { nil }
+    package func collapsedSearch(_ node: NodeView) -> (view: UIView, box: CGRect, activate: () -> Bool)? { nil }
     package func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
     #if os(iOS)
     package func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)? { nil }
