@@ -238,6 +238,8 @@ fn event(name: &str) -> Option<Event> {
 }
 
 fn entry(name: &str) -> Option<Entry> {
+    // A retired swipe name has only its refusal (LLP 1057.001 §8)
+    vocab::swipe_retired(name).is_none().then_some(())?;
     let tag = tags::tag(name)
         .map(|t| tag_json(name, &t))
         .or_else(|| heading_json(name));
@@ -627,13 +629,13 @@ fn concept_json(c: &Concept) -> Value {
     })
 }
 
-/// Why the compiler refuses a name the web has (`sort`, `now`, `padStart`),
-/// with what to write instead; `None` for any other.
+/// Why the compiler refuses a name the web has (`sort`, `now`, `padStart`) or
+/// one it retired (`swiperight`), with what to write instead; `None` for any other.
 fn idiom(name: &str) -> Option<String> {
     if name == "now" {
         return Some(contract_syntax::idioms::NOW_REFUSED.into());
     }
-    contract_syntax::idioms::refusal(name)
+    contract_syntax::idioms::refusal(name).or_else(|| vocab::swipe_retired(name).map(String::from))
 }
 
 /// A name nothing admits: the lookups' hints, a function one edit away, what

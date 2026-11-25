@@ -55,7 +55,11 @@ fn tags_are_the_compilers() {
 
 #[test]
 fn events_are_the_compilers() {
-    let handlers = contract_analyze::HANDLERS.iter().map(|h| h.to_string());
+    // A retired swipe name is a handler row for what the plan holds, no word an author writes (LLP 1057.001 §8)
+    let handlers = contract_analyze::HANDLERS
+        .iter()
+        .filter(|h| contract_lower::vocab::swipe_retired(h).is_none())
+        .map(|h| h.to_string());
     same(
         "events",
         words(&grammar(), "attributes", "support.function.event"),

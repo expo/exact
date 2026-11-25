@@ -79,11 +79,7 @@ final class SwipeScrollDragTests: XCTestCase {
         try swipe(session, "left", by: 100)
         XCTAssertEqual(text(session, "swipes"), "1:0", "short of the knee, or toward a side the node does not hear, runs nothing")
         try swipe(session, "right", by: 100)
-        until(session, "swipes", "1:1", "`swiperight` is unchanged")
-        try swipe(session, "both", by: -100)
-        until(session, "swipes", "2:1", "a node hearing both: left")
-        try swipe(session, "both", by: 100)
-        until(session, "swipes", "2:2", "and right")
+        until(session, "swipes", "1:1", "a right swipe is unchanged")
     }
 
     func testAScrollDragReportsItsStartAndItsRelease() throws {

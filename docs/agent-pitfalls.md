@@ -1381,12 +1381,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   bench, LLP 1087, t4-kanban: about 15 minutes, 2026-10-04.) **Candidate
   diagnostic:** the compiler could warn on a `pan` without `touch-action`.
 
-- **`swipeleft` is not swipe-to-delete.** A row given `swipeleft`, or built from
-  `pan`, `panrelease` and `translate`, follows the finger and runs one action when it
-  lifts, but reveals no Delete button and is not the platform's swipe action. Fix:
-  `delete=remove(item.id)` on the list's row (`contract vocab swipe`): on iOS UIKit's
-  own swipe action, which a full swipe performs. Cause: `swipeleft` and `swiperight`
-  are the reply gesture's (a message bubble), one action at the gesture's end.
+- **`swipe-follow="left"` is not swipe-to-delete.** A row given `swipe` with
+  `swipe-follow="left"`, or built from `pan`, `panrelease` and `translate`, follows the
+  finger and runs one action when it lifts, but reveals no Delete button and is not the
+  platform's swipe action. Fix: `delete=remove(item.id)` on the list's row (`contract
+  vocab swipe`): on iOS UIKit's own swipe action, which a full swipe performs. Cause: a
+  swipe the node follows is the reply gesture's (a message bubble), one action at the
+  gesture's end.
   Actions other than Delete are a swipe row written by hand (the next pitfall).
   (Ledger2 DIARY, "Needed: swipe gesture", about 15 minutes, 2026-10-04.)
 
@@ -1420,17 +1421,19 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
     a time and the actions VoiceOver reads (`apps/messages` paints its own circles in
     hex and is no model for the rest).
 
-- **A `swiperight` or `swipeleft` hears nothing from a finger on iOS.** A mouse drag fires it on
-  the web and macOS, in a drive and in a test, while a real touch on an iPhone
-  does nothing. Cause: with `touch-action` at `auto` a horizontal pan is the
-  platform's, as in a browser, so the swipe never begins. Fix:
+- **A swipe the node follows (`swipe-follow`) hears nothing from a finger on iOS.** A mouse
+  drag fires it on the web and macOS, in a drive and in a test, while a real touch on an
+  iPhone does nothing. Cause: with `touch-action` at `auto` a horizontal pan is the
+  platform's, as in a browser, so the swipe never begins. In a painted content region's
+  picture a row with a `swipeIndicator` child or a resting transform also stays still,
+  since the picture's route follows only a row with neither. Fix:
   `touch-action="pan-y"` on the swiped node, which leaves vertical scrolling to the
   page. The bubble follows the finger with or without a `transition`; the one
   Messages gives it, `transition="translate -exact-spring(300, 30, 1)"`, springs it
   back after the lift and does not arm the gesture
   ([Swipe to reply](contract-for-agents.md#swipe-to-reply)). (Chat2 DIARY, about 20
   minutes; reproduced with `agent ios --touch platform`, 2026-10-04.) **Candidate
-  diagnostic:** the compiler could warn on a `swiperight` without `touch-action`, as on a `pan`.
+  diagnostic:** the compiler could warn on a `swipe-follow` without `touch-action`, as on a `pan`.
 
 - **A dragged piece snaps back, lands on the wrong square, or a tap moves it.** A
   board has no drop target; build the drag from the pointer events (Chess DIARY,

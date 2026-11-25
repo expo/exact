@@ -434,7 +434,7 @@ fn the_presenters_own_gestures_claim_their_axes() {
         boot(&source).scrollers_at(x, y).claims
     };
     // A swipe row takes a sideways drag; up and down is the scroller's.
-    let swipe = r#"box swiperight=hear touch-action="pan-y" width=400 height=100"#;
+    let swipe = r#"box swipe=hear swipe-follow="right" touch-action="pan-y" width=400 height=100"#;
     assert_eq!(claims(swipe, 200., 50.), (true, false));
     assert_eq!(claims(swipe, 200., 150.), (false, false), "below the row");
     // A `pan` hears what its `touch-action` keeps from scrolling.

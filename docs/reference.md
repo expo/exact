@@ -7580,12 +7580,14 @@ Windows send neither. A wheel, the keyboard and a programmatic scroll send
 neither
 ([events](contract-grammar.md#events)).
 
-`swipeleft` mirrors `swiperight`: the node follows the finger, and one action
-runs when it lifts 64 points or more that way. Both directions are the
-screen's, in a right-to-left layout too, and a node may have both
-([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
+An element takes one `swipe=action` and exactly one of `swipe-follow` or
+`swipe-flick` beside it. With `swipe-follow="right"` or `"left"`, a quoted
+literal, the node follows the finger, and one action runs when it lifts 64
+points or more that way; `tree` names the event `swiperight` or `swipeleft`.
+The direction is the screen's, in a right-to-left layout too, and a node
+follows one direction ([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
 
-`swipe=action` with `swipe-direction` (`left`, `right`, `up` or `down`) is the
+With `swipe-flick` (`left`, `right`, `up` or `down`), `swipe` is the
 platform's discrete swipe: nothing follows the finger, and the action runs once
 when UIKit's swipe recognizer recognizes a swipe that way on the node or a view
 inside it, a text field included. UIKit arbitrates it with the other gestures

@@ -94,7 +94,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
         if (opts.at?.some(v => v < 0)) throw new Error('swipe: at is an offset into the target\'s box from its top-left corner, never negative');
         if (holdOf(target)) throw new Error(`swipe: ${target} is a held request, which takes a choice, not a swipe; a swipe is on a view`);
         // `--touch drag`, a test file's, makes a drag a real touch too, and a swipe is one
-        if (!['ios', 'host-ios'].includes(host) || !['platform', 'drag'].includes(touch)) throw new Error(`swipe: a swipe is the platform's recognizer's, which only a real touch on a view reaches; drive iOS with --touch platform, or the effect through the control the app gives it`);
+        if (!['ios', 'host-ios'].includes(host) || !['platform', 'drag'].includes(touch)) throw new Error(`swipe: a swipe is the platform's recognizer's, which only a real touch on a view reaches; drive iOS with --touch platform, or the effect through the control the app gives it; a node that follows the finger (\`swipe-follow\`) is driven with \`drag\` on every host`);
         return s.tap(target, { drag: { ...swipeDrag(opts), flick: true } });
       }
       if (holdOf(target)) {

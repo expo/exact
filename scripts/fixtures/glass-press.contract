@@ -68,7 +68,7 @@ component GlassPress
       input value=typed paste=add("paste") testId="on-paste"
       column key=addText("key") tabindex=0 testId="on-key" height=20
       column contextmenu=add("contextmenu") testId="on-contextmenu" height=20
-      column swiperight=add("swiperight") testId="on-swiperight" height=20
+      column swipe=add("swiperight") swipe-follow="right" testId="on-swiperight" height=20
       scroll refresh=add("refresh") testId="on-refresh" height=40
         text "Pull"
       column dblclick=add("dblclick") testId="on-dblclick" height=20

@@ -809,7 +809,7 @@ mod tests {
             view width=100 height=20
       list testId="other" width=120 height=120
         for row in range(1000) key=row
-          view width=100 height=20 swiperight=noop
+          view width=100 height=20 swipe=noop swipe-follow="right"
             view swipeIndicator=true width=10 height=10 scale=0.5
 "#;
         let (mut p, error) = Presenter::boot_with(

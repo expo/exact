@@ -326,7 +326,7 @@ pub enum Event {
     Swiperight,
     /// Its mirror, a left swipe (Charlie, 2026-11-10).
     Swipeleft,
-    /// The platform's discrete swipe in the node's `swipe-direction` (LLP
+    /// The platform's discrete swipe in the node's `swipe-flick` direction (LLP
     /// 1057.001 §8).
     Swipe,
     /// A pull past the top of a scroll container asked for fresh content

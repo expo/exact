@@ -538,13 +538,11 @@ fn lower_with_sites(
         Err(fatal) => {
             let mut all = std::mem::take(&mut l.errors);
             for e in fatal {
-                if !all
-                    .iter()
-                    .any(|o| o.id == e.id && o.span == e.span && o.message == e.message)
-                {
+                if !all.contains(&e) {
                     all.push(e);
                 }
             }
+            handlers::swipe::supersede(&mut all);
             all.truncate(MAX_REFUSALS);
             values::name_template_holes(checked, &mut all);
             Err(all)
@@ -1146,7 +1144,7 @@ impl<'a> Lowerer<'a> {
             "keep-mounted" => return self.bind_keep_mounted(a, scope, locals, bindings),
             _ => {}
         }
-        let Some(mut target) = tags::attr_valued(&a.name, &a.value) else {
+        let Some(mut target) = handlers::swipe::attr_valued(tag, a) else {
             return Err(unknown_attr(tag, a));
         };
         // A reset that writes no row (`tags::attr_valued`).

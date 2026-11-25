@@ -301,6 +301,7 @@ mod surface;
 mod svg;
 mod svg_use_foreign_object;
 mod swipe;
+mod swipe_fold;
 mod symbol_ink;
 mod symbol_tint;
 mod symbols;
