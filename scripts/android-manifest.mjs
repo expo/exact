@@ -192,7 +192,11 @@ function androidPermissionGrant(permission, appDir) {
             const grants = Array.isArray(name.grants) ? name.grants : inheritedGrants;
             const grant = key.startsWith('device.') ? key : Array.isArray(grants) && grants[0];
             const call = name.source ?? name.send ?? name.event;
-            if (typeof call === 'string' && typeof grant === 'string' && /^[a-z][a-z0-9.-]*$/.test(grant)) advice.add(`${lines(grant)} with ${call} from ${iface.name}`);
+            if (typeof call === 'string' && typeof grant === 'string' && /^[a-z][a-z0-9.-]*$/.test(grant)) {
+              const option = key.startsWith('device.') ? '' : typeof value === 'string' ? ` using ${key}` :
+                ` using ${key}=${JSON.stringify(Object.keys(value).find(k => value[k] === permission))}`;
+              advice.add(`${lines(grant)} with ${call} from ${iface.name}${option}`);
+            };
           }
         }
       };

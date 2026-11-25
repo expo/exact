@@ -243,6 +243,7 @@ test("an app and its packages declare install-time permissions on one allow-list
     ['android.permission.ACCESS_COARSE_LOCATION', 'device.geolocation-approximate'],
     ['android.permission.WRITE_CALENDAR', 'device.calendar-write-only'],
     ['android.permission.CAMERA', 'device.camera'],
+    ['android.permission.health.READ_HEALTH_DATA_HISTORY', 'android.readHealthDataHistory'],
     ['android.permission.READ_EXTERNAL_STORAGE', 'device.photos'],
     ['android.permission.SEND_SMS', undefined],
   ]) {

@@ -328,12 +328,7 @@ pub fn within_linked(plan: &[u8], receipt: Option<&str>, compat: &str) -> Result
         ("extensions", extensions),
         ("permissions", permissions),
     ] {
-        let have = if key == "permissions" {
-            linked.get("manifestPermissions").unwrap_or(&linked[key])
-        } else {
-            &linked[key]
-        }
-        .as_array();
+        let have = linked[key].as_array();
         if let Some(missing) = needs
             .iter()
             .find(|need| !have.is_some_and(|have| have.iter().any(|h| h == need.as_str())))
@@ -523,16 +518,6 @@ mod tests {
             ),
             Ok(())
         );
-        let network = "android.permission.ACCESS_NETWORK_STATE";
-        let mut apk: serde_json::Value = serde_json::from_str(&compat(&uses, &[])).unwrap();
-        apk["inputs"]["androidLinked"]["manifestPermissions"] = serde_json::json!([network]);
-        let receipt = module(&[network]).receipt;
-        assert_eq!(
-            within_linked(&plan, Some(&receipt), &apk.to_string()),
-            Ok(())
-        );
-        apk["inputs"]["androidLinked"]["manifestPermissions"] = serde_json::json!([]);
-        assert!(within_linked(&plan, Some(&receipt), &apk.to_string()).is_err());
         let error = within_linked(&plan, None, &compat(&uses[1..], &[])).unwrap_err();
         assert!(error.contains(uses[0]), "{error}");
         let error = within_linked(

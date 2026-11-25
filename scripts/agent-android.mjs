@@ -1049,11 +1049,24 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false, 
   const dirs = apkDirs(app);
   mkdirSync(dirname(dirs.app), { recursive: true });
   const release = takeLock(`${dirs.app}.apk.lock`, { waitMs: Infinity });
-  try { return assembleApk(app, env, profile, writeLocks, bundle, abis, dirs); }
-  finally { release(); }
+  try {
+    const inventory = resolve(dirs.app, 'manifest-permissions.json');
+    const readInventory = () => JSON.stringify(JSON.parse(readFileSync(inventory, 'utf8')));
+    let permissions = '[]';
+    try { permissions = readInventory(); } catch { /* Gradle regenerates a missing or interrupted cache. */ }
+    // Gradle selects the release's libraries from the baked plan. If the merge changes,
+    // repeat the whole build so its bindings, native payload and receipt describe one bake.
+    for (const first of [true, false]) {
+      const result = assembleApk(app, env, profile, writeLocks, bundle, abis, dirs, permissions,
+        first && !!env.EXACT_UPDATE_RECEIPT, readInventory);
+      if (result !== undefined) return result;
+      permissions = readInventory();
+    }
+    throw new Error('Android manifest permissions changed again during packaging; rebuild the APK');
+  } finally { release(); }
 }
 
-function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
+function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs, names, analysis, mergedPermissions) {
   env = androidReleaseEnvironment(env, bundle);
   const java = androidJavaEnv(env);
   if (!java) throw new Error(androidJavaFix(env));
@@ -1074,14 +1087,9 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
   const staged = resolve(dirs.app, 'rust'), out = resolve(staged, 'bake');
   rmSync(staged, { recursive: true, force: true });
   const built = triple => resolve(app.target, triple, profile, `lib${crate.replaceAll('-', '_')}.so`);
-  const inventory = resolve(dirs.app, 'manifest-permissions.json');
-  // Gradle needs the baked plan to select its libraries. Reuse the last merge for the first
-  // ABI, then bind all ABIs to this build's merge before publishing their receipts.
-  const mergedPermissions = () => JSON.stringify(JSON.parse(readFileSync(inventory, 'utf8')));
-  let names = existsSync(inventory) ? mergedPermissions() : '[]';
   const bakes = [], libraries = [];
   let gpuArgs = [];
-  const bake = (abi, analysis = false) => {
+  const bake = abi => {
     const triple = ANDROID_ABIS[abi], toolchain = androidToolchainEnv(env, process.platform, API, triple);
     return bakeGpuLibraries(app, {profile, target:triple, env:{...toolchain, EXACT_ANDROID_MANIFEST_PERMISSIONS:names}, androidPayload, record:false, analysis,
       capture: (receipt, image, modules) => {
@@ -1110,7 +1118,7 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
   // Every ABI is baked (`buildBake`), which writes its own android-<target>.build.json receipt:
   // a first `push` starts a stream from exactly this APK's cohort (LLP 1030.006 D6).
   let gpu;
-  try { gpu = bake(abis[0], !!env.EXACT_UPDATE_RECEIPT); }
+  try { gpu = bake(abis[0]); }
   catch (error) { console.error(error.message); return null; }
   const extensions = JSON.parse(readFileSync(resolve(out, 'artifacts.json'), 'utf8')).extensions;
   const bound = androidImplementations(app.dir, extensions);
@@ -1152,15 +1160,10 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
       ...developmentApkArgs(development, profile, bundle), ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...(launch.theme ? [`-PappTheme=${launch.theme}`] : []), `-PwidgetsBuildDir=${dirs.widgets}`, ...librariesArgs, ...extensionArgs(app, out, config, bound, firebase, development), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env), ...graph.env } }, process.platform, { lockAdvice: maven.length && !writeLocks ? `${app.name}: Gradle locks or verification metadata do not match its dependencies; for an intended graph change, run ${androidLockCommand(app)}, then review and commit gradle.lockfile and gradle-verification.xml` : null });
     const manifestTask = ':app:writeReleaseManifestPermissions';
     if (!gradle([manifestTask])) return null;
-    const merged = mergedPermissions();
-    if (names !== merged || env.EXACT_UPDATE_RECEIPT) {
-      names = merged;
-      bakes.length = libraries.length = 0;
-      bake(abis[0]);
-    }
+    if (names !== mergedPermissions() || analysis) return undefined;
     for (const abi of abis.slice(1)) bake(abi);
     assembled = gradle([manifestTask, bundle ? ':app:bundleRelease' : ':app:assembleRelease']);
-    if (assembled && (mergedPermissions() !== names || bakes.some(b => JSON.stringify(b.compat.inputs.androidLinked?.manifestPermissions) !== names))) throw new Error('Android manifest permissions changed during packaging; rebuild the APK');
+    if (assembled && (mergedPermissions() !== names || bakes.some(b => JSON.stringify(b.compat.inputs.androidLinked?.permissions) !== names))) throw new Error('Android manifest permissions changed during packaging; rebuild the APK');
     if (assembled) graph.kept();
   } finally {
     graph.done();

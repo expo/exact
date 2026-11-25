@@ -143,20 +143,16 @@ test('a receipt without merged Android permissions compares host metadata as bef
   } finally { fs.rmSync(root, {recursive:true, force:true}); }
 });
 
-test('the installed manifest admits the same module with or without a repeated app declaration', () => {
-  const {root, build, cohort} = harness();
+test('an Android source edit compares its requested permissions against the merged APK', () => {
+  const {root, app, binaryInputChanges} = harness();
   try {
-    const network = 'android.permission.ACCESS_NETWORK_STATE';
-    build.version = 1;
-    build.binary = {sha256:'binary'};
-    build.graph.artifacts[0].requires = {androidPermissions:[network]};
-    for (const names of [[], [network]]) {
-      cohort.compat.reach = {androidAppPermissions:names};
-      cohort.compat.inputs.androidLinked = {permissions:[], manifestPermissions:[network]};
-      const frozen = cohortReceipt(build);
-      expect(classifyArtifacts(build, frozen, {id:"test",public:"public"}).bundle).toBe(true);
-      frozen.compat.inputs.androidLinked.manifestPermissions = [];
-      expect(classifyArtifacts(build, frozen, {id:"test",public:"public"}).bundle).toBe(false);
+    const network = 'android.permission.ACCESS_NETWORK_STATE', capture = 'android.permission.DETECT_SCREEN_CAPTURE';
+    const compat = { inputs: { platform: 'android' } };
+    const native = nativeManifestMetadata(app.manifest, 'android');
+    const evidence = {metadata: {...native, host: {permissions:[network]}}, files: [], directories: [], absent: [], links: []};
+    for (const [permissions, changed] of [[[], []], [[network, network], []], [[network, capture], ['host']]]) {
+      app.manifest.host = { android: { permissions } };
+      expect(binaryInputChanges(null, app, compat, [], evidence)).toEqual(changed);
     }
   } finally { fs.rmSync(root, {recursive:true, force:true}); }
 });

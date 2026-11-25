@@ -283,7 +283,7 @@ fn android_compat_uses_the_merged_permissions_after_package_resolution() {
         "package.json",
         r#"{"dependencies":{"@exact/device":"1.0.0"}}"#,
     );
-    let bake = |imports: bool, declared: &[&str]| {
+    let bake = |imports: bool, declared: &[&str], merged: &[&str]| {
         app.write("app.json", &serde_json::json!({"app":{"id":"com.example.capture","name":"Capture"},"implementations":{"@exact/device":{"android":"@fixture/provider/android"}},"host":{"android":{"permissions":declared}}}).to_string());
         let view = if imports {
             "use getBattery, BatteryManager from \"@exact/device\"\ncomponent App\n  resource battery = getBattery() as shape BatteryManager else empty(level=-1)\n  view\n    text \"battery\"\n"
@@ -303,7 +303,7 @@ fn android_compat_uses_the_merged_permissions_after_package_resolution() {
             ])
             .env(
                 "EXACT_ANDROID_MANIFEST_PERMISSIONS",
-                serde_json::to_string(&installed).unwrap(),
+                serde_json::to_string(merged).unwrap(),
             )
             .env_remove("OUT_DIR")
             .output()
@@ -315,23 +315,29 @@ fn android_compat_uses_the_merged_permissions_after_package_resolution() {
         );
         serde_json::from_slice::<Value>(&result.stdout).unwrap()
     };
-    let implicit = bake(true, &[]);
-    let repeated = bake(true, &installed);
+    let implicit = bake(true, &[], &installed);
+    let repeated = bake(true, &installed, &installed);
     std::fs::write(
         device.join("package.json"),
         r#"{"name":"@exact/device","exports":{".":"./exact.json"}}"#,
     )
     .unwrap();
-    let bound = bake(true, &installed);
-    let dropped = bake(false, &installed);
+    let bound = bake(true, &installed, &installed);
+    let dropped = bake(false, &installed, &installed);
     assert_eq!(
         bound["inputs"]["capabilities"],
         dropped["inputs"]["capabilities"]
     );
+    let removed = bake(false, &[network], &[network]);
+    assert_ne!(removed["id"], dropped["id"]);
+    assert_eq!(
+        removed["inputs"]["androidLinked"]["permissions"],
+        serde_json::json!([network])
+    );
     assert_eq!(implicit["id"], repeated["id"]);
     for compat in [&implicit, &repeated, &dropped] {
         assert_eq!(
-            compat["inputs"]["androidLinked"]["manifestPermissions"],
+            compat["inputs"]["androidLinked"]["permissions"],
             serde_json::json!(installed)
         );
         assert_eq!(

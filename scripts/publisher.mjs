@@ -244,7 +244,7 @@ function binaryInputEvidence(bytes) {
   return evidence;
 }
 
-export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = binaryInputEvidence(bytes), env = process.env, extensions, linked = compat.inputs.androidLinked) {
+export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = binaryInputEvidence(bytes), env = process.env, extensions) {
   const platform = compat.inputs.platform, apple = ['ios', 'macos'].includes(platform);
   const assetApp = { ...app, appleIcons, manifest: { host: app.manifest.host } };
   const appleAssetCatalogs = apple ? appleAssetCatalogInventory(assetApp, compat.target.includes('-tvos') ? 'tvos' : platform) : [];
@@ -252,10 +252,13 @@ export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = bi
   const nativeResources = apple ? nativeResourceInventory(app, null, platform) : [];
   const metadata = { ...(appleAssetCatalogs.length ? { appleAssetCatalogs } : {}), ...(launchImage ? { launchImage } : {}), ...(nativeResources.length ? { nativeResources } : {}), ...(apple && evidence.metadata.appleExtensions !== undefined ? { appleExtensions: evidence.metadata.appleExtensions } : {}),
     ...nativeManifestMetadata(app.manifest, platform, compat.target, env, compat.embedded?.trust !== 'production'), delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys };
-  // Older APK receipts have no merged permission inventory. Compare the host fields they understood.
-  if (platform === 'android' && !linked?.manifestPermissions && metadata.host) {
-    const { permissions, ...host } = metadata.host;
-    metadata.host = host;
+  if (platform === 'android') {
+    const { permissions = [], ...host } = metadata.host;
+    const installed = evidence.metadata.host?.permissions;
+    // Only the APK build knows the whole merge. A source-only update can establish
+    // that it needs an absent name. Removing a request leaves the installed APK intact.
+    metadata.host = installed ? { ...host, permissions: installed } : host;
+    if (installed && permissions.some(name => !installed.includes(name))) metadata.host.permissions = permissions;
   }
   const keys = new Set([...Object.keys(metadata), ...Object.keys(evidence.metadata)]);
   const changed = [...keys].filter(key => canonicalJson(metadata[key] ?? null) !== canonicalJson(evidence.metadata[key] ?? null));
@@ -378,7 +381,7 @@ export async function streamCandidates(app, origin, found, env, { baker = null, 
       nativeData = superseded.filter(key => key === 'dataCrate');
       // The native files and manifest metadata the binary's evidence names, which the compatibility id does not all encode.
       const unchecked = evidence === null;
-      const pendingInputs = [...superseded, ...(unchecked ? [] : binaryInputChanges(evidenceBytes, app, compat, graph.appleIcons, evidence, env, graph.extensions, inputs.androidLinked ?? null))];
+      const pendingInputs = [...superseded, ...(unchecked ? [] : binaryInputChanges(evidenceBytes, app, compat, graph.appleIcons, evidence, env, graph.extensions))];
       // The named entries are this bake's, in place of the last generation's whole.
       const entries = [...built.entries].map(([name, bytes]) => ({ name, bytes, sha256: sha256(bytes) }));
       const staticAssets = snapshot
