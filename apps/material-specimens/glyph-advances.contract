@@ -1,0 +1,22 @@
+component GlyphAdvances
+  state index = 0
+  action next
+    index = index + 1
+  derive samples = ["Search, pull to refresh, or tap a specimen for details.", "Search pull to refresh or tap a specimen for details", "abcdefghijklmnopqrstuvwxyz abcdefghijklmnop", "0123456789", ".,:;!? ()[] — ...", "AVA To Wa", "Café naïve déjà vu", "🙂🚀👩‍💻", "Москва ЖЖ", "مرحبا بالعالم", "東京の漢字", "The first line has a few words. The second line has several more words to wrap.", "Search, pull to refresh, or tap a specimen for details.", "AVA To Wa 012345", "AVA To Wa 012345", "0123456789", "কো কি ক্ষি"]
+  derive sizes = [12, 14, 16, 20, 28]
+  derive which = index % 17
+  derive sample = match samples.at(which) { case some(s) => s, case none => "" }
+  derive points = match sizes.at(floor(index / 17) % 5) { case some(n) => n, case none => 16 }
+  derive room = which == 11 ? 140 : which == 12 ? 368 : -1
+  derive family = which == 13 ? "serif" : which == 14 ? "monospace" : "sans-serif"
+  derive numeric = which == 15 ? "tabular-nums" : "normal"
+  view
+    column width="100%" align-items="flex-start"
+      button press=next testId="next"
+        text "Next sample"
+      if room > 0
+        text sample font-size=points font-family=family font-variant-numeric=numeric width=room testId="sample"
+      else
+        text sample font-size=points font-family=family font-variant-numeric=numeric white-space="nowrap" testId="sample"
+      text-reference sample=sample sp=points room=room family=(which == 13 ? 3 : which == 14 ? 5 : 0) tabular=(which == 15) width="100%" height=180
+      input value=sample font-size=points font-family=family font-variant-numeric=numeric width="100%" testId="field"

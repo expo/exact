@@ -97,12 +97,12 @@ fn an_owner_update_round_trips_and_a_malformed_one_is_refused() {
     let mut presence = bytes.clone();
     presence[0] = 2;
     assert!(OwnerUpdate::decode(&presence).is_err());
-    // An operation past the five, at the contribution's byte 25, a relation past the seven, at the
+    // An operation past the six, at the contribution's byte 25, a relation past the seven, at the
     // first relation's byte 120, a vertical bar edge past the three, before the sidebar's two
     // bytes, the window map's 25, the configuration's 9 and the regions' 47, and a region's kind
     // past the two, 34 bytes from the end
     for (at, unknown) in [
-        (25, 5),
+        (25, 6),
         (120, 7),
         (bytes.len() - 84, 3),
         (bytes.len() - 34, 2),
@@ -133,8 +133,9 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
         BarReservation,
         KeyboardInsets,
         ContainerClearance,
+        NativeViewInsets,
     ];
-    assert_eq!(operations.map(|o| o as u8), [0, 1, 2, 3, 4]);
+    assert_eq!(operations.map(|o| o as u8), [0, 1, 2, 3, 4, 5]);
     assert_eq!(Operation::ALL, operations);
     use Relation::*;
     let relations = [

@@ -142,6 +142,7 @@ pub use font::FontContext;
 pub use inline_box::{InlineBox, InlineBoxKind};
 #[doc(inline)]
 pub use layout::Layout;
+pub use shape::{AdvanceMeasure, AdvanceRequest, GlyphAdvance, RunAdvances};
 
 pub use editing::*;
 pub use layout::*;

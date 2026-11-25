@@ -9,3 +9,6 @@ include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 
 #[cfg(target_os = "android")]
 exact_painted::canvas_jni!(hello_data::Hello, hatches = crate::exact_hatches());
+
+#[cfg(target_os = "android")]
+mod advances;

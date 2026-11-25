@@ -36,6 +36,8 @@ package final class ContributionsIOS {
         case barReservation = 2
         case keyboardInsets = 3
         case containerClearance = 4
+        /// The clearance still owed in a native view, through its own controller (D15).
+        case nativeViewInsets = 5
     }
 
     /// What `identity` adds, as last recorded, and its effect, as last measured; zero where it adds

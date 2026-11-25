@@ -1,11 +1,6 @@
 # The Android reader
 
-The Kotlin reader is part of Android’s Canvas host (LLP 1076 §3.3, LLP 1115.001 D2). The Rust host (`host/painted`, built for `aarch64-linux-android` or `x86_64-linux-android`) runs the app, lays out its text and records its paint operations (`host/painted/src/canvas.rs`). The
-reader replays that stream onto Android's own Canvas: a `RenderNode` for each row, scroller and animated layer,
-hardware bitmaps for pictures, `drawGlyphs` for text the Rust has shaped (below Android 12, the glyphs' outlines:
-"Android 10 and 11", below). The two meet at `dev.exact.canvas.Native`,
-whose methods `exact_painted::canvas_jni!(Data)` defines for an app (`host/painted/src/canvas/jni.rs`). Nothing versions
-the stream or those calls, so both sides are built from one commit. The build holds that as far as it can see
+The Kotlin reader replays the Rust host’s paint operations on Android’s Canvas (LLP 1076 §3.3, LLP 1115.001 D2). `host/painted` runs the app on ARM64 and x86-64 Android, lays out its text and records the stream in `canvas.rs`. The reader uses a `RenderNode` for each row, scroller and animated layer, hardware bitmaps for pictures, and `drawGlyphs` for the glyphs Rust shaped. On Android 10 and 11 it draws their outlines. The app defines the reader’s JNI methods in `dev.exact.canvas.Native` through `exact_painted::canvas_jni!(Data)`. The stream and JNI calls are unversioned, so the reader and Rust host build from the same commit. The build checks this pairing
 (LLP 1159.002): Gradle runs without file watching, so an edit it was not told of is still read, and the APK is refused
 when the library it packaged does not load what the one the build staged loads. A pair that slips past both shows as
 one line in the log, `exact canvas: unknown op …; the frame stops here`.
@@ -846,6 +841,8 @@ Both arrays take `group:artifact:version` with a pinned version: no ranges, dyna
 An app with no Maven libraries resolves as before, unlocked and unverified. Maven builds and lock reports on the same checkout take turns using Gradle's verification file. A library that is not on those repositories stays LLP 1133.001 D9's pinned `artifacts`. `packages/camera/test/android.mjs` exercises locking and verification in an app with CameraX and Compose.
 
 ## Text fields (LLP 1115.001 D8)
+
+Painted text measures, fits lines and draws with the advances of a default Android `TextView` in the resolved font at the displayed size (LLP 1085.000 §8). Each shaped font run makes one measurement call from the shaping thread. Android 12 and later supply glyph origins when the face and ordered IDs match. For plain ASCII, if the font can only adjust advances for the glyphs drawn, those widths already give every origin. Each shaping thread remembers the last face inspected. With only a cluster width, it shares that width in proportion to Exact’s advances. Android breaks greedily on these widths, like `BREAK_STRATEGY_SIMPLE`. The default `TextView` can choose other breaks. Linux and Windows keep their existing metrics. Web layout parity on Android holds up to text metrics. Run the comparison with `ANDROID_SERIAL=emulator-… bun test host/android/reference/advances.test.mjs`.
 
 Each `input` of a text type and each `textarea` is the framework's own `android.widget.EditText` (`Fields.kt`), with no background of its own, over the container exact2 paints for it. No library: the one subclass (`FieldText`) only says when its selection moves, which no listener of the class tells. The IME and its composition, autofill's hints, the selection handles, the magnifier, the floating toolbar and the spell checker come with the class. A field is an `EditText` whether or not it is focused, so nothing shifts when it takes the focus. exact2's side is `host/painted/src/fields.rs`, `presenter/hosted.rs` and `canvas/field.rs`.
 

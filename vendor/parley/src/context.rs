@@ -58,6 +58,14 @@ impl<B: Brush> LayoutContext<B> {
         }
     }
 
+    /// Supply the advances used by this host before line breaking and alignment.
+    pub fn set_advance_measure(
+        &mut self,
+        measure: Option<alloc::sync::Arc<crate::AdvanceMeasure>>,
+    ) {
+        self.scx.measure = measure;
+    }
+
     fn resolve_style_set(
         &mut self,
         font_ctx: &mut FontContext,
@@ -208,7 +216,8 @@ impl<B: Brush> Default for LayoutContext<B> {
 
 impl<B: Brush> Clone for LayoutContext<B> {
     fn clone(&self) -> Self {
-        // None of the internal state is visible so just return a new instance.
-        Self::new()
+        let mut context = Self::new();
+        context.scx.measure.clone_from(&self.scx.measure);
+        context
     }
 }

@@ -2368,6 +2368,7 @@ dependencies = [
  "iana-time-zone",
  "ibex2",
  "icu_locale",
+ "jni",
  "jni-sys 0.3.1",
  "jpeg-encoder",
  "libc",
@@ -4207,7 +4208,9 @@ version = "0.1.0"
 dependencies = [
  "contract",
  "exact-bake",
+ "exact-kernel",
  "exact-painted",
+ "exact-plan",
  "hello-data",
 ]
 
