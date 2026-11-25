@@ -406,12 +406,10 @@ pub fn lower_all(
     );
     asset_errors.extend(routes::placed(checked, &mut notes));
     if let Some((selection, out)) = warned {
-        out.extend(warnings::with_text_styles(
-            checked,
-            &text_styles,
-            notes,
-            selection,
-        ));
+        // Lowering's refusals hold the placement warning (`warnings::with_text_styles`)
+        let refused = result.is_err();
+        let earned = warnings::with_text_styles(checked, &text_styles, refused, notes, selection);
+        out.extend(earned);
     }
     asset_errors.extend(warnings::header_bar::refused(checked, profile));
     let result = match result {
@@ -1092,7 +1090,7 @@ impl<'a> Lowerer<'a> {
                     sites.region(*tag);
                 }
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
-                self.under_bindings(n.scoped_child_lists()[0].1, |l| {
+                self.under_repeat(n.scoped_child_lists()[0].1, |l| {
                     l.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
                 })
             }
@@ -1398,8 +1396,8 @@ impl<'a> Lowerer<'a> {
                 } else if prop == exact_kernel::PropId::IntersectMargin {
                     glass = crate::intersect::margin(&a.value, a.span)?;
                     &glass
-                } else if let Some(width) = values::split_width(prop, &a.value) {
-                    glass = width;
+                } else if let Some(text) = values::split_literal(prop, &a.value) {
+                    glass = text;
                     &glass
                 // @ref LLP 1116.007 D3.1 — a symbol by another spelling is its role.
                 } else if let Some(role) = matches!(

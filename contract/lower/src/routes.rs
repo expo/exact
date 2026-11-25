@@ -200,10 +200,19 @@ pub(crate) enum NavPlace {
     PanelChild(Vec<String>, Vec<Expr>),
     /// Deeper inside a root, behind a wrapper, outside any route.
     InRoot(Vec<String>, Vec<Expr>),
-    /// Directly inside the column that owns a route.
-    RouteColumn,
-    /// Inside a route.
+    /// A route's own child, through any branch: where its placeholder box goes (LLP 1127 D1); `column` where
+    /// the route is a `column`, whose own `row role="toolbar"` is its bottom toolbar (LLP 1123 C11b).
+    RouteChild { column: bool },
+    /// A route's own child that a `for` repeats: a row, never its placeholder box.
+    RouteRow { column: bool },
+    /// Deeper inside a route.
     InRoute,
+    /// A keyed element's own child outside every navigation root the compiler places, as one that is not the view's
+    /// first element: a host may still own its route (LLP 1127 D1), so a placeholder there is taken as a route's own
+    /// child, and anything else is outside, as before.
+    UnplacedRouteChild,
+    /// Such a child that a `for` repeats: a row, never its placeholder box.
+    UnplacedRouteRow,
 }
 
 /// The refusals of what stands where it cannot, by its place in the checked view: a bottom toolbar and an arrangement.
@@ -213,16 +222,76 @@ pub(crate) fn placed(checked: &Checked<'_>, warnings: &mut Vec<LowerError>) -> V
     errors
 }
 
-/// @ref LLP 1116.006 D2 — the attribute marking a box as the split's own placeholder, written as
-/// a literal: a wide window's split shows it in the detail pane while nothing is selected, and
-/// it is no box anywhere else (its `display` is `none`, which the web shell overrides there).
+/// What a placeholder box is, which every refusal of one ends with, so a repair that follows it compiles (LLP 1127 D1).
+const PLACEHOLDER: &str = "A placeholder is a plain box (`box`, `column` or `row`) directly under the stack's root route, outside any `for` inside the route, no popover, and with no `portal` or the literal `portal=\"\"`";
+
+/// @ref LLP 1116.006 D2 — the attribute marking a box as the split's own placeholder, a value the
+/// compiler knows (`split_text`): a wide window's split shows it in the detail pane while nothing
+/// is selected, and it is no box anywhere else (its `display` is `none`, which the web shell
+/// overrides there).
 pub(crate) fn split_placeholder(attrs: &[Attr]) -> Option<&Attr> {
     attrs.iter().find(|a| {
-        a.name == "navigationSplit" && matches!(&a.value, Expr::Str(s, _) if s == "placeholder")
+        a.name == "navigationSplit" && split_text(&a.value).is_some_and(|s| s == "placeholder")
     })
 }
 
+/// `e` without the type a component's typed prop wraps a value it passes in (`use_node.rs`).
+pub(crate) fn untyped(e: &Expr) -> &Expr {
+    match e {
+        Expr::Typed(inner, ..) => untyped(inner),
+        e => e,
+    }
+}
+
+/// `navigationSplit`'s value as text where the compiler knows it, as the prop carries it at run time: a literal, a number
+/// as the language writes it, a switch's word, or a template of these with nothing computed in
+/// it, through any typed prop's wrapper. Every check of the attribute reads this one answer (LLP 1127 D1).
+pub(crate) fn split_text(e: &Expr) -> Option<String> {
+    match untyped(e) {
+        Expr::Str(s, _) => Some(s.clone()),
+        Expr::Number(n, _) => Some(n.to_string()),
+        Expr::Bool(b, _) => Some(b.to_string()),
+        Expr::Template(parts, _) => parts
+            .iter()
+            .map(|part| match part {
+                contract_syntax::TemplatePart::Text(t) => Some(t.clone()),
+                contract_syntax::TemplatePart::Expr(e) => split_text(e),
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
+/// A string literal's text, or a template's whose every part is literal, as
+/// a component's prop can leave one: what the attribute says, whatever the app does.
+fn constant_text(e: &Expr) -> Option<String> {
+    match e {
+        // A literal a component's typed prop passed keeps its type's wrapper (`use_node.rs`)
+        Expr::Typed(inner, ..) => constant_text(inner),
+        Expr::Str(s, _) => Some(s.clone()),
+        Expr::Template(parts, _) => parts
+            .iter()
+            .map(|part| match part {
+                contract_syntax::TemplatePart::Text(t) => Some(t.clone()),
+                contract_syntax::TemplatePart::Expr(e) => constant_text(e),
+            })
+            .collect(),
+        _ => None,
+    }
+}
+
 impl NavPlace {
+    /// @ref LLP 1127 D1 — enters a `for`'s body, where a route's own child is a row it repeats, never
+    /// the route's placeholder box; gives back the place to restore after the body.
+    pub(crate) fn repeat(&mut self) -> Self {
+        let row = match &*self {
+            NavPlace::RouteChild { column } => NavPlace::RouteRow { column: *column },
+            NavPlace::UnplacedRouteChild => NavPlace::UnplacedRouteRow,
+            other => other.clone(),
+        };
+        std::mem::replace(self, row)
+    }
+
     fn is_root(&self, first_root: bool, attrs: &[Attr]) -> bool {
         first_root
             && matches!(self, NavPlace::Outside)
@@ -360,8 +429,12 @@ impl NavPlace {
             format!("a `{tag}` that is not a `role=\"tablist\"`")
         } else {
             match self {
-                NavPlace::Outside => "a tablist outside every navigation root".into(),
-                NavPlace::InRoute | NavPlace::RouteColumn => "a tablist inside a route".into(),
+                NavPlace::Outside | NavPlace::UnplacedRouteChild | NavPlace::UnplacedRouteRow => {
+                    "a tablist outside every navigation root".into()
+                }
+                NavPlace::RouteChild { .. } | NavPlace::RouteRow { .. } | NavPlace::InRoute => {
+                    "a tablist inside a route".into()
+                }
                 _ => return Ok(()),
             }
         };
@@ -374,6 +447,7 @@ impl NavPlace {
 
     /// The place of `tag`'s children, or the refusal of a route `tag` that
     /// no host would find here.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn enter(
         &self,
         first_root: bool,
@@ -381,6 +455,7 @@ impl NavPlace {
         attrs: &[Attr],
         children: &[Node],
         span: Span,
+        boxed: bool,
     ) -> Result<NavPlace, LowerError> {
         let has = |name: &str| attrs.iter().any(|a| a.name == name);
         let path = |p: &[String]| [p, &[tag.to_string()]].concat();
@@ -503,19 +578,88 @@ impl NavPlace {
         if matches!(self, NavPlace::PanelChild(..)) && self.is_route(attrs) {
             if let Some(a) = attrs.iter().find(|a| {
                 a.name == "navigationSplit"
-                    && !matches!(&a.value, Expr::Str(s, _) if s == "split" || s == "none")
+                    && !matches!(split_text(&a.value).as_deref(), Some("split" | "none"))
             }) {
-                return err("lower-tab-split", "a tab is a split or a stack by construction: write the literal \"split\" or \"none\" for `navigationSplit`, or leave it out. To offer both, declare two tabs or two routes", a.span);
+                // A placeholder written on the route is told where the box goes, as off a tab
+                let placeholder = (split_text(&a.value).as_deref() == Some("placeholder"))
+                    .then(|| format!(" `\"placeholder\"` marks a box, not a route, which it would hide. {PLACEHOLDER}"))
+                    .unwrap_or_default();
+                return err("lower-tab-split", format!("a tab is a split or a stack by construction: write the literal \"split\" or \"none\" for `navigationSplit`, or leave it out. To offer both, declare two tabs or two routes.{placeholder}"), a.span);
             }
         }
-        // @ref LLP 1116.006 D2 — the split's placeholder is a box in the root route; a route
-        // marked so would never show.
+        // @ref LLP 1116.006 D2 — the split's placeholder is a plain box, the root route's own child; a
+        // route marked so would never show.
         if let Some(a) = split_placeholder(attrs).filter(|_| has("navigationKey")) {
             return err(
                 "lower-attr-value",
-                "`navigationSplit=\"placeholder\"` marks a box inside the stack's root route, which a wide window shows in the detail pane while nothing is selected; on a route it would hide the route. Put it on a box in the route (docs/recipes/navigation-stack.md)",
+                format!("`navigationSplit=\"placeholder\"` marks a plain box that is the stack's root route's own child, which a wide window shows in the detail pane while nothing is selected; on a route, or on the navigation root, it would hide it. {PLACEHOLDER} (docs/recipes/navigation-stack.md)"),
                 a.span,
             );
+        }
+        // @ref LLP 1127 D1 — off a route a computed `navigationSplit` is refused, since it could be a
+        // placeholder the compiler cannot place; a literal one there warns, as on the navigation root.
+        // Any keyed element passes: a navigation root that is not the view's first element is placed
+        // `Outside` here, and the hosts still read its routes. A native view's is its own attribute check's
+        // (`lower-native-attr`), which says what its box takes.
+        let split = attrs
+            .iter()
+            .find(|a| a.name == "navigationSplit")
+            .filter(|_| !crate::native::is_module_tag(tag));
+        if let Some(a) = split.filter(|a| !has("navigationKey") && split_text(&a.value).is_none()) {
+            return err(
+                "lower-navigation-split",
+                format!("off a stack's root route, `navigationSplit` is only the literal \"placeholder\" on a box, which the split shows over the detail pane; a computed value here is no placeholder the compiler can place. Write the stack's setting on its root route (a tab's first route takes only the literal \"split\" or \"none\"), or render a separate box under an `if` with the literal `navigationSplit=\"placeholder\"`. {PLACEHOLDER}"),
+                a.span,
+            );
+        }
+        if let Some(a) = split_placeholder(attrs).filter(|_| !crate::native::is_module_tag(tag)) {
+            if !boxed {
+                return err(
+                    "lower-navigation-split",
+                    format!("`navigationSplit=\"placeholder\"` marks a box, the detail pane's content while nothing is selected; no host shows a `{tag}` there. {PLACEHOLDER}"),
+                    a.span,
+                );
+            }
+            // @ref LLP 1127 D1 — the placeholder is a plain box the split shows: a dialog or a popover shows only
+            // when opened, a header is a route's bar, and a portal moves it where the split cannot lay it out (an
+            // empty one moves nothing)
+            let popover = attrs
+                .iter()
+                .any(|a| a.name == "popover" && !matches!(untyped(&a.value), Expr::None(_)));
+            if !matches!(tag, "box" | "view" | "column" | "row") || popover {
+                return err(
+                    "lower-navigation-split",
+                    format!("`navigationSplit=\"placeholder\"` marks the box the split shows while nothing is selected, which only a plain box can be: a `dialog` or a popover shows only when opened, and a header is its route's bar. {PLACEHOLDER}"),
+                    a.span,
+                );
+            }
+            if let Some(p) = attrs.iter().find(|a| {
+                a.name == "portal" && constant_text(&a.value).is_none_or(|s| !s.is_empty())
+            }) {
+                return err(
+                    "lower-navigation-split",
+                    format!("`navigationSplit=\"placeholder\"` marks a box the split lays out over the detail pane from its route; a `portal` moves it elsewhere, where the split cannot place it. {PLACEHOLDER}"),
+                    p.span,
+                );
+            }
+            match self {
+                NavPlace::RouteChild { .. } | NavPlace::UnplacedRouteChild => {}
+                NavPlace::RouteRow { .. } | NavPlace::UnplacedRouteRow => return err(
+                    "lower-navigation-split",
+                    format!("`navigationSplit=\"placeholder\"` is on a box a `for` inside the route repeats; the split shows one box over the detail pane, the route's own child, and a list mounts the rows a `for` makes where the split cannot lay them out. {PLACEHOLDER}"),
+                    a.span,
+                ),
+                NavPlace::InRoute => return err(
+                    "lower-navigation-split",
+                    format!("`navigationSplit=\"placeholder\"` is on a box inside another box of its route; the split lays it out over the detail pane only as the route's own child. {PLACEHOLDER}"),
+                    a.span,
+                ),
+                _ => return err(
+                    "lower-navigation-split",
+                    format!("`navigationSplit=\"placeholder\"` is on a box that is no route's own child the compiler can find (outside every route, or inside another box of a route a host keeps), so no split shows it: it is the detail pane's content while nothing is selected. {PLACEHOLDER}"),
+                    a.span,
+                ),
+            }
         }
         if root {
             let path = vec![tag.to_string()];
@@ -545,17 +689,19 @@ impl NavPlace {
                         modal.map_or(span, |a| a.span),
                     );
                 }
-                NavPlace::InRoute | NavPlace::RouteColumn => {
+                NavPlace::RouteChild { .. } | NavPlace::RouteRow { .. } | NavPlace::InRoute => {
                     return err(
                         "lower-route-place",
                         format!("this `{tag}` has a `navigationKey` inside another route; a route is a child of the navigation root or of a linked `role=\"tabpanel\"` in it, never of a route, so no host would show it"),
                         span,
                     )
                 }
-                NavPlace::Outside => return Ok(NavPlace::Outside),
+                NavPlace::Outside | NavPlace::UnplacedRouteChild | NavPlace::UnplacedRouteRow => {
+                    return Ok(NavPlace::UnplacedRouteChild)
+                }
                 _ => {
                     check_scroll(tag, attrs, children)?;
-                    return Ok(if tag == "column" { NavPlace::RouteColumn } else { NavPlace::InRoute });
+                    return Ok(NavPlace::RouteChild { column: tag == "column" });
                 }
             };
             return err(
@@ -585,7 +731,8 @@ impl NavPlace {
                     NavPlace::InRoot(path(p), tabs.clone())
                 }
             }
-            NavPlace::RouteColumn => NavPlace::InRoute,
+            NavPlace::RouteChild { .. } | NavPlace::RouteRow { .. } => NavPlace::InRoute,
+            NavPlace::UnplacedRouteChild | NavPlace::UnplacedRouteRow => NavPlace::Outside,
             other => other.clone(),
         })
     }

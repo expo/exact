@@ -197,7 +197,11 @@ a grouped list nor a list of cells (`lower-list-section`), and a
 name or key a host would refuse or ignore at run time: a
 swipe row's `swipeTrailing` naming a button outside its `scroll` (`lower-swipe-wiring`),
 a navigation root's `navigationKey` that never meets its routes' (`lower-navigation-key`),
-a `navigationSplit` off the root route (`lower-navigation-split`), an `image` source
+a literal `navigationSplit` no host reads, such as `"none"` on a box that is no route (`lower-navigation-split`; under
+the same id the build fails for a computed one on such a box, which could be a placeholder the compiler cannot place,
+and for a `"placeholder"` that is no plain box, outside every route, not its route's own child, repeated by a `for`
+inside the route, a popover or with a `portal` other than the literal `portal=""`; which route is a stack's first, whose placeholder shows, is known
+at run time), an `image` source
 that is a bare word, neither a symbol nor a file (`lower-image-source`), an `image`, `video` or `audio`
 file outside `assets/`, which the app would ship without (`lower-asset-path`), and a literal `RoundButton`
 label of more than the 7 characters its circle holds (`lower-round-button-label`); each names its repair, and fixing it is part of the edit.
@@ -4854,7 +4858,7 @@ On iPad a tab keeps a pushed stack by default. Write `navigationSplit="split"`
 on the first keyed route in the tabpanel to keep that route beside its detail.
 On a tab’s keyed route the value must be the literal `"split"` or `"none"`, or absent.
 To offer both presentations, declare two tabs or two routes. An untabbed route
-can still bind the value or specify a positive column width.
+can still bind the value or specify a column width, a whole number of px from 1 to 999999 in digits with no leading zero (a bare number is written as its text first).
 UIKit keeps the tab bar and collapses the columns in a compact window.
 On iPad this also works on an untabbed first route. UIKit chooses the column
 width, including for a custom primary without a list.

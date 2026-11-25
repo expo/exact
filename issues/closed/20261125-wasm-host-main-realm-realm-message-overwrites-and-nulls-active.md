@@ -1,6 +1,7 @@
 # Wasm host main-realm realm.message() overwrites and nulls active closure context mid-turn (and realm.forget() races with resettle())
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Save and restore active closure context and prelude currentCall around stream messages, and cancel forgotten answers queued in resettle() or mid-turn.
 **Systems:** host/web wasm data-module main realm (module-glue.js)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

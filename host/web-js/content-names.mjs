@@ -90,3 +90,51 @@ export async function languageHead(gen, names, storage, entry, development) {
     return `<script>${output[0].code.trim()}</script>\n`;
   } finally { await build.close(); }
 }
+
+// HTML Living Standard §13.2.5 ("Script data state" through "Script data double escape end state"): `<!--` enters
+// script-data escaped state where a later `<script` prevents `</script>` from ending the element (scripts/web-head.mjs).
+const SCRIPT_DATA_TAG = /<(?=!--|\/script[\t\n\f\r />])/gi;
+
+/** Neutralize HTML script-data hazards (`<!--` and `</script`) inside JS strings, untagged templates, and regexes so
+ * the minified entry chunk is safe verbatim inside `<script type="module">` and matches its on-disk bytes. */
+export function safeInlineScript(code, fileName = 'app.js') {
+  SCRIPT_DATA_TAG.lastIndex = 0;
+  if (!SCRIPT_DATA_TAG.test(code)) return code;
+  const edits = [];
+  const escapeRange = (from, to) => {
+    const slice = code.slice(from, to);
+    SCRIPT_DATA_TAG.lastIndex = 0;
+    if (!SCRIPT_DATA_TAG.test(slice)) return;
+    edits.push([from, to, slice.replace(SCRIPT_DATA_TAG, (_, offset) => {
+      let slashes = 0;
+      for (let i = offset - 1; i >= 0 && slice[i] === '\\'; i--) slashes++;
+      return slashes % 2 ? 'x3c' : '\\x3c';
+    })]);
+  };
+  const tagged = new Set();
+  new Visitor({
+    TaggedTemplateExpression: node => { if (node.quasi) tagged.add(node.quasi); },
+    Literal: node => {
+      if (typeof node.value === 'string') escapeRange(node.start + 1, node.end - 1);
+      else if (node.regex) escapeRange(node.start + 1, node.end);
+    },
+    TemplateLiteral: node => {
+      if (tagged.has(node)) return;
+      for (const q of node.quasis) escapeRange(q.start, q.end);
+    },
+  }).visit(parseSync(fileName, code).program);
+  let out = code;
+  for (const [from, to, rep] of edits.sort((a, b) => b[0] - a[0])) out = out.slice(0, from) + rep + out.slice(to);
+  SCRIPT_DATA_TAG.lastIndex = 0;
+  if (SCRIPT_DATA_TAG.test(out)) throw new Error(`${fileName}: inline script still contains an HTML script-data tag`);
+  return out;
+}
+
+/** A Rolldown plugin that rewrites the entry chunk for `--inline` after minification so disk and inline bytes match. */
+export function inlineScript() {
+  return { name: 'exact-inline-script', generateBundle(_, bundle) {
+    for (const chunk of Object.values(bundle)) {
+      if (chunk.type === 'chunk' && chunk.isEntry) chunk.code = safeInlineScript(chunk.code, chunk.fileName);
+    }
+  } };
+}

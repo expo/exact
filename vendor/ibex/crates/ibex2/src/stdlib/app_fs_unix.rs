@@ -260,8 +260,10 @@ fn remove_raw(dir: &File, path: &CStr) -> io::Result<bool> {
 }
 #[path = "app_fs_create.rs"]
 mod create;
-use create::atomic;
 pub(crate) use create::create_below;
+use create::{atomic, atomic_in};
+#[path = "app_fs_staging.rs"]
+pub(super) mod staging;
 
 /// A folder where `what` needs a file: EISDIR, the code a write to one gets
 /// from the kernel and the web's store gives every such operation.
@@ -372,6 +374,9 @@ impl AppDirectories {
         {
             return Err(error("app path contains traversal or NUL"));
         }
+        if parts.first().is_some_and(|part| staging::reserved(part)) {
+            return Err(error("app path names the host's staging directory"));
+        }
         Ok((index, parts))
     }
     pub(crate) fn open_parent(&self, path: &str) -> Result<(File, String), HostError> {
@@ -424,10 +429,15 @@ impl AppDirectories {
         grants: &GrantSet,
         path: &str,
     ) -> Result<AtomicTarget, HostError> {
-        self.parse(path)?;
+        let (index, _) = self.parse(path)?;
         crate::boundary::admit(grants, &Operation::FsWrite { path: path.into() })?;
         let (parent, leaf) = self.open_parent(path)?;
-        Ok(AtomicTarget { parent, leaf })
+        let staging = self.staging_or(index, &parent)?;
+        Ok(AtomicTarget {
+            parent,
+            leaf,
+            staging,
+        })
     }
     /// Open a granted regular file relative to the retained app roots.
     /// Trusted Rust callers own subsequent read scheduling and byte bounds.
@@ -535,6 +545,18 @@ impl AppDirectories {
             Some(to) => Some(below(to)?),
             None => None,
         };
+        let (index, parts) = self.parse(path)?;
+        if op == FsOp::ReadDir && parts.is_empty() {
+            return Ok(FsResult::Names(
+                staging::listed(&self.root(index)?).map_err(error)?,
+            ));
+        }
+        if op == FsOp::AtomicWriteFile {
+            let (parent, leaf) = below(path)?.parent()?;
+            let staging = self.staging_or(index, &parent)?;
+            atomic_in(&staging, &parent, &leaf, data.unwrap_or(&[])).map_err(error)?;
+            return Ok(FsResult::Done);
+        }
         run_below(op, below(path)?, destination, data.unwrap_or(&[]))
     }
 }
@@ -1012,22 +1034,23 @@ pub fn resolve_sqlite(
 #[path = "app_fs_publish.rs"]
 mod publication;
 
-/// An app file written in pieces beside its target and put in its place
-/// whole (Exact local patch 19): the staging file is removed unless
-/// [`Staged::publish`] renames it over the target.
+/// An app file written in pieces in this launch's staging directory and put
+/// in its place whole (Exact local patches 19 and 54): the staging file is
+/// removed unless [`Staged::publish`] renames it over the target.
 pub struct Staged {
     parent: File,
     leaf: String,
+    staging: File,
     /// The staging file's name; empty once published.
     temp: String,
     file: Option<File>,
 }
 impl AppDirectories {
-    /// Admit `fs.write` on `path` and create its staging file in the pinned
-    /// parent, `.exact-<32 hex>.partial`. A missing parent, or a target that
-    /// is not a regular file, is refused before anything is written.
+    /// Admit `fs.write` on `path` and create its staging file,
+    /// `.exact-<32 hex>.partial`, in this launch's staging directory. A missing
+    /// parent, or a target that is not a regular file, is refused first.
     pub fn stage(&self, grants: &GrantSet, path: &str) -> Result<Staged, HostError> {
-        self.parse(path)?;
+        let (index, _) = self.parse(path)?;
         crate::boundary::admit(grants, &Operation::FsWrite { path: path.into() })?;
         let (parent, leaf) = self.open_parent(path)?;
         match open_at(&parent, &leaf, libc::O_RDONLY | libc::O_NONBLOCK) {
@@ -1041,8 +1064,9 @@ impl AppDirectories {
         getrandom::getrandom(&mut bytes).map_err(error)?;
         let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         let temp = format!(".exact-{hex}.partial");
+        let staging = self.staging_or(index, &parent)?;
         let file = open_at(
-            &parent,
+            &staging,
             &temp,
             libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
         )
@@ -1050,6 +1074,7 @@ impl AppDirectories {
         Ok(Staged {
             parent,
             leaf,
+            staging,
             temp,
             file: Some(file),
         })
@@ -1078,7 +1103,7 @@ impl Staged {
         file.sync_all().map_err(error)?;
         admit()?;
         drop(file);
-        rename(&self.parent, &self.temp, &self.parent, &self.leaf).map_err(error)?;
+        rename(&self.staging, &self.temp, &self.parent, &self.leaf).map_err(error)?;
         self.temp.clear();
         Ok(())
     }
@@ -1087,7 +1112,7 @@ impl Drop for Staged {
     fn drop(&mut self) {
         drop(self.file.take());
         if !self.temp.is_empty() {
-            let _ = unlink(&self.parent, &self.temp, false);
+            let _ = unlink(&self.staging, &self.temp, false);
         }
     }
 }
@@ -1095,10 +1120,11 @@ impl Drop for Staged {
 pub(crate) struct AtomicTarget {
     parent: File,
     leaf: String,
+    staging: File,
 }
 impl AtomicTarget {
     pub(crate) fn write(self, data: &[u8]) -> Result<(), HostError> {
-        atomic(&self.parent, &self.leaf, data).map_err(error)
+        atomic_in(&self.staging, &self.parent, &self.leaf, data).map_err(error)
     }
     /// The same file with `.extension` appended, in the directory already pinned.
     pub(crate) fn extended(self, extension: &str) -> Self {
@@ -1371,12 +1397,12 @@ mod tests {
         let f = Fixture::new();
         let grants = GrantSet::parse("fs.write app:/cache").unwrap();
         std::fs::write(f.path.join("cache/a"), b"old").unwrap();
-        let names = || std::fs::read_dir(f.path.join("cache")).unwrap().count();
+        let names = || std::fs::read_dir(f.path.join("cache")).unwrap().count() - 1;
         let mut staged = f.dirs.stage(&grants, "app:/cache/a").unwrap();
         staged.write_all(b"ne").unwrap();
         staged.write_all(b"w").unwrap();
         assert_eq!(std::fs::read(f.path.join("cache/a")).unwrap(), b"old");
-        assert_eq!(names(), 2);
+        assert_eq!(names(), 1);
         staged.publish().unwrap();
         assert_eq!(std::fs::read(f.path.join("cache/a")).unwrap(), b"new");
         assert_eq!(names(), 1);

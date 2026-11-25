@@ -61,11 +61,19 @@ fn has_route(nodes: &[Node], place: &NavPlace, first_root: bool) -> bool {
             span,
             ..
         } => {
-            let Ok(next) = place.enter(first_root && index == 0, tag, attrs, children, *span)
+            // Every element counts as a box here: only where routes are matters, not a placeholder's tag, nor a
+            // `navigationSplit` value, which the lowerer judges once it folds it
+            let attrs: Vec<_> = attrs
+                .iter()
+                .filter(|a| a.name != "navigationSplit")
+                .cloned()
+                .collect();
+            let Ok(next) =
+                place.enter(first_root && index == 0, tag, &attrs, children, *span, true)
             else {
                 return false;
             };
-            place.is_route(attrs) || has_route(children, &next, false)
+            place.is_route(&attrs) || has_route(children, &next, false)
         }
         Node::Use { .. } | Node::Children { .. } => false,
         node => node

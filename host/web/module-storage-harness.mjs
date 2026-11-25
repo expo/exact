@@ -153,6 +153,7 @@ ${top}`);
       background: () => glue.call({ op: 'background', id: realm.id }),
       drain: () => glue.run(glue.call({ op: 'background-round', id: realm.id }).token),
       forget: inFlight => glue.call({ op: 'forget', id: realm.id, inFlight: inFlight.map(s => request('answer', s)) }),
+      message: (source, outcome) => glue.call(request('message', source, { outcome })),
       overlay: source => glue.call({ op: 'overlay', id: realm.id, source, args: [], answer: [], writes: [] }),
       holdWorkerMessagesAfter: count => {
         const dispatch = captured.messages.dispatch;

@@ -29,7 +29,7 @@ import { writers } from './writers.mjs';
 import { namesStream } from './stream-names.mjs';
 import { bundleHostModule, localImports, stageHostGlue, writeFalse } from './glue.mjs';
 import { gateAgent } from './agent-gate.mjs';
-import { contentName, contentNames, languageHead, splitLanguages } from './content-names.mjs';
+import { contentName, contentNames, inlineScript, languageHead, splitLanguages } from './content-names.mjs';
 import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, moduleSources, undeclaredRustData, fresh, frameAnswer, frameFixture, frameURL, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
 import { appDigest, developmentStore } from '../../scripts/agent-launch.mjs';
 import { productionManifestImports, settingLines } from '../../js/bake/src/__exact_env.mjs';
@@ -1222,7 +1222,7 @@ const prepareChunks = { name: 'exact-prepare-chunks', renderChunk(code, chunk, _
 } };
 {
   const b = await rolldown({ ...bundleOptions, input: resolve(gen, 'main.js'), ...(ts ? { tsconfig: resolve(tsStage, '__exact_tsconfig.json') } : {}), transform: { ...bundleOptions.transform, define: { ...bundleOptions.transform.define, ...versionDefines, 'import.meta.exactPageAdmits': 'undefined', 'globalThis.__exactRender': 'false' } },
-    plugins: [...scopedPlugins(), contentNames(contentFiles, exactModule), prepareChunks], logLevel: 'warn', onLog });
+    plugins: [...scopedPlugins(), contentNames(contentFiles, exactModule), prepareChunks, ...(args.includes('--inline') ? [inlineScript()] : [])], logLevel: 'warn', onLog });
   // In a development reload build, put the TypeScript data module and every
   // helper it imports in one chunk the page really loads. Its emitted bytes,
   // rather than watcher filenames or source mtimes, are the logic revision.
@@ -1321,7 +1321,7 @@ ${languageScript}${webHead(manifest)}<div id="exact-root"${manifest.audio_sessio
 ${webAudioSession(manifest, contentFiles['audio-session.js'])}${args.includes('--inline')
   // The entry, marked so a renderer finds it (page.rs `js_entry`); an inline one names the external one, which a rendered
   // page's capture script imports.
-  ? `<script type="module" data-entry="./${contentFiles['app.js']}">${readFileSync(resolve(out, contentFiles['app.js']), 'utf8').replaceAll('</script', '<\\/script')}</script>`
+  ? `<script type="module" data-entry="./${contentFiles['app.js']}">${readFileSync(resolve(out, contentFiles['app.js']), 'utf8')}</script>`
   : `<script type="module" data-entry src="./${contentFiles['app.js']}"></script>`}
 `);
 if (production && !opt('--plan')) {

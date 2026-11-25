@@ -1378,3 +1378,46 @@ test('storage preserves access denial codes and the known-folder absence name', 
     expect([absent.name, absent.kind, absent.code]).toEqual(['NotSupportedError', 'Unavailable', 'failed']);
   }
 });
+
+test('main: a stream message delivered mid-storage-wait preserves the suspended turn context', async () => {
+  const w = await moduleRealm(`if (source === 'stream') return fetch('https://api.castle.test/events', { exactStream: ev => ev.data + ':' + store.get('recovery-owner') });
+  return read('app:/data/held').then(v => v + ':' + store.get('recovery-owner'));`, { placement: 'main', taskDelayedStorage: true });
+  try {
+    expect((await w.ask('stream')).request.stream).toBeTruthy();
+    const work = w.ask('work');
+    await w.storageEvent('held', 'app:/data/held');
+    const mapped = w.message('stream', { message: { data: 'ping' } });
+    expect(mapped).toMatchObject({ tag: 0, value: 'ping:stream', reads: ['recovery-owner'] });
+    w.releaseHeldStorage();
+    expect(await race(work)).toMatchObject({ tag: 0, value: 'app:/data/held:work', reads: ['recovery-owner'] });
+  } finally { w.done(); }
+}, 20000);
+
+test('main: forgetting a parked answer waiting in resettle rejects it without running its continuation', async () => {
+  const environment = secretEnvironment('login');
+  const w = await moduleRealm(`if (source === 'blocker') {
+    const file = read('app:/data/blocker');
+    return fetch('https://api.castle.test/blocker').then(async () => (await file, 'blocked'));
+  }
+  if (source === 'p1') return read('app:/data/held');
+  if (source === 'p2') {
+    const file = read('app:/data/p2');
+    return store.exclusive('token', async () => { await file; return read('app:/data/p2-ran'); });
+  }
+  if (source === 'barrier') return 'ready';
+  return read('app:/data/' + source);`, { placement: 'main', secrets: true, taskDelayedStorage: true });
+  try {
+    expect((await w.ask('blocker')).request.url).toBe('https://api.castle.test/blocker');
+    const p1 = w.ask('p1'), p2 = race(w.ask('p2'));
+    expect((await w.ask('barrier')).value).toBe('ready');
+    const blocker = w.resume('blocker');
+    await w.storageEvent('held', 'app:/data/held');
+    w.forget(['p1']);
+    expect(await p2).toBe('rejected: the runner let this answer go');
+    w.releaseHeldStorage();
+    expect((await race(blocker)).value).toBe('blocked');
+    expect((await race(p1)).value).toBe('app:/data/held');
+    expect(w.storageEvents().some(e => e[1] === 'app:/data/p2-ran')).toBe(false);
+    expect((await race(w.ask('after'))).value).toBe('app:/data/after');
+  } finally { w.done(); environment.restore(); }
+}, 20000);
