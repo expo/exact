@@ -540,7 +540,8 @@ extension NavigationHost: NavigationHosting {
                 return space.convert(frame, to: window)
             }
         }
-        let placementFrames = frames(of: item)
+        // UIKit morphs the collapsed field into its button in place: an item that reports no frame is where the field rests
+        let placementFrames = frames(of: item).isEmpty ? [editor.convert(editor.bounds, to: window)].filter { !$0.isEmpty } : frames(of: item)
         let otherItems = (route.toolbarItems ?? []) + (navigationItem.leftBarButtonItems ?? [])
             + (navigationItem.rightBarButtonItems ?? [])
             + (navigationItem.leadingItemGroups + navigationItem.centerItemGroups + navigationItem.trailingItemGroups).flatMap(\.barButtonItems)

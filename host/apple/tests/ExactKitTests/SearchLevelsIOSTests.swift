@@ -12,6 +12,11 @@ final class SearchLevelsIOSTests: XCTestCase {
     private var session: ExactSession?
 
     override func tearDown() {
+        // A test that edits leaves the next one no keyboard: one left up is laid out for a window that is gone
+        if let window {
+            window.endEditing(true)
+            waitFor("the keyboard goes down") { KeyboardSampleIOS.existing(in: window)?.sample == nil }
+        }
         session?.destroy()
         session = nil
         window?.isHidden = true
@@ -273,6 +278,11 @@ final class SearchLevelsIOSTests: XCTestCase {
             XCTAssertTrue(screen(outer.bounds, from: outer).insetBy(dx: -1, dy: -1).contains(row), file: file, line: line)
         }
 
+        // An earlier class in this process can leave the scene so that the simulator lays the keyboard out beside this
+        // window: then nothing is over the results to clear, and this test measures nothing
+        if let keys = KeyboardSampleIOS.existing(in: window)?.sample, !keys.frame.intersects(window.bounds) {
+            throw XCTSkip("the simulator laid the keyboard out at \(keys.frame), outside this window \(window.bounds); run this class alone")
+        }
         // The keyboard reaches the results' owner in an update of its own, after UIKit says it showed
         waitFor("the results clear the keyboard", facts: {
             let occupancy = fixture.host.searchOccupancy(in: view).map { "docked \($0.docked) keys \($0.keyboard) bar \($0.bar)" } ?? "none"
@@ -648,6 +658,22 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertNil(fixture.agent.type(["id": Int(node.id), "text": "Asia"])["error"], fixture.searchFacts)
         fixture.settle("the query settles")
         XCTAssertEqual(try fixture.value(), "Asia")
+    }
+
+    func testAgentTapOpensTheCollapsedSearchWithoutTheAccessibilityRuntime() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("integrated search is available from iOS 26") }
+        let fixture = try boot(fullScreen: true)
+        // Use Landscapes' untitled Home, whose compact search UIKit collapses into a button
+        try fixture.navigate("/cover-search")
+        let node = try fixture.node("search")
+        XCTAssertNil(fixture.session.presenter.navigation.drawnSearch(node), fixture.searchFacts)
+        XCTAssertEqual(try fixture.tap("search")["native"] as? String, "search-button", fixture.searchFacts)
+        waitFor("the button opens UIKit's search editor", facts: { fixture.searchFacts }) { fixture.search.bindEditor().isFirstResponder }
+        fixture.settle("the search presentation settles")
+        XCTAssertNil(fixture.agent.type(["id": Int(node.id), "text": "Fuji"])["error"], fixture.searchFacts)
+        fixture.settle("the query settles")
+        XCTAssertEqual(try fixture.value(), "Fuji")
     }
 
     func testUnpreventedCloseProducesOneEmptyEditAndLateCompletionKeepsNewerText() throws {
