@@ -36,6 +36,10 @@ extension UIEdgeInsets {
     func adding(_ other: UIEdgeInsets) -> UIEdgeInsets {
         UIEdgeInsets(top: top + other.top, left: left + other.left, bottom: bottom + other.bottom, right: right + other.right)
     }
+    /// Each side less `other`'s.
+    func less(_ other: UIEdgeInsets) -> UIEdgeInsets {
+        UIEdgeInsets(top: top - other.top, left: left - other.left, bottom: bottom - other.bottom, right: right - other.right)
+    }
 }
 
 /// A scroll view whose indicators take its own safe area where UIKit's adjustment gives them none
@@ -46,29 +50,35 @@ package protocol SafeIndicators: UIScrollView {
     var writtenWhole: Bool { get set }
 }
 
-/// What a scroll view's own safe area adds to both indicators' insets where UIKit's adjustment gives them none: its
-/// sides always, and its top and bottom too while that adjustment is off. UIKit's adjustment, on, adds the safe area's
-/// top and bottom (under a large title it hangs over, a top of its own), never its sides, so a scroll view filling
-/// the iPhone Duo's cover screen keeps its indicator under the button strip; with this term it lies beside it, clear
-/// of the system's controls (HIG Layout). A page band turns the adjustment off while it bands the scroll view, so the
-/// band and the safe area are each counted once (`NodeView.bandScroll`). The term moves as a difference, as the
-/// padding edge's (`ScrollView.paddingInset`), the keyboard's and a page band's do, so each leaves the others' in
-/// place; its scroll view syncs it as its safe area, its adjustment or `writtenWhole` changes.
+/// What a scroll view's own safe area adds to its indicators' insets while UIKit's adjustment, which adds its top and
+/// bottom itself, is off: its top and bottom, and the horizontal indicator its sides, so that one's track keeps within
+/// the area. A page band turns the adjustment off while it bands the scroll view, so the band and the safe area are
+/// each counted once (`NodeView.bandScroll`). The vertical indicator takes no side. UIKit's adjustment adds the side
+/// safe area again to a side inset written; with none, the vertical indicator lies where UIKit's own scroll view's
+/// does, outside the layout margins and so never over content that keeps to them: on the iPhone Duo's cover screen
+/// under the strip, at the screen's edge (460 of 466), the adjustment on or off; under a controller's additional side
+/// inset, at the inset's inner edge while the adjustment is on and at the scroll view's side while it is off. The
+/// term moves as a difference, as the padding edge's (`ScrollView.paddingInset`), the keyboard's and a page band's
+/// do, so each leaves the others' in place; its scroll view syncs it as its safe area, its adjustment or
+/// `writtenWhole` changes.
 package struct SafeIndicatorTerm {
-    private var applied = UIEdgeInsets.zero
+    private var applied = (vertical: UIEdgeInsets.zero, horizontal: UIEdgeInsets.zero)
 
     package init() {}
 
     package mutating func sync(_ scroll: some SafeIndicators) {
         let safe = scroll.safeAreaInsets
-        let term = scroll.writtenWhole ? .zero
-            : scroll.automaticallyAdjustsScrollIndicatorInsets ? UIEdgeInsets(top: 0, left: safe.left, bottom: 0, right: safe.right) : safe
-        guard term != applied else { return }
-        let moved = UIEdgeInsets(top: term.top - applied.top, left: term.left - applied.left,
-                                 bottom: term.bottom - applied.bottom, right: term.right - applied.right)
-        applied = term
-        scroll.verticalScrollIndicatorInsets = scroll.verticalScrollIndicatorInsets.adding(moved)
-        scroll.horizontalScrollIndicatorInsets = scroll.horizontalScrollIndicatorInsets.adding(moved)
+        let off = !scroll.writtenWhole && !scroll.automaticallyAdjustsScrollIndicatorInsets
+        let vertical = off ? UIEdgeInsets(top: safe.top, left: 0, bottom: safe.bottom, right: 0) : .zero
+        let horizontal = off ? safe : .zero
+        if vertical != applied.vertical {
+            scroll.verticalScrollIndicatorInsets = scroll.verticalScrollIndicatorInsets.adding(vertical.less(applied.vertical))
+            applied.vertical = vertical
+        }
+        if horizontal != applied.horizontal {
+            scroll.horizontalScrollIndicatorInsets = scroll.horizontalScrollIndicatorInsets.adding(horizontal.less(applied.horizontal))
+            applied.horizontal = horizontal
+        }
     }
 }
 

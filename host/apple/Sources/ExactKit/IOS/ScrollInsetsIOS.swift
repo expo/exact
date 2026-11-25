@@ -5,7 +5,8 @@ import UIKit
 /// A native scroll view whose own layout clears some depth of the occupied region on some edges, top right bottom
 /// left, as a grouped list insets its cards from the side safe area its layout uses (LLP 1123 D9: each native scroll
 /// view an owner hosts reports the band it consumes). D14's writer writes the occupied depth less that there, and the
-/// indicators, which the layout does not move, the whole of it.
+/// indicators, which the layout does not move, the whole of it, but for the vertical indicator's sides, which take
+/// none (`ScrollInsetsIOS.insets`).
 package protocol BandConsumer: AnyObject {
     var consumedBand: [CGFloat] { get }
 }
@@ -90,9 +91,13 @@ package struct ScrollInsetsIOS: Equatable {
             let clamped = terms.container[e] && terms.reserved[e] == nil && reaches && consumed[e] == 0
             content[e] = rows.authored[e] + held[e] + (clamped ? max(0, past) : past)
         }
-        let follow = { (authored: [CGFloat]) in (0..<4).map { authored[$0] + (rows.indicatorsFollow ? occupied[$0] : 0) } }
-        return ScrollInsetsIOS(content: edgeInsets(content), verticalIndicator: edgeInsets(follow(rows.verticalIndicator)),
-                               horizontalIndicator: edgeInsets(follow(rows.horizontalIndicator)))
+        // The vertical indicator takes no side band: it lies at the scroll view's side, as UIKit's own does, never over
+        // content that keeps to the band's inner edge (`SafeIndicatorTerm`)
+        let follow = { (authored: [CGFloat], sides: Bool) in
+            (0..<4).map { e in authored[e] + (rows.indicatorsFollow && (sides || e % 2 == 0) ? occupied[e] : 0) }
+        }
+        return ScrollInsetsIOS(content: edgeInsets(content), verticalIndicator: edgeInsets(follow(rows.verticalIndicator, false)),
+                               horizontalIndicator: edgeInsets(follow(rows.horizontalIndicator, true)))
     }
 
     /// D14's native `band` for `scroll`, top right bottom left: its frame's overlap with the unsafe

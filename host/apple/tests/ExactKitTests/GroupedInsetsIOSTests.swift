@@ -31,18 +31,19 @@ final class GroupedInsetsIOSTests: GroupedListFixture {
         XCTAssertEqual(layout.configuration.contentInsetsReference, .automatic)
     }
 
-    /// A list's indicators lie beside the side safe area its cards are inset from, as a plain scroller's do: UIKit's
-    /// adjustment never insets them from the collection's side, which on the iPhone Duo's cover screen is under the
-    /// button strip (`SafeIndicatorTerm`).
-    func testAListsIndicatorsKeepBesideItsSideSafeArea() throws {
+    /// While UIKit's adjustment is off, a list's horizontal indicator keeps its track within the side safe area its
+    /// cards are inset from, and its vertical indicator takes none of it, as a plain scroller's do: UIKit's
+    /// adjustment, on, would add the side again to a side inset written (`SafeIndicatorTerm`).
+    func testAListsHorizontalIndicatorKeepsWithinItsSideSafeArea() throws {
         let p = presenter { self.model() }
         let l = try list(p)
+        l.collection.automaticallyAdjustsScrollIndicatorInsets = false
         let vertical = l.collection.verticalScrollIndicatorInsets, horizontal = l.collection.horizontalScrollIndicatorInsets
         l.collection.sideSafeArea = (0, 84)
-        XCTAssertEqual(l.collection.verticalScrollIndicatorInsets.right - vertical.right, 84, accuracy: 0.5)
         XCTAssertEqual(l.collection.horizontalScrollIndicatorInsets.right - horizontal.right, 84, accuracy: 0.5)
+        XCTAssertEqual(l.collection.verticalScrollIndicatorInsets.right, vertical.right, "the vertical one takes no side")
         l.collection.sideSafeArea = (0, 0)
-        XCTAssertEqual(l.collection.verticalScrollIndicatorInsets, vertical, "and gone with it")
+        XCTAssertEqual(l.collection.horizontalScrollIndicatorInsets, horizontal, "and gone with it")
     }
 
     func testARowsMarginsAndBackgroundInsetsReachItsCellThroughItsUpdates() throws {
