@@ -205,6 +205,9 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
             warn(live.presenter.set_preferences(prefs));
         }
         live.turn(now);
+        if let Some(drops) = live.drops.as_mut() {
+            drops.turn(&mut live.presenter);
+        }
         if self.closed.get() {
             events.exit();
             return;
@@ -259,7 +262,7 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
             Event::Drag(heard) => {
                 if let Some(live) = self.live.as_mut() {
                     if let Some(drops) = live.drops.as_mut() {
-                        drops.heard(&mut live.presenter, heard, &self.proxy);
+                        drops.heard(&mut live.presenter, heard);
                     }
                     if live.presenter.dirty() {
                         live.window.request_redraw();

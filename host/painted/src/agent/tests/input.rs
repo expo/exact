@@ -58,13 +58,16 @@ fn the_clipboard_events_reach_the_nearest_handler() {
         )),
         "{reply}"
     );
-    for form in [
-        r#""drop":["/tmp/a.png"]"#,
-        r#""dragenter":["/tmp/a.png"]"#,
-        r#""dragleave":true"#,
+    for (form, said) in [
+        (
+            r#""drop":["/tmp/a.png"]"#,
+            "took no drop: nothing under it declares `drop`",
+        ),
+        (r#""dragenter":["/tmp/a.png"]"#, r#""dragenter":"#),
+        (r#""dragleave":true"#, r#""dragleave":true"#),
     ] {
         let reply = handle(&mut p, &format!(r#"{{"op":"tap","id":{cell},{form}}}"#));
-        assert!(!reply.contains("unsupported"), "{reply}");
+        assert!(reply.contains(said), "{form}: {reply}");
     }
     let k = p.host().kernel();
     assert_eq!(

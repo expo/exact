@@ -1,7 +1,13 @@
-//! Drags over the window, from another app or this one (LLP 1094.001 D8).
-//! Wayland's own data device, on winit's connection, says where a drag is
-//! and what it offers by MIME type; the window takes a drop as a copy, and
-//! the drop's items arrive through pipes off the main thread.
+//! Drags from other apps over the window (LLP 1094.001 D8). Wayland's own
+//! data device, on winit's connection, says where a drag is and what it
+//! offers by MIME type; the window takes a drop as a copy, and reads the
+//! drop's items through pipes off the main thread.
+//!
+//! A listening thread owns the data devices, their offers and every request
+//! to the compositor about them; the event loop tells the presenter what
+//! the listener heard and sends back the presenter's answers. Winit sleeps
+//! through events that are not its own queue's, so the listener waits on
+//! the connection itself.
 #![allow(unsafe_code)]
 
 use exact_painted::presenter::Presenter;
@@ -19,22 +25,25 @@ use smithay_client_toolkit::reexports::client::{
         wl_seat::WlSeat,
         wl_surface::WlSurface,
     },
-    Connection, Dispatch, EventQueue, Proxy, QueueHandle,
+    Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
 };
 use std::ffi::OsString;
-use std::io::{PipeReader, PipeWriter, Read};
+use std::io::{ErrorKind, PipeReader, PipeWriter, Read, Write};
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Mutex;
 use std::thread::JoinHandle;
+use std::time::Duration;
 use winit::event_loop::EventLoopProxy;
 use winit::raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 use winit::window::Window;
 
-/// The URI list a file manager or a browser offers its files and links as.
+/// The URI list a file manager offers its files as (RFC 2483).
 const URI_LIST: &str = "text/uri-list";
 /// The link a browser offers with its title, as Firefox and Chromium do and
 /// as GTK and Qt read it: UTF-16, the URL, a line break and the title.
@@ -42,72 +51,60 @@ const MOZ_URL: &str = "text/x-moz-url";
 /// The plain text types a drag may offer, the first offered taken: UTF-8
 /// by name, then X11's name for it, then text in no named charset.
 const TEXTS: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
+/// A source that sends nothing for this long while a drop is read has
+/// stalled: what it has not finished sending is not delivered.
+const QUIET: Duration = Duration::from_secs(10);
+/// The most a drop's type may send; a type that sends more is not
+/// delivered.
+const LARGEST: usize = 64 << 20;
 
-/// The window's side of drags from other apps: the drag over the window,
-/// and the thread that hears the compositor on the window's connection.
-/// Winit sleeps through events that are not its own, so the data devices
-/// have a thread of their own, which hands each event to the event loop.
+/// The event loop's side of drags: the drag over the window as the
+/// presenter knows it, and the way to the listener.
 pub(super) struct Drops {
-    connection: Connection,
-    drag: Option<Drag>,
-    stop: Option<PipeWriter>,
-    hearing: Option<JoinHandle<()>>,
+    hover: Option<Hover>,
+    commands: Sender<Command>,
+    wake: Option<PipeWriter>,
+    listener: Option<JoinHandle<()>>,
 }
 
-/// What the data devices heard, in order, and a drop whose items arrived.
-pub(in crate::window) enum Heard {
-    Entered(Drag),
-    Moved((f32, f32)),
-    Left,
-    Dropped,
-    Landed(Landed),
-}
-
-/// A drop whose items arrived: the presenter's drop, what came, and the
-/// offer, which is finished once the presenter has them.
-pub(in crate::window) struct Landed {
-    id: u32,
-    dropped: Dropped,
-    offer: WlDataOffer,
-}
-
-/// The drag over the window: its offer, the serial its enter came with,
-/// the types the window reads from it, where it is, and whether the window
-/// last said it takes the drop there.
-pub(in crate::window) struct Drag {
-    offer: WlDataOffer,
-    serial: u32,
-    wanted: Wanted,
+/// The drag over the window: the listener's number for it, where it is,
+/// and the last answer sent on whether a node there takes the drop.
+struct Hover {
+    number: u64,
     point: (f32, f32),
     takes: Option<bool>,
 }
 
-/// The data devices, one a seat, on the hearing thread.
-struct Devices {
-    surface: ObjectId,
-    manager: WlDataDeviceManager,
-    seats: Vec<(u32, WlSeat, WlDataDevice)>,
-    /// Whether a drag the window reads is over its surface.
-    over: bool,
-    proxy: EventLoopProxy<super::Event>,
+/// What the listener heard, in order, each drag by its number.
+pub(in crate::window) enum Heard {
+    Over {
+        number: u64,
+        point: (f32, f32),
+    },
+    Left,
+    Dropped {
+        number: u64,
+        point: (f32, f32),
+    },
+    Landed {
+        number: u64,
+        id: u32,
+        dropped: Dropped,
+    },
 }
 
-/// The types the window reads from an offer: its URI list, its titled
-/// link and its text.
-#[derive(Default, PartialEq, Debug)]
-struct Wanted {
-    uris: Option<String>,
-    link: Option<String>,
-    text: Option<String>,
+/// The presenter's answers: whether a node under drag `number` takes the
+/// drop, the drop the presenter made of it (none: nothing took it), and
+/// that the presenter has its items.
+enum Command {
+    Takes { number: u64, takes: bool },
+    Released { number: u64, id: Option<u32> },
+    Finish { number: u64 },
 }
-
-/// An offer's MIME types, as the compositor lists them before its enter.
-#[derive(Default)]
-struct Offered(Mutex<Vec<String>>);
 
 impl Drops {
-    /// The data devices of `window`'s seats, on winit's connection; none
-    /// when the window is not Wayland's or the compositor offers no drags.
+    /// The listener for `window`'s seats, on winit's connection; none when
+    /// the window is not Wayland's or the compositor shares no data.
     pub(super) fn new(window: &Window, proxy: EventLoopProxy<super::Event>) -> Option<Self> {
         let RawDisplayHandle::Wayland(display) = window.display_handle().ok()?.as_raw() else {
             return None;
@@ -115,164 +112,225 @@ impl Drops {
         let RawWindowHandle::Wayland(surface) = window.window_handle().ok()?.as_raw() else {
             return None;
         };
-        // The display outlives Drops: the window stops its thread when the event loop exits (`App::exiting`)
+        // Winit's display outlives the listener: `App::exiting` drops Drops, which joins the listener, before the
+        // event loop ends, and the builds that ship abort on a panic rather than unwind past it
         let backend = unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) };
         let surface =
             unsafe { ObjectId::from_ptr(WlSurface::interface(), surface.surface.as_ptr().cast()) }
                 .ok()?;
         let connection = Connection::from_backend(backend);
-        let (globals, queue) = registry_queue_init::<Devices>(&connection).ok()?;
+        let (globals, queue) = registry_queue_init::<Listener>(&connection).ok()?;
         let handle = queue.handle();
         let manager = globals
             .bind::<WlDataDeviceManager, _, _>(&handle, 1..=3, ())
             .ok()?;
-        let mut devices = Devices {
+        let (commands, heard) = std::sync::mpsc::channel();
+        let mut listener = Listener {
             surface,
             manager,
             seats: Vec::new(),
-            over: false,
+            drag: None,
+            released: Vec::new(),
+            drags: 0,
             proxy,
+            commands: heard,
         };
         globals.contents().with_list(|list| {
             for global in list.iter().filter(|g| g.interface == "wl_seat") {
-                devices.add_seat(globals.registry(), global.name, global.version, &handle);
+                listener.add_seat(globals.registry(), global.name, global.version, &handle);
             }
         });
-        let _ = connection.flush();
-        let (stopped, stop) = std::io::pipe().ok()?;
-        let hearing = {
-            let connection = connection.clone();
-            std::thread::Builder::new()
-                .name("exact-drags".into())
-                .spawn(move || hear(&connection, queue, devices, &stopped))
-                .ok()?
-        };
+        let (woken, wake) = std::io::pipe().ok()?;
+        let listener = std::thread::Builder::new()
+            .name("exact-drags".into())
+            .spawn(move || listen(&connection, queue, listener, woken))
+            .ok()?;
         Some(Self {
-            connection,
-            drag: None,
-            stop: Some(stop),
-            hearing: Some(hearing),
+            hover: None,
+            commands,
+            wake: Some(wake),
+            listener: Some(listener),
         })
     }
 
-    /// Tell the presenter what the compositor said, and answer the
-    /// compositor: the window takes a drop where a node under the drag does,
-    /// and a dropped drag's items are read from its source.
-    pub(super) fn heard<D: DataSource>(
-        &mut self,
-        p: &mut Presenter<D>,
-        heard: Heard,
-        proxy: &EventLoopProxy<super::Event>,
-    ) {
+    /// Tell the presenter what the listener heard, and send back its answer.
+    pub(super) fn heard<D: DataSource>(&mut self, p: &mut Presenter<D>, heard: Heard) {
         match heard {
-            Heard::Entered(drag) => {
-                if let Some(stale) = self.drag.replace(drag) {
-                    stale.offer.destroy();
-                    p.drag_left();
-                }
-                self.over(p);
-            }
-            Heard::Moved(point) => {
-                if let Some(drag) = self.drag.as_mut() {
-                    drag.point = point;
-                    self.over(p);
-                }
+            Heard::Over { number, point } => {
+                let takes = self
+                    .hover
+                    .take()
+                    .filter(|h| h.number == number)
+                    .and_then(|h| h.takes);
+                self.hover = Some(Hover {
+                    number,
+                    point,
+                    takes,
+                });
+                self.answer(p);
             }
             Heard::Left => {
-                if let Some(drag) = self.drag.take() {
-                    drag.offer.destroy();
-                    p.drag_left();
-                }
+                self.hover = None;
+                p.drag_left();
             }
-            Heard::Dropped => {
-                if let Some(drag) = self.drag.take() {
-                    match p.drop_released(drag.point, p.modifiers()) {
-                        Some(id) => read(id, drag, proxy.clone()),
-                        None => drag.offer.destroy(),
-                    }
-                }
+            Heard::Dropped { number, point } => {
+                self.hover = None;
+                let id = p.drop_released(point, p.modifiers());
+                self.send(Command::Released { number, id });
             }
-            Heard::Landed(landed) => {
-                p.drop_landed(landed.id, &landed.dropped);
-                if landed.offer.version() >= 3 {
-                    landed.offer.finish();
-                }
-                landed.offer.destroy();
+            Heard::Landed {
+                number,
+                id,
+                dropped,
+            } => {
+                p.drop_landed(id, &dropped);
+                self.send(Command::Finish { number });
             }
         }
-        let _ = self.connection.flush();
     }
 
-    /// The drag moved: the presenter hears it, and the compositor hears
-    /// whether a node under it takes the drop now, when that changed.
-    fn over<D: DataSource>(&mut self, p: &mut Presenter<D>) {
-        let Some(drag) = self.drag.as_mut() else {
+    /// Ask the presenter again whether a node under a drag that has not
+    /// moved takes the drop, as a commit may have changed it.
+    pub(super) fn turn<D: DataSource>(&mut self, p: &mut Presenter<D>) {
+        if self.hover.is_some() {
+            self.answer(p);
+        }
+    }
+
+    /// The drag is where it is: the presenter hears it, and the listener
+    /// hears whether a node there takes the drop when that changed.
+    fn answer<D: DataSource>(&mut self, p: &mut Presenter<D>) {
+        let Some(hover) = self.hover.as_ref() else {
             return;
         };
-        let takes = p.drag_over(drag.point, p.modifiers()).is_some();
-        if drag.takes != Some(takes) {
-            let mime = takes.then(|| drag.wanted.first()).flatten();
-            drag.offer.accept(drag.serial, mime.map(str::to_owned));
-            drag.takes = Some(takes);
+        let (number, point) = (hover.number, hover.point);
+        let takes = p.drag_over(point, p.modifiers()).is_some();
+        if let Some(hover) = self.hover.as_mut().filter(|h| h.takes != Some(takes)) {
+            hover.takes = Some(takes);
+            self.send(Command::Takes { number, takes });
+        }
+    }
+
+    fn send(&mut self, command: Command) {
+        if self.commands.send(command).is_ok() {
+            if let Some(wake) = self.wake.as_mut() {
+                let _ = wake.write(&[1]);
+            }
         }
     }
 }
 
 impl Drop for Drops {
     fn drop(&mut self) {
-        // Closing the pipe wakes the thread, which then leaves the connection alone
-        drop(self.stop.take());
-        if let Some(hearing) = self.hearing.take() {
-            let _ = hearing.join();
-        }
-        if let Some(drag) = self.drag.take() {
-            drag.offer.destroy();
+        // The listener hears the wake pipe close, ends its offers, and leaves the connection
+        drop(self.wake.take());
+        if let Some(listener) = self.listener.take() {
+            let _ = listener.join();
         }
     }
 }
 
-/// The hearing thread: dispatch the data devices' events as they come,
-/// until `stopped` closes or the connection fails.
-fn hear(
+/// The listening thread's state: the data devices, one a seat, the drag
+/// over the window, and the drops released to the presenter, each kept
+/// until the presenter lands or refuses it.
+struct Listener {
+    surface: ObjectId,
+    manager: WlDataDeviceManager,
+    seats: Vec<(u32, WlSeat, WlDataDevice)>,
+    drag: Option<Drag>,
+    released: Vec<Drag>,
+    drags: u64,
+    proxy: EventLoopProxy<super::Event>,
+    commands: Receiver<Command>,
+}
+
+/// A drag the window follows: its number, the device it is on, its offer,
+/// the serial its enter came with, the types the window reads from it,
+/// where it is, and whether the window last accepted it.
+struct Drag {
+    number: u64,
+    device: ObjectId,
+    offer: WlDataOffer,
+    serial: u32,
+    wanted: Wanted,
+    point: (f32, f32),
+    accepted: bool,
+}
+
+/// The types the window reads from an offer, each spelled as offered: its
+/// URI list, its titled link and its text.
+#[derive(Default, PartialEq, Debug)]
+struct Wanted {
+    uris: Option<String>,
+    link: Option<String>,
+    text: Option<String>,
+}
+
+/// An offer's MIME types, as the compositor lists them before its enter,
+/// and the action the compositor last chose for it.
+#[derive(Default)]
+struct Offered {
+    types: Mutex<Vec<String>>,
+    action: AtomicU32,
+}
+
+/// The listening thread: dispatch the data devices' events and the
+/// presenter's answers as they come, until the wake pipe closes or the
+/// connection fails.
+fn listen(
     connection: &Connection,
-    mut queue: EventQueue<Devices>,
-    mut devices: Devices,
-    stopped: &PipeReader,
+    mut queue: EventQueue<Listener>,
+    mut listener: Listener,
+    mut woken: PipeReader,
 ) {
     loop {
-        if queue.dispatch_pending(&mut devices).is_err() {
+        if queue.dispatch_pending(&mut listener).is_err() {
             return;
         }
-        // A read is prepared before the poll, as libwayland's threads share one socket
+        listener.obey();
+        let blocked = matches!(connection.flush(), Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock);
+        // A read is prepared before the poll, as threads that share a libwayland socket must
         let Some(guard) = queue.prepare_read() else {
             continue;
         };
-        let _ = connection.flush();
-        let mut fds =
-            [guard.connection_fd().as_raw_fd(), stopped.as_raw_fd()].map(|fd| libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            });
+        let display = libc::POLLIN | if blocked { libc::POLLOUT } else { 0 };
+        let mut fds = [
+            (guard.connection_fd().as_raw_fd(), display),
+            (woken.as_raw_fd(), libc::POLLIN),
+        ]
+        .map(|(fd, events)| libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        });
         let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, -1) };
         if ready < 0 {
-            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            if std::io::Error::last_os_error().kind() == ErrorKind::Interrupted {
                 continue;
             }
             return;
         }
         if fds[1].revents != 0 {
-            return;
+            let mut bytes = [0; 64];
+            if matches!(woken.read(&mut bytes), Ok(0) | Err(_)) {
+                drop(guard);
+                listener.end();
+                let _ = connection.flush();
+                return;
+            }
+        }
+        if fds[0].revents & libc::POLLIN == 0 {
+            continue;
         }
         match guard.read() {
             Ok(_) => {}
-            Err(WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {}
             Err(_) => return,
         }
     }
 }
 
-impl Devices {
+impl Listener {
     fn add_seat(
         &mut self,
         registry: &WlRegistry,
@@ -288,23 +346,79 @@ impl Devices {
     fn tell(&self, heard: Heard) {
         let _ = self.proxy.send_event(super::Event::Drag(heard));
     }
+
+    /// The drag over the window ended without a drop.
+    fn left(&mut self) {
+        if let Some(drag) = self.drag.take() {
+            drag.offer.destroy();
+            self.tell(Heard::Left);
+        }
+    }
+
+    /// Act on the presenter's answers.
+    fn obey(&mut self) {
+        while let Ok(command) = self.commands.try_recv() {
+            match command {
+                Command::Takes { number, takes } => {
+                    let drag = self.drag.as_mut().filter(|d| d.number == number);
+                    if let Some(drag) = drag.filter(|d| d.accepted != takes) {
+                        let mime = takes.then(|| drag.wanted.first()).flatten();
+                        drag.offer.accept(drag.serial, mime.map(str::to_owned));
+                        drag.accepted = takes;
+                    }
+                }
+                Command::Released { number, id } => {
+                    let Some(at) = self.released.iter().position(|d| d.number == number) else {
+                        continue;
+                    };
+                    match id {
+                        Some(id) => read(id, &self.released[at], self.proxy.clone()),
+                        None => self.released.remove(at).offer.destroy(),
+                    }
+                }
+                Command::Finish { number } => {
+                    let Some(at) = self.released.iter().position(|d| d.number == number) else {
+                        continue;
+                    };
+                    let drag = self.released.remove(at);
+                    if drag.offer.version() >= 3 {
+                        drag.offer.finish();
+                    }
+                    drag.offer.destroy();
+                }
+            }
+        }
+    }
+
+    /// The window is closing: every offer it holds ends unfinished.
+    fn end(&mut self) {
+        for drag in self.drag.take().into_iter().chain(self.released.drain(..)) {
+            drag.offer.destroy();
+        }
+    }
 }
 
 impl Wanted {
-    /// What an offer of `types` gives the window: its URI list, its titled
-    /// link and the first of its text types; none when it offers none.
+    /// What an offer of `types` gives the window, each type as offered:
+    /// its URI list, its titled link and the first of its text types; none
+    /// when it offers none of them.
     fn of(types: &[String]) -> Option<Self> {
-        let has = |t: &str| types.iter().any(|offered| offered.eq_ignore_ascii_case(t));
+        let find = |t: &str| {
+            types
+                .iter()
+                .find(|offered| offered.eq_ignore_ascii_case(t))
+                .cloned()
+        };
         let wanted = Wanted {
-            uris: has(URI_LIST).then(|| URI_LIST.to_owned()),
-            link: has(MOZ_URL).then(|| MOZ_URL.to_owned()),
-            text: TEXTS.into_iter().find(|t| has(t)).map(str::to_owned),
+            uris: find(URI_LIST),
+            link: find(MOZ_URL),
+            text: TEXTS.into_iter().find_map(find),
         };
         (wanted != Wanted::default()).then_some(wanted)
     }
 
-    /// The type the window says it takes while a node under the drag takes
-    /// the drop.
+    /// The type the window accepts while a node under the drag takes the
+    /// drop.
     fn first(&self) -> Option<&str> {
         [&self.uris, &self.link, &self.text]
             .into_iter()
@@ -314,34 +428,90 @@ impl Wanted {
     }
 }
 
-/// Ask the source for drop `id`'s items, and read them off the main thread:
-/// the event loop hears them as `Landed`.
-fn read(id: u32, drag: Drag, proxy: EventLoopProxy<super::Event>) {
+/// Ask the source for drop `id`'s items and read them off the listener:
+/// the event loop hears them as `Landed`, with nothing when the reading
+/// cannot begin, so the presenter's drop always lands.
+fn read(id: u32, drag: &Drag, proxy: EventLoopProxy<super::Event>) {
     let Wanted { uris, link, text } = &drag.wanted;
-    let mut pipes = [uris, link, text].map(|mime| {
+    let pipes = [uris, link, text].map(|mime| {
         let (reader, writer) = std::io::pipe().ok()?;
         drag.offer.receive(mime.clone()?, writer.as_fd());
         // The source holds its own copy of the write end, so the read ends when the source closes it
         drop(writer);
         Some(reader)
     });
-    let offer = drag.offer;
-    std::thread::Builder::new()
+    let number = drag.number;
+    let land = move |proxy: &EventLoopProxy<super::Event>, dropped| {
+        let _ = proxy.send_event(super::Event::Drag(Heard::Landed {
+            number,
+            id,
+            dropped,
+        }));
+    };
+    let reading = proxy.clone();
+    let started = std::thread::Builder::new()
         .name("exact-drop".into())
         .spawn(move || {
-            let [uris, link, text] = pipes.each_mut().map(|pipe| {
-                let mut bytes = Vec::new();
-                if let Some(pipe) = pipe {
-                    let _ = pipe.read_to_end(&mut bytes);
+            let [uris, link, text] = drain(pipes, QUIET, LARGEST);
+            land(&reading, items(&uris, &link, &text));
+        });
+    if let Err(e) = started {
+        eprintln!("exact: drop: its items could not be read, so it brings nothing: {e}");
+        land(&proxy, Dropped::default());
+    }
+}
+
+/// Each pipe's bytes once its source closes it; none for a pipe that sent
+/// more than `largest`, or had not closed when every open pipe had been
+/// quiet for `quiet`.
+fn drain<const N: usize>(
+    mut pipes: [Option<PipeReader>; N],
+    quiet: Duration,
+    largest: usize,
+) -> [Vec<u8>; N] {
+    let mut bytes: [Vec<u8>; N] = std::array::from_fn(|_| Vec::new());
+    loop {
+        let open: Vec<usize> = (0..N).filter(|&i| pipes[i].is_some()).collect();
+        if open.is_empty() {
+            return bytes;
+        }
+        let mut fds: Vec<libc::pollfd> = open
+            .iter()
+            .map(|&i| libc::pollfd {
+                fd: pipes[i].as_ref().map_or(-1, AsRawFd::as_raw_fd),
+                events: libc::POLLIN,
+                revents: 0,
+            })
+            .collect();
+        let wait = quiet.as_millis() as libc::c_int;
+        let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, wait) };
+        if ready < 0 && std::io::Error::last_os_error().kind() == ErrorKind::Interrupted {
+            continue;
+        }
+        if ready <= 0 {
+            for &i in &open {
+                bytes[i].clear();
+            }
+            return bytes;
+        }
+        for (fd, &i) in fds.iter().zip(&open) {
+            if fd.revents == 0 {
+                continue;
+            }
+            let mut chunk = [0; 1 << 16];
+            match pipes[i].as_mut().map(|pipe| pipe.read(&mut chunk)) {
+                Some(Ok(0)) => pipes[i] = None,
+                Some(Ok(n)) if bytes[i].len() + n <= largest => {
+                    bytes[i].extend_from_slice(&chunk[..n])
                 }
-                bytes
-            });
-            let dropped = items(&uris, &link, &text);
-            let landed = Landed { id, dropped, offer };
-            let _ = proxy.send_event(super::Event::Drag(Heard::Landed(landed)));
-        })
-        .map(drop)
-        .unwrap_or_else(|e| eprintln!("exact: drop: no thread to read its items: {e}"));
+                Some(Err(e)) if e.kind() == ErrorKind::Interrupted => {}
+                _ => {
+                    pipes[i] = None;
+                    bytes[i].clear();
+                }
+            }
+        }
+    }
 }
 
 /// The items a drop's URI list (RFC 2483), titled link and text give: each
@@ -352,41 +522,53 @@ fn items(uris: &[u8], link: &[u8], text: &[u8]) -> Dropped {
         text: String::from_utf8_lossy(text).into_owned(),
         ..Default::default()
     };
-    let list = String::from_utf8_lossy(uris);
-    for line in list
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-    {
-        match line.get(..5).filter(|s| s.eq_ignore_ascii_case("file:")) {
-            Some(_) => dropped.paths.extend(file_path(&line[5..])),
-            None if dropped.url.is_empty() => dropped.url = line.to_owned(),
-            None => {}
+    let lines = uris.split(|&b| b == b'\n').map(<[u8]>::trim_ascii);
+    for line in lines.filter(|l| !l.is_empty() && !l.starts_with(b"#")) {
+        if line.len() >= 5 && line[..5].eq_ignore_ascii_case(b"file:") {
+            dropped.paths.extend(file_path(&line[5..]));
+        } else if dropped.url.is_empty() {
+            if let Some(url) = std::str::from_utf8(line).ok().and_then(web_link) {
+                dropped.url = url.to_owned();
+            }
         }
     }
     if dropped.url.is_empty() {
         let titled = utf16_or_utf8(link);
-        let url = titled.lines().next().unwrap_or_default().trim();
-        if !url
-            .get(..5)
-            .is_some_and(|s| s.eq_ignore_ascii_case("file:"))
-        {
+        if let Some(url) = titled.lines().next().and_then(web_link) {
             dropped.url = url.to_owned();
         }
     }
     dropped
 }
 
-/// Text a browser wrote as UTF-16, with or without a byte order mark, as
-/// Mozilla's types are, or as UTF-8 when it holds no NUL byte to be UTF-16.
+/// `text` as a link that is not a file: an absolute URI (RFC 3986), its
+/// scheme a letter and then letters, digits, `+`, `-` or `.`, with no
+/// space or control character.
+fn web_link(text: &str) -> Option<&str> {
+    let text = text.trim();
+    let (scheme, _) = text.split_once(':')?;
+    let mut letters = scheme.chars();
+    let valid = letters.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && letters.all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+        && !text.chars().any(|c| c.is_whitespace() || c.is_control());
+    (valid && !scheme.eq_ignore_ascii_case("file")).then_some(text)
+}
+
+/// Text a browser wrote as UTF-16, as Mozilla's types are: by its byte
+/// order mark, else by where an ASCII character's zero byte falls; else
+/// UTF-8, without the NUL a C string ends with.
 fn utf16_or_utf8(bytes: &[u8]) -> String {
-    let (big, bytes) = match bytes {
+    let (big, units) = match bytes {
         [0xFE, 0xFF, rest @ ..] => (true, rest),
         [0xFF, 0xFE, rest @ ..] => (false, rest),
-        _ if bytes.contains(&0) => (false, bytes),
-        _ => return String::from_utf8_lossy(bytes).into_owned(),
+        [first, 0, ..] if *first != 0 && bytes.len().is_multiple_of(2) => (false, bytes),
+        [0, second, ..] if *second != 0 && bytes.len().is_multiple_of(2) => (true, bytes),
+        _ => {
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            return String::from_utf8_lossy(&bytes[..end]).into_owned();
+        }
     };
-    let units = bytes.as_chunks::<2>().0.iter().map(|&pair| {
+    let units = units.as_chunks::<2>().0.iter().map(|&pair| {
         if big {
             u16::from_be_bytes(pair)
         } else {
@@ -400,22 +582,26 @@ fn utf16_or_utf8(bytes: &[u8]) -> String {
 }
 
 /// The local path a `file:` URI names (RFC 8089), after its scheme: none
-/// for another machine's file.
-fn file_path(rest: &str) -> Option<PathBuf> {
-    let path = match rest.strip_prefix("//") {
+/// for another machine's file, or for a URI with a query or a fragment.
+/// Its percent-decoded bytes are kept as they are, UTF-8 or not.
+fn file_path(rest: &[u8]) -> Option<PathBuf> {
+    let path = match rest.strip_prefix(b"//") {
         Some(authority) => {
-            let at = authority.find('/')?;
+            let at = authority.iter().position(|&b| b == b'/')?;
             let host = &authority[..at];
-            (host.is_empty() || host.eq_ignore_ascii_case("localhost"))
+            (host.is_empty() || host.eq_ignore_ascii_case(b"localhost"))
                 .then_some(&authority[at..])?
         }
-        None => rest.starts_with('/').then_some(rest)?,
+        None => rest.starts_with(b"/").then_some(rest)?,
     };
+    if path.iter().any(|b| matches!(b, b'?' | b'#')) {
+        return None;
+    }
     let mut bytes = Vec::with_capacity(path.len());
-    let mut at = path.bytes();
-    while let Some(b) = at.next() {
+    let mut at = path.iter();
+    while let Some(&b) = at.next() {
         if b == b'%' {
-            let hex = [at.next()?, at.next()?];
+            let hex = [*at.next()?, *at.next()?];
             bytes.push(u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?);
         } else {
             bytes.push(b);
@@ -424,7 +610,7 @@ fn file_path(rest: &str) -> Option<PathBuf> {
     Some(PathBuf::from(OsString::from_vec(bytes)))
 }
 
-impl Dispatch<WlRegistry, GlobalListContents> for Devices {
+impl Dispatch<WlRegistry, GlobalListContents> for Listener {
     fn event(
         state: &mut Self,
         registry: &WlRegistry,
@@ -442,14 +628,18 @@ impl Dispatch<WlRegistry, GlobalListContents> for Devices {
                 state.add_seat(registry, name, version, handle);
             }
             wl_registry::Event::GlobalRemove { name } => {
-                if let Some(at) = state.seats.iter().position(|(n, ..)| *n == name) {
-                    let (_, seat, device) = state.seats.remove(at);
-                    if device.version() >= 2 {
-                        device.release();
-                    }
-                    if seat.version() >= 5 {
-                        seat.release();
-                    }
+                let Some(at) = state.seats.iter().position(|(n, ..)| *n == name) else {
+                    return;
+                };
+                let (_, seat, device) = state.seats.remove(at);
+                if state.drag.as_ref().is_some_and(|d| d.device == device.id()) {
+                    state.left();
+                }
+                if device.version() >= 2 {
+                    device.release();
+                }
+                if seat.version() >= 5 {
+                    seat.release();
                 }
             }
             _ => {}
@@ -457,7 +647,7 @@ impl Dispatch<WlRegistry, GlobalListContents> for Devices {
     }
 }
 
-impl Dispatch<WlSeat, ()> for Devices {
+impl Dispatch<WlSeat, ()> for Listener {
     fn event(
         _: &mut Self,
         _: &WlSeat,
@@ -469,7 +659,7 @@ impl Dispatch<WlSeat, ()> for Devices {
     }
 }
 
-impl Dispatch<WlDataDeviceManager, ()> for Devices {
+impl Dispatch<WlDataDeviceManager, ()> for Listener {
     fn event(
         _: &mut Self,
         _: &WlDataDeviceManager,
@@ -481,15 +671,18 @@ impl Dispatch<WlDataDeviceManager, ()> for Devices {
     }
 }
 
-impl Dispatch<WlDataDevice, ()> for Devices {
+impl Dispatch<WlDataDevice, ()> for Listener {
     fn event(
         state: &mut Self,
-        _: &WlDataDevice,
+        device: &WlDataDevice,
         event: wl_data_device::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        // The window follows one drag at a time, on the device it entered by: another seat's drag meanwhile is
+        // refused, and its events are not this drag's
+        let ours = state.drag.as_ref().is_some_and(|d| d.device == device.id());
         match event {
             wl_data_device::Event::Enter {
                 serial,
@@ -498,57 +691,78 @@ impl Dispatch<WlDataDevice, ()> for Devices {
                 y,
                 id,
             } => {
-                if std::mem::take(&mut state.over) {
-                    state.tell(Heard::Left);
+                if ours {
+                    state.left();
                 }
                 let Some(offer) = id else { return };
                 let types = offer
                     .data::<Offered>()
-                    .and_then(|o| o.0.lock().ok().map(|t| t.clone()));
-                // A drag over the window's own surface that offers a file, text or a link, taken as a copy: a
-                // decoration's surface takes none, and neither does a drag that offers nothing exact2 reads
-                let wanted = (surface.id() == state.surface)
-                    .then(|| Wanted::of(&types.unwrap_or_default()))
+                    .and_then(|o| o.types.lock().ok().map(|t| t.clone()))
+                    .unwrap_or_default();
+                // A decoration's surface takes no drag, and neither does a drag that offers nothing exact2 reads
+                let wanted = (state.drag.is_none() && surface.id() == state.surface)
+                    .then(|| Wanted::of(&types))
                     .flatten();
                 let Some(wanted) = wanted else {
                     offer.accept(serial, None);
                     offer.destroy();
                     return;
                 };
+                // A copy alone: a move would let the source delete its files
                 if offer.version() >= 3 {
                     offer.set_actions(DndAction::Copy, DndAction::Copy);
                 }
-                state.over = true;
-                let point = (x as f32, y as f32);
-                state.tell(Heard::Entered(Drag {
+                state.drags += 1;
+                let (number, point) = (state.drags, (x as f32, y as f32));
+                state.drag = Some(Drag {
+                    number,
+                    device: device.id(),
                     offer,
                     serial,
                     wanted,
                     point,
-                    takes: None,
-                }));
+                    accepted: false,
+                });
+                state.tell(Heard::Over { number, point });
             }
-            wl_data_device::Event::Motion { x, y, .. } if state.over => {
-                state.tell(Heard::Moved((x as f32, y as f32)));
+            wl_data_device::Event::Motion { x, y, .. } if ours => {
+                if let Some(drag) = state.drag.as_mut() {
+                    drag.point = (x as f32, y as f32);
+                    let (number, point) = (drag.number, drag.point);
+                    state.tell(Heard::Over { number, point });
+                }
             }
-            // The drop ends the drag: the leave that follows it finds none
-            wl_data_device::Event::Drop if std::mem::take(&mut state.over) => {
-                state.tell(Heard::Dropped)
-            }
-            wl_data_device::Event::Leave if std::mem::take(&mut state.over) => {
-                state.tell(Heard::Left)
+            wl_data_device::Event::Leave if ours => state.left(),
+            wl_data_device::Event::Drop if ours => {
+                let Some(drag) = state.drag.take() else {
+                    return;
+                };
+                // Finishing an offer the window last refused, or one the compositor chose no copy for, is a
+                // protocol error: such a drop is a cancelled drag
+                let copy = drag.offer.version() < 3
+                    || drag.offer.data::<Offered>().is_some_and(|o| {
+                        o.action.load(Ordering::Relaxed) == DndAction::Copy.bits()
+                    });
+                if drag.accepted && copy {
+                    let (number, point) = (drag.number, drag.point);
+                    state.released.push(drag);
+                    state.tell(Heard::Dropped { number, point });
+                } else {
+                    drag.offer.destroy();
+                    state.tell(Heard::Left);
+                }
             }
             wl_data_device::Event::Selection { id: Some(offer) } => offer.destroy(),
             _ => {}
         }
     }
 
-    event_created_child!(Devices, WlDataDevice, [
+    event_created_child!(Listener, WlDataDevice, [
         wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, Offered::default()),
     ]);
 }
 
-impl Dispatch<WlDataOffer, Offered> for Devices {
+impl Dispatch<WlDataOffer, Offered> for Listener {
     fn event(
         _: &mut Self,
         _: &WlDataOffer,
@@ -557,118 +771,20 @@ impl Dispatch<WlDataOffer, Offered> for Devices {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_data_offer::Event::Offer { mime_type } = event {
-            if let Ok(mut types) = offered.0.lock() {
-                types.push(mime_type);
+        match event {
+            wl_data_offer::Event::Offer { mime_type } => {
+                if let Ok(mut types) = offered.types.lock() {
+                    types.push(mime_type);
+                }
             }
+            wl_data_offer::Event::Action {
+                dnd_action: WEnum::Value(action),
+            } => offered.action.store(action.bits(), Ordering::Relaxed),
+            _ => {}
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_uri_list_gives_local_files_and_its_first_link() {
-        let list = b"# from a file manager\r\nfile:///home/a/Photo%20one.jpg\r\nfile://localhost/home/a/b.pdf\r\nhttps://example.com/fuji\r\nfile://other.example/x\r\nhttps://example.com/second\r\n";
-        let dropped = items(list, b"", b"");
-        assert_eq!(
-            dropped.paths,
-            [
-                PathBuf::from("/home/a/Photo one.jpg"),
-                PathBuf::from("/home/a/b.pdf")
-            ]
-        );
-        assert_eq!(dropped.url, "https://example.com/fuji");
-        assert_eq!(dropped.text, "");
-    }
-
-    #[test]
-    fn text_arrives_as_it_came_and_a_link_is_not_made_from_it() {
-        let dropped = items(b"", b"", "Mount Fuji\nhttps://example.com/fuji".as_bytes());
-        assert_eq!(dropped.text, "Mount Fuji\nhttps://example.com/fuji");
-        assert_eq!(dropped.url, "");
-        assert!(dropped.paths.is_empty());
-    }
-
-    #[test]
-    fn a_browsers_titled_link_gives_the_link_the_uri_list_lacks() {
-        let utf16 = |s: &str| {
-            s.encode_utf16()
-                .flat_map(u16::to_le_bytes)
-                .collect::<Vec<_>>()
-        };
-        let titled = utf16("https://example.com/fuji\nA link to Fuji");
-        let dropped = items(b"", &titled, b"https://example.com/fuji");
-        assert_eq!(dropped.url, "https://example.com/fuji");
-        assert_eq!(
-            dropped.text, "https://example.com/fuji",
-            "the text is the source's own"
-        );
-        let listed = items(b"https://example.com/listed\r\n", &titled, b"");
-        assert_eq!(
-            listed.url, "https://example.com/listed",
-            "a URI list's link comes first"
-        );
-        let file = items(
-            b"file:///tmp/a.jpg\r\n",
-            &utf16("file:///tmp/a.jpg\nA photo"),
-            b"",
-        );
-        assert_eq!(
-            (file.url.as_str(), file.paths.len()),
-            ("", 1),
-            "a file: link is a file, not the link"
-        );
-        let bom: Vec<u8> = [0xFE, 0xFF]
-            .into_iter()
-            .chain(
-                "https://example.com/b\n"
-                    .encode_utf16()
-                    .flat_map(u16::to_be_bytes),
-            )
-            .collect();
-        assert_eq!(items(b"", &bom, b"").url, "https://example.com/b");
-        assert_eq!(
-            items(b"", b"https://example.com/u8\ntitle", b"").url,
-            "https://example.com/u8"
-        );
-    }
-
-    #[test]
-    fn a_path_keeps_bytes_that_are_not_utf8() {
-        let path = file_path("///tmp/caf%E9").unwrap();
-        assert_eq!(path.as_os_str().as_encoded_bytes(), b"/tmp/caf\xe9");
-        assert_eq!(file_path("//host.example/tmp/a"), None);
-        assert_eq!(file_path("relative"), None);
-        assert_eq!(file_path("///tmp/%4"), None);
-    }
-
-    #[test]
-    fn an_offer_is_read_for_its_uri_list_and_its_first_text_type() {
-        let types = |list: &[&str]| list.iter().map(|t| t.to_string()).collect::<Vec<_>>();
-        let wanted = Wanted::of(&types(&["text/plain", "UTF8_STRING", "text/uri-list"])).unwrap();
-        assert_eq!(wanted.uris.as_deref(), Some(URI_LIST));
-        assert_eq!(wanted.link, None);
-        assert_eq!(wanted.text.as_deref(), Some("UTF8_STRING"));
-        assert_eq!(wanted.first(), Some(URI_LIST));
-        let text = Wanted::of(&types(&["TEXT/PLAIN;charset=UTF-8"])).unwrap();
-        assert_eq!(text.text.as_deref(), Some("text/plain;charset=utf-8"));
-        assert_eq!(
-            Wanted::of(&types(&["image/png", "application/x-example"])),
-            None
-        );
-        let firefox = Wanted::of(&types(&[
-            "text/x-moz-url",
-            "_NETSCAPE_URL",
-            "text/html",
-            "text/plain",
-        ]))
-        .unwrap();
-        assert_eq!(
-            (firefox.link.as_deref(), firefox.first()),
-            (Some(MOZ_URL), Some(MOZ_URL))
-        );
-    }
-}
+#[path = "drop_tests.rs"]
+mod tests;
