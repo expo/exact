@@ -13,7 +13,7 @@ import UIKit
 import ExactKit
 
 extension Presenter {
-    private var holds: [ObjectIdentifier: (view: NodeView, source: FlightSource)] {
+    private var holds: [ObjectIdentifier: (view: NodeView, source: FlightSource, lines: CGRect)] {
         get { (flightHost as? BuiltInFlights)?.holds ?? [:] }
         set { (flightHost as? BuiltInFlights)?.holds = newValue }
     }
@@ -21,7 +21,7 @@ extension Presenter {
     func holdFlights(leaving: UIView, arriving: UIView, zoom: String?) {
         guard !DisplayPreferences.reducedMotion, zoom == nil else { return }
         let pairs = Self.routePairs(leaving: named(in: leaving), arriving: named(in: arriving))
-        for pair in pairs { holds[ObjectIdentifier(pair.from)] = (pair.from, flightSource(pair.from)) }
+        for pair in pairs { holds[ObjectIdentifier(pair.from)] = (pair.from, flightSource(pair.from), pair.from.flightLines) }
     }
 
     /// The pairs a route change flies: each name `leaving` holds once and
@@ -74,7 +74,7 @@ extension Presenter {
                 // A bitmap: a snapshot view goes on following the leaver as its route moves.
                 let box = h.leaver.bounds
                 let picture = UIImageView(image: UIGraphicsImageRenderer(bounds: box).image { _ in h.leaver.drawHierarchy(in: box, afterScreenUpdates: false) })
-                h.flight.fade = (picture, h.leaver.contentBox())
+                h.flight.fade = (picture, sources[ObjectIdentifier(h.leaver)]?.lines ?? h.leaver.flightLines)
             }
         }
         UIView.performWithoutAnimation { for h in held { h.leaver.alpha = 0 } }

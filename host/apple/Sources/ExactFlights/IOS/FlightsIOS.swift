@@ -15,6 +15,7 @@
 // that is the shown box (`FlightScale`). `land` puts it back.
 #if os(iOS) || os(tvOS)
 import UIKit
+import ExactCore
 import ExactKit
 
 /// Where a leaver was shown when its name moved on.
@@ -43,12 +44,11 @@ final class Flight {
     var clip: UIView?
     var geometry: BatchOp?
     var saved: (interaction: Bool, hidden: Bool, alpha: CGFloat)?
-    /// A route change's (LLP 1013.004 D3): its transition lifts it, and a text scales by its content box's
-    /// height, not its width, since a paragraph's box can be the row's width at one end and its words'
-    /// at the other while its content's height is its font's.
+    /// A route change's (LLP 1013.004 D3): its transition lifts it, and a text scales by its lines' width,
+    /// not its box's, which can be the row's width at one end and its words' at the other.
     var crossing = false
-    /// A route change's picture of the leaver and its content box in it, which dissolves into the arriver in
-    /// the clip (LLP 1013.004 D3 step 4).
+    /// A route change's picture of the leaver and its `flightLines` in it, which dissolves into the arriver
+    /// in the clip (LLP 1013.004 D3 step 4).
     var fade: (view: UIView, content: CGRect)?
     init(id: UInt32, source: FlightSource) { self.id = id; self.source = source }
 }
@@ -64,8 +64,8 @@ final class BuiltInFlights: FlightHosting {
     weak var presenter: Presenter?
     var flights: [UInt32: Flight] = [:]
     /// Leavers of a route the batch destroys, kept for the transition that starts with it (`holdFlights`), with
-    /// where each showed then: the destroy takes an image's raster.
-    var holds: [ObjectIdentifier: (view: NodeView, source: FlightSource)] = [:]
+    /// where each showed then and its text's lines: the destroy takes an image's raster and a text's layout.
+    var holds: [ObjectIdentifier: (view: NodeView, source: FlightSource, lines: CGRect)] = [:]
     init(_ presenter: Presenter) { self.presenter = presenter }
     var isEmpty: Bool { flights.isEmpty }
     func begin(_ op: BatchOp) { presenter?.beginFlight(op) }
@@ -349,7 +349,10 @@ extension Presenter {
         guard let view = f.view, let slot = f.slot, let layer = f.container else { return }
         let p = f.progress
         let from = layer.convert(f.source.rect, from: nil)
-        let to = slot.convert(slot.bounds, to: layer)
+        var to = slot.convert(slot.bounds, to: layer)
+        // A route change's lands where its route is drawn now, which UIKit is still sliding, so it reaches its
+        // place with the page and never shows past the page's edge.
+        if f.crossing, let s = slot.layer.presentation(), let l = layer.layer.presentation() { to = s.convert(s.bounds, to: l) }
         func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * p }
         let shown = CGRect(x: mix(from.minX, to.minX), y: mix(from.minY, to.minY),
                            width: max(0, mix(from.width, to.width)), height: max(0, mix(from.height, to.height)))
@@ -379,15 +382,16 @@ extension Presenter {
             }
             let size = fade.view.bounds.size
             if view.kind == "text" {
-                // Each end's text by its content box's height, as a font's size goes, the two content boxes
-                // aligned, so neither padding moves the words.
-                let mine = view.contentBox(), r = from.width / max(size.width, 1)
+                // Each end's text scaled so its lines are as wide as the other's, where its alignment puts them,
+                // and centred on them, as Compose's scaleToBounds scales a text: the same words land on each
+                // other, only their weight differing.
+                let mine = view.flightLines, r = from.width / max(size.width, 1)
                 let c = CGRect(x: mix(from.minX + fade.content.minX * r, to.minX + mine.minX * ratio),
-                               y: mix(from.minY + fade.content.minY * r, to.minY + mine.minY * ratio),
-                               width: 0, height: mix(fade.content.height * r, mine.height * ratio))
-                let sa = c.height / max(mine.height, 1), sf = c.height / max(fade.content.height, 1)
-                place(view, scale: sa, at: CGPoint(x: c.minX - shown.minX - mine.minX * sa, y: c.minY - shown.minY - mine.minY * sa))
-                place(fade.view, scale: sf, at: CGPoint(x: c.minX - shown.minX - fade.content.minX * sf, y: c.minY - shown.minY - fade.content.minY * sf))
+                               y: mix(from.minY + fade.content.midY * r, to.minY + mine.midY * ratio),
+                               width: mix(fade.content.width * r, mine.width * ratio), height: 0)
+                let sa = c.width / max(mine.width, 1), sf = c.width / max(fade.content.width, 1)
+                place(view, scale: sa, at: CGPoint(x: c.minX - shown.minX - mine.minX * sa, y: c.minY - shown.minY - mine.midY * sa))
+                place(fade.view, scale: sf, at: CGPoint(x: c.minX - shown.minX - fade.content.minX * sf, y: c.minY - shown.minY - fade.content.midY * sf))
                 view.flightLook = FlightLook(image: CGRect(origin: .zero, size: layout), scale: sa)
             } else {
                 place(view, scale: s, at: .zero)
@@ -456,6 +460,22 @@ extension Presenter {
         func mix(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * p }
         return CGRect(x: mix(start.minX * from.width, end.minX * to.width), y: mix(start.minY * from.height, end.minY * to.height),
                       width: mix(start.width * from.width, end.width * to.width), height: mix(start.height * from.height, end.height * to.height))
+    }
+}
+
+extension NodeView {
+    /// Where a text's lines are laid out in it, from the leftmost line's start to the rightmost's end, as its
+    /// alignment puts them; another view's content box.
+    var flightLines: CGRect {
+        let box = paragraphBox()
+        guard kind == "text", let p = paragraphLayout(), !p.lines.isEmpty else { return contentBox() }
+        let align = paragraphSpec().align
+        let spans = p.lines.indices.map { i -> (CGFloat, CGFloat) in
+            let x = box.minX + p.origin(i, align: align, width: box.width)
+            return (x, x + CGFloat(CTLineGetTypographicBounds(p.lines[i], nil, nil, nil)) - CGFloat(CTLineGetTrailingWhitespaceWidth(p.lines[i])))
+        }
+        let lo = spans.map(\.0).min() ?? box.minX, hi = spans.map(\.1).max() ?? box.maxX
+        return CGRect(x: lo, y: box.minY, width: hi - lo, height: p.height)
     }
 }
 #endif
