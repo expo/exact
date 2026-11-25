@@ -235,7 +235,7 @@ pub(crate) fn derive(
                 modes.extend(grant.device.ios_modes);
                 tasks.extend(grant.device.ios_tasks);
             }
-            "linux" => {
+            "linux" | "android" => {
                 android.extend(grant.device.android);
                 features.extend(grant.device.android_features);
                 for pair in grant.device.android_services {

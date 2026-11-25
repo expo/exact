@@ -485,6 +485,9 @@ pub fn compatibility_id_pinned(
         );
         compat.id = compatibility_digest(&compat.inputs);
     }
+    if target.contains("android") {
+        android::app_permissions(app_dir, manifest, ships, &mut compat)?;
+    }
     crate::icon_rules::apply(&mut compat, ships, entries)?;
     crate::atom_faces::apply(&mut compat, ships, entries);
     if !target.contains("watchos") {

@@ -1273,7 +1273,7 @@ export function coldGradleHome(env = process.env) {
  * configuration (`config`, `packageConfigs`', which `ExtensionContext.config` reads), and the permissions the app's
  * grant lines derive (the bake's `reach.android`) with those its names derive, and the components its packages'
  * manifest fragments declare with the meta-data the configuration fills, as Gradle properties. */
-function extensionArgs(app, out, config, bound, firebase, development) {
+export function extensionArgs(app, out, config, bound, firebase, development) {
   const generated = resolve(apkDirs(app).app, 'extensions');
   rmSync(generated, { recursive: true, force: true });
   let permissions = [], services = {}, features = [], callbacks = [], reach = null;
@@ -1288,11 +1288,11 @@ function extensionArgs(app, out, config, bound, firebase, development) {
   } catch { /* no bake output: none */ }
   // And what the module names the app calls derive beside their lines (`android_entry`'s `permissions.txt`, LLP 1133.018 D11).
   try { permissions = [...new Set([...permissions, ...readFileSync(resolve(out, 'permissions.txt'), 'utf8').split('\n').filter(Boolean)])].sort(); } catch { /* none */ }
-  // And the normal permissions the packages' manifest fragments declare (LLP 1133.031 D12 item 1).
+  // Install-time permissions declared by the app and its packages (LLP 1133.030 D9).
   // A live activity's notification asks to be promoted (Android 16's Live Updates, LLP 1126 D13): a normal
   // permission, which the person can still turn off in Settings.
   const promoted = reach?.androidActivities?.length ? ['android.permission.POST_PROMOTED_NOTIFICATIONS'] : [];
-  const declared = fragmentPermissions(bound);
+  const declared = fragmentPermissions(bound, app.manifest?.host?.android?.permissions, app.dir);
   permissions = [...new Set([...permissions, ...declared, ...promoted])].sort();
   const car = carAppService(bound), carOwner = car && bound.find(b => b.manifest?.carAppService === car);
   if (bound.length) {

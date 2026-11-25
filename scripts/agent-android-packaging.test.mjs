@@ -4,9 +4,21 @@ import {createHash} from 'node:crypto';
 import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {basename, resolve} from 'node:path';
-import {androidJavaEnv, androidSdk, androidSdkPackages, composeArgs, loadAlignment} from './agent-android.mjs';
+import {androidJavaEnv, androidSdk, androidSdkPackages, extensionArgs, composeArgs, loadAlignment} from './agent-android.mjs';
 import {manifestFragment} from './android-manifest.mjs';
 import {ANDROID_TARGET, androidBakeLibraryName, androidToolchainEnv, stageAndroidBake} from './android-abi.mjs';
+
+test('Gradle receives one permission across the app, a grant and a bound package', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-permission-'));
+  try {
+    const foreground = 'android.permission.FOREGROUND_SERVICE', capture = 'android.permission.DETECT_SCREEN_CAPTURE';
+    const app = { dir, name: 'capture', target: dir, manifest: { host: { android: { permissions: [foreground, capture] } } } };
+    const bound = [{ extension: 'fixture', className: 'fixture.Module', dirs: [dir], manifest: { permissions: [foreground] } }];
+    writeFileSync(resolve(dir, 'compat.json'), JSON.stringify({ reach: { android: [foreground] } }));
+    const args = extensionArgs(app, dir, [], bound, null, true);
+    expect(args.filter(arg => arg.startsWith('-Ppermissions='))).toEqual([`-Ppermissions=${capture},${foreground}`]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('Compose follows the plan and the Kotlin source directories Gradle compiles', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'exact-compose-'));

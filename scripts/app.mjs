@@ -183,7 +183,6 @@ export function outsideWorkspaceProblems(workspace) {
   if (PINNED_RUST && channel !== PINNED_RUST) problems.push(`${toolchain}: ${channel ? `pins ${channel}` : 'is missing'}; exact2 builds with ${PINNED_RUST}. Copy ${resolve(ROOT, 'rust-toolchain.toml')} there (\`bun exact.mjs update\` does).`);
   return problems;
 }
-
 /** Resolve a binding lock, fetching its missing sources once without updating it. */
 export function lockedMetadata(workspace, noDeps = false, env = process.env) {
   const args = ['metadata', '--locked', '--offline', ...(noDeps ? ['--no-deps'] : []), '--format-version', '1'];
@@ -572,6 +571,7 @@ export function readManifest(dir, name) {
       : /^((host\.\w+\.)?(splash\w*|windowBackground|backgroundColor|launchColor)): not a known key$/i.test(p) ? `${p.split(':')[0]}: not a known key; what shows before the first frame is background_color in every colour scheme, or color_scheme_light.background_color and color_scheme_dark.background_color in one, on every host (host.ios.launchImage and host.android.launchImage add a picture)`
       : /^host\.ios\.associatedDomains: expected array, got boolean$/.test(p) ? REMOVED_DOMAINS[parsed.host.ios.associatedDomains]
       : appleMetadataProblem(p)).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed), vendorPlistProblems(parsed));
+  if (Array.isArray(parsed.host?.android?.permissions)) problems.push(...permissionProblems(parsed.host.android.permissions, "host.android.permissions", false, dir));
   if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...linkProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir), ...variantProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
@@ -580,8 +580,8 @@ export function readManifest(dir, name) {
   canonicalizeDocumentExtensions(manifest);
   return packageGpuManifest(manifest, dir);
 }
-
 import { DOCUMENT_UTIS, ownDocumentType, documentTypeProblems, canonicalizeDocumentExtensions } from './document-utis.mjs';
+import { installedNormalPermissions, permissionProblems } from './android-manifest.mjs';
 import { launchModules, moduleDirectory } from './launch-modules.mjs';
 export { moduleDirectory } from './launch-modules.mjs';
 import { webManifestAtBase, webCspProblems, webHeadProblems } from './web-head.mjs';
@@ -1169,6 +1169,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     {name:'app',path:app.dir}, {name:'exact',path:ROOT}, {name:'workspace',path:graph.metadata.workspace_root},
     ...packages.filter(pkg => pkg.source === null).map(pkg => ({name:'workspace',path:graph.metadata.workspace_root, contains:dirname(pkg.manifest_path)})),
   ], watchOutputs);
+  if (platform === 'android') sourceInputsRecord.androidPermissions = installedNormalPermissions(app, compat, bundleGraph.extensions);
   const products=roots.flatMap((r)=>messages.filter((m)=>m.reason==='compiler-artifact'&&m.package_id===r.package&&m.target.name===r.name).flatMap((m)=>m.filenames)).filter((p)=>!p.endsWith('.d')&&!p.endsWith('.dSYM')).map((path)=>prepared.get(path)??path).map((path)=>{const info=statSync(path);return {path,bytes:info.size,sha256:hashes.of(path,info)};})
     .concat(generatedInputs.products);
   hashes.save();
@@ -1210,7 +1211,6 @@ export function awaitBuildOutput(app, path, waiting) {
     }
   }
 }
-
 export function claimLive(text) {
   let claim;
   try { claim = JSON.parse(text); } catch { return true; } // unreadable: never guess
@@ -1364,7 +1364,7 @@ export function classifyArtifacts(candidate, cohort, signingKey = null) {
       for(const [svg, rendition] of Object.entries(need)) if(canonicalBuild(have[key]?.[svg]??null)!==canonicalBuild(rendition)) fail(`.${svg} (requires the installed SVG rendition)`);
     } else if(key==='executors'||key==='hatches') { for(const item of need) if(!have[key]?.includes(item)) fail(key==='hatches'?`.${item} (handled by this platform's module, not by the installed one)`:`.${item}`); // hatches: LLP 1075.003.000.001 §4.3, a cohort from before the capability handles none
     } else if(key==='appleUses') { /* LLP 1047.001 D13: what the binary was composed from, as a subset; a cohort that names no set links everything, and a capability its roster predates was in its core */ if(Array.isArray(have.linked)) for(const item of need) if(!have.linked.includes(item)&&(!Array.isArray(have.linkRoster)||have.linkRoster.includes(item))) fail(`.${item} (not linked into the installed binary; that needs a new binary)`);
-    } else if(['androidUses','androidExtensions','androidPermissions'].includes(key)) { /* LLP 1030.006 D4a: what the APK was composed from, as a subset */ for(const item of need) if(!have.androidLinked?.[key.slice(7).toLowerCase()]?.includes(item)) fail(`.${item} (not in the installed APK; that needs a new APK)`); } else if(key==='hermesBytecode') { if(have[key]!==need) fail(` (the module is Hermes bytecode ${need}; this cohort's APK runs ${have[key]??'none'}, which needs a new APK)`); } else if(key==='typescriptRuntime') { if(!((have[key]??0)>=need)) fail(` (requires a prelude of runtime ${need} or later; this cohort's is ${have[key]??0})`); /* LLP 1108 D6 R2: an older prelude ignores exactBodyFrom */ } else if(key==='grantCeiling') {
+    } else if(['androidUses','androidExtensions','androidPermissions'].includes(key)) { /* LLP 1030.006 D4a: what the APK was composed from, as a subset */ for(const item of need) if(!have.androidLinked?.[key.slice(7).toLowerCase()]?.includes(item) && !(key==='androidPermissions' && cohort.compat.reach?.androidAppPermissions?.includes(item))) fail(`.${item} (not in the installed APK; that needs a new APK)`); } else if(key==='hermesBytecode') { if(have[key]!==need) fail(` (the module is Hermes bytecode ${need}; this cohort's APK runs ${have[key]??'none'}, which needs a new APK)`); } else if(key==='typescriptRuntime') { if(!((have[key]??0)>=need)) fail(` (requires a prelude of runtime ${need} or later; this cohort's is ${have[key]??0})`); /* LLP 1108 D6 R2: an older prelude ignores exactBodyFrom */ } else if(key==='grantCeiling') {
       const grants=new Set((have.grantCeiling??'').split('\n').filter(Boolean));
       if(need===null||have.grantCeiling===null) fail(' (unknown baked grants)',false);
       else for(const grant of need.split('\n').filter(Boolean)) if(!grants.has(grant)) fail(` (${grant})`);
