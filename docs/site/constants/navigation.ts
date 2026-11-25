@@ -51,7 +51,7 @@ export const sections: NavSection[] = [
         path: '/',
         source: 'site/pages/home.md',
         landing: true,
-        description: 'Write an app once. It runs natively on the web, macOS, iOS, and Linux.',
+        description: 'Write an app once. It runs natively on the web, iOS, macOS, Android, Linux, and more.',
       },
     ],
   },

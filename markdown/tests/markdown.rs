@@ -23,8 +23,10 @@ fn hidden(source: &str, reveal: Option<Range>) -> Vec<String> {
         .collect()
 }
 
+mod autolinks;
 mod code_spans;
 mod commands;
+mod titles;
 use commands::run;
 
 #[test]
@@ -329,6 +331,37 @@ fn lists_tasks_quotes_and_rules() {
     );
     // An ordered item's number is text: visible, dimmed.
     assert!(spans(source, None).contains(&("1.".into(), MARKER)));
+}
+
+/// CommonMark 0.31.2 §5.2: 1 to 4 columns of spaces or tabs follow a list
+/// marker. Before indented code, the marker takes one.
+#[test]
+fn spaces_and_tabs_after_a_list_marker_are_not_text() {
+    use ParagraphKind::{Body, Bullet, Ordered, Rule, Task};
+    for (source, kind, text) in [
+        ("-\titem", Bullet, "• item"),
+        ("- \titem", Bullet, "• item"),
+        ("-   item", Bullet, "• item"),
+        ("-    item", Bullet, "• item"),
+        ("  -\titem", Bullet, "◦ item"),
+        ("> -\titem", Bullet, "▎ • item"),
+        ("1.\titem", Ordered, "1. item"),
+        ("1.  item", Ordered, "1. item"),
+        ("-  [ ] task", Task(false), "☐ task"),
+        ("-\t[x] done", Task(true), "☑ done"),
+        ("- [x]\tdone", Task(true), "☑ done"),
+        ("-     code", Bullet, "•     code"),
+        ("-\t  code", Bullet, "•   code"),
+        ("-     [ ] code", Bullet, "•     [ ] code"),
+        ("-   ", Bullet, "• "),
+        ("-item", Body, "-item"),
+        ("- [x]done", Bullet, "• [x]done"),
+        ("-\t-\t-", Rule, "──────────"),
+    ] {
+        assert_eq!(style(source, None).paragraphs[0].kind, kind, "{source:?}");
+        let drawn: String = pieces(source).iter().map(|p| p.text.as_str()).collect();
+        assert_eq!(drawn, text, "{source:?}");
+    }
 }
 
 #[test]
@@ -890,6 +923,44 @@ fn pieces_flatten_a_document_into_runs_one_engine_paints() {
     }
     assert_eq!(pieces(""), Vec::<Piece>::new());
     assert_eq!(pieces("plain")[0].text, "plain");
+}
+
+#[test]
+fn a_blank_line_between_items_is_any_line_the_block_pass_calls_blank() {
+    let drawn = |source: &str| -> Vec<(String, f32)> {
+        pieces(source)
+            .into_iter()
+            .map(|p| (p.text, p.scale))
+            .collect()
+    };
+    let gaps = |source: &str| drawn(source).iter().filter(|p| p.1 == 0.5).count();
+
+    let loose = drawn("- a\n\n- b");
+    assert_eq!(gaps("- a\n\n- b"), 1);
+    for source in [
+        "- a\r\n\r\n- b",
+        "- a\n \n- b",
+        "- a\n\t\n- b",
+        "- a\r\n  \r\n- b",
+        "- a\n\n\n- b",
+    ] {
+        assert_eq!(drawn(source), loose, "{source:?}");
+    }
+
+    let tight = drawn("- a\n- b");
+    assert_eq!(gaps("- a\n- b"), 0);
+    assert_eq!(drawn("- a\r\n- b"), tight);
+    // White space at an item's end is not a blank line.
+    assert_eq!(gaps("- a  \r\n- b"), 0);
+
+    let mixed = "1. one\n   more\n2. two\n\n- [ ] three\n  - four";
+    assert_eq!(gaps(mixed), 1);
+    assert_eq!(gaps(&mixed.replace('\n', "\r\n")), 1);
+
+    // A quote's blank line is its markers alone.
+    assert_eq!(gaps("> - a\n> - b"), 0);
+    assert_eq!(gaps("> - a\n>\n> - b"), 1);
+    assert_eq!(gaps("> - a\r\n> \r\n> - b"), 1);
 }
 
 #[test]

@@ -197,7 +197,7 @@ component Agents
       accent-color="-exact-system-indigo"
       for e in stack(nav) key=e.id
         if e.name == "chats"
-          column navigationKey=`${e.id}` navigationScroll="chats" position="absolute" inset=0 display="flex" flex-direction="column"
+          column navigationKey=`${e.id}` navigationSplit="split" navigationScroll="chats" position="absolute" inset=0 display="flex" flex-direction="column"
             header display="flex" align-items="center" gap=8 padding="8px 16px"
               text "Agents" role="heading" aria-level=1
               input type="search" value=query input=search placeholder="Search" flex=1 min-width=0 testId="search"

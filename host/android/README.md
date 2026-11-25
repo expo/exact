@@ -1,11 +1,6 @@
 # The Android reader
 
-The Kotlin reader is part of Android’s Canvas host (LLP 1076 §3.3, LLP 1115.001 D2). The Rust host (`host/painted`, built for `aarch64-linux-android` or `x86_64-linux-android`) runs the app, lays out its text and records its paint operations (`host/painted/src/canvas.rs`). The
-reader replays that stream onto Android's own Canvas: a `RenderNode` for each row, scroller and animated layer,
-hardware bitmaps for pictures, `drawGlyphs` for text the Rust has shaped (below Android 12, the glyphs' outlines:
-"Android 10 and 11", below). The two meet at `dev.exact.canvas.Native`,
-whose methods `exact_painted::canvas_jni!(Data)` defines for an app (`host/painted/src/canvas/jni.rs`). Nothing versions
-the stream or those calls, so both sides are built from one commit. The build holds that as far as it can see
+The Kotlin reader replays the Rust host’s paint operations on Android’s Canvas (LLP 1076 §3.3, LLP 1115.001 D2). `host/painted` runs the app on ARM64 and x86-64 Android, lays out its text and records the stream in `canvas.rs`. The reader uses a `RenderNode` for each row, scroller and animated layer, hardware bitmaps for pictures, and `drawGlyphs` for the glyphs Rust shaped. On Android 10 and 11 it draws their outlines. The app defines the reader’s JNI methods in `dev.exact.canvas.Native` through `exact_painted::canvas_jni!(Data)`. The stream and JNI calls are unversioned, so the reader and Rust host build from the same commit. The build checks this pairing
 (LLP 1159.002): Gradle runs without file watching, so an edit it was not told of is still read, and the APK is refused
 when the library it packaged does not load what the one the build staged loads. A pair that slips past both shows as
 one line in the log, `exact canvas: unknown op …; the frame stops here`.
@@ -16,8 +11,7 @@ one line in the log, `exact canvas: unknown op …; the frame stops here`.
 | `app/` | the shell: one activity over the reader, packaging the app that `-Papp=<name>` names |
 | `gradlew`, `gradle/` | the Gradle wrapper (9.8.0), committed. Its jar is Gradle's own (sha256 `238e777f…`, as services.gradle.org publishes it) and the distribution's sha256 is pinned in `gradle-wrapper.properties` |
 
-The app defaults to minSdk 31 (Android 12). Set `host.android.minimumOS` to `"10"` for minSdk 29 (see "Android 10 and 11").
-The shell targets SDK 36, compiles with SDK 37.2, AGP 9.4.1 and Kotlin 2.4.10, and defaults to `arm64-v8a`. It uses Views without Compose, AppCompat or Material.
+The app defaults to minSdk 31 (Android 12). Set `host.android.minimumOS` to `"10"` for minSdk 29 (see "Android 10 and 11"). The shell targets SDK 36, compiles with SDK 37.2, AGP 9.4.1 and Kotlin 2.4.10, and defaults to `arm64-v8a`. It uses Views without Compose, AppCompat or Material.
 Jetpack WindowManager supplies the activity's fold. A half-open hinge reports `devicePosture="folded"`. A separating hinge gives the window two columns or two rows, even when flat. See the [foldables recipe](../../docs/recipes/foldables.md).
 
 The Android reader displays `image` sources from HTTPS URLs (LLP 1011 §2).
@@ -587,8 +581,19 @@ table and the four rows it adds. A report paints the page again; a role D4 leave
 blue) keeps its table pair.
 
 **One accent.** A control, a field's focused indicator and a filled button paint in the node's `accent-color` where it sets one, else
-in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a switch's thumb, a filled button's title):
-the device’s `primary` and `onPrimary`. Desktop Linux keeps the painter’s blue when no palette is reported. The root’s `accent-color` supplies the RGB seed for the bars’ Material tonal-spot scheme at the device’s contrast level.
+in `AccentColor`, with `AccentColorText` drawn on it (a check, a switch's thumb, a filled button's title):
+the device’s `primary` and `onPrimary`, or the design’s `AccentColor` with its `AccentColorText` or else the ink that
+reads on it. Desktop Linux keeps the painter’s blue when no palette is reported. The root’s `accent-color` supplies the
+RGB seed for the bars’ Material tonal-spot scheme at the device’s contrast level.
+
+**A design's accent seeds the scheme** (LLP 1115.001 D4). Where the app's design says `AccentColor`, the presenter
+replaces the reader's palette with Material's tonal-spot scheme from it (`SchemeTonalSpot`, Material Color
+Utilities), light from the accent's light value and dark from its dark one, at the device's contrast level: every
+role, and the bars' swatches from the light seed's palettes. A role the palette maps is no seed. A root
+`accent-color` tints the controls and seeds the bars (above) and leaves the rest to the device. Not reached: home-screen
+widgets, the launch window, the pull-to-refresh disc, the framework's date and time dialogs, and a paragraph's
+selection highlight, handles and toolbar read the device's resources, and the Compose date and time pickers take
+only the primary roles of an accent a node writes.
 
 **An icon button is Material's** (D9; `host/painted/src/paint/icon_button.rs`): a button holding a symbol and no
 title is a round 40 dp container round a 24 dp icon (the `icon-button-` rows, Compose Material 3 1.4's
@@ -767,18 +772,20 @@ time control alike. A date control shows its value as the device writes it: `Dev
 **Hatches** (D4, D5). The app's Rust hatches (`modules/linux`, or Rust in `modules/android`) run on this host as on
 Linux: `canvas_jni!`'s `hatches` hands the host their install, they connect as the reader takes its first requests after a displayed frame, and an overlay is painted as a canvas is, as a picture. Beside them, Kotlin in the app's `modules/android` defines `class exact.app.Hatches : ExactHatches()` (`Hatches.kt`), which hears the same moments for the same words (`app.json`'s for `android`) as request kind 10: `app`, `element`, `elementEnded`, on the main thread. Its handle, `ExactElement`, has the node's word, `id`, box and `data-*` words; `click`, `focus`, `blur` and `input(text)`, which cross by the node's number (`Native.hatchAct`) and run between exact2's turns; and `view`, a text field's `EditText` where the reader hosts it; `host { context -> view }`, a view of the app's own in the node's box, made for each activity and shown by `Natives` as element kind 5 wherever the node is painted; and `diagnostics`. The module has exact2's clock and input: `frames`, `after` and `observe`, each a ticket that `stop()` ends, told back as scopes 5, 6 and 7 of kind 10. `picker(element, picker)` is asked as a hatched date or time control's picker opens: it may set the title, the text-entry mode, the mode toggle, the days allowed, the 24-hour clock, or show its own (`ExactPicker.show`). `apps/native-fixture/modules/android` is one: it logs every moment under `ExactHatch`, gives its `due` pickers titles, no weekends and a 24-hour clock, and hosts a dial at `spin` that turns on exact2's clock and stops at a tap. `bun scripts/exact.mjs hatch <word> <app>` writes the class for an app with an `android/` crate.
 
-An app's optional native module views (LLP 1024) live in the same `modules/android` source directory. Their Maven libraries are named in `app.json` under `host.android.maven` ("Maven libraries" below). For package visibility, `host.android.queries` takes the same entries as a package's `manifest.queries`. An entry outside the allow-list fails the Android build. For example, `[{"action":"android.intent.action.TTS_SERVICE"}]` lets the app's Kotlin discover installed speech engines on Android 11 and later. Define `class exact.app.Modules : dev.exact.canvas.NativeModules` with a `modules: Map<String, NativeModule>` roster; the APK resolves it only at the first module view. Each module creates and updates its real Android `View`. `events(view, emit)` binds before its first update; call `emit("change", value)` with a string value, `emit("message", payload)` with the guest message, `emit("load", "")`, or `emit("press", "")`. A view reports focus with `emit("focus", "")` and blur with `emit("blur", "")`. A live, eligible view can take or release focus even without a handler. Other events need a handler on the node. Retired bindings and events for an old node allocation are ignored.
+An app's optional native module views (LLP 1024) live in the same `modules/android` source directory. Their Maven libraries are named in `app.json` under `host.android.maven` ("Maven libraries" below). For package visibility, `host.android.queries` takes the same entries as a package's `manifest.queries`. An entry outside the allow-list fails the Android build. For example, `[{"action":"android.intent.action.TTS_SERVICE"}]` lets the app's Kotlin discover installed speech engines on Android 11 and later. Define `class exact.app.Modules : dev.exact.canvas.NativeModules` with a `modules: Map<String, NativeModule>` roster; the APK resolves it only at the first module view. Each module creates and updates its real Android `View`. `events(view, emit)` binds before its first update; call `emit("change", value)` with a string value, `emit("message", payload)` with the guest message, `emit("load", "")`, or `emit("press", "")`. A view reports focus with `emit("focus", "")` and blur with `emit("blur", "")`. A live, eligible view can take or release focus even without a handler. Other events need a handler on the node. Retired bindings and events for an old node allocation are ignored. For content sizing, override `sizing(view: View, events: NativeViewSizing)` on the module or its package's `ExactExtension`. Call `events.wrapContent()` to follow the view's Android measurement as its content changes. For a size the module knows, call `events.intrinsicSize(SizeF(widthDp, heightDp))` with two finite positive values, or `events.intrinsicSize(null)` to clear it. The kernel uses this preference on automatic axes. CSS still sets the final content box.
 
 ### Kotlin data modules
 
-An app or game answers its own `native.call` and `native.later` through
-`class exact.app.Module : dev.exact.canvas.ExactModule()` in `modules/android`,
-the Kotlin counterpart to Apple's `ExactModule` (LLP 1067.000). `call` runs on
+An app or game answers `native.call` and `native.later` through `class exact.app.Module : dev.exact.canvas.ExactModule()` in `modules/android`, the Kotlin counterpart to Apple's `ExactModule` (LLP 1067.000). `call` runs on
 the calling thread. `later` starts on main and defaults to answering with
 `call(request)`. Protect state shared between those threads. The module receives
 the application Context and stays with the Canvas session through rotation and
 backgrounding. Its `app` callback receives the root's data words. Its timers and
 `app` run on the session thread. An orderly session end calls `destroy` once.
+List the module’s install-time permissions in `app.json` under `host.android.permissions`. For example, `["android.permission.DETECT_SCREEN_CAPTURE"]` lets it call `context.activity?.registerScreenCaptureCallback(…)` on API 34 and later. The app shares the allow-list with package fragments. Runtime permissions come from grant lines, and the map permission belongs only to the package that declares the POI car service.
+
+Changing the set in `host.android.permissions` flags a new APK at publication. Reordering the names has no effect. Update admission uses the permission names in the merged manifest, including names supplied by packages and Android libraries. Recording this full set changes the compatibility ID on rebuild when an earlier bake omitted installed names, even for an app without this key. The rebuilt APK starts a new cohort. Binaries already installed keep their receipts and continue to receive updates under their original compatibility ID and permission checks.
+
 See the [native module recipe](../../docs/recipes/native-module.md).
 
 ### Compose module views
@@ -794,8 +801,7 @@ object HelloCompose : NativeModule {
     override fun destroy(view: View) { (view as ComposeView).disposeComposition() }
 }
 ```
-
-Register it as `"hello-compose"` in `exact.app.Modules.modules` and app.json's `modules`, then write `hello-compose width="100%" height=48` in Contract. The shell enables the Compose compiler and links Material 3 with `-Pcompose=1` for a date or time control, or when a Kotlin file in the app's `modules/android` or a bound package's Android sources imports `androidx.compose` or uses `@Composable`. The text scan can also match comments or strings. A fully qualified use without an import or the annotation needs `ORG_GRADLE_PROJECT_compose=1`. The environment property accepts `1` or `0` to override Kotlin detection. A date or time control always selects Material 3. With neither use, the default APK links no Compose. Further libraries go under `host.android.maven`; the [Maven instructions](#maven-libraries-one-locked-verified-gradle-graph-llp-1133008-d8-item-5) cover the lock and verification files. Give each ComposeView a stable, unique Android view ID when using `rememberSaveable` across activity recreation. A module should dispose its composition in `destroy`, since its lifetime can end before the activity's.
+Register `"hello-compose"` in `exact.app.Modules.modules`. For an Android-only view, add `{"tag":"hello-compose","hosts":["android"]}` to `app.json`’s `modules` and put `hello-compose width="100%" height=48` under `if page.platform == "android"` with `page` bound to `exactPage()`. Packaging checks the compiled factory map against the Android tags in the bake. The shell enables the Compose compiler and links Material 3 with `-Pcompose=1` for a date or time control, or when a Kotlin file in the app's `modules/android` or a bound package's Android sources imports `androidx.compose` or uses `@Composable`. The text scan can also match comments or strings. A fully qualified use without an import or the annotation needs `ORG_GRADLE_PROJECT_compose=1`. The environment property accepts `1` or `0` to override Kotlin detection. A date or time control always selects Material 3. With neither use, the default APK links no Compose. Further libraries go under `host.android.maven`; the [Maven instructions](#maven-libraries-one-locked-verified-gradle-graph-llp-1133008-d8-item-5) cover the lock and verification files. Give each ComposeView a stable, unique Android view ID when using `rememberSaveable` across activity recreation. A module should dispose its composition in `destroy`, since its lifetime can end before the activity's.
 
 Home and return keep every mounted module view. The activity reparents it onto the new reader in the same window. A view that observes its immediate parent can rebind that observer in `onFinishTemporaryDetach`. The view's fields and Compose's `remember` and `rememberSaveable` survive. A node that leaves still follows the module's `reset` or `destroy` path. Process death recreates the views and restores `rememberSaveable` from the activity's saved state. Module views share a ViewModelStore. The activity retains it across configuration changes and clears it on every other destruction. Use separate ViewModel keys for independent views.
 
@@ -846,6 +852,8 @@ Both arrays take `group:artifact:version` with a pinned version: no ranges, dyna
 An app with no Maven libraries resolves as before, unlocked and unverified. Maven builds and lock reports on the same checkout take turns using Gradle's verification file. A library that is not on those repositories stays LLP 1133.001 D9's pinned `artifacts`. `packages/camera/test/android.mjs` exercises locking and verification in an app with CameraX and Compose.
 
 ## Text fields (LLP 1115.001 D8)
+
+Painted text measures, fits lines and draws with the advances of a default Android `TextView` in the resolved font at the displayed size (LLP 1085.000 §8). Each shaped font run makes one measurement call from the shaping thread. Android 12 and later supply glyph origins when the face and ordered IDs match. For plain ASCII, if the font can only adjust advances for the glyphs drawn, those widths already give every origin. Each shaping thread remembers the last face inspected. With only a cluster width, it shares that width in proportion to Exact’s advances. Android breaks greedily on these widths, like `BREAK_STRATEGY_SIMPLE`. The default `TextView` can choose other breaks. Linux and Windows keep their existing metrics. Web layout parity on Android holds up to text metrics. Run the comparison with `ANDROID_SERIAL=emulator-… bun test host/android/reference/advances.test.mjs`.
 
 Each `input` of a text type and each `textarea` is the framework's own `android.widget.EditText` (`Fields.kt`), with no background of its own, over the container exact2 paints for it. No library: the one subclass (`FieldText`) only says when its selection moves, which no listener of the class tells. The IME and its composition, autofill's hints, the selection handles, the magnifier, the floating toolbar and the spell checker come with the class. A field is an `EditText` whether or not it is focused, so nothing shifts when it takes the focus. exact2's side is `host/painted/src/fields.rs`, `presenter/hosted.rs` and `canvas/field.rs`.
 
@@ -1147,7 +1155,7 @@ A level-1 heading is the same small bar: Material's medium and large bars, which
 | Colour | The root tablist’s `background-color`, through the gesture bar. Defaults to `surfaceContainer` | `surfaceContainer` |
 | Destinations | the root tablist's tabs that name a panel, sharing the width 8 dp apart | 3 to 5, the same (`NavigationBarItemHorizontalPadding`) |
 | Symbol and label | a 24 dp symbol 16 dp from the top, its label under it (label-medium, 12/16 sp), 16 dp from the bottom | the same |
-| Active indicator | a 56 by 32 dp pill in `secondaryContainer` behind the selected symbol or lone label, seeded by the root accent when written | 56 by 32 dp in the theme’s `secondaryContainer` |
+| Active indicator | a 56 by 32 dp pill in `secondaryContainer` behind the selected symbol or lone label, seeded by the root accent when written, else by the design’s `AccentColor` | 56 by 32 dp in the theme’s `secondaryContainer` |
 | Colours | the selected symbol uses `onSecondaryContainer` and its label uses `secondary` from the same seed. A lone label on a seeded indicator uses `onSecondaryContainer` when `secondary` falls below 4.5:1 against the pill. Unselected destinations use the tablist’s ink, defaulting to `onSurfaceVariant`, at 38 % when disabled | `NavigationBarItemDefaults.colors` reads the theme’s selected and unselected roles |
 | Badge | a tab's badge box (LLP 1075.003 §9.9): its text, label-small in `onError` on an `error` pill at least 16 dp square, 4 dp either side of the text, its start 12 dp before the symbol's end and 14 dp into it; not run on a device | `Badge` with content in a `BadgedBox` (`BadgeTokens`, `Badge.kt`, read at the pinned version) |
 

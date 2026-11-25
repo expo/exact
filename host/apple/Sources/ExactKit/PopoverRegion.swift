@@ -90,7 +90,8 @@ extension Presenter {
             }
             #else
             if let scroller = view as? UIScrollView, !layer.isDescendant(of: scroller) || layer.superview === scroller {
-                sum.x += scroller.contentOffset.x
+                // A side inset that comes or goes scrolls nothing
+                sum.x += scroller.contentOffset.x + scroller.adjustedContentInset.left
                 sum.y += scroller.contentOffset.y
             }
             #endif

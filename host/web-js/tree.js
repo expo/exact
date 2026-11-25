@@ -1,7 +1,7 @@
 // The element tree: elements built or adopted from a rendered page, their props and styles, and view ids.
 import { markdownText } from './markdown.js';
 import { oneActivation, suppressedInvocation, releaseAsset as rel } from './elements.js';
-import { listRow, listOwner, renderMarkup } from './navigation.js';
+import { listRow, listOwner, fieldText, renderMarkup } from './navigation.js';
 import { Docs } from './document.js';
 import { Refusal } from './shape.js';
 import { regions } from './regions.js';
@@ -153,7 +153,7 @@ if (typeof addEventListener === 'function')
 const Composing = new WeakSet(),
   Held = new WeakMap(),
   HeldTask = new WeakMap();
-function writeValue(e, v) {
+function writeValue(e, v, replace) {
   // An option's getter may equal its label without carrying an explicit value.
   if (e.localName === 'option') {
     if (e.getAttribute('value') !== v) e.value = v;
@@ -173,15 +173,40 @@ function writeValue(e, v) {
         e,
         setTimeout(() => {
           Composing.delete(e);
-          if (Held.has(e)) writeValue(e, Held.get(e));
+          if (Held.has(e)) writeValue(e, ...Held.get(e));
           e.exactDecorations?.sync();
         }, 0),
       );
     });
   }
-  if (e.value !== v && Composing.has(e)) return Held.set(e, v);
-  Held.delete(e);
-  if (e.value !== v) e.value = v;
+  if (e.value !== v && Composing.has(e)) {
+    Held.set(e, [v, replace]);
+    e.$echo?.(() => {
+      if (Held.get(e)?.[0] === e.value) { Held.delete(e); e.$echo(); }
+    });
+    return;
+  }
+  if (Held.delete(e)) e.$echo?.();
+  if (e.value !== v) {
+    if (replace) replace(e, v);
+    else e.value = v;
+    return true;
+  }
+}
+// A field can share a record with another editor. A change to another member
+// only reaches the widget when its own bound text changes.
+export function fieldValue(e, f) {
+  let accepted;
+  const show = () => {
+    if (writeValue(e, accepted, e.$field?.replace)) e.exactDecorations?.sync();
+  };
+  const binding = effect(() => {
+    const value = fieldText(e, String(f() ?? ''));
+    if (accepted === value) return;
+    accepted = value;
+    show();
+  });
+  return { binding, show };
 }
 // a URL that navigates (navigation.js `navigableURL`); an iframe's is iframes.js's
 const navigable = v => {

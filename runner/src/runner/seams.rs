@@ -357,7 +357,7 @@ pub trait PresenceSecrets<D: DataSource> {
         false
     }
     /// A store's presence call: with no presence name, refused by its name.
-    fn presence_call(&self, _: &mut Runner<D>, body: &[u8]) -> Option<Dispatch> {
+    fn presence_call(&self, _: &mut Runner<D>, body: &[u8], _: Option<&str>) -> Option<Dispatch> {
         let (_, name, _) = presence_body(body)?;
         let message = format!("{name} is not a secret.keep name with a presence policy");
         let answer = json!({ "error": "NotSupportedError", "message": message });
@@ -657,9 +657,13 @@ impl<D: DataSource> Runner<D> {
         self.seams.presence.presence_holds(self, ticket)
     }
 
-    pub(in crate::runner) fn presence_call(&mut self, body: &[u8]) -> Option<Dispatch> {
+    pub(in crate::runner) fn presence_call(
+        &mut self,
+        body: &[u8],
+        grants: Option<&str>,
+    ) -> Option<Dispatch> {
         let p = self.seams.presence;
-        p.presence_call(self, body)
+        p.presence_call(self, body, grants)
     }
 
     pub(in crate::runner) fn presence_writes(
@@ -889,7 +893,7 @@ mod tests {
         .unwrap();
         let body = br#"{"presence":"unlock","name":"token","reason":"Sign in"}"#;
         let Some(crate::request::Dispatch::Run(crate::request::Work::Now(answer))) =
-            r.presence_call(body)
+            r.presence_call(body, None)
         else {
             panic!("a presence call is answered now");
         };
@@ -902,7 +906,7 @@ mod tests {
             said["message"],
             "token is not a secret.keep name with a presence policy"
         );
-        assert!(r.presence_call(br#"{"op":"other"}"#).is_none());
+        assert!(r.presence_call(br#"{"op":"other"}"#, None).is_none());
         assert!(r.presence_list().is_empty() && r.take_presence_asks().is_empty());
         assert!(!r.presence_secrets() && r.presence_due_ms().is_none());
     }

@@ -314,12 +314,229 @@ fn a_navigation_split_where_no_host_reads_it_is_named_with_its_repair() {
         "box navigationSplit=\"none\"\n              text \"Rooms\"",
     );
     assert_eq!(warned(&on_box), [(SPLIT.to_string(), 10)]);
+    // A template the compiler folds to that word is that literal, as the compiler judges it.
+    let folded_none = on_box.replace(
+        "navigationSplit=\"none\"",
+        "navigationSplit=`${\"n\" + \"one\"}`",
+    );
+    assert_eq!(warned(&folded_none), [(SPLIT.to_string(), 10)]);
+    // So is one only the element's scope folds, as lowering folds it.
+    let scoped_none = on_box.replace(
+        "navigationSplit=\"none\"",
+        "navigationSplit=`${(1 + 1 == 2) ? \"none\" : e.name}`",
+    );
+    assert_eq!(warned(&scoped_none), [(SPLIT.to_string(), 10)]);
+    // Each use of a shared source is judged by its own value: the one folding to "none" warns, whichever comes first.
+    let shared = "routes nav\n  home \"/\"\ncomponent App\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${e.id}` position=\"absolute\" inset=0\n          Pane(mode=`${\"place\" + \"holder\"}`)\n          Pane(mode=`${\"n\" + \"one\"}`)\ncomponent Pane\n  props\n    mode: string\n  view\n    column navigationSplit=mode\n      text \"Pick one\"\n";
+    let split: Vec<_> = warned(shared)
+        .into_iter()
+        .filter(|(id, _)| id == SPLIT)
+        .collect();
+    assert_eq!(split, [(SPLIT.to_string(), 14)]);
+    // A computed value on a box that is no route is refused: one error, and no warning beside it
+    let computed = "routes nav\n  home \"/\"\ncomponent App\n  state mode = \"none\"\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${e.id}` position=\"absolute\" inset=0\n          box navigationSplit=mode\n            text \"Rooms\"\n";
+    let (result, notes) = contract::compile_warned(computed);
+    assert_eq!(result.unwrap_err().id, SPLIT);
+    assert!(notes.iter().all(|note| note.id != SPLIT), "{notes:?}");
+    // So is a switch on the navigation root, which the lowerer refuses anywhere
+    let root_switch = computed
+        .replace(
+            "navigationBack=\"back\"",
+            "navigationBack=\"back\" navigationSplit=true",
+        )
+        .replace("box navigationSplit=mode", "box");
+    let (result, notes) = contract::compile_warned(&root_switch);
+    assert_eq!(result.unwrap_err().id, "lower-attr-value");
+    assert!(notes.iter().all(|note| note.id != SPLIT), "{notes:?}");
+    // So is a value of the wrong type the lowerer refuses on the navigation root
+    let root_bound = computed
+        .replace("state mode = \"none\"", "state mode = true")
+        .replace(
+            "navigationBack=\"back\"",
+            "navigationBack=\"back\" navigationSplit=mode",
+        )
+        .replace("box navigationSplit=mode", "box");
+    let (result, notes) = contract::compile_warned(&root_bound);
+    assert_eq!(result.unwrap_err().id, "lower-attr-type");
+    assert!(notes.iter().all(|note| note.id != SPLIT), "{notes:?}");
+    // So is a folded placeholder, which placement refuses on the navigation root
+    let root_placeholder = computed
+        .replace(
+            "navigationBack=\"back\"",
+            "navigationBack=\"back\" navigationSplit=`${\"place\" + \"holder\"}`",
+        )
+        .replace("box navigationSplit=mode", "box");
+    let (result, notes) = contract::compile_warned(&root_placeholder);
+    let error = result.unwrap_err();
+    assert!(error.message.contains("own child"), "{error}");
+    assert!(notes.iter().all(|note| note.id != SPLIT), "{notes:?}");
+    // A build that refuses anything holds its placement warnings: they speak of a build that runs, as the next one
+    // that compiles shows
+    let instances = "routes nav\n  home \"/\"\ncomponent App\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${e.id}` position=\"absolute\" inset=0\n          Pane(mode=\"none\")\n          Pane(mode=\"auto\")\ncomponent Pane\n  props\n    mode: string\n  view\n    box navigationSplit=mode\n      text \"Rooms\"\n";
+    let (result, notes) = contract::compile_warned(instances);
+    assert_eq!(result.unwrap_err().id, "lower-attr-value");
+    assert!(notes.iter().all(|note| note.id != SPLIT), "{notes:?}");
+    let (result, notes) =
+        contract::compile_warned(&instances.replace("mode=\"auto\"", "mode=\"none\""));
+    result.unwrap();
+    assert_eq!(
+        notes.iter().filter(|note| note.id == SPLIT).count(),
+        1,
+        "{notes:?}"
+    );
+    // A native view's computed one is its own attribute check's, which names what the module's box takes
+    let computed_native = "component A\n  state mode = \"none\"\n  view\n    ghostty-terminal testId=\"term\" width=320 height=200 navigationSplit=mode\n";
+    assert_eq!(
+        contract::compile(computed_native).unwrap_err().id,
+        "lower-native-attr"
+    );
+    // So is an action as the value, refused where the value is
+    let action = computed
+        .replace("box navigationSplit=mode", "box")
+        .replace(
+            "navigationBack=\"back\"",
+            "navigationBack=\"back\" navigationSplit=pick",
+        )
+        .replace("  view\n", "  action pick\n    mode = \"split\"\n  view\n");
+    let (result, notes) = contract::compile_warned(&action);
+    assert!(result.is_err());
+    assert!(notes.iter().all(|note| note.id != SPLIT), "{notes:?}");
+    // So is a native view's, which the module never takes
+    let native = "component A\n  view\n    ghostty-terminal testId=\"term\" width=320 height=200 navigationSplit=\"none\"\n";
+    let (result, notes) = contract::compile_warned(native);
+    assert_eq!(result.unwrap_err().id, "lower-native-attr");
+    assert!(notes.iter().all(|note| note.id != SPLIT), "{notes:?}");
+    // So is a width the lowerer does not take, there as anywhere
+    let fraction = computed.replace("navigationSplit=mode", "navigationSplit=280.5");
+    let (result, notes) = contract::compile_warned(&fraction);
+    assert_eq!(result.unwrap_err().id, "lower-attr-value");
+    assert!(notes.iter().all(|note| note.id != SPLIT), "{notes:?}");
+    // A literal width is literal too, written as a number, as text or as a template with nothing computed in it.
+    for width in ["280", "\"280\"", "`280`"] {
+        let on_box = stack("`${top(nav).id}`", "`${e.id}`", "`${e.id}`").replace(
+            "text \"Rooms\"",
+            &format!("box navigationSplit={width}\n              text \"Rooms\""),
+        );
+        assert_eq!(warned(&on_box), [(SPLIT.to_string(), 10)], "{width}");
+    }
+    // A literal `true` is refused for what it says, not as a computed value.
+    let on_box = stack("`${top(nav).id}`", "`${e.id}`", "`${e.id}`").replace(
+        "text \"Rooms\"",
+        "box navigationSplit=true\n              text \"Rooms\"",
+    );
+    let error = contract::compile(&on_box).unwrap_err();
+    assert!(
+        error.id == "lower-attr-value" && error.message.contains("is no switch"),
+        "{error}"
+    );
     // On the root route, and a placeholder box inside it, it is read.
     let on_route = stack("`${top(nav).id}`", "`${e.id}`", "`${e.id}`").replace(
         "column navigationKey=`${e.id}` position=\"absolute\" inset=0\n            text \"Rooms\"",
-        "column navigationKey=`${e.id}` navigationSplit=\"none\" position=\"absolute\" inset=0\n            box navigationSplit=\"placeholder\"\n              text \"Pick one\"",
+        "column navigationKey=`${e.id}` navigationSplit=\"split\" position=\"absolute\" inset=0\n            box navigationSplit=\"placeholder\"\n              text \"Pick one\"",
     );
     assert_eq!(warned(&on_route), []);
+    // So is one the compiler folds to "placeholder", which it takes as written so
+    let folded = on_route.replace(
+        "box navigationSplit=\"placeholder\"",
+        "box navigationSplit=`${\"place\" + \"holder\"}`",
+    );
+    assert_eq!(warned(&folded), []);
+    // One that folds only with the app's scope is the lowerer's, which takes it as the placeholder
+    let scoped = on_route.replace(
+        "box navigationSplit=\"placeholder\"",
+        "box navigationSplit=`${(1 + 1 == 2) ? \"placeholder\" : e.name}`",
+    );
+    assert_eq!(warned(&scoped), []);
+    // A portal would move a placeholder where the split cannot lay it out.
+    let portaled = on_route.replace(
+        "box navigationSplit=\"placeholder\"",
+        "box navigationSplit=\"placeholder\" portal=\"elsewhere\"",
+    );
+    let error = contract::compile(&portaled).unwrap_err();
+    assert!(
+        error.id == SPLIT && error.message.contains("`portal` moves it elsewhere"),
+        "{error}"
+    );
+    // An empty portal moves nothing.
+    contract::compile(&portaled.replace("portal=\"elsewhere\"", "portal=\"\"")).unwrap();
+    // A popover shows only when opened, so it is no placeholder.
+    let popover = on_route.replace(
+        "box navigationSplit=\"placeholder\"",
+        "box navigationSplit=\"placeholder\" popover=\"auto\" id=\"pick\"",
+    );
+    let error = contract::compile(&popover).unwrap_err();
+    assert!(
+        error.id == SPLIT && error.message.contains("shows only when opened"),
+        "{error}"
+    );
+    // Only a plain box is a placeholder (`view` is `box`): a header is its route's bar.
+    contract::compile(&on_route.replace(
+        "box navigationSplit=\"placeholder\"",
+        "view navigationSplit=\"placeholder\"",
+    ))
+    .unwrap();
+    let header = on_route.replace(
+        "box navigationSplit=\"placeholder\"\n              text \"Pick one\"",
+        "header navigationSplit=\"placeholder\"\n              h1 \"Pick one\"",
+    );
+    let error = contract::compile(&header).unwrap_err();
+    assert!(
+        error.id == SPLIT && error.message.contains("only a plain box can be"),
+        "{error}"
+    );
+    // `popover=none` makes no popover.
+    contract::compile(&popover.replace("popover=\"auto\"", "popover=none")).unwrap();
+    // LLP 1127 D1: "none" beside the route's own placeholder box is admitted: "none" wins at run time.
+    let both = on_route.replace("navigationSplit=\"split\"", "navigationSplit=\"none\"");
+    contract::compile(&both).unwrap();
+    // Off a route, a computed `navigationSplit` is no placeholder the compiler can place.
+    let computed_box = on_route.replace(
+        "box navigationSplit=\"placeholder\"",
+        "box navigationSplit=(true ? \"placeholder\" : \"\")",
+    );
+    let error = contract::compile(&computed_box).unwrap_err();
+    assert!(error.message.contains("only the literal"), "{error}");
+    // A placeholder is a box: on a list no host shows it.
+    let listed = on_route.replace(
+        "box navigationSplit=\"placeholder\"",
+        "list navigationSplit=\"placeholder\"",
+    );
+    let error = contract::compile(&listed).unwrap_err();
+    assert!(error.message.contains("marks a box"), "{error}");
+    // Only the route's own child is laid out over the detail pane: one inside another box is refused.
+    let nested = on_route.replace(
+        "            box navigationSplit=\"placeholder\"\n              text \"Pick one\"",
+        "            column\n              box navigationSplit=\"placeholder\"\n                text \"Pick one\"",
+    );
+    assert_ne!(nested, on_route, "the fixture moved");
+    let error = contract::compile(&nested).unwrap_err();
+    assert!(
+        error.message.contains("inside another box of its route"),
+        "{error}"
+    );
+    // A box a `for` repeats is a row: the split shows one box, and a list mounts its rows where the split cannot lay them out.
+    let repeated = on_route.replace(
+        "            box navigationSplit=\"placeholder\"\n              text \"Pick one\"",
+        "            for q in stack(nav) key=q.id\n              box navigationSplit=\"placeholder\"\n                text \"Pick one\"",
+    );
+    assert_ne!(repeated, on_route, "the fixture moved");
+    let error = contract::compile(&repeated).unwrap_err();
+    assert!(
+        error.id == SPLIT && error.message.contains("a `for` inside the route repeats"),
+        "{error}"
+    );
+    // A placeholder box outside every route is refused: no split shows it.
+    let orphan = stack("`${top(nav).id}`", "`${e.id}`", "`${e.id}`").replace(
+        "      for e in stack(nav)",
+        "      box navigationSplit=\"placeholder\"\n        text \"Pick one\"\n      for e in stack(nav)",
+    );
+    assert_ne!(
+        orphan,
+        stack("`${top(nav).id}`", "`${e.id}`", "`${e.id}`"),
+        "the fixture moved"
+    );
+    let error = contract::compile(&orphan).unwrap_err();
+    assert!(error.message.contains("outside every route"), "{error}");
 }
 
 const IMAGE: &str = "lower-image-source";

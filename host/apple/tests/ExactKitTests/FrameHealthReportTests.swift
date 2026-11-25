@@ -316,7 +316,7 @@ final class FrameHealthReportTests: XCTestCase {
         XCTAssertNotNil(session.frameHealth.setAgentCapture("start", duration: .nan)["error"])
     }
 
-    /// Measuring the screen, the card's Share gives Exact's frames as a report of their own beside the screen's, and each
+    /// Measuring the screen, the card's Share gives Exact's frames' report beside the screen's, and each
     /// gives the median, p99 and maximum of every frame's timing since the reset: an app drawn by GPU surfaces has its
     /// frame times only on Exact's clock (LLP 1079.000 §7.4)
     func testShareGivesExactsFramesBesideTheScreensWithEveryFramesTiming() throws {
@@ -333,7 +333,7 @@ final class FrameHealthReportTests: XCTestCase {
         screen.record(arrival: now - 0.0205, target: now - 0.012, period: 0, finished: now - 0.0102)
         let clock = FrameHealthReport.snapshot(health: exact, session: nil, now: now, beside: screen)
         XCTAssertEqual(clock["source"] as? String, exact.source)
-        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update as a report of its own")
+        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update's report beside it")
         XCTAssertEqual((clock["otherSources"] as? [[String: Any]])?.compactMap { $0["source"] as? String }, ["ui-update"])
         let core = try XCTUnwrap(clock["coreSinceReload"] as? [String: Any])
         XCTAssertEqual(core["frameIntervals"] as? String, "59")
@@ -347,7 +347,7 @@ final class FrameHealthReportTests: XCTestCase {
         XCTAssertLessThanOrEqual(FrameHealthReport.encode(clock).count + 1, 4000)
         // The screen's report names Exact's frames as the other, and has work but no frame times
         let shown = FrameHealthReport.snapshot(health: screen, session: nil, now: now, beside: exact)
-        XCTAssertEqual(shown["selection"] as? String, "one-source; the card's Share gives \(exact.source) as a report of its own")
+        XCTAssertEqual(shown["selection"] as? String, "one-source; the card's Share gives \(exact.source)'s report beside it")
         let screenCore = try XCTUnwrap(shown["coreSinceReload"] as? [String: Any])
         XCTAssertTrue(screenCore["frameTimeBoundsNs"] is NSNull)
         XCTAssertEqual((screenCore["workBoundsNs"] as? [String: Any])?["maximum"] as? [UInt64], [10_000_000, 10_500_000])

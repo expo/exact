@@ -529,12 +529,34 @@ impl<D: DataSource> Host<D> {
         Ok(self.reorder_reply(&batch, false, false))
     }
     fn reorder_finish(&mut self, i: &Input) -> Result<String, &'static str> {
-        let token = self.reorder_drags.active.take().unwrap().token;
-        let receipt = self
-            .runner
-            .finish_reorder(token)
-            .map_err(|_| "reorder finish refused")?;
-        let batch = self.reorder_batch(receipt, i.now);
+        let token = self.reorder_drags.active.as_ref().unwrap().token;
+        // The drag is the host's until the runner lets it go. A refused finish
+        // cancels the reorder; the drag ends with the cancel, carrying the refusal.
+        let (receipt, error) = match self.runner.finish_reorder(token) {
+            Ok(receipt) => (receipt, None),
+            Err(_) => {
+                let receipt = self
+                    .runner
+                    .cancel_reorder(token)
+                    .map_err(|_| "reorder finish refused")?;
+                (receipt, Some("reorder finish refused"))
+            }
+        };
+        self.reorder_drags.active = None;
+        let batch = match error {
+            None => self.reorder_batch(receipt, i.now),
+            Some(error) => {
+                self.now_ms = i.now;
+                let receipts: Vec<_> = receipt
+                    .into_iter()
+                    .map(|receipt| Timed {
+                        at_ms: i.now,
+                        receipt,
+                    })
+                    .collect();
+                self.batch_for(&receipts, Some(error))
+            }
+        };
         Ok(format!("{{\"accepted\":true,\"batch\":{batch}}}"))
     }
     fn reorder_batch(&mut self, receipt: Option<CommitReceipt>, now: f64) -> String {

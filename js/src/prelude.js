@@ -1167,6 +1167,9 @@
           epoch: syncEpoch(),
         }
       : call;
+    var prevCall = currentCall,
+      prevInMapper = inMapper,
+      prevMapping = mapping;
     currentCall = mine;
     inMapper = true;
     if (mine !== call) work.setTurn(mine);
@@ -1219,9 +1222,9 @@
       // A synchronous mapper has no drain: its queued reactions still need a waiter's turn (LLP 1162 D3).
       if (mine !== call && mine.replied) readyAll();
       mine.sync = false;
-      currentCall = null;
-      mapping = null;
-      inMapper = false;
+      currentCall = prevCall;
+      mapping = prevMapping;
+      inMapper = prevInMapper;
       if (turn) handSocketOps(turn);
     }
   };

@@ -728,6 +728,7 @@ impl Engine {
             if sample.done {
                 slot.set_running(None);
                 slot.set_owner(None);
+                self.pending.remove(key);
             }
             self.dirty.insert(*key);
             !sample.done

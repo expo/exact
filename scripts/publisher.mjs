@@ -193,9 +193,12 @@ function planGraph(tool, app, plan, compat, env, entries) {
       if (!name.startsWith('plans/') || !name.endsWith('.plan')) continue;
       const entry = planGraph(tool, app, bytes, compat, env);
       icons.push(...(entry.appleIcons ?? []));
-      const raster = entry.artifacts[0].requires.appleRasterIcons;
-      const uses = entry.artifacts[0].requires.appleUses;
-      graph.artifacts.push({ ...entry.artifacts[0], name, requires: { ...(raster ? { appleRasterIcons: raster } : {}), ...(uses ? { appleUses: uses } : {}) } });
+      const req = entry.artifacts[0].requires;
+      const copied = {};
+      for (const key of ['appleRasterIcons', 'appleUses', 'iconFillRules', 'atomFace']) {
+        if (req[key] !== undefined) copied[key] = req[key];
+      }
+      graph.artifacts.push({ ...entry.artifacts[0], name, requires: copied });
     }
     graph.appleIcons = [...new Map(icons.sort((a, b) => Buffer.compare(Buffer.from(a.svg), Buffer.from(b.svg))).map(icon => [icon.svg, icon])).values()];
     return graph;

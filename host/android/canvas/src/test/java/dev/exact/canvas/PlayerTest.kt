@@ -112,6 +112,82 @@ class PlayerTest {
         }
     }
 
+    @Test fun aStationaryClipContainsTheMovingGroupAndItsRetainedRows() {
+        val group = RenderNode("rows").apply { setClipToBounds(false) }
+        val row = RenderNode("row").apply { setPosition(0, 0, 30, 10) }
+        fun record(color: Int) {
+            row.beginRecording().drawColor(color)
+            row.endRecording()
+        }
+        record(Color.BLUE)
+        val player = Player(emptyMap()).also {
+            it.width = 80; it.height = 80
+            it.group = { group }; it.row = { row }
+        }
+        val page = RenderNode("page").apply { setPosition(0, 0, 80, 160) }
+        val drawn = ArrayList<RenderNode>()
+        val outer = object : Canvas(Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)) {
+            override fun drawRenderNode(node: RenderNode) { drawn.add(node) }
+        }
+        fun clip(x: Int, y: Int, w: Int, h: Int) = intArrayOf(4, f(x), f(y), f(w), f(h)) + IntArray(8)
+        val rows = intArrayOf(20, 7, 17, 1, f(10), f(100), 21)
+        fun draw(clips: List<IntArray>, expected: List<Int>, transform: IntArray = identity) {
+            val ops = transform + clips.fold(intArrayOf()) { a, b -> a + b } + rows + IntArray(clips.size) { 6 }
+            player.replay(outer, IntBuffer.wrap(ops), 0, ops.size)
+            val port = drawn.removeAt(0)
+            assertNotSame(group, port)
+            assertTrue(port.clipToBounds)
+            assertEquals(expected, listOf(port.left, port.top, port.right, port.bottom))
+            page.beginRecording().drawRenderNode(port)
+            page.endRecording()
+        }
+        draw(listOf(clip(0, 0, 80, 80)), listOf(0, 0, 80, 80))
+        // An unclipped ancestor may paint beyond the nominal 80-pixel recording.
+        draw(listOf(clip(0, 40, 65, 80)), listOf(0, 40, 65, 120))
+        group.translationY = -10f
+        pixels(page) { assertEquals(Color.BLUE, it.getPixel(18, 92)) }
+        draw(listOf(clip(10, 10, 50, 40), clip(5, 20, 35, 45)), listOf(10, 20, 40, 50))
+        // Bring an already recorded row through the lower edge without replaying the page.
+        group.translationY = -55f
+        pixels(page) {
+            assertEquals(Color.BLUE, it.getPixel(18, 46))
+            assertEquals(Color.TRANSPARENT, it.getPixel(18, 50))
+        }
+        record(Color.RED)
+        pixels(page) { assertEquals(Color.RED, it.getPixel(18, 46)) }
+        val project = intArrayOf(48, f(1), 0, 0, 0, f(1), 0, 0, 0.001f.toBits(), f(1))
+        draw(listOf(clip(20, 40, 80, 80)), listOf(17, 38, 97, 108), project)
+    }
+
+    @Test fun aOnePixelPortKeepsItsColumnInAShiftedRecording() {
+        val shift = 1 shl 24
+        val group = RenderNode("group").apply { setClipToBounds(false); translationX = shift.toFloat() }
+        val player = Player(emptyMap()).also { it.width = 8; it.height = 8; it.group = { group } }
+        val page = RenderNode("page").apply { setPosition(0, 0, 8, 8) }
+        val moved = intArrayOf(1, f(1), 0, 0, f(1), f(shift), 0)
+        fun stripe(x: Int, color: Int) = intArrayOf(2, color, f(x), 0, f(1), f(8)) + IntArray(8)
+        for (x in 0..1) {
+            val clip = intArrayOf(4, f(x), 0, f(1), f(8)) + IntArray(8)
+            val ops = moved + clip + intArrayOf(20, 7) + moved + stripe(0, Color.RED) + stripe(1, Color.BLUE) + intArrayOf(21, 6)
+            player.replayAt(page.beginRecording(), IntBuffer.wrap(ops), 0, ops.size, shift.toFloat(), 0f)
+            page.endRecording()
+            pixels(page) {
+                assertEquals(if (x == 0) Color.RED else Color.BLUE, it.getPixel(x, 3))
+                assertEquals(Color.TRANSPARENT, it.getPixel(1 - x, 3))
+            }
+        }
+    }
+
+    private fun bitmap(page: RenderNode): Bitmap =
+        HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap", RenderNode::class.java,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType).invoke(null, page, page.width, page.height) as Bitmap
+
+    private fun pixels(page: RenderNode, check: (Bitmap) -> Unit) {
+        val hardware = bitmap(page)
+        val copy = hardware.copy(Bitmap.Config.ARGB_8888, false)
+        try { check(copy) } finally { copy.recycle(); hardware.recycle() }
+    }
+
     /** A shader and the shape it paints (op 43 before op 2) are one draw: a played gradient, a press's ripple, is
      * scaled as it is drawn, with no offscreen layer. */
     @Test fun aShadedShapeIsOneShape() {
@@ -228,9 +304,7 @@ class PlayerTest {
         canvas.drawColor(Color.WHITE)
         Player(emptyMap()).apply { width = 80; height = 80 }.replay(canvas, IntBuffer.wrap(ops), 0, ops.size)
         page.endRecording()
-        return HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap",
-            RenderNode::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-            .invoke(null, page, 80, 80) as Bitmap
+        return bitmap(page)
     }
 
     /** The chain draws as the painter's: a blur spreads the box past its edge, a colour matrix scales its channels,

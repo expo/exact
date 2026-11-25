@@ -885,19 +885,8 @@ impl Em<'_> {
             return Ok(None);
         }
         let parts = self.parts[i as usize].clone().ok_or("no parts")?;
-        let mut virtualized = false;
-        for b in row.bindings.iter().map(|b| plan.binding(b)) {
-            if b.kind == BindingKind::Prop && b.id == PropId::Virtualized as u16 {
-                match style::literal(plan, plan.code(b.expr)) {
-                    Some(Value::Bool(v)) => virtualized = v,
-                    _ => {
-                        return Err(format!(
-                            "node {i}: a dynamic `virtualized` is not in the JS target"
-                        ))
-                    }
-                }
-            }
-        }
+        let mut filter_input = false;
+        let virtualized = self.virtualized(i)?;
         let element = if parts.tag == "canvas" {
             "div"
         } else {
@@ -1187,6 +1176,7 @@ impl Em<'_> {
                     || b.id == PropId::SystemBarsHidden as u16
                     || b.id == PropId::GlassInteractive as u16
                     || b.id == PropId::MenuOrder as u16
+                    || b.id == PropId::Arrangement as u16
                     || b.id == PropId::Tip as u16
                     || b.id == PropId::TipMessage as u16
                     || b.id == PropId::TipImage as u16
@@ -1235,6 +1225,9 @@ impl Em<'_> {
                 BindingKind::Prop if markdown && b.id == PropId::Text as u16 => {
                     self.markdown(i, &e, &f, plan.code(b.expr))
                 }
+                BindingKind::Prop if b.id == PropId::Value as u16 && input::text_field(&parts) => {
+                    filter_input = self.field_value(i, b.expr, &e, &f);
+                }
                 BindingKind::Prop if b.id == PropId::Dataset as u16 => self.dataset(&e, &f),
                 BindingKind::Prop if self.canvas_setting(&b, &e, &f) => {}
                 BindingKind::Prop => {
@@ -1248,6 +1241,9 @@ impl Em<'_> {
                         format!("()=>{{const v=({f})();return v==null?v:!v}}")
                     } else if prop == PropId::GlassGroup {
                         format!("()=>{{const v=({f})();return v===-1?\"auto\":v}}")
+                    } else if prop == PropId::NavigationPresentation {
+                        // A popover route is this host's sheet (LLP 1123 D7), as `element.rs` writes it
+                        format!("()=>{{const v=({f})();return v===\"popover\"?\"modal\":v}}")
                     } else if let Some(value) =
                         crate::svg_lengths::binding(&mut self.uses, prop, &f, &e)
                     {
@@ -1460,6 +1456,11 @@ impl Em<'_> {
             }
             // The event family's binder (rt.js), imported only where a plan binds it.
             let bind = crate::events::binder(h.event).map(|b| format!(",{}", self.uses.rt(b)));
+            let handler = if filter_input && h.event == EventKind::Input {
+                format!("{}({e},{handler})", self.uses.rt("filterInput"))
+            } else {
+                handler
+            };
             let (bind, name) = (bind.unwrap_or_default(), h.event.name());
             let _ = write!(self.out, "{on}({e},\"{name}\",{handler}{bind});");
         }

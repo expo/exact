@@ -670,7 +670,7 @@ impl Store {
                 continue;
             }
             change.any = true;
-            change.read |= !Self::runner_owned(&name);
+            change.read |= !Self::runner_owned(&name) || name.starts_with(Store::PRESENCE);
             self.remember(&name);
             match next.get(&name) {
                 Some(value) => {

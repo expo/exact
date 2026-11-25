@@ -5,6 +5,7 @@ import { pointer, record } from './pointer.js';
 import { press } from './focus.js';
 import {
   settleRadios,
+  replaceFieldText,
   sourceField,
   textField,
   onSelection,
@@ -16,7 +17,7 @@ import {
   liveById,
   isInputClick,
 } from './navigation.js';
-import { Owner, onEnd, Origin, Media, inflight, Sounds, Flushing, FocusQueue } from './rt.js';
+import { Owner, onEnd, Origin, Media, inflight, Sounds, Flushing, FocusQueue, commit, Writes, Finishes, deferForReplacement } from './rt.js';
 import { clock, advance } from './clock.js';
 import { Mutations } from './resources.js';
 import { start } from './mount.js';
@@ -136,6 +137,11 @@ export const onPress = (e, kind, f, l) => {
 // text (files.js: a picker's lines, which an input's value would flatten). A range's is a number (the events table). An
 // action taking one more parameter hears the `InputEvent` (x2apps codeedit #2, survey #2).
 export const onValue = (e, kind, f, l) => {
+  // A direct echo needs a finish callback only while an external rewrite is held.
+  if (kind === 'input' && e.$echo) {
+    const action = f;
+    e.$echo = check => { f = check ? (...args) => { if (action(...args)) check(); } : action; };
+  }
   return l(kind, ev => {
     if (ev instanceof CustomEvent) return f(ev.detail);
     const box = e.type === 'checkbox',
@@ -146,6 +152,36 @@ export const onValue = (e, kind, f, l) => {
     if (radio) settleRadios(e, r => r.$checked);
   });
 };
+// Check the reads before settlement can switch a conditional to another arm.
+export function filterInput(e, action) {
+  const run = (...args) => {
+    if (deferForReplacement(() => run(...args))) return true;
+    return commit(() => {
+      const first = Writes.length;
+      action(...args);
+      if (first === Writes.length || e.localName === 'input' && !/^(text|search|url|tel|email|password)$/.test(e.type)) return;
+      const { binding, show } = e.$field;
+      const assigned = new Set();
+      for (let i = first; i < Writes.length; i++) assigned.add(Writes[i][0]);
+      const seen = new Set(), pending = [binding];
+      while (pending.length) {
+        const node = pending.pop();
+        if (assigned.has(node)) {
+          e.$field.replace = replaceFieldText;
+          Finishes.push(ok => {
+            try { if (ok && !binding.gone) show(); }
+            finally { e.$field.replace = undefined; }
+          });
+          break;
+        }
+        if (seen.has(node) || node.resource) continue;
+        seen.add(node);
+        for (const source of node.src) pending.push(source);
+      }
+    }, 'action');
+  };
+  return run;
+}
 export const onBeforeInput = (e, kind, f, l) =>
   l(kind, ev => {
     const outer = KeyEvent;

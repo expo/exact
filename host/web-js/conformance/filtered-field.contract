@@ -1,0 +1,128 @@
+shape Form
+  name: string
+  count: number
+
+shape Reply
+  text: string
+
+source save(text: string) as shape Reply
+  url "https://example.test/filtered-field"
+  method "POST"
+  body json
+
+source lookup(q: string) as shape Reply
+  url "https://example.test/field-answer"
+
+component App
+  state query = "today"
+  resource answer = lookup(query) as shape Reply
+  action ask(v: string)
+    query = query
+  state acceptedReply = "old"
+  mutation saving as shape Reply then receive
+  action receive
+    acceptedReply = match saving { case some(reply) => reply.text, case none => acceptedReply }
+  action saveDraft(v: string)
+    send saving = save(v)
+  state digits = "40"
+  state short = "abc"
+  state other = ""
+  state record = Form(name="A", count=0)
+  state draft = ""
+  state pick = "a"
+  state numberValue = 40
+  state dateValue = "2026-11-25"
+  state timeValue = "11:00"
+  state checked = false
+  action keepNumber(v: number)
+    numberValue = numberValue
+  action keepDate(v: string)
+    dateValue = dateValue
+  action keepTime(v: string)
+    timeValue = timeValue
+  action keepChecked(v: bool)
+    checked = checked
+  state saved = ""
+  state lines = "a\u{D}\nbc"
+  state enabled = false
+  state quantity = "1"
+  derive selected = enabled ? other : digits
+  action keepLines(v: string)
+    lines = lines
+  action flip(v: string)
+    enabled = true
+  action setEcho
+    draft = "A"
+  action choose(v: string)
+    pick = pick
+  action guarded(v: string)
+    if v == "ok"
+      saved = v
+  action enter(v: string)
+    quantity = v
+  action normalize(v: string)
+    quantity = match parseNumber(v) { case some(n) => `${n}`, case none => "0" }
+  action editDigits(v: string)
+    digits = v.split("").filter(c => "0123456789".includes(c)).join("")
+  action editShort(v: string)
+    short = v.slice(0, 3)
+  action editRecord(v: string)
+    record = Form(record, count=record.count + 1)
+  action observe(v: string)
+    other = v
+  action echo(v: string)
+    draft = v
+  view
+    column
+      input value=answer.text input=ask testId="resource"
+      Child(value=digits, edit=editDigits)
+      for name in ["row-a", "row-b"] key=name
+        RowEditor(id=name)
+      input value=short input=editShort testId="short"
+      input value=record.name input=observe testId="sibling"
+      input value=record.name input=editRecord testId="record"
+      input value=draft input=echo testId="echo"
+      input input=observe testId="free"
+      input value=acceptedReply input=saveDraft testId="async"
+      textarea value=digits input=editDigits testId="area"
+      textarea value=lines input=keepLines testId="lines"
+      input type=(enabled ? "text" : "password") value=digits input=editDigits testId="password"
+      input type="SEARCH" value=digits input=editDigits testId="search"
+      input value=selected input=observe testId="conditional"
+      input value=selected input=flip testId="flip"
+      button press=setEcho testId="set-echo"
+        text "Set A"
+      input value=saved input=guarded testId="guard"
+      input value=quantity input=enter change=normalize testId="quantity"
+      input value=short change=editShort testId="commit-only"
+      select value=pick change=choose testId="pick"
+        option "A" value="a"
+        option "B" value="b"
+      input type="range" value=numberValue input=keepNumber testId="range"
+      input type="date" value=dateValue input=keepDate testId="date"
+      input type="time" value=timeValue input=keepTime testId="time"
+      input type="checkbox" checked=checked change=keepChecked testId="box"
+      input type="checkbox" role="switch" checked=checked change=keepChecked testId="toggle"
+      input type="radio" name="pick" value="a" checked=(pick == "a") change=choose testId="radio-a"
+      input type="radio" name="pick" value="b" checked=(pick == "b") change=choose testId="radio-b"
+      text `${record.count}` testId="assignments"
+      text digits testId="accepted"
+
+component Child
+  props
+    value: string
+    edit: action
+  action filtered(v: string)
+    edit(v)
+  view
+    input value=value input=filtered testId="digits"
+
+component RowEditor
+  props
+    id: string
+  state own = "A"
+  derive shown = own.trim()
+  action edit(v: string)
+    own = own
+  view
+    input value=shown input=edit testId=id

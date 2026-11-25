@@ -83,7 +83,8 @@ component MoreTabs
                         text "Sheet"
                       button press=showOverlay testId="show-overlay"
                         text "Overlay"
-                      column height=1200
+                      column id="list-middle" height=1200
+                      column height=600
                   if e.name == "sheet"
                     button press=pick("five") testId="sheet-five"
                       text "Five"

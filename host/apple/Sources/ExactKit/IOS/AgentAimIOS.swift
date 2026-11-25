@@ -6,15 +6,29 @@
 import UIKit
 
 #if os(iOS)
+extension UIBarItem {
+    /// UIKit can place an item's view outside the bar that owns it (LLP 1035.003).
+    var agentBackingView: UIView? {
+        #if EXACT_INSPECT
+        if responds(to: NSSelectorFromString("view")) { return value(forKey: "view") as? UIView }
+        #endif
+        return nil
+    }
+}
+
+extension UITabBarItem {
+    func backingTabControl(in bar: UITabBar) -> UIView? {
+        guard let window = bar.window, let view = agentBackingView, view.window === window,
+              RouteGeometry.shownBar(view) != nil else { return nil }
+        let middle = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        return bar.bounds.contains(view.convert(middle, to: bar)) && window.bounds.contains(view.convert(middle, to: window)) ? view : nil
+    }
+}
+
 extension UIBarButtonItem {
     /// UIKit can project the button into the tab rail, outside its navigation bar (LLP 1035.003).
     func projectedControl(in window: UIWindow?) -> UIView? {
-        var control = customView
-        #if EXACT_INSPECT
-        if control == nil, responds(to: NSSelectorFromString("view")) {
-            control = value(forKey: "view") as? UIView
-        }
-        #endif
+        let control = customView ?? agentBackingView
         guard !isHidden, let window, control?.window === window else { return nil }
         return control
     }
@@ -64,45 +78,59 @@ extension Agent {
         return presenter.navigation.barItem(node)
     }
 
-    /// The control UIKit shows for the item standing for the tab `node` is
-    /// (or is in), as VoiceOver and XCUITest find it (a `UITabBarItem` has no
-    /// public frame): in the tab bar its tablist is drawn as (`drawnItem`),
-    /// or under `--chrome platform` in UIKit's tab bar, the one accessibility
-    /// element with the item's identifier. Nil for any other node; a refusal
-    /// when none, or more than one, shows, or the item is outside the window.
-    func tabItem(_ node: NodeView) -> Result<UIView, AimRefusal>? {
+    /// The control UIKit presents for a tab or one of its children.
+    func tabItem(_ node: NodeView, forPress: Bool = false) -> Result<UIView, AimRefusal>? {
         #if os(iOS)
-        if let (bar, item) = presenter.segments.barItem(of: node) { return drawnItem(item, among: Self.elements(under: [bar])) }
+        if let (bar, item) = presenter.segments.barItem(of: node) { return presentedTabItem(item, in: bar) }
         let nav = presenter.navigation
         guard nav.tabBarShows, let tabs = nav.container.flatMap({ NavigationTabs.of($0, presenter) }),
               let index = tabs.tabs.firstIndex(where: { node === $0 || node.isDescendant(of: $0) }),
-              let controller = nav.tabController, controller.tabBar.items != nil else { return nil }
+              let controller = nav.tabController else { return nil }
         // Find the tab's item by its controller: a tab whose item the bar does not show is a row of More's list
         guard let item = nav.barItem(ofTab: index) else {
             return .failure(AimRefusal(why: "its tab is a row of UIKit's More list, which the bar has no item for; tap More, then its row"))
         }
-        // By the item's identifier (its tab's test id, `syncItems`), which
-        // UIKit gives the control it shows for it, in the bar or, on an
-        // iPad, at the top or in the sidebar; by its title only without one.
-        let id = item.accessibilityIdentifier ?? "", title = item.title ?? ""
-        guard !id.isEmpty || !title.isEmpty else { return .failure(AimRefusal(why: "its tab has neither a test id nor a title UIKit's tab bar shows; give it a testId")) }
-        let shown = Self.elements(under: controller.view.subviews).filter { $0.window?.bounds.contains(Self.middle($0)) == true }
-        let found = shown.filter { id.isEmpty ? $0.accessibilityLabel == title : $0.accessibilityIdentifier == id }
-        // A button without one yet is found by its name (`drawnItem`), and by
-        // place, as a vertical bar's buttons are not the bar's subviews.
-        if found.isEmpty, let bar = controller.shownTabBar {
-            let place = bar.convert(bar.bounds, to: nil)
-            return drawnItem(item, among: shown.filter { place.contains(Self.middle($0)) })
+        let bar = controller.shownTabBar
+        if forPress, let id = tabs.tabs[index].props["testId"], !id.isEmpty {
+            for (other, peer) in tabs.tabs.enumerated() where other != index && peer.props["testId"] == id {
+                if let otherItem = nav.barItem(ofTab: other), case .success = presentedTabItem(otherItem, in: bar, controller: controller) {
+                    return .failure(AimRefusal(why: "multiple visible tabs have the test id \(id); give each tab its own testId"))
+                }
+            }
         }
-        guard found.count == 1 else {
-            return .failure(AimRefusal(why: found.isEmpty ? "UIKit's tab bar shows no item for its tab; `clock settle` first waits out a transition"
-                : "UIKit shows \(found.count) tab items as \(id.isEmpty ? "\"\(title)\"" : id); give each tab its own testId"))
-        }
-        return .success(found[0])
+        return presentedTabItem(item, in: bar, controller: controller)
         #else
         return nil
         #endif
     }
+
+    #if os(iOS)
+    func presentedTabItem(_ item: UITabBarItem, in bar: UIView?, controller: UITabBarController? = nil) -> Result<UIView, AimRefusal> {
+        guard let bar = RouteGeometry.shownBar(bar) else { return .failure(AimRefusal(why: "its tab bar is not shown")) }
+        if let controller, let list = bar as? UICollectionView {
+            guard let view = RouteGeometry.shownBar(controller.floatingTabView(for: item, in: list)),
+                  view.window?.bounds.contains(Self.middle(view)) == true else {
+                return .failure(AimRefusal(why: "its tab bar shows no item for its tab; `clock settle` first waits out a transition"))
+            }
+            return .success(view)
+        }
+        if let classic = bar as? UITabBar, let control = item.backingTabControl(in: classic) { return .success(control) }
+        guard let controller else { return drawnItem(item, in: bar, among: Self.elements(under: [bar])) }
+        // A vertical bar can place its accessible buttons outside its own view.
+        let id = item.accessibilityIdentifier ?? "", title = item.title ?? ""
+        guard !id.isEmpty || !title.isEmpty else { return .failure(AimRefusal(why: "its tab has neither a test id nor a title UIKit's tab bar shows; give it a testId")) }
+        let shown = Self.elements(under: controller.view.subviews).filter { $0.window?.bounds.contains(Self.middle($0)) == true }
+        let found = shown.filter { id.isEmpty ? $0.accessibilityLabel == title : $0.accessibilityIdentifier == id }
+        if found.isEmpty {
+            let place = bar.convert(bar.bounds, to: nil)
+            return drawnItem(item, in: bar, among: shown.filter { place.contains(Self.middle($0)) })
+        }
+        guard found.count == 1 else {
+            return .failure(AimRefusal(why: "UIKit shows \(found.count) tab items as \(id.isEmpty ? "\"\(title)\"" : id); give each tab its own testId"))
+        }
+        return .success(found[0])
+    }
+    #endif
 
     /// The segment or bar button item UIKit draws in `node`'s place, where a
     /// finger aims at it and what covers it is judged. The node's own box is
@@ -164,12 +192,13 @@ extension Agent {
     /// client has asked, and one made since (a tab out of More, as the bar
     /// widens) has none. The bar draws each button twice for its glass, so
     /// copies at one box count once: the copy a finger at its middle reaches.
-    private func drawnItem(_ item: UITabBarItem, among elements: [UIView]) -> Result<UIView, AimRefusal> {
+    private func drawnItem(_ item: UITabBarItem, in bar: UIView, among elements: [UIView]) -> Result<UIView, AimRefusal> {
         let id = item.accessibilityIdentifier ?? "", names = [item.accessibilityLabel, item.title].compactMap { $0 }.filter { !$0.isEmpty }
         let controls = elements.filter { $0 is UIControl }
         var found = id.isEmpty ? [] : controls.filter { $0.accessibilityIdentifier == id }
         let byName = found.isEmpty
         if byName { found = controls.filter { $0.accessibilityLabel.map(names.contains) == true } }
+        if found.isEmpty, let bar = bar as? UITabBar, let view = drawnTabControl(item, in: bar) { found = [view] }
         var shown: [(box: CGRect, control: UIView)] = []
         for v in found {
             let box = v.convert(v.bounds, to: nil), middle = CGPoint(x: box.midX, y: box.midY)

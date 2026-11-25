@@ -142,16 +142,18 @@ pub(crate) fn emit(
     }
     for (kind, entry) in entries {
         let entry_graph = artifact_graph(&entry.plan, &compat.inputs, &[], false, target)?;
-        let raster = &entry_graph["artifacts"][0]["requires"]["appleRasterIcons"];
-        if raster.is_null() {
-            continue;
-        }
-        if let Some(card) = graph["artifacts"].as_array_mut().and_then(|cards| {
+        let Some(card) = graph["artifacts"].as_array_mut().and_then(|cards| {
             cards
                 .iter_mut()
                 .find(|card| card["name"] == format!("plans/{kind}.plan"))
-        }) {
-            card["requires"]["appleRasterIcons"] = raster.clone();
+        }) else {
+            continue;
+        };
+        for key in ["appleRasterIcons", "iconFillRules", "atomFace"] {
+            let value = &entry_graph["artifacts"][0]["requires"][key];
+            if !value.is_null() {
+                card["requires"][key] = value.clone();
+            }
         }
     }
     graph["contractSources"] = json!(contract::source_graph(&app.join("app.contract"))
@@ -613,6 +615,10 @@ pub fn plan_graph(
     requires["formatVersion"] = json!(exact_plan::FORMAT_VERSION);
     requires["formatDigest"] = json!(format!("{:016x}", exact_plan::FORMAT_DIGEST));
     requires["kernelSchema"] = json!(format!("{:016x}", plan.kernel_schema_digest));
+    requires["commands"] = json!(crate::compat::commands_digest());
+    if let Some(platform) = inputs["platform"].as_str() {
+        requires["faces"] = crate::compat::faces_of(&plan, platform, target).unwrap_or(Value::Null);
+    }
     // What it needs the cohort to link, from the manifest and the grants
     // `inputs` name as a bake composes it. A plan pushed alone brings no Rust
     // source (that is native code, a binary change), so no declared host work.
@@ -684,6 +690,22 @@ fn artifact_graph(
     for key in ["app", "kernelSchema", "formatVersion", "formatDigest"] {
         requires.insert(key.into(), inputs[key].clone());
     }
+    requires.insert(
+        "commands".into(),
+        inputs
+            .get("commands")
+            .cloned()
+            .unwrap_or_else(|| json!(crate::compat::commands_digest())),
+    );
+    if crate::icon_rules::even_odd(plan)? {
+        requires.insert("iconFillRules".into(), json!(["evenodd"]));
+    }
+    if crate::atom_faces::binds(plan) {
+        requires.insert(
+            "atomFace".into(),
+            json!(exact_runner::decorations::ATOM_FACE_FIELDS),
+        );
+    }
     // The plan's source table covers resource calls and sends, including
     // branches not mounted during bake. Installed cohorts retain their own
     // implementations of matching names/shapes (1030 D3's stated caveat).
@@ -745,6 +767,12 @@ fn artifact_graph(
         if inputs.get(key).is_some() {
             requires.insert(key.into(), inputs[key].clone());
         }
+    }
+    // Binary-bound alternate icon rosters, compiled faced-tool doors and
+    // controls: null when absent so removing the last one also rejects older
+    // cohorts (LLP 1163.000 D2, LLP 1133.023 D8, LLP 1126.004 D3/D5).
+    for key in ["alternateIcons", "faces", "controls"] {
+        requires.insert(key.into(), inputs.get(key).cloned().unwrap_or(Value::Null));
     }
     let rust = assets
         .iter()

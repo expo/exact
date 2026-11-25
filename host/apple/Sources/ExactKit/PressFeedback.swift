@@ -349,7 +349,7 @@ extension NodeView {
             .applying(hostPlacement).offsetBy(dx: center.x, dy: center.y)
         return NativeGeometry.convert(box, from: parent, to: viewport).offsetBy(dx: -viewport.pageOrigin.x, dy: -viewport.pageOrigin.y)
     }
-    /// Whether a touch is inside the box as it stands unpressed. The pressed
+    /// Whether a touch is inside the hit area as it stands unpressed. The pressed
     /// box is smaller, so testing against it would release a finger resting
     /// between the two edges, which re-grows the box under it, which presses
     /// again: a flicker. The unpressed point is the pressed one scaled back
@@ -358,7 +358,7 @@ extension NodeView {
     /// The same for a point in the window (the agent's recognized finger).
     func pressInside(at windowPoint: CGPoint) -> Bool {
         let p = local(windowPoint), f = pressModelFactor, o = transformOriginPoint
-        return bounds.contains(CGPoint(x: o.x + (p.x - o.x) * f, y: o.y + (p.y - o.y) * f))
+        return hitBounds.contains(CGPoint(x: o.x + (p.x - o.x) * f, y: o.y + (p.y - o.y) * f))
     }
     #else
     /// The one place the layer's anchor moves. Core Animation's transform
@@ -439,7 +439,7 @@ extension NodeView {
     /// once. An untransformed box has no press in it to undo.
     func pressInside(_ windowPoint: NSPoint) -> Bool {
         let p = local(windowPoint), f = plane == nil ? 1 : pressFactor, o = transformOriginPoint
-        let area = drawsRowBezel ? rowBezelRect ?? bounds : bounds
+        let area = drawsRowBezel ? rowBezelRect ?? hitBounds : hitBounds
         return area.contains(CGPoint(x: o.x + (p.x - o.x) * f, y: o.y + (p.y - o.y) * f))
     }
     #endif

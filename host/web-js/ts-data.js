@@ -640,7 +640,7 @@ export function install(data, rustSources = null, modules = null) {
     asking = target ?? name; watching = name;
     for (const sources of moduleWatched.values()) sources.delete(name);
     // The origin of the commit that asked it (LLP 1133.002 D12), which a fetch it makes carries (LLP 1133.036 D6).
-    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, input: mutation && rt.Origin.input === true, origin: rt.Origin.now(), watches: new Set() }, target_ = target ?? name;
+    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, input: mutation && rt.Origin.input === true, origin: rt.Origin.now(), invocation: rt.Invocation?.id ?? 0, watches: new Set() }, target_ = target ?? name;
     if (call.origin !== 'app') answering.untraced.add(call);
     // What the source sent goes once the commit that asked it stands: an answer in flight's (a resource's, or a mutation's that
     // answers with a promise) whatever it then answers, a refused commit saying so (LLP 1016.000 D7, amended 2026-10-18).

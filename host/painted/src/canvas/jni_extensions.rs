@@ -88,6 +88,16 @@ pub fn surface_has(name: &str) -> bool {
 macro_rules! canvas_jni_extensions {
     () => {
         #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_moduleSizes(
+            env: *mut JNIEnv,
+            _class: jclass,
+            reports: jstring,
+        ) {
+            let reports = string(env, reports);
+            with(|h| h.module_sizes(&reports));
+        }
+
+        #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_moduleAfter(
             _env: *mut JNIEnv,
             _class: jclass,

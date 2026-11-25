@@ -5,7 +5,9 @@
 //! carry.
 
 use super::provenance::{Contribution, Operation};
-use super::{Kernel, Keyboard, KeyboardReport, OwnerMargins};
+use super::{
+    Kernel, Keyboard, KeyboardReport, OwnerMargins, RegionKind, ReservedRegion, WindowMap,
+};
 use crate::error::{KernelError, LayoutError};
 use crate::id::IdMap;
 use crate::style::env::{Rect, SegmentGrid};
@@ -36,6 +38,16 @@ pub struct OwnerUpdate {
     pub bar_regions: [Option<BarRegion>; 4],
     /// Its chrome (D6's `chrome`), `None` where its host reports none.
     pub chrome: Option<OwnerChrome>,
+    /// Its view's map into its window (D6's `"window"` space), from the origin its block's space
+    /// starts at; `None` out of a window or where its host reports none.
+    pub window_map: Option<WindowMap>,
+    /// Its configuration's identity: its bars, title display mode, size classes, orientation and
+    /// window size, which the largest band an `observed-max` reader reads is kept for (D9);
+    /// `None` where its host reports none.
+    pub configuration: Option<u64>,
+    /// The reserved regions of its view (D16), active and inactive, in its block's space; `None`
+    /// where its host has none to report, as UIKit before iOS 27.1, and empty where it has.
+    pub regions: Option<Vec<ReservedRegion>>,
 }
 
 /// What an owner's host reports of its chrome (D6's `chrome`, D4, D15), which no layout reads:
@@ -100,6 +112,12 @@ impl Kernel {
         owed |= self.set_owner_keyboard_report(view, update.keyboard)?;
         owed |= self.set_owner_bar_regions(view, update.bar_regions)?;
         self.set_owner_chrome(view, update.chrome)?;
+        let slot = self.arena.slot_of(view);
+        self.set_window_map(slot, update.window_map);
+        owed |= slot.is_some_and(|s| self.track_band(Some(s), update.configuration));
+        if let Some(s) = slot {
+            self.set_regions(Some(s), update.regions);
+        }
         Ok(owed)
     }
 
@@ -132,6 +150,12 @@ impl Kernel {
         }
         if let Some(why) = update.segments.as_ref().and_then(SegmentGrid::refusal) {
             return Err(LayoutError::OwnerSegments(why).into());
+        }
+        if let Some(why) = WindowMap::refusal(update.window_map.as_ref()) {
+            return Err(LayoutError::NativeTarget(why).into());
+        }
+        if let Some(why) = super::regions::refusal(update.regions.as_deref()) {
+            return Err(LayoutError::NativeTarget(why).into());
         }
         super::bar::check_regions(&update.bar_regions)
     }
@@ -200,7 +224,9 @@ impl OwnerUpdate {
     /// and rows (`u8` each) and the `cols × rows` rects, row-major; then each edge's bar region,
     /// top right bottom left, its distance and its two sides (`f32` each); then the chrome, its
     /// vertical bar edge's raw value (`u8`) and its sidebar's availability (a byte, 0 or 1), each
-    /// optional.
+    /// optional; then the window map after a presence byte, its six terms `f32` each, the
+    /// configuration's identity after one, a `u64`, and the reserved regions after one, as
+    /// `regions_out` writes them.
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         optional(&mut w, self.band.as_ref(), |w, b| floats(w, b));
@@ -236,6 +262,9 @@ impl OwnerUpdate {
             optional(w, c.vertical_bar_edge.as_ref(), |w, e| w.u8(*e as u8));
             optional(w, c.sidebar_available.as_ref(), |w, a| w.u8(u8::from(*a)));
         });
+        window_map_out(&mut w, self.window_map.as_ref());
+        optional(&mut w, self.configuration.as_ref(), |w, c| w.u64(*c));
+        regions_out(&mut w, self.regions.as_deref());
         w.into_vec()
     }
 }
@@ -335,6 +364,9 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         }),
         false => None,
     };
+    let window_map = window_map_in(r)?;
+    let configuration = configuration_in(r)?;
+    let regions = regions_in(r)?;
     Some(OwnerUpdate {
         band,
         contributions,
@@ -344,6 +376,9 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         segments,
         bar_regions,
         chrome,
+        window_map,
+        configuration,
+        regions,
     })
 }
 
@@ -402,6 +437,64 @@ pub(super) fn keyboard_in(r: &mut Reader<'_>) -> Option<KeyboardReport> {
     })
 }
 
+/// A window map after a presence byte, its six terms `f32` each.
+pub(super) fn window_map_out(w: &mut Writer, map: Option<&WindowMap>) {
+    optional(w, map, |w, m| floats(w, &m.0));
+}
+
+pub(super) fn window_map_in(r: &mut Reader<'_>) -> Option<Option<WindowMap>> {
+    Some(match present(r)? {
+        true => {
+            let terms: Option<Vec<f32>> = (0..6).map(|_| r.f32().ok()).collect();
+            Some(WindowMap(terms?.try_into().ok()?))
+        }
+        false => None,
+    })
+}
+
+/// Reserved regions after a presence byte, their count (`u32`) and each region's identity
+/// (`u64`), its kind's index in [`RegionKind::ALL`] (`u8`), its frame and its margins (four `f32`s
+/// each) and an active byte, 0 or 1.
+pub(super) fn regions_out(w: &mut Writer, regions: Option<&[ReservedRegion]>) {
+    w.u8(u8::from(regions.is_some()));
+    let Some(regions) = regions else {
+        return;
+    };
+    w.u32(regions.len() as u32);
+    for r in regions {
+        w.u64(r.id);
+        w.u8(r.kind as u8);
+        floats(w, &r.frame);
+        floats(w, &r.margins);
+        w.u8(u8::from(r.active));
+    }
+}
+
+pub(super) fn regions_in(r: &mut Reader<'_>) -> Option<Option<Vec<ReservedRegion>>> {
+    if !present(r)? {
+        return Some(None);
+    }
+    let mut regions = Vec::new();
+    for _ in 0..r.u32().ok()? {
+        regions.push(ReservedRegion {
+            id: r.u64().ok()?,
+            kind: *RegionKind::ALL.get(usize::from(r.u8().ok()?))?,
+            frame: four(r)?,
+            margins: four(r)?,
+            active: present(r)?,
+        });
+    }
+    Some(Some(regions))
+}
+
+/// A configuration's identity after a presence byte, a `u64`.
+pub(super) fn configuration_in(r: &mut Reader<'_>) -> Option<Option<u64>> {
+    Some(match present(r)? {
+        true => Some(r.u64().ok()?),
+        false => None,
+    })
+}
+
 /// A presence byte: 0 or 1, else malformed.
 pub(super) fn present(r: &mut Reader<'_>) -> Option<bool> {
     match r.u8().ok()? {
@@ -436,7 +529,7 @@ fn target_in(r: &mut Reader<'_>) -> Option<NativeTarget> {
     })
 }
 
-fn optional<T>(w: &mut Writer, value: Option<&T>, each: impl FnOnce(&mut Writer, &T)) {
+pub(super) fn optional<T>(w: &mut Writer, value: Option<&T>, each: impl FnOnce(&mut Writer, &T)) {
     w.u8(u8::from(value.is_some()));
     if let Some(v) = value {
         each(w, v);

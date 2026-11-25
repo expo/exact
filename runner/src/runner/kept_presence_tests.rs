@@ -697,3 +697,57 @@ fn an_unlock_the_app_aborts_during_its_check_retires_the_ticket_and_frees_the_na
     );
     assert!(!matches!(first.lock().unwrap().take(), Some(o) if body(&o).contains("value")));
 }
+
+#[test]
+fn a_presence_call_respects_narrowed_request_grants() {
+    let vault = MemoryVault::default();
+    vault.clone().put_plain("token", Some(b"alice")).unwrap();
+    let (backend, snapshot) = reconciled(&vault);
+    let mut r = launch(true, snapshot);
+    r.install_presence(backend, None);
+    // Lock `token` under the app's full grants first.
+    let protect = Request::native(br#"{"presence":"protect","name":"token"}"#.to_vec());
+    let Dispatch::Run(Work::Later(work)) = r.as_person(|r| r.native_work(&protect)) else {
+        panic!("protect runs")
+    };
+    let (slot, reply) = pending();
+    work(reply);
+    assert!(slot.lock().unwrap().take().is_some());
+    r.adopt_presence();
+    assert!(r.store.locked("token"));
+
+    for op in ["unlock", "protect", "unprotect"] {
+        let mut denied = Request::native(
+            serde_json::json!({ "presence": op, "name": "token", "reason": "Read" })
+                .to_string()
+                .into_bytes(),
+        );
+        denied.grants = Some(String::new());
+        let Dispatch::Run(Work::Now(work)) = r.as_person(|r| r.native_work(&denied)) else {
+            panic!("{op} outside narrowed request.grants must be refused at once");
+        };
+        let said: serde_json::Value = serde_json::from_str(&body(&work())).unwrap();
+        assert_eq!(said["error"], "NotSupportedError", "{op}: {said}");
+        assert!(r.device_holds().is_empty(), "{op} must create no hold");
+    }
+
+    let mut allowed = Request::native(
+        serde_json::json!({ "presence": "unlock", "name": "token", "reason": "Read" })
+            .to_string()
+            .into_bytes(),
+    );
+    allowed.grants = Some(GRANTS.to_owned());
+    let Dispatch::Run(Work::Later(work)) = r.as_person(|r| r.native_work(&allowed)) else {
+        panic!("unlock within narrowed request.grants proceeds");
+    };
+    let (slot, reply) = pending();
+    work(reply);
+    assert_eq!(r.device_holds().len(), 1);
+    let hold = r.device_holds()[0].clone();
+    r.answer_hold(hold.ticket, &HoldAnswer::Choice("allow".into()))
+        .unwrap();
+    assert_eq!(
+        body(&slot.lock().unwrap().take().unwrap()),
+        r#"{"value":"alice"}"#
+    );
+}

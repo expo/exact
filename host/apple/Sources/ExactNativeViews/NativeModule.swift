@@ -72,6 +72,8 @@
 //        changes (LLP 1133.027 D17 item 3)
 //
 // 256  module_bindings(module, json, len)             size ≥ 264; committed track bindings
+// 264  safe_area(handle) → NSDictionary *, retained    size ≥ 272; nullable:
+//        the view's safe-area declaration (LLP 1123 D15, `ExactNativeSafeArea`)
 //
 //   event(ctx, nonce, kind, bytes, len)          kind: EventKind 0–8 — press,
 //     change, hover, focus, blur, key, submit, load, message; change, key and
@@ -157,6 +159,8 @@ final class NativeTable {
     var connect: HatchConnectFn?, navigationHatch: HatchNavigationFn?, routeHatch: HatchRouteFn?
     /// Tabs and native screens, in a table of 168 bytes or more.
     var tabsHatch: HatchTabsFn?, tabContainerHatch: HatchTabContainerFn?, platformController: ViewFn?
+    /// A view's safe-area declaration (LLP 1123 D15), in a table of 272 bytes or more.
+    var safeArea: ViewFn?
     /// Hatched nodes (LLP 1075.003.000), in a table of 176 bytes or more;
     /// the window toolbar's hatch (macOS), in one of 184 or more.
     var elementHatch: HatchElementFn?, toolbarHatch: HatchToolbarFn?
@@ -265,6 +269,7 @@ final class NativeTable {
         if size >= 248 { loaded.image = pointer(240).map { unsafeBitCast($0, to: PackageImageFn.self) } }
         if size >= 256 { loaded.sessionView = pointer(248).map { unsafeBitCast($0, to: SessionViewFn.self) } }
         if size >= 264 { loaded.bindings = pointer(256).map { unsafeBitCast($0, to: BindingsFn.self) } }
+        if size >= 272 { loaded.safeArea = pointer(264).map { unsafeBitCast($0, to: ViewFn.self) } }
         return .success(loaded)
     }
 }
@@ -300,6 +305,25 @@ final class NativeEntry {
     #if os(iOS) || os(tvOS)
     /// A native screen's controller, a child of its route's while it lives.
     var screen: UIViewController?
+    /// The controller the host made for a view with none that lets it clear its safe area (LLP 1123
+    /// D15), whose own view holds the view: made at the instance's first mount and kept with it
+    /// through reuse, so one controller holds the view while the instance lives.
+    var made: UIViewController?
+    #endif
+    /// What the host puts in the node's box: the view, or the view of the controller the host made
+    /// for it, which holds it (`made`).
+    var attached: NativePlatformView? {
+        #if os(iOS) || os(tvOS)
+        return made?.viewIfLoaded ?? view
+        #else
+        return view
+        #endif
+    }
+    #if os(iOS) || os(tvOS)
+    /// What the view declares of its safe area, read as it mounts (LLP 1123 D15), and the scroll
+    /// views it lends, which D14's writer writes.
+    var safeArea: NativeSafeArea?
+    var lent: [LentScrollIOS] = []
     #endif
     var intrinsicSize: CGSize?
     var hasIntrinsicReport = false
@@ -1030,7 +1054,7 @@ final class NativeViews: NativeModuleHosting {
 
     private func available(_ owner: NodeView) -> NativeEntry? {
         guard let entry = entries[owner.id], entry.owner === owner, entry.state == "ready",
-              entry.handle != nil, let root = entry.view, root.superview === owner,
+              entry.handle != nil, let root = entry.view, entry.attached?.superview === owner,
               root.window != nil, !owner.disabled, !owner.inert,
               owner.bounds.width > 0, owner.bounds.height > 0 else { return nil }
         var next: NSView? = root
@@ -1116,6 +1140,10 @@ final class NativeViews: NativeModuleHosting {
     /// The node is gone: the nonce dies first, then the instance (D4).
     func destroy(id: UInt32) {
         guard let entry = entries.removeValue(forKey: id) else { return }
+        #if os(iOS) || os(tvOS)
+        // Before a parked instance's reset, which a module may not undo Exact's writes through
+        releaseSafeArea(entry)
+        #endif
         if entry.nonce != 0 {
             NativeProcess.owners.removeValue(forKey: entry.nonce)
             NativeProcess.retired[entry.nonce] = WeakNatives(self)
@@ -1195,6 +1223,9 @@ final class NativeViews: NativeModuleHosting {
         guard let entry = entries[owner.id], let view = entry.view else { return }
         if entry.sizing && owner.bounds.isEmpty { return }
         entry.sizing = false
+        #if os(iOS) || os(tvOS)
+        entry.made?.viewIfLoaded?.frame = owner.bounds
+        #endif
         view.frame = owner.contentBox()
         #if os(iOS) || os(tvOS)
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -1210,8 +1241,8 @@ final class NativeViews: NativeModuleHosting {
     /// is not declining, and its box answers, as a UIKit superview would; so
     /// does a box with a handler a touch on it runs (`press`).
     func declined(_ owner: NodeView, at point: CGPoint, with event: UIEvent?) -> Bool {
-        guard let entry = entries[owner.id], entry.owner === owner, let view = entry.view, view.superview === owner,
-              !view.isHidden, view.alpha > 0.01, view.isUserInteractionEnabled, view.frame.contains(point),
+        guard let entry = entries[owner.id], entry.owner === owner, let view = entry.view, entry.attached?.superview === owner,
+              !view.isHidden, view.alpha > 0.01, view.isUserInteractionEnabled, owner.convert(view.frame, from: view.superview).contains(point),
               owner.handlers.isSubset(of: Self.reported) else { return false }
         return view.hitTest(owner.convert(point, to: view), with: event) == nil
     }
@@ -1221,7 +1252,7 @@ final class NativeViews: NativeModuleHosting {
     /// `accessibilityElement(at:)`). Then those are what VoiceOver reads, not
     /// the box.
     func speaksForItself(_ owner: NodeView) -> Bool {
-        guard let entry = entries[owner.id], entry.owner === owner, let view = entry.view, view.superview === owner else { return false }
+        guard let entry = entries[owner.id], entry.owner === owner, let view = entry.view, entry.attached?.superview === owner else { return false }
         func speaks(_ view: UIView) -> Bool {
             guard !view.isHidden, !view.accessibilityElementsHidden else { return false }
             if view.isAccessibilityElement { return true }
@@ -1390,6 +1421,9 @@ extension NativeViews {
         entry.instance = from.instance
         entry.handle = handle
         entry.view = view
+        #if os(iOS) || os(tvOS)
+        entry.made = from.made
+        #endif
         entry.snapshotBit = from.snapshotBit
         entry.uses = from.uses + (same == nil ? 1 : 0)
         NativeProcess.set(from.instance, token)
@@ -1417,7 +1451,7 @@ extension NativeViews {
     /// the background.
     private func discard(_ entry: NativeEntry) {
         NativeProcess.set(entry.instance, nil)
-        entry.view?.removeFromSuperview()
+        entry.attached?.removeFromSuperview()
         if let handle = entry.handle, case .success(let table)? = NativeProcess.table { table.destroy(handle) }
         entry.handle = nil
         dropped += 1

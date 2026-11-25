@@ -109,7 +109,8 @@ fn anonymous(
         ..Default::default()
     };
     let track = GridTemplateComponent::Single(auto());
-    s.rare.grid_template_columns = vec![track; columns as usize];
+    let count = columns.min(u32::from(LINES)) as usize;
+    s.rare.grid_template_columns = vec![track; count];
     s.rare.grid_line_limit = LINES;
     s
 }
@@ -261,10 +262,14 @@ impl Tables {
                 Some(formed) if formed.context == ctx => {
                     if ctx == Some(Context::Table) {
                         let track = GridTemplateComponent::Single(auto());
-                        s.rare.grid_template_columns = vec![track; formed.columns as usize];
+                        let count = formed.columns.min(u32::from(LINES)) as usize;
+                        s.rare.grid_template_columns = vec![track; count];
                         for &(column, width) in &formed.widths {
-                            s.rare.grid_template_columns[column as usize] =
-                                GridTemplateComponent::Single(length(width));
+                            if let Some(slot) =
+                                s.rare.grid_template_columns.get_mut(column as usize)
+                            {
+                                *slot = GridTemplateComponent::Single(length(width));
+                            }
                         }
                         s.rare.grid_line_limit = LINES;
                         if formed.padding.as_ref() != Some(&s.padding) {
@@ -409,7 +414,7 @@ fn spans(arena: &NodeArena, slot: u32, part: Part) -> (u32, u32) {
 }
 
 fn place(area: Area, s: &mut taffy::style::Style) {
-    let at = |n: u32| line::<GridPlacement>(i16::try_from(n + 1).unwrap_or(i16::MAX));
+    let at = |n: u32| line::<GridPlacement>(i16::try_from(n.saturating_add(1)).unwrap_or(i16::MAX));
     let cover = |n: u32| span::<GridPlacement>(u16::try_from(n.max(1)).unwrap_or(u16::MAX));
     s.rare.grid_row = Line {
         start: at(area.row),
@@ -580,13 +585,25 @@ fn form_grid(
         if let Some(g) = group {
             out.push(Item::new(g, whole(y, rows.len() as u32), (1, 1)));
         }
-        // Which of the group's slots a cell covers, by row from its first.
-        let mut taken: Vec<Vec<bool>> = vec![Vec::new(); rows.len()];
+        // Active downward-growing cells from earlier rows: `(start_col, end_col, end_row)`,
+        // sorted by `start_col`.
+        let mut downward: Vec<(u32, u32, usize)> = Vec::new();
+        let mut min_end_row = usize::MAX;
+        let mut next: Vec<(u32, u32, usize)> = Vec::new();
         for (r, &row) in rows.iter().enumerate() {
             if row != table {
                 out.push(Item::new(row, whole(y, 1), (1, 1)));
             }
+            if r >= min_end_row {
+                downward.retain(|span| span.2 > r);
+                min_end_row = downward
+                    .iter()
+                    .map(|span| span.2)
+                    .min()
+                    .unwrap_or(usize::MAX);
+            }
             let mut x = 0u32;
+            let mut cursor = 0usize;
             // A block row's run of cells, or a row's cells.
             let cells = if row == table {
                 children
@@ -594,8 +611,9 @@ fn form_grid(
                 arena.children(row)
             };
             for &cell in cells.iter().filter(|c| of(**c, Part::Cell)) {
-                while taken[r].get(x as usize).copied().unwrap_or(false) {
-                    x += 1;
+                while cursor < downward.len() && downward[cursor].0 <= x {
+                    x = x.max(downward[cursor].1);
+                    cursor += 1;
                 }
                 let (colspan, rowspan) = spans(arena, cell, Part::Cell);
                 let left = (rows.len() - r) as u32;
@@ -604,12 +622,9 @@ fn form_grid(
                 } else {
                     rowspan.min(left)
                 };
-                let end = (x + colspan) as usize;
-                for slots in taken.iter_mut().skip(r).take(covers as usize) {
-                    if slots.len() < end {
-                        slots.resize(end, false);
-                    }
-                    slots[x as usize..end].fill(true);
+                let end = x.saturating_add(colspan);
+                if covers > 1 {
+                    next.push((x, end, r + covers as usize));
                 }
                 let area = Area {
                     row: y,
@@ -618,8 +633,32 @@ fn form_grid(
                     columns: colspan,
                 };
                 out.push(Item::new(cell, area, (colspan, rowspan)));
-                x += colspan;
-                columns = columns.max(x);
+                x = end;
+                columns = columns.max(x).min(u32::from(LINES));
+            }
+            if !next.is_empty() {
+                for &span in &next {
+                    min_end_row = min_end_row.min(span.2);
+                }
+                downward.append(&mut next);
+                downward.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+                let mut write = 0usize;
+                for read in 0..downward.len() {
+                    let cur = downward[read];
+                    if write > 0 {
+                        let prev = &mut downward[write - 1];
+                        if prev.1 >= cur.1 && prev.2 >= cur.2 {
+                            continue;
+                        }
+                        if prev.2 == cur.2 && prev.1 >= cur.0 {
+                            prev.1 = prev.1.max(cur.1);
+                            continue;
+                        }
+                    }
+                    downward[write] = cur;
+                    write += 1;
+                }
+                downward.truncate(write);
             }
             y += 1;
         }
@@ -631,6 +670,7 @@ fn form_grid(
                 let width = *arena.table_column_widths.get(&item.slot)?;
                 (item.area.row == captions
                     && item.area.columns == 1
+                    && item.area.column < columns
                     && crate::style::table::column_header(arena, item.slot))
                 .then_some((item.area.column, width))
             })
@@ -872,6 +912,9 @@ impl LayoutTree {
         let Some(formed) = self.tables.formed.get_mut(&table) else {
             return;
         };
+        if column >= formed.columns {
+            return;
+        }
         let widths = &mut formed.widths;
         match (
             widths.binary_search_by_key(&column, |&(index, _)| index),

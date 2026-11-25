@@ -1263,7 +1263,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             }
             scroll = sv
             applyScrollEdge(sv) // a scroll view made when first needed (`needScroll`) has no restyle to give it its edge effects
-            if pageBand != .zero || bandInset != .zero || reachGiven { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero; more.reachGiven = false } // a new scroll view reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13)
+            forgetReach()
             scrollWritten = nil
             updateRefresh()
             presenter?.navigation.scrollBackendChanged(self)
@@ -1278,7 +1278,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                 if presenter?.navigation.container === self { presenter?.navigation.fitOwner() }
                 sv.removeFromSuperview()
             }
-            if pageBand != .zero || bandInset != .zero || reachGiven { more.pageBand = .zero; more.bandInset = .zero; more.reach = .zero; more.reachGiven = false }
+            forgetReach()
         }
         scroll?.scrollsX = (ox == "scroll" || ox == "auto")
         scroll?.scrollsY = (oy == "scroll" || oy == "auto")

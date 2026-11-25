@@ -5,6 +5,7 @@ mod accessibility;
 mod caret;
 mod drop;
 mod input;
+mod signals;
 
 use crate::event_loop::LocalPlan;
 use exact_painted::app::{boot_presenter, Config};
@@ -29,6 +30,11 @@ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant
         .build()
         .map_err(|e| e.to_string())
         .and_then(|events| {
+            let quit = events.create_proxy();
+            let _signals = signals::Signals::install(move || {
+                let _ = quit.send_event(Event::Quit);
+            })
+            .map_err(|e| format!("termination signals: {e}"))?;
             let mut app = App::<D> {
                 proxy: events.create_proxy(),
                 local_plan: config.dev_plan.as_deref().map(LocalPlan::new),
@@ -40,9 +46,10 @@ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant
                 closed: Rc::new(Cell::new(false)),
             };
             let result = app.run(events);
-            if let Some(live) = &mut app.live {
-                live.presenter.end_hatches();
-                live.presenter.end_packages();
+            // Release the Wayland surface while the presenter finishes its work.
+            if let Some(mut presenter) = app.live.take().map(|live| live.presenter) {
+                use exact_painted::teardown::{finish, EXIT_BOUND};
+                finish(&mut presenter, EXIT_BOUND);
             }
             result
         });
@@ -57,6 +64,7 @@ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant
 
 enum Event {
     Wake,
+    Quit,
     Settings(WindowSettings),
     Access(accesskit_winit::Event),
     Drag(drop::Heard),
@@ -166,14 +174,20 @@ impl<D: DataSource + Default> App<'_, D> {
         let closed = self.closed.clone();
         presenter.set_window_closer(move || closed.set(true));
         window.request_redraw();
+        let drops = drop::Drops::new(&window, self.proxy.clone());
+        let mut input = input::Input::default();
+        if let Some(drops) = drops.as_ref() {
+            input.listen(drops.held());
+            presenter.set_lifter(drops.lifter());
+        }
         Ok(Live {
             access,
             output_surface,
             surface,
-            drops: drop::Drops::new(&window, self.proxy.clone()),
+            drops,
             window,
             presenter,
-            input: input::Input::default(),
+            input,
             extent: (size.width, size.height, scale),
             presented: false,
             app_name,
@@ -193,6 +207,9 @@ fn theme(dark: bool) -> Theme {
 
 impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
     fn about_to_wait(&mut self, events: &ActiveEventLoop) {
+        if events.exiting() {
+            return;
+        }
         let Some(live) = self.live.as_mut() else {
             return;
         };
@@ -242,7 +259,10 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
         events.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
-    fn user_event(&mut self, _: &ActiveEventLoop, event: Event) {
+    fn user_event(&mut self, events: &ActiveEventLoop, event: Event) {
+        if events.exiting() {
+            return;
+        }
         let settings = match event {
             Event::Access(event) => {
                 if let Some(live) = self
@@ -261,8 +281,43 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
             }
             Event::Drag(heard) => {
                 if let Some(live) = self.live.as_mut() {
+                    let now = self.started.elapsed().as_secs_f64() * 1000.0;
+                    let heard = match heard {
+                        drop::Heard::Pointer {
+                            seat,
+                            pointed,
+                            modifiers,
+                        } => {
+                            if matches!(pointed, drop::Pointed::Button { pressed: true, .. }) {
+                                live.caret.restart(now);
+                            }
+                            warn(live.presenter.advance(now));
+                            let now = live.presenter.host().now();
+                            let p = &mut live.presenter;
+                            live.input
+                                .pointed(p, &live.window, seat, pointed, modifiers, now)
+                        }
+                        drop::Heard::Gone => {
+                            live.presenter.set_lifter(None);
+                            let now = live.presenter.host().now();
+                            live.input.unlisten(&mut live.presenter, now)
+                        }
+                        drop::Heard::Ended(press) => {
+                            let now = live.presenter.host().now();
+                            live.input.ended(&mut live.presenter, press, now)
+                        }
+                        heard => {
+                            if let Some(drops) = live.drops.as_mut() {
+                                drops.heard(&mut live.presenter, heard);
+                            }
+                            Ok(())
+                        }
+                    };
+                    if let Err(error) = heard {
+                        eprintln!("exact: {error}");
+                    }
                     if let Some(drops) = live.drops.as_mut() {
-                        drops.heard(&mut live.presenter, heard);
+                        drops.flush();
                     }
                     if live.presenter.dirty() {
                         live.window.request_redraw();
@@ -272,6 +327,10 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
             }
             Event::Settings(settings) => settings,
             Event::Wake => return,
+            Event::Quit => {
+                events.exit();
+                return;
+            }
         };
         let previous = std::mem::replace(&mut self.settings, settings);
         if let Some(live) = &mut self.live {
@@ -296,11 +355,15 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
     fn exiting(&mut self, _: &ActiveEventLoop) {
         // The drag thread reads the display, which the event loop disconnects as it ends
         if let Some(live) = self.live.as_mut() {
+            live.presenter.set_lifter(None);
             live.drops = None;
         }
     }
 
     fn resumed(&mut self, events: &ActiveEventLoop) {
+        if events.exiting() {
+            return;
+        }
         if self.live.is_none() {
             match self.open(events) {
                 Ok(live) => self.live = Some(live),
@@ -313,6 +376,9 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
     }
 
     fn window_event(&mut self, events: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if events.exiting() {
+            return;
+        }
         let Some(live) = self.live.as_mut().filter(|live| live.window.id() == id) else {
             return;
         };
@@ -354,6 +420,9 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
                     .handle(&mut live.presenter, &live.window, event, now)
                 {
                     eprintln!("exact: {error}");
+                }
+                if let Some(drops) = live.drops.as_mut() {
+                    drops.flush();
                 }
             }
         }

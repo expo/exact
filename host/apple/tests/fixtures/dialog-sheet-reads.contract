@@ -1,5 +1,8 @@
 // The UIKit sheet's point reads cross the native top-layer ABI.
 component App
+  state taps = ""
+  action record(event: string)
+    taps = taps + event
   state contentHeight = 100
   action grow
     contentHeight = 300
@@ -56,3 +59,10 @@ component App
             text "Close"
       dialog id="painted-point" width=100 height=100 background-color="-exact-secondary-grouped-background" pointer-events="none" pointermove=read
         column id="point-pop" popover="manual" pointer-events="auto" position="absolute" left=20 top=120 width=50 height=50
+      button "Page" id="page-button" press=record("page") width=100 height=44 margin-top=80
+      dialog id="tap-sheet" width=280 closedby="any" cancel=record("cancel") close=record("close")
+        input id="sheet-field" aria-label="Name"
+        button "Save" id="sheet-save" press=record("save") commandfor="tap-sheet" command="close"
+      dialog id="tap-painted" width=280 closedby="any" background-color="-exact-secondary-grouped-background" cancel=record("cancel") close=record("close")
+        input id="painted-field" aria-label="Name"
+        button "Save" id="painted-save" press=record("save") commandfor="tap-painted" command="close"

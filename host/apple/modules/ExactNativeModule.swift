@@ -917,7 +917,8 @@ public final class ExactElement {
     /// The first child is primary and the second secondary. Exact manages their child controllers
     /// and containment; supply a detached controller with empty content slots. The app configures
     /// the native arrangement, including animated updates. Navigation stays in the enclosing
-    /// controller, with its native policies unchanged. Pass nil to restore authored layout.
+    /// controller, with its native policies unchanged. Pass nil to give the element back to its author's
+    /// layout, in CSS or by its `arrangement`.
     @available(iOS 27.1, *)
     @discardableResult
     public func arrange(using controller: UIArrangementViewController?) -> Bool {
@@ -1419,7 +1420,7 @@ private let table: UnsafeMutableRawPointer = {
         let trackProps = factory.trackProps.map { "\"\($0)\"" }.joined(separator: ",")
         return "\"\(tag)\":{\"snapshot\":\(factory.snapshot),\"reuse\":\(factory.reuse),\"firstFrame\":\(factory.firstFrame),\"trackProps\":[\(trackProps)]}"
     } + [words]).joined(separator: ",") + "}"
-    let size = 264
+    let size = 272
     let t = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
     t.initializeMemory(as: UInt8.self, repeating: 0, count: size)
     t.storeBytes(of: major, as: UInt32.self)
@@ -1455,6 +1456,7 @@ private let table: UnsafeMutableRawPointer = {
     t.storeBytes(of: unsafeBitCast(moduleImage, to: UnsafeRawPointer.self), toByteOffset: 240, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(moduleSessionView, to: UnsafeRawPointer.self), toByteOffset: 248, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(moduleBindings, to: UnsafeRawPointer.self), toByteOffset: 256, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(ExactNativeViewABI.safeArea, to: UnsafeRawPointer.self), toByteOffset: 264, as: UnsafeRawPointer.self)
     return t
 }()
 

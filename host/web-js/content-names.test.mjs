@@ -4,7 +4,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { webCompiler } from './module.mjs';
-import { contentNames } from './content-names.mjs';
+import { contentNames, safeInlineScript } from './content-names.mjs';
+import { open } from '../../scripts/agent.mjs';
 
 // LLP 1153.004: a build names by content each file that only it, a renderer or code it bundles names, and `routes.json`
 // `files` names each. A path never names two contents: a path two builds share has the same bytes, and the entry and the
@@ -49,3 +50,56 @@ const label = "é"; fetch('./${style}'); import(new URL("./${picker}", import.me
     contentNames(files, () => false).transform(code('style.css', 'picker-glue.js', 'markdown.wasm'), '/app/x.js')])
     .toEqual([code('style-Ab12Cd34.css', 'picker-glue-Ef56Gh78.js', 'markdown-Ij90Kl12.wasm'), null]);
 });
+
+test('an --inline build neutralizes HTML script-data tags without diverging from app.js and boots cleanly', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const scriptData = /<(?=!--|\/script[\t\n\f\r />])/gi;
+  // Unit check: string, template, regex, and odd-backslash escapes preserve runtime values while removing hazards.
+  const rewritten = safeInlineScript('const a="<!-- <script></script>",b=`<!-- <SCRIPT>x`,c=/<!--|<\\/script>/i,d="\\\\<!--";');
+  expect(scriptData.test(rewritten)).toBe(false);
+  expect(new Function(`${rewritten} return [a,b,c.test("<!--"),d];`)()).toEqual([
+    '<!-- <script></script>', '<!-- <SCRIPT>x', true, '\\<!--',
+  ]);
+
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  mkdirSync(resolve(root, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(root, 'target/web-js-inline-script-'));
+  let browser, server;
+  const appDir = process.env.EXACT_APP_DIR;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Inline', app: { id: 'test.inline', name: 'Inline' } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    column\n      text "<!-- <script></script>" testId="a"\n      text "<!-- <SCRIPT>hello" testId="b"\n');
+    const out = resolve(dir, 'dist');
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', 'inline', '--out', out, '--inline', '--render', 'none'], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8',
+    });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    const entryName = JSON.parse(readFileSync(resolve(out, 'routes.json'), 'utf8')).files['app.js'];
+    const onDisk = readFileSync(resolve(out, entryName), 'utf8');
+    const html = readFileSync(resolve(out, 'index.html'), 'utf8');
+    const openTag = `<script type="module" data-entry="./${entryName}">`;
+    const start = html.indexOf(openTag);
+    expect(start).toBeGreaterThan(0);
+    const end = html.indexOf('</script>', start + openTag.length);
+    const inlined = html.slice(start + openTag.length, end);
+    expect(inlined).toBe(onDisk);
+    scriptData.lastIndex = 0;
+    expect(scriptData.test(inlined)).toBe(false);
+
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
+      const p = new URL(req.url).pathname;
+      const file = resolve(out, p === '/' ? 'index.html' : p.slice(1));
+      return new Response(Bun.file(file));
+    } });
+    browser = await open({ host: 'web', url: server.url.href, webDist: out });
+    const nodes = (await browser.tree()).nodes;
+    expect(nodes.find(n => n.props.testId === 'a')?.props.text).toBe('<!-- <script></script>');
+    expect(nodes.find(n => n.props.testId === 'b')?.props.text).toBe('<!-- <SCRIPT>hello');
+  } finally {
+    if (appDir === undefined) delete process.env.EXACT_APP_DIR;
+    else process.env.EXACT_APP_DIR = appDir;
+    await browser?.close();
+    server?.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 180_000);

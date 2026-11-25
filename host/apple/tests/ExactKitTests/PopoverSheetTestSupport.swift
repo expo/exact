@@ -110,12 +110,14 @@ extension PopoverSheetIOSTests {
 final class SheetPresenter: UIViewController {
     let owner: UIViewController
     let transition: SheetDismissal?
+    var willPresent: (() -> Void)?
     init(_ owner: UIViewController, transition: SheetDismissal? = nil) {
         self.owner = owner; self.transition = transition
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { nil }
     override func present(_ controller: UIViewController, animated: Bool, completion: (() -> Void)? = nil) {
+        willPresent?()
         controller.modalPresentationStyle = .fullScreen
         controller.transitioningDelegate = transition
         owner.present(controller, animated: animated, completion: completion)

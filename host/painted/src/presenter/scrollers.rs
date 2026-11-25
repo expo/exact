@@ -356,7 +356,8 @@ impl<D: DataSource> Presenter<D> {
                         }
                     })
                 }
-                Candidate::Group(_) => (true, true),
+                // A mouse's lift takes a drag in any direction (LLP 1094.000 D13).
+                Candidate::Group(_) | Candidate::Lift { .. } => (true, true),
                 // A `pan` hears what its `touch-action` does not give to
                 // scrolling, as a browser cancels a pointer it pans with.
                 Candidate::Pan(key) => kernel.node_by_key(key).map_or((false, false), |n| {
@@ -816,6 +817,87 @@ fn bits(v: f32) -> i32 {
 }
 
 impl<D: DataSource> Presenter<D> {
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn module_ancestor(&self, mut id: ViewId) -> Option<ViewId> {
+        loop {
+            let node = self.host.kernel().node(id)?;
+            if node.node_type == NodeType::NativeView {
+                return Some(id);
+            }
+            id = node.parent?;
+        }
+    }
+
+    /// Resolve an addressed finger to the allocation the reader must actually touch.
+    /// The reader answers after Android dispatch. Other inputs stay with the presenter.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_agent_tap(
+        &mut self,
+        request: &serde_json::Value,
+        scale: f32,
+    ) -> Option<Result<serde_json::Value, String>> {
+        let args = request.as_object()?;
+        if request["op"] != "tap"
+            || !args.keys().all(|key| {
+                matches!(
+                    key.as_str(),
+                    "op" | "id" | "at" | "phase" | "x" | "y" | "session" | "modifiers"
+                )
+            })
+            || args.contains_key("phase") && request["phase"] != "down"
+        {
+            return None;
+        }
+        let id = u32::try_from(request["id"].as_u64()?).ok()?;
+        let module = self.module_ancestor(id)?;
+        let mut aim = || -> Result<_, String> {
+            if self.contact_position().is_some() {
+                return Err("a contact is already down".into());
+            }
+            let b = self
+                .box_of(id)
+                .ok_or_else(|| format!("view {id} has no painted box"))?;
+            let coord = |v: &serde_json::Value| {
+                v.as_f64()
+                    .map(|n| n as f32)
+                    .ok_or("invalid tap coordinates")
+            };
+            let (x, y) = if let Some(at) = args.get("at") {
+                if at.as_array().map(Vec::len) != Some(2) {
+                    return Err("tap at needs two coordinates".into());
+                }
+                (b.rect.0 + coord(&at[0])?, b.rect.1 + coord(&at[1])?)
+            } else if args.contains_key("x") || args.contains_key("y") {
+                (coord(&request["x"])?, coord(&request["y"])?)
+            } else {
+                b.center()
+            };
+            let hit = self.hit(x, y);
+            if !b.contains(x, y)
+                || !self.alert_allows(id)
+                || self.host.route_visibility(id).1
+                || self.placement_hidden(id)
+                || !hit.is_some_and(|h| h == id || self.is_inside(h, id))
+            {
+                return Err(format!(
+                    "view {id} is covered or not hittable at ({x}, {y})"
+                ));
+            }
+            let under = self.reader_module(x * scale, y * scale, scale);
+            if under[0] as u32 != module {
+                return Err(format!("module view {module} is not hittable"));
+            }
+            if args.contains_key("modifiers") {
+                return Err("Android module touches with modifiers are unsupported".into());
+            }
+            Ok(
+                serde_json::json!({"moduleContact":{"id":module,"slot":under[5],"generation":under[6],
+                "session":self.brush.native_session}, "at":[x,y]}),
+            )
+        };
+        Some(aim())
+    }
+
     /// The module view under a point of the Android reader (pixels), for
     /// its hit reply (`Native.under` in `host/android/canvas` has the
     /// words): its id, border box, allocation slot and generation, the

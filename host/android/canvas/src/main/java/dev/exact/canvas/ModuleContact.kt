@@ -18,7 +18,7 @@ internal class ModuleContact(private val transform: (View, Matrix) -> Boolean) {
     fun begin(view: View, down: MotionEvent, x: Float, y: Float, place: Boolean = true): Boolean {
         localToReader.setTranslate(x, y)
         readerToLocal.setTranslate(-x, -y)
-        if (!send(view, down)) return false
+        if (send(view, down) != true) return false
         if (place) {
             point.fill(0f); localToReader.mapPoints(point)
             view.translationX = point[0]; view.translationY = point[1]
@@ -28,12 +28,13 @@ internal class ModuleContact(private val transform: (View, Matrix) -> Boolean) {
         return true
     }
 
-    fun deliver(e: MotionEvent) {
-        target?.let { send(it, e) }
+    fun deliver(e: MotionEvent): View? {
+        val receiver = target?.takeIf { send(it, e) != null }
         remember(e)
         if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) {
             target = null; last?.recycle(); last = null; owned = false
         }
+        return receiver
     }
 
     /** Whether the view is a frame's WebView that can scroll its page the way a finger moved by ([dx], [dy]) goes,
@@ -69,8 +70,8 @@ internal class ModuleContact(private val transform: (View, Matrix) -> Boolean) {
 
     private fun remember(e: MotionEvent) { last?.recycle(); last = MotionEvent.obtain(e) }
 
-    private fun send(view: View, e: MotionEvent): Boolean {
-        if (transform(view, localToReader)) localToReader.invert(readerToLocal)
+    private fun send(view: View, e: MotionEvent): Boolean? {
+        if (transform(view, localToReader) && !localToReader.invert(readerToLocal)) return null
         val own = MotionEvent.obtain(e)
         own.transform(readerToLocal)
         return try { view.dispatchTouchEvent(own) } finally { own.recycle() }

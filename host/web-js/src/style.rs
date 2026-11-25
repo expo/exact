@@ -1088,6 +1088,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         | StyleId::SafeAreaExtendBoundsLeft
         | StyleId::ScrollInsetAdjustment
         | StyleId::ScrollIndicatorAdjustment
+        | StyleId::SafeAreaTrack
         | StyleId::ScrollEdgeEffectSoft
         | StyleId::ScrollEdgeEffectHard
         | StyleId::ScrollEdgeEffectHidden

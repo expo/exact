@@ -23,13 +23,17 @@ fn style_value(value: &Json) -> Option<StyleValue<'_>> {
 /// The `decoration` declarations visible to one field, decoded with the
 /// same style codecs as node rows.
 #[derive(Debug, Clone, Default)]
-pub struct StyleTable(BTreeMap<String, StyleProps>);
+pub struct StyleTable {
+    styles: BTreeMap<String, StyleProps>,
+    _wide: Keep,
+}
 
 impl StyleTable {
     /// Read ordered `[kernelStyleId, literal]` rows. An invalid value leaves
     /// the other properties and declarations available to their spans.
     pub fn decode(text: &str) -> Result<Self, String> {
         let table: Rows = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        let _batch = exact_kernel::style::wide::Batch::open();
         let mut styles = BTreeMap::new();
         for (name, rows) in table {
             let mut patch = StyleProps::default();
@@ -41,17 +45,26 @@ impl StyleTable {
             }
             styles.insert(name, patch);
         }
-        Ok(Self(styles))
+        let wide = Keep::of(|mark| {
+            use exact_kernel::style::wide::Colors;
+            for patch in styles.values() {
+                patch.colors(mark);
+            }
+        });
+        Ok(Self {
+            styles,
+            _wide: wide,
+        })
     }
 
     /// A declaration's rows; only the rows its mask names were written.
     pub fn get(&self, name: &str) -> Option<&StyleProps> {
-        self.0.get(name)
+        self.styles.get(name)
     }
 
     /// Visible names in stable order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.0.keys().map(String::as_str)
+        self.styles.keys().map(String::as_str)
     }
 }
 

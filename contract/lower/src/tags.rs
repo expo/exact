@@ -95,8 +95,7 @@ pub fn tag(name: &str) -> Option<Tag> {
             &[(StyleId::PositionType, "absolute")],
             &[(PropId::SemanticTag, "dialog")],
         ),
-        // @ref LLP 1021 D1 — HTML's separator, one hairline (LLP 1115.000
-        // D10.3); void.
+        // @ref LLP 1021 D1 — HTML's separator, one hairline (LLP 1115.000 D10.3); void.
         "hr" => view(crate::menus::HR, &[(PropId::SemanticTag, "hr")]),
         "main" => view(&[], &[(PropId::SemanticTag, "main")]),
         "header" => view(&[], &[(PropId::SemanticTag, "header")]),
@@ -249,8 +248,7 @@ pub fn tag(name: &str) -> Option<Tag> {
             fixed_props: &[],
             positional: None,
         },
-        // @ref LLP 1055.000 D14 — a filter and its primitives; a primitive's
-        // tag is its `fe` prop.
+        // @ref LLP 1055.000 D14 — a filter and its primitives; a primitive's tag is its `fe` prop.
         "filter" => Tag {
             node_type: NodeType::SvgFilter,
             fixed_styles: &[],
@@ -639,6 +637,9 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "navigationSelectedDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
         "navigationEdgeAttachedInCompactHeight" => AttrTarget::Prop(p(name)),
         "navigationScrollExpands" | "navigationUndimmedDetent" => AttrTarget::Prop(p(name)),
+        "navigationPopoverAnchor" | "navigationPopoverArrows" => AttrTarget::Prop(p(name)),
+        "navigationPopoverMargins" | "navigationPopoverAdaptation" => AttrTarget::Prop(p(name)),
+        "navigationPopoverOverlapsSource" => AttrTarget::Prop(p(name)),
         // @ref LLP 1125 D11 — the Screen Wake Lock API's one type, on any element.
         "wakelock" => AttrTarget::Prop(p("wakelock")),
         // @ref LLP 1133.029 D1 — the Screen Orientation API's lock types, on any element.
@@ -646,7 +647,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar:
         // `none` for a full-bleed screen.
         "navigationBar" => AttrTarget::Prop(p("navigationBar")),
-        "navigationSource" | "sharedElement" => AttrTarget::Prop(p(name)),
+        "navigationSource" | "sharedElement" | "arrangement" => AttrTarget::Prop(p(name)),
         // @ref LLP 1013.002 D1 — where the element is shown, by a destination's `id`.
         "portal" => AttrTarget::Prop(p("portal")),
         // @ref LLP 1075.003 §3.5 — the route's content scroll view, by HTML id.

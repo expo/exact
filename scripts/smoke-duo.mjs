@@ -202,13 +202,13 @@ async function suite({ open: openSession, check: record }, reset) {
   /** Set the hinge and wait for the session to report the pose. A failure before the fold is photographed first. */
   const pose = async (s, deg) => {
     await shot(s);
-    hinge(deg);
-    await reached(s, deg);
+    // The driver's `fold` lands at the pose; a host fixture's session has none, and is watched for it
+    if (s.carrier?.fold) { check((await s.fold(deg)).reason !== 'hinge', `the app takes the fold to ${deg}°`); await reached(s, deg, 1); } else { hinge(deg); await reached(s, deg); }
   };
-  /** Wait, over 50 reads, for the session to report the pose `deg`, then settle it: the cover panel at 0° and only then, the posture and the segments (the division regions can trail the posture). A pose the session never reports fails here. */
-  const reached = async (s, deg) => {
+  /** Wait, over `reads` reads, for the session to report the pose `deg`, then settle it: the cover panel at 0° and only then, the posture and the segments (the division regions can trail the posture). A pose the session never reports fails here. */
+  const reached = async (s, deg, reads = 50) => {
     let panel = false, postured = false, split = false;
-    for (let i = 0; i < 50 && !(panel && postured && split); i++) {
+    for (let i = 0; i < reads && !(panel && postured && split); i++) {
       if (i > 0) await sleep(100);
       const l = await s.layout();
       panel = onCover(l) === (deg === 0);

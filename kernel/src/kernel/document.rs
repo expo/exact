@@ -191,6 +191,13 @@ impl Kernel {
         if changed {
             self.epoch = receipt.epoch;
         }
+        // A row destroyed before it showed stops waiting, and its id created
+        // again, in this commit or later, does not wait for its former self.
+        if !receipt.destroyed.is_empty() && !self.awaiting.is_empty() {
+            let (arena, created) = (&self.arena, &receipt.created);
+            self.awaiting
+                .retain(|v| arena.key_of(*v).is_some_and(|k| !created.contains(&k)));
+        }
         receipt.epoch = self.epoch;
         // @ref LLP 1057.003 D4 — timeline names resolve against the tree
         // this commit left.

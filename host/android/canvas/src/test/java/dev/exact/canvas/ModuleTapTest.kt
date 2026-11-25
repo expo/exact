@@ -31,6 +31,8 @@ class ModuleTapTest {
         companion object {
             @JvmStatic @Implementation fun __staticInitializer__() {}
             val events = ArrayList<Pair<Long, String>>()
+            val sizes = ArrayList<String>()
+            @JvmStatic @Implementation fun moduleSizes(reports: String) { sizes.add(reports) }
             @JvmStatic @Implementation fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String) {
                 events.add(session to payload)
             }
@@ -39,6 +41,8 @@ class ModuleTapTest {
 
     private class Button : NativeModule {
         var clicks = 0
+        val sizing = ArrayList<NativeViewSizing>()
+        override fun sizing(view: View, events: NativeViewSizing) { sizing.add(events) }
         val bindings = ArrayList<(String, String) -> Unit>()
         override fun create(context: Context, props: JSONObject) = View(context).apply {
             setOnClickListener { clicks++ }
@@ -68,6 +72,7 @@ class ModuleTapTest {
         view.ownerStarted(true)
         Exact.owner = null
         Host.events.clear()
+        Host.sizes.clear()
         ensure(1)
     }
 
@@ -113,6 +118,33 @@ class ModuleTapTest {
         }
         assertEquals(2, button.clicks)
         assertEquals(listOf(0, 3, 0, 3), thread.touches)
+    }
+
+    @Test fun twoSizeReportsShareOneFrameAndTheNextBorrowerResetsItsPreference() {
+        val old = button.sizing.single()
+        val props = JSONObject().put("module", "test-button").put("slot", 6).put("generation", 7).put("session", 1)
+        view.natives!!.ensure(2, 2, 100, 40, props.toString(), 0)
+        val size = android.util.SizeF(42f, 24f)
+        old.intrinsicSize(size)
+        button.sizing.last().intrinsicSize(size)
+        fun frame() = shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofMillis(32))
+        frame()
+        val batch = org.json.JSONArray(Host.sizes.single())
+        assertEquals(2, batch.length())
+        val rows = (0 until batch.length()).map { batch.getJSONArray(it) }.associateBy { it.getInt(0) }
+        assertEquals(3, rows.getValue(1).getInt(1))
+        assertEquals(6, rows.getValue(2).getInt(1))
+        assertEquals(42, rows.getValue(2).getJSONArray(4).getInt(0))
+        view.natives!!.unrowed(emptySet())
+        old.intrinsicSize(android.util.SizeF(1f, 1f))
+        frame()
+        assertEquals("the parked row keeps its size", 1, Host.sizes.size)
+        view.natives!!.ensure(2, 2, 100, 40, props.put("hasPreferred", true).toString(), 0)
+        frame()
+        val cleared = org.json.JSONArray(Host.sizes.last()).getJSONArray(0)
+        assertEquals(2, cleared.getInt(0))
+        assertTrue(cleared.isNull(4))
+        assertEquals(2, Host.sizes.size)
     }
 
     @Test fun reloadRebindsAnOtherwiseIdenticalModuleAndRetiresQueuedEvents() {

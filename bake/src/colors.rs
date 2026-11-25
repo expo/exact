@@ -10,6 +10,7 @@ use std::path::Path;
 pub fn unavailable(wide: &Wide, platform: &str) -> Option<&'static str> {
     match platform {
         "linux" if !wide.in_srgb() => Some("is outside sRGB, and Linux draws sRGB only"),
+        "android" if !wide.in_srgb() => Some("is outside sRGB, and Android draws sRGB only"),
         "web" if wide.space.is_hdr() => {
             Some("is in a CSS Color HDR space, which no browser draws yet")
         }
@@ -179,7 +180,7 @@ pub(crate) fn check_plan(
     }
     for text in &literals {
         for (written, name, count) in profiled_colors(text) {
-            if platform == "linux" || platform == "web" {
+            if matches!(platform, "linux" | "android" | "web") {
                 return Err(format!(
                     "app.contract: `{written}` is in a color profile's space, which only the platform converts and {platform} does not \
                      (LLP 1100 D3): write a CSS color, or choose this one where the platform has it"
@@ -207,9 +208,14 @@ pub(crate) fn check_plan(
             }
         }
     }
-    // @ref LLP 1100 D12a, D10 — Linux's canvases are 8-bit sRGB; a setting
-    // computed at run time is sRGB there (`Runner::canvas_settings`).
-    if platform == "linux" {
+    // @ref LLP 1100 D12a, D10 — Linux and Android canvases are 8-bit sRGB; a
+    // setting computed at run time is sRGB there (`Runner::canvas_settings`).
+    if matches!(platform, "linux" | "android") {
+        let host = if platform == "android" {
+            "Android"
+        } else {
+            "Linux"
+        };
         for b in plan
             .bindings
             .iter()
@@ -224,7 +230,7 @@ pub(crate) fn check_plan(
             };
             if literal(plan, &b) == Some(refused) {
                 return Err(format!(
-                    "app.contract: a canvas's `{attr}=\"{refused}\"`: Linux's canvases are 8-bit sRGB (LLP 1100 D12a)"
+                    "app.contract: a canvas's `{attr}=\"{refused}\"`: {host}'s canvases are 8-bit sRGB (LLP 1100 D12a)"
                 ));
             }
         }

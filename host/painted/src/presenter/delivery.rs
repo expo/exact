@@ -441,29 +441,29 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// A periodic check that is due, started; then a finished check, if one
-    /// landed: its line to stderr and the journal (`exact update: …`), the
-    /// store's facts into the runner, and under `immediate` the activation
-    /// it staged, which the next [`Presenter::run_commands`] applies.
+    /// Any finished checks that landed, drained first (logging each, syncing
+    /// delivery, and scheduling `immediate` activation if one staged); then a
+    /// periodic check that is due, started.
     pub fn poll_update(&mut self) -> bool {
+        let mut any = false;
+        while let Some(line) = self.updates.as_mut().and_then(|u| u.take_line()) {
+            any = true;
+            eprintln!("exact update: {line}");
+            self.host.log(format!("exact update: {line}"));
+            self.sync_delivery();
+            if self
+                .update_checks
+                .as_mut()
+                .is_some_and(|c| c.completed(&line))
+            {
+                self.owe_update(false);
+            }
+        }
         let now = self.update_clock();
         if self.update_checks.as_mut().is_some_and(|c| c.tick(now)) {
             self.check_update();
         }
-        let Some(line) = self.updates.as_mut().and_then(|u| u.take_line()) else {
-            return false;
-        };
-        eprintln!("exact update: {line}");
-        self.host.log(format!("exact update: {line}"));
-        self.sync_delivery();
-        if self
-            .update_checks
-            .as_mut()
-            .is_some_and(|c| c.completed(&line))
-        {
-            self.owe_update(false);
-        }
-        true
+        any
     }
 
     /// An interaction holds a replacement ([`Presenter::interaction_hold`]):

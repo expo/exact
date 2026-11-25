@@ -742,6 +742,54 @@ abstract class CheckCarManifest : DefaultTask() {
     }
 }
 
+abstract class ManifestPermissions : DefaultTask() {
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE) abstract val merged: RegularFileProperty
+    @get:OutputFile abstract val inventory: RegularFileProperty
+
+    @TaskAction fun writePermissions() {
+        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        factory.isNamespaceAware = true
+        val root = factory.newDocumentBuilder().parse(merged.get().asFile).documentElement
+        val names = (0 until root.childNodes.length).mapNotNull { root.childNodes.item(it) as? org.w3c.dom.Element }
+            .filter { it.tagName == "uses-permission" }
+            .map { it.getAttributeNS("http://schemas.android.com/apk/res/android", "name") }.toSortedSet()
+        inventory.get().asFile.writeText(groovy.json.JsonOutput.toJson(names))
+    }
+}
+
+// The release variant supplies the factory classes. The unit-test runtime supplies Android APIs.
+abstract class CheckModuleRoster : Test() {
+    @get:Classpath abstract val jars: ListProperty<RegularFile>
+    @get:Classpath abstract val classes: ListProperty<Directory>
+}
+
+androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+    val receipt = out.resolve("rust/bake/compat.json")
+    val inputs = if (receipt.isFile) (JsonSlurper().parse(receipt) as Map<*, *>)["inputs"] as? Map<*, *> else null
+    val tags = (inputs?.get("nativeModules") as? Map<*, *>)?.get("tags") as? List<*>
+    if (!tags.isNullOrEmpty()) {
+        val checkRoster = tasks.register<CheckModuleRoster>("checkReleaseModuleRoster") {
+            val unit = tasks.named<Test>("testDebugUnitTest").get()
+            testClassesDirs = unit.testClassesDirs
+            val testRuntime = unit.classpath - files(tasks.named("bundleDebugClassesToRuntimeJar"))
+            classpath = files(classes, jars, testRuntime)
+            filter.includeTestsMatching("dev.exact.app.ModuleRosterTest")
+            systemProperty("exact.module.tags", tags.joinToString(","))
+            systemProperty("exact.module.development", developmentApk.toString())
+            // API 36's shared memory uses the JDK file descriptor.
+            jvmArgs(unit.jvmArgs.orEmpty() + "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
+            testLogging { showStandardStreams = true; exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
+        }
+        variant.artifacts.forScope(ScopedArtifacts.Scope.ALL).use(checkRoster).toGet(ScopedArtifact.CLASSES, CheckModuleRoster::jars, CheckModuleRoster::classes)
+        tasks.matching { it.name in setOf("packageRelease", "packageReleaseBundle") }.configureEach { dependsOn(checkRoster) }
+    }
+    tasks.register<ManifestPermissions>(variant.computeTaskName("write", "ManifestPermissions")) {
+        merged.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST))
+        inventory.set(layout.buildDirectory.file("manifest-permissions.json"))
+    }
+}
+
 val mapPermission = "androidx.car.app.MAP_TEMPLATES" in providers.gradleProperty("permissions").orNull.orEmpty().split(',')
 if (carService != null || mapPermission || maven.isNotEmpty() || providers.gradleProperty("manifestFragment").isPresent) {
     androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->

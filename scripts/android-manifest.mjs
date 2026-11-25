@@ -35,6 +35,8 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { grantLines } from './grant-advice.mjs';
+import { implementationFor, moduleInterfaces } from '../js/bake/src/typescript.mjs';
 import { EXACT_PATHS, androidAuthCallbacks } from './links.mjs';
 
 /** The broadcasts a package's receiver may name: the boot, the package replaced, the clock and zone, the exact-alarm
@@ -119,10 +121,16 @@ export const ACTIVITY_ACTIONS = new Set(['androidx.health.ACTION_SHOW_PERMISSION
 export const ALIAS_ACTIONS = new Set(['android.intent.action.VIEW_PERMISSION_USAGE']);
 export const ALIAS_CATEGORIES = new Set(['android.intent.category.HEALTH_PERMISSIONS']);
 
-/** The normal permissions a fragment may declare (LLP 1133.031 D12 item 1): `protectionLevel="normal"` in the
- * platform's own manifest, granted at install with no prompt. */
-export const NORMAL_PERMISSIONS = new Set(['android.permission.ACCESS_NETWORK_STATE', 'android.permission.RUN_USER_INITIATED_JOBS', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_DATA_SYNC']);
+/** Install-time permissions an app or package can declare (LLP 1133.030 D9, LLP 1133.031 D12). */
+export const NORMAL_PERMISSIONS = new Set([
+  'android.permission.ACCESS_NETWORK_STATE',
+  'android.permission.DETECT_SCREEN_CAPTURE',
+  'android.permission.FOREGROUND_SERVICE',
+  'android.permission.FOREGROUND_SERVICE_DATA_SYNC',
+  'android.permission.RUN_USER_INITIATED_JOBS',
+]);
 
+// Only the package providing the POI service may declare its map permission.
 const MAP_TEMPLATES = 'androidx.car.app.MAP_TEMPLATES';
 
 /** The one POI service in this APK. Its owning package also owns the optional map permission. */
@@ -145,22 +153,98 @@ export function carAppService(bound) {
   return service;
 }
 
-/** The normal permissions and the POI service's map permission that the build adds as `<uses-permission>`
- * beside the grants' (`-Ppermissions`). Throws, naming the package, for any permission not on the list. */
-export function fragmentPermissions(bound) {
-  const car = carAppService(bound);
-  const names = new Set();
-  for (const impl of bound) {
-    const list = impl.manifest?.permissions;
-    if (list == null) continue;
-    const refuse = (what) => { throw new Error(`${impl.extension}'s Android implementation: its manifest fragment ${what} (LLP 1133.031 D12 item 1: normal permissions only; a runtime permission comes from a grant line)`); };
-    if (!Array.isArray(list)) refuse('has permissions that are not a list');
-    for (const p of list) {
-      if (p === MAP_TEMPLATES) {
-        if (!car || impl.manifest.carAppService !== car) throw new Error(`${impl.extension}'s Android implementation asks for ${MAP_TEMPLATES} without its own carAppService (LLP 1133.030 D9)`);
-      } else if (!NORMAL_PERMISSIONS.has(p)) refuse(`asks for ${JSON.stringify(p)}, which is not on the list`);
-      names.add(p);
+/** Prefer the narrowest grant that directly declares the permission. A package's
+ * name-derived permission also needs the call that derives it (e.g. getUserMedia). */
+function androidPermissionGrant(permission, appDir) {
+  let table;
+  try { table = readFileSync(new URL('../runner/src/device.rs', import.meta.url), 'utf8').replace(/\/\/[^\n]*|\/\*[\s\S]*?\*\//g, ''); }
+  catch { return; } // A partial checkout can still name the offending permission and the allow-list.
+  const hints = [];
+  for (const [, row] of table.matchAll(/^    Device \{([\s\S]*?)^    \},/gm)) {
+    const name = /\bname:\s*"([^"]+)"/.exec(row)?.[1];
+    if (!name) continue;
+    for (const [, writes, field] of row.matchAll(/\bandroid(_writes)?:\s*(&\[[^\]]*\]|\w+)/g)) {
+      const array = field.startsWith('&[') ? field : new RegExp(`\\bconst ${field}\\s*:[^=]+?=\\s*(&\\[[^\\]]*\\])`).exec(table)?.[1];
+      const names = [...(array ?? '').matchAll(/"([^" ]+)(?: maxSdkVersion=\d+)?"/g)].map(m => m[1]);
+      if (names.includes(permission)) hints.push({ grant: `device.${name}`, writes: !!writes, count: names.length });
     }
+  }
+  hints.sort((a, b) => Number(a.writes) - Number(b.writes) || a.count - b.count || a.grant.localeCompare(b.grant));
+  const lines = grant => grantLines([grant], table)[0].map(line => `\`${line}\``).join(' beside ');
+  if (hints.length) return `Use ${lines(hints[0].grant)}${hints[0].writes ? ' with a package call that writes under this grant' : ''}.`;
+
+  // The app can install an interface outside Exact. Resolve it as the builder
+  // does, then consider standard packages the author could add to this app.
+  const advice = new Set();
+  for (const root of new Set([appDir, resolve(import.meta.dir, '..')].filter(Boolean))) {
+    let interfaces;
+    try { interfaces = moduleInterfaces(root); } catch { continue; }
+    for (const iface of interfaces) {
+      const spec = iface.declaration;
+      let impl;
+      try { impl = implementationFor(root, iface, 'android')?.json; } catch { /* an unrelated package can lack a binding */ }
+      const addNames = (declaration, inheritedGrants) => {
+        if (!Array.isArray(declaration?.names)) return;
+        for (const name of declaration.names) {
+          if (Array.isArray(name?.targets) && !name.targets.includes('android')) continue;
+          for (const [key, value] of Object.entries(name?.derives?.android ?? {})) {
+            if (value !== permission && !(value && typeof value === 'object' && Object.values(value).includes(permission))) continue;
+            const grants = Array.isArray(name.grants) ? name.grants : inheritedGrants;
+            const grant = key.startsWith('device.') ? key : Array.isArray(grants) && grants[0];
+            const call = name.source ?? name.send ?? name.event;
+            if (typeof call === 'string' && typeof grant === 'string' && /^[a-z][a-z0-9.-]*$/.test(grant)) {
+              const option = Array.isArray(name.derives.android) || key.startsWith('device.') ? '' : typeof value === 'string' ? ` using ${key}` :
+                ` using ${key}=${JSON.stringify(Object.keys(value).find(k => value[k] === permission))}`;
+              advice.add(`${lines(grant)} with ${call} from ${iface.name}${option}`);
+            }
+          }
+        }
+      };
+      addNames(spec, spec.grants);
+      addNames(impl, impl?.grants ?? spec.grants);
+    }
+    if (advice.size) return `Use ${[...advice].sort().join(' or ')}.`;
+  }
+}
+
+/** Native source comparisons use the app's declarations. The installed names come from Gradle's merge. */
+export function androidHostMetadata({ permissions = [], ...host } = {}) {
+  return permissions.length ? { ...host, permissions: [...new Set(permissions)].sort() } : host;
+}
+
+/** The app reports every invalid declaration. A package keeps its manifest-fragment diagnostic. */
+export function permissionProblems(list, appDir, extension, ownsCar = false) {
+  const owner = extension === undefined ? null : `${extension}'s Android implementation`;
+  const fragment = what => `${owner}: its manifest fragment ${what} (LLP 1133.031 D12 item 1: normal permissions only; a runtime permission comes from a grant line)`;
+  const source = 'app.json host.android.permissions';
+  if (!Array.isArray(list)) return [owner ? fragment('has permissions that are not a list') : `${source}: expected an array of permission names`];
+  const allowed = [...NORMAL_PERMISSIONS].join(', ');
+  const problems = [];
+  for (const name of new Set(list)) {
+    if (NORMAL_PERMISSIONS.has(name) || (ownsCar && name === MAP_TEMPLATES)) continue;
+    if (owner) return [name === MAP_TEMPLATES ? `${owner} asks for ${name} without its own carAppService (LLP 1133.030 D9)` :
+      fragment(`asks for ${JSON.stringify(name)}, which is not on the list`)];
+    if (name === MAP_TEMPLATES) {
+      problems.push(`${source} asks for ${name} without its own carAppService. Only the package declaring that service may request it. Normal permissions: ${allowed}`);
+      continue;
+    }
+    const hint = typeof name === 'string' && androidPermissionGrant(name, appDir);
+    problems.push(`${source}: ${JSON.stringify(name)} is not on the allow-list (normal permissions only): ${allowed}. Runtime permissions come from a grant line.${hint ? ' ' + hint : ''}`);
+  }
+  return problems;
+}
+
+/** Permissions from the app and its bound packages, merged with grant-derived names by the APK builder. */
+export function fragmentPermissions(bound, appPermissions = [], appDir) {
+  const car = carAppService(bound);
+  const problems = permissionProblems(appPermissions, appDir);
+  if (problems.length) throw new Error(problems.join('\n'));
+  const names = new Set(appPermissions);
+  for (const { extension, manifest } of bound) {
+    if (manifest?.permissions == null) continue;
+    const [problem] = permissionProblems(manifest.permissions, appDir, extension, !!car && manifest.carAppService === car);
+    if (problem) throw new Error(problem);
+    for (const name of manifest.permissions) names.add(name);
   }
   return [...names];
 }

@@ -600,6 +600,15 @@ mod tests {
             Op::Tile,
             Op::Turbulence(0.05, 0.1, 2, 3.0, true, false),
             Op::Displacement(4.0, 0, 1),
+            Op::Convolve(Box::new(exact_svg_filter::Convolve {
+                order: (2, 2),
+                kernel: vec![1.0, 0.0, 0.0, 1.0],
+                divisor: 2.0,
+                bias: 0.0,
+                target: (0, 1),
+                edge: 0,
+                preserve_alpha: false,
+            })),
             Op::Lighting(Box::new(Lighting {
                 specular: true,
                 surface_scale: 2.0,
@@ -623,6 +632,47 @@ mod tests {
         };
         assert_eq!(Filter::decode(&f.encode()), Some(f));
         assert_eq!(Filter::decode(&[0.0, 0.0, 1.0, 1.0, 1.0, 99.0]), None);
+
+        // A hand-crafted malformed Convolve never desynchronizes trailing primitives
+        // and never overflows direct rasterization.
+        let malformed = exact_svg_filter::Convolve {
+            order: (u32::MAX, u32::MAX),
+            kernel: vec![1.0, 2.0],
+            divisor: 1.0,
+            bias: 0.0,
+            target: (0, 0),
+            edge: 0,
+            preserve_alpha: false,
+        };
+        let chain = Filter {
+            region: (0.0, 0.0, 4.0, 4.0),
+            primitives: vec![
+                Primitive {
+                    op: Op::Convolve(Box::new(malformed.clone())),
+                    inputs: [Input::SourceGraphic, Input::None],
+                    subregion: (0.0, 0.0, 4.0, 4.0),
+                    linear: false,
+                },
+                Primitive {
+                    op: Op::Flood([1.0, 0.0, 0.0, 1.0]),
+                    inputs: [Input::None, Input::None],
+                    subregion: (0.0, 0.0, 4.0, 4.0),
+                    linear: false,
+                },
+            ],
+        };
+        let decoded = Filter::decode(&chain.encode()).expect("wire stays aligned");
+        assert_eq!(decoded.primitives[0].op, Op::Flood([0.0; 4]));
+        assert_eq!(decoded.primitives[1].op, Op::Flood([1.0, 0.0, 0.0, 1.0]));
+        let mut px = vec![255u8; 4 * 4 * 4];
+        run(
+            &one(Op::Convolve(Box::new(malformed)), false),
+            &mut px,
+            4,
+            4,
+            SPACE,
+        );
+        assert!(px.iter().all(|&b| b == 0));
     }
 
     /// A blur keeps the total coverage and spreads it; an offset moves it.

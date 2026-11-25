@@ -867,17 +867,24 @@ impl Server {
     /// up: a param's token where it names one in full or short, else the
     /// name as given (a design token, which may read a param). A short name
     /// two components share is refused, not read as a design token.
-    fn lookup(&self, request: &Value) -> Result<(Snapshot, exact_forma::Folding, String), Value> {
-        let app = self.app_params();
-        let token = Self::token_of(&app, &required(request, "token")?)?;
-        let (snap, folding, _) = self.design_with(request, &app)?;
-        Ok((snap, folding, token))
+    fn lookup(
+        &self,
+        request: &Value,
+        app: &contract::forma_params::AppParams,
+    ) -> Result<(Snapshot, exact_forma::Folding, exact_forma::Design, String), Value> {
+        let given = required(request, "token")?;
+        let token = Self::token_of(&app.resolver(), &given)?;
+        let (snap, folding, design) = self.design_with(request, app)?;
+        Ok((snap, folding, design, token))
     }
 
     /// The name [`Self::lookup`] looks `name` up by: a param's token where
     /// it names one in full or short, else `name`.
-    fn token_of(app: &contract::forma_params::AppParams, name: &str) -> Result<String, Value> {
-        match contract_lower::params::resolve(&app.tokens, &app.identities, name) {
+    fn token_of(
+        resolver: &contract_lower::params::Resolver<'_>,
+        name: &str,
+    ) -> Result<String, Value> {
+        match resolver.resolve(name) {
             Ok(p) => Ok(p.token.clone()),
             Err(e) if e.id == "forma-param-ambiguous" => {
                 Err(json!({"message": format!("{}: {}", e.id, e.message), "id": e.id}))
@@ -912,12 +919,7 @@ impl Server {
     /// A reply with each param named by its full name (D15), never by its
     /// name below the IR.
     fn present(&self, v: Value) -> Value {
-        let app = self.app_params();
-        if app.tokens.is_empty() {
-            return v;
-        }
-        let text = app.shown(&v.to_string());
-        serde_json::from_str(&text).unwrap_or(v)
+        self.app_params().present(v)
     }
 
     fn design(&self, request: &Value) -> Result<(Snapshot, exact_forma::Folding), Value> {
@@ -964,7 +966,8 @@ impl Server {
     /// joins the spans through its own source map (LLP 1122 T2b's
     /// `outline`).
     fn uses(&mut self, request: &Value) -> Result<Value, Value> {
-        let (snap, folding, name) = self.lookup(request)?;
+        let app = self.app_params();
+        let (snap, folding, _, name) = self.lookup(request, &app)?;
         let icon = folding.icons.iter().any(|i| i.name == name);
         if !icon && !folding.tokens.iter().any(|t| t.name == name) {
             return Err(no_token(&folding, &name));
@@ -977,13 +980,7 @@ impl Server {
         }
         // An icon's image sites, an icon param's too (stage 9 C2, *1.12*).
         if icon {
-            return crate::forma_explain::icon_uses(
-                &self.dir,
-                &self.design,
-                &self.app_params(),
-                &snap,
-                &name,
-            );
+            return crate::forma_explain::icon_uses(&self.dir, &self.design, &app, &snap, &name);
         }
         let aliases = contract::forma_uses::aliases(
             &name,

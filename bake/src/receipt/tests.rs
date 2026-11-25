@@ -73,7 +73,12 @@ fn package_extensions_follow_placed_library_components() {
             format!("use Tile from \"{package}\"\ncomponent App\n  view\n    text \"plain\"\n");
         assert_eq!(graph(&unused)["extensions"], json!({}), "unused {package}");
     }
-    assert_eq!(graph("use Tile from \"@repro/lib\"\ncomponent App\n  state shown = false\n  view\n    column\n      if shown\n        Tile()\n")["extensions"], json!({"swatch":"@fixture/swatch"}));
+    assert_eq!(
+        graph(
+            "use Tile from \"@repro/lib\"\ncomponent App\n  state shown = false\n  view\n    column\n      if shown\n        Tile()\n"
+        )["extensions"],
+        json!({"swatch":"@fixture/swatch"})
+    );
     assert_eq!(
         graph(&format!(
             "component App\n  view\n    text \"plain\"\n{TILE}"
@@ -85,7 +90,9 @@ fn package_extensions_follow_placed_library_components() {
         "use swatchReports, SwatchReports from \"@fixture/swatch\"\n",
     );
     assert_eq!(
-        graph("use swatchReports, SwatchReports from \"@repro/lib\"\ncomponent App\n  resource heard = swatchReports() as shape SwatchReports else empty()\n  view\n    text heard.text\n")["extensions"],
+        graph(
+            "use swatchReports, SwatchReports from \"@repro/lib\"\ncomponent App\n  resource heard = swatchReports() as shape SwatchReports else empty()\n  view\n    text heard.text\n"
+        )["extensions"],
         json!({"swatch":"@fixture/swatch"})
     );
     std::fs::remove_dir_all(dir).unwrap();
@@ -156,13 +163,19 @@ fn package_selection_refuses_two_used_packages_with_the_same_basename() {
     check_package_selection(
         "conflicting-scopes",
         "component App\n  view\n    column\n      a-box\n      b-box\n",
-        Err("bake-extension-ambiguous: extension 'swatch' names both '@a/swatch' and '@b/swatch'; host rosters require one package per extension"),
+        Err(
+            "bake-extension-ambiguous: extension 'swatch' names both '@a/swatch' and '@b/swatch'; host rosters require one package per extension",
+        ),
     );
 }
 
 #[test]
 fn package_selection_keeps_event_only_packages() {
-    check_package_selection("events", "use chime from \"@fixture/bell\"\ncomponent App\n  state heard = false\n  action hear\n    heard = true\n  view\n    column chime=hear\n      text `${heard}`\n", Ok(json!({"bell":"@fixture/bell"})));
+    check_package_selection(
+        "events",
+        "use chime from \"@fixture/bell\"\ncomponent App\n  state heard = false\n  action hear\n    heard = true\n  view\n    column chime=hear\n      text `${heard}`\n",
+        Ok(json!({"bell":"@fixture/bell"})),
+    );
 }
 
 #[test]
@@ -191,7 +204,10 @@ fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
         "node_modules/@repro/lib/package.json",
         r#"{"name":"@repro/lib","version":"1.0.0","exports":{".":"./index.contract"},"dependencies":{"@exact/geolocation":"1.0.0"}}"#,
     );
-    put("node_modules/@repro/lib/index.contract", "use requestPreciseLocation, GeolocationStatus from \"@exact/geolocation\"\ncomponent Locate\n  mutation precise as shape GeolocationStatus\n  action ask\n    send precise = requestPreciseLocation(purposeKey=\"nav\")\n  view\n    button press=ask\n      text \"Locate\"\n");
+    put(
+        "node_modules/@repro/lib/index.contract",
+        "use requestPreciseLocation, GeolocationStatus from \"@exact/geolocation\"\ncomponent Locate\n  mutation precise as shape GeolocationStatus\n  action ask\n    send precise = requestPreciseLocation(purposeKey=\"nav\")\n  view\n    button press=ask\n      text \"Locate\"\n",
+    );
     put("app.contract", "use Locate from \"@repro/lib\"\n");
     put(
         "strings/en.json",
@@ -900,10 +916,10 @@ fn a_masked_svg_image_loads_the_svg_island_module() {
     std::fs::create_dir_all(root.join("assets/sponsors")).unwrap();
     let art = "<path d=\"M0 0H5V5H0Z\" fill=\"#F2545B\"/>";
     let masked = format!(
-            "<svg width=\"24\" height=\"12\" viewBox=\"0 0 24 12\" xmlns=\"http://www.w3.org/2000/svg\">\
+        "<svg width=\"24\" height=\"12\" viewBox=\"0 0 24 12\" xmlns=\"http://www.w3.org/2000/svg\">\
              <mask id=\"m\" style=\"mask-type:luminance\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"24\" height=\"12\">\
              <path d=\"M24 0H0V12H24V0Z\" fill=\"white\"/></mask><g mask=\"url(#m)\">{art}</g></svg>"
-        );
+    );
     let plain =
         format!("<svg viewBox=\"0 0 24 12\" xmlns=\"http://www.w3.org/2000/svg\">{art}</svg>");
     std::fs::write(root.join("assets/sponsors/plain.svg"), &plain).unwrap();
@@ -1319,4 +1335,114 @@ fn a_plan_requires_its_watch_policy_including_removal() {
         .unwrap();
         assert_eq!(graph["artifacts"][0]["requires"]["watchSync"], policy);
     }
+}
+
+/// `artifact_graph`, `plan_graph`, and entry-plan cards must require
+/// `commands`, `iconFillRules` (including baked resource values), `atomFace`,
+/// `alternateIcons`, `faces`, and `controls` so older cohorts refuse
+/// incompatible bundles.
+#[test]
+fn artifact_and_plan_graphs_require_commands_icons_atoms_alternates_faces_and_controls() {
+    use exact_runner::{DataError, DataSource, Value as PlanValue};
+    struct OddGlyph;
+    impl DataSource for OddGlyph {
+        fn query(&mut self, _: &str, _: &[PlanValue]) -> Result<PlanValue, DataError> {
+            Ok(PlanValue::record(vec![PlanValue::list(vec![
+                PlanValue::str("symbol:icon||0 0 24 24|evenodd:M2 2H22V22H2Z M8 8H16V16H8Z|"),
+            ])]))
+        }
+    }
+    let dir = crate::TempDir(
+        std::env::temp_dir().join(format!("exact-receipt-requires-{}", std::process::id())),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("app.json"),
+        r#"{"app":{"id":"com.example.req","name":"Req"},"alternate_icons":[{"name":"dark","src":"assets/a.png"}],"intents":{"tools":{"bump":{"title":"Bump"}}},"controls":[{"kind":"go","title":"Go","symbol":"play.fill","tool":"bump"}],"widgets":[{"kind":"card","component":"Card","props":"Props","families":["systemSmall"],"refresh":"refresh","preview":{"title":"Hi"}}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("app.contract"),
+        "shape Glyph\n  srcs: string[]\nshape Props\n  title: string\natom mention prefix=\"@\"\ncomponent App\n  state n = 0\n  resource glyph = glyph() as shape Glyph\n  derive faces = [AtomFace(source=\"@a\", label=\"\", icon=\"\", title=\"\", color=\"\", backgroundColor=\"\", direction=\"\", ariaLabel=\"\")]\n  tool bump writes \"Bump.\" = bump\n  action bump\n    n = n + 1\n  view\n    column\n      textarea value=\"@a \" markup=\"markdown\" atoms=\"mention\" atomFaces=faces\n      for s in glyph.srcs key = s\n        image s\ncomponent Card\n  props\n    title: string\n  view\n    column\n      image \"symbol:icon||0 0 24 24|evenodd:M2 2H22V22H2Z M8 8H16V16H8Z|\"\n",
+    )
+    .unwrap();
+    let manifest = Manifest::read(&dir).unwrap();
+    let compiled = contract::compile_path(&dir.join("app.contract")).unwrap();
+    let baked = contract::bake(compiled, OddGlyph).unwrap();
+    let compat = crate::compat::compatibility_id(
+        &dir,
+        "ios",
+        "aarch64-apple-ios",
+        &manifest,
+        Some(""),
+        false,
+    )
+    .unwrap();
+
+    // `artifact_graph` on the baked plan catches all six requirements, including baked even-odd icons.
+    let graph = artifact_graph(&baked, &compat.inputs, &[], false, "aarch64-apple-ios").unwrap();
+    let req = &graph["artifacts"][0]["requires"];
+    assert_eq!(req["commands"], json!(crate::compat::commands_digest()));
+    assert_eq!(req["iconFillRules"], json!(["evenodd"]));
+    assert_eq!(
+        req["atomFace"],
+        json!(exact_runner::decorations::ATOM_FACE_FIELDS)
+    );
+    assert_eq!(req["alternateIcons"], json!(["dark"]));
+    assert_eq!(req["faces"], compat.inputs["faces"]);
+    assert_eq!(req["controls"], compat.inputs["controls"]);
+
+    // `plan_graph` enforces current `commands`, `iconFillRules`, `atomFace`, and `faces` even when given an older cohort's inputs.
+    let old_inputs = json!({"platform": "ios", "commands": "0000000000000000"});
+    let pushed = plan_graph(&baked.encode(), &old_inputs, "aarch64-apple-ios", &dir).unwrap();
+    let preq = &pushed["artifacts"][0]["requires"];
+    assert_eq!(preq["commands"], json!(crate::compat::commands_digest()));
+    assert_eq!(preq["iconFillRules"], json!(["evenodd"]));
+    assert_eq!(
+        preq["atomFace"],
+        json!(exact_runner::decorations::ATOM_FACE_FIELDS)
+    );
+    assert_eq!(preq["faces"], compat.inputs["faces"]);
+
+    // Entry-plan cards in `receipt::emit` carry `iconFillRules` and `atomFace`.
+    let mut entries = contract::snapshot::entries(&dir).unwrap();
+    let mut atom_entry = entries["card"].clone();
+    atom_entry.plan = baked.clone();
+    entries.insert("live".into(), atom_entry);
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("app.plan"), baked.encode()).unwrap();
+    let mut emitted = compat.clone();
+    emit(
+        &mut emitted,
+        "development",
+        &dir,
+        ("ios", "aarch64-apple-ios"),
+        &manifest,
+        &out,
+        &entries,
+    )
+    .unwrap();
+    let written: Value =
+        serde_json::from_slice(&std::fs::read(out.join("artifacts.json")).unwrap()).unwrap();
+    let card = written["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "plans/card.plan")
+        .expect("widget entry card");
+    assert_eq!(card["requires"]["iconFillRules"], json!(["evenodd"]));
+    let live = written["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "plans/live.plan")
+        .expect("live entry card");
+    assert_eq!(live["requires"]["iconFillRules"], json!(["evenodd"]));
+    assert_eq!(
+        live["requires"]["atomFace"],
+        json!(exact_runner::decorations::ATOM_FACE_FIELDS)
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

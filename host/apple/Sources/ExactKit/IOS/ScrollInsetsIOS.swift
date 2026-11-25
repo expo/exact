@@ -39,7 +39,7 @@ package struct ScrollInsetsIOS: Equatable {
     /// run once the writes end (`SafeAreaSteps`). Out of a window, or out of `owner`, the band is
     /// unavailable (D9) and nothing is written; activation writes the scroller when it enters one.
     package static func write(_ scroll: UIScrollView, in owner: UIView, terms: Terms, rows: Rows,
-                              held: [CGFloat] = [0, 0, 0, 0]) {
+                              held: [CGFloat] = [0, 0, 0, 0], consumed lent: [CGFloat]? = nil) {
         guard scroll.window != nil, scroll.isDescendant(of: owner) else { return }
         SafeAreaSteps.stepping {
             let before = scroll.adjustedContentInset, free = scroll.scrollsItself
@@ -52,7 +52,8 @@ package struct ScrollInsetsIOS: Equatable {
             let adjusted = scroll.adjustedContentInset, inset = scroll.contentInset
             let platform = edges(UIEdgeInsets(top: adjusted.top - inset.top, left: adjusted.left - inset.left,
                                               bottom: adjusted.bottom - inset.bottom, right: adjusted.right - inset.right))
-            let consumed = (scroll as? BandConsumer)?.consumedBand ?? [0, 0, 0, 0]
+            // What a lent scroll view's own layout cleared (`LentScrollIOS`), or a native list's
+            let consumed = lent ?? (scroll as? BandConsumer)?.consumedBand ?? [0, 0, 0, 0]
             var next = insets(terms: terms, rows: rows, held: held, band: band(of: scroll, in: owner), platform: platform, consumed: consumed)
             // The indicators keep inside a padding edge that masks the scroll view (`ScrollView.clip(toPaddingEdge:inset:)`)
             if let clip = (scroll as? ScrollView)?.paddingInset, clip != .zero {
@@ -80,10 +81,10 @@ package struct ScrollInsetsIOS: Equatable {
     package static func insets(terms: Terms, rows: Rows, held: [CGFloat] = [0, 0, 0, 0], band: [CGFloat],
                                platform: [CGFloat], consumed: [CGFloat] = [0, 0, 0, 0]) -> ScrollInsetsIOS {
         var content = [CGFloat](repeating: 0, count: 4), occupied = content
+        let containers = terms.container(band: band)
         for e in 0..<4 {
             let reaches = terms.bandReaches[e]
-            let container = terms.container[e] ? terms.reserved[e] ?? (reaches ? band[e] : 0) : 0
-            occupied[e] = max(container, terms.keyboard[e], 0)
+            occupied[e] = max(containers[e], terms.keyboard[e], 0)
             // What the layout clears of an observed region is not the writer's, and UIKit's adjustment over it is
             // cancelled, unclamped; an inset cannot undo what it clears of an ignored one, which it is to clear none of,
             // nor what it clears past a shallower reservation, which it is to clear no more than
@@ -115,34 +116,8 @@ package struct ScrollInsetsIOS: Equatable {
                 depth(frame.maxY - safe.maxY, area.bottom), depth(safe.minX - frame.minX, area.left)]
     }
 
-    /// The kernel's terms for one scroller, each top right bottom left (`ScrollTerms`).
-    package struct Terms: Equatable {
-        package var reach: [CGFloat] = [0, 0, 0, 0]
-        package var reserved: [CGFloat?] = [nil, nil, nil, nil]
-        package var keyboard: [CGFloat] = [0, 0, 0, 0]
-        package var bandReaches: [Bool] = [true, true, true, true]
-        package var container: [Bool] = [true, true, true, true]
-
-        package init(reach: [CGFloat] = [0, 0, 0, 0], reserved: [CGFloat?] = [nil, nil, nil, nil],
-                     keyboard: [CGFloat] = [0, 0, 0, 0], bandReaches: [Bool] = [true, true, true, true],
-                     container: [Bool] = [true, true, true, true]) {
-            (self.reach, self.reserved, self.keyboard, self.bandReaches, self.container) = (reach, reserved, keyboard, bandReaches, container)
-        }
-
-        /// The terms the runner's `node` reply carries as `scrollTerms`, or `nil` for a box with
-        /// none or a reply that does not hold four of each. `reach` is D13's, which reach reads to
-        /// set the scroll view's frame, not an inset.
-        package init?(reply: [String: Any]) {
-            guard let object = reply["scrollTerms"] as? [String: Any] else { return nil }
-            let numbers = { (key: String) in (object[key] as? [Any])?.map { ($0 as? NSNumber).map { CGFloat($0.doubleValue) } } }
-            guard let reach = numbers("reach"), let reserved = numbers("reserved"), let keyboard = numbers("keyboard"),
-                  let reaches = object["bandReaches"] as? [Bool], let container = object["container"] as? [Bool],
-                  [reach.count, reserved.count, keyboard.count, reaches.count, container.count] == [4, 4, 4, 4, 4]
-            else { return nil }
-            self.init(reach: reach.map { $0 ?? 0 }, reserved: reserved, keyboard: keyboard.map { $0 ?? 0 },
-                      bandReaches: reaches, container: container)
-        }
-    }
+    /// The kernel's terms for one scroller, shared with AppKit's writer.
+    package typealias Terms = ScrollTerms
 
     /// What an author wrote on the scroller (D14's rows), each length top right bottom left.
     package struct Rows: Equatable {
@@ -178,10 +153,10 @@ package struct ScrollInsetsIOS: Equatable {
     }
 
     /// `insets` top right bottom left, the kernel's order.
-    private static func edges(_ insets: UIEdgeInsets) -> [CGFloat] { [insets.top, insets.right, insets.bottom, insets.left] }
+    static func edges(_ insets: UIEdgeInsets) -> [CGFloat] { [insets.top, insets.right, insets.bottom, insets.left] }
 
     /// `edges`, top right bottom left, as UIKit's insets.
-    private static func edgeInsets(_ edges: [CGFloat]) -> UIEdgeInsets {
+    static func edgeInsets(_ edges: [CGFloat]) -> UIEdgeInsets {
         UIEdgeInsets(top: edges[0], left: edges[3], bottom: edges[2], right: edges[1])
     }
 }

@@ -163,6 +163,9 @@ fn only_routes_in_the_expanded_view_suppress_the_warning() {
     let repaired = screen(&screen(HEADER).replacen("column", "column navigationKey=\"home\"", 1))
         .replacen("column", "column navigationKey=\"home\"", 1);
     assert!(warnings(&app(&repaired)).is_empty());
+    // A linked panel's `navigationSplit` that only lowering folds says nothing of where the routes are
+    let src = "component App\n  state fallback = \"x\"\n  view\n    column navigationKey=\"home\"\n      header display=\"flex\"\n        text \"Household\" role=\"heading\" aria-level=1\n      row role=\"tablist\"\n        button role=\"tab\" aria-controls=\"p\"\n          text \"Home\"\n      column role=\"tabpanel\" id=\"p\" navigationSplit=`${(1 + 1 == 2) ? \"none\" : fallback}`\n        column navigationKey=\"home\"\n          text \"Home\"\n";
+    assert!(warnings(src).is_empty(), "{src}");
 }
 
 #[test]

@@ -3,7 +3,7 @@
 //! the kernel, as on a native host. Outside an action there is no read at all
 //! (the compiler refuses it: `contract/corpus/rejects.txt`).
 
-use crate::source::{boxed, NoData, Source};
+use crate::source::{boxed, measure_dialogs, NoData, Source};
 use exact_kernel::{Kernel, Offer};
 use exact_runner::{Capability, Runner, Value};
 
@@ -293,6 +293,45 @@ fn resize_given_an_action_is_the_element_resize_event_and_a_string_is_css() {
         error.id.starts_with("analyze") || error.id.starts_with("type"),
         "{error:?}"
     );
+}
+
+/// A round gives the nodes of one depth in view order, which is mount order,
+/// as `intersect_due` breaks its ties.
+#[test]
+fn a_resize_round_gives_one_depths_nodes_in_mount_order() {
+    let plan = contract::compile(
+        r#"component App
+  state heard = 0
+  action note(w: number, h: number)
+    heard = heard + 1
+  view
+    column
+      column height=10 resize=note
+      column height=11 resize=note
+      column height=12 resize=note
+      column height=13 resize=note
+      column height=14 resize=note
+      column height=15 resize=note
+      column height=16 resize=note
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        crate::source::boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    lay_out(&mut r);
+    // Mount order is the order the siblings are written in, heights 10 to 16
+    let heights: Vec<f64> = r
+        .resize_due(0)
+        .into_iter()
+        .map(|(_, rect, _)| rect.height)
+        .collect();
+    assert_eq!(heights, [10., 11., 12., 13., 14., 15., 16.]);
 }
 
 /// `elementFromPoint(x, y)` (LLP 1094 D10): the `id` nearest the front-most
@@ -656,6 +695,7 @@ fn open_top_layer_escapes_its_authored_clip() {
         "/",
     )
     .unwrap();
+    measure_dialogs(&mut r);
     lay_out(&mut r);
     let key = r.kernel().find_by_id("dialog")[0];
     r.top_layer(&[r.kernel().arena().local_id(key.index)]);
@@ -694,6 +734,7 @@ fn top_layer_uses_presented_frames_and_stack_order() {
         "/",
     )
     .unwrap();
+    measure_dialogs(&mut r);
     lay_out(&mut r);
     let view = |id| {
         let key = r.kernel().find_by_id(id)[0];

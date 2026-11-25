@@ -4,7 +4,7 @@
 //! their `pointer-events` and `visibility` (CSS inheritance follows the
 //! tree, not the top layer).
 
-use crate::source::{boxed, NoData};
+use crate::source::{boxed, measure_dialogs, NoData};
 use exact_kernel::{Kernel, Offer};
 use exact_runner::{Runner, Value};
 
@@ -31,6 +31,7 @@ fn hit_with(view: &str, open: &[&str], (x, y): (u32, u32)) -> Option<String> {
         "/",
     )
     .unwrap();
+    measure_dialogs(&mut r);
     let root = r.kernel().roots()[0];
     r.kernel_mut()
         .compute_layout(root, Offer::definite(400.0, 800.0))

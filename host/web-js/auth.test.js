@@ -3,7 +3,11 @@ import { test, expect, jest, mock } from "bun:test";
 const clock = { now: 0, agent: true };
 const journal = [];
 let ticket = 0;
-mock.module("./rt.js", () => ({ clock, journal, nextTicket: () => ++ticket }));
+let currentOrigin = "app";
+const personRequired = [];
+const Origin = { now: () => currentOrigin, personRequired: id => personRequired.push(id) };
+const Invocation = { id: 0 };
+mock.module("./rt.js", () => ({ clock, journal, nextTicket: () => ++ticket, Origin, Invocation }));
 const realAuthGlue = await import("../web/auth-glue.js?web-js-auth-test");
 let glueImported = false;
 mock.module("./auth-glue.js", () => {
@@ -357,5 +361,46 @@ test("authFixture shows the full URL for both http and https loopback origins, n
       answer({ ticket: hold.ticket, op: "tap", choice: "cancel" });
       await pending.catch(() => {});
     }
+  }
+});
+
+test("non-app origins are refused 403 without holding or opening, and tool calls report person-required", async () => {
+  globalThis.location = new URL("https://app.example/");
+  clock.agent = true;
+  let active = null;
+  install(
+    "auth.session https://login.example.com\nauth.callback https://app.example/.exact/auth/callback",
+    () => "login",
+    () => active,
+  );
+  try {
+    for (const origin of ["device", "wake", "tool", "action"]) {
+      currentOrigin = origin;
+      Invocation.id = origin === "tool" ? 7 : 0;
+      personRequired.length = 0;
+      const err = await openAuthSession("https://login.example.com/authorize", {
+        callback: authCallback(),
+        state: "s",
+      }).catch(e => e);
+      expect(err.status).toBe(403);
+      expect(holds()).toHaveLength(0);
+      expect(personRequired).toEqual(origin === "tool" ? [7] : []);
+    }
+    // Async continuation after await: Origin.now() returned to "app", active call stays "tool".
+    currentOrigin = "app";
+    Invocation.id = 0;
+    personRequired.length = 0;
+    active = { origin: "tool", invocation: 11 };
+    const asyncErr = await openAuthSession("https://login.example.com/authorize", {
+      callback: authCallback(),
+      state: "s",
+    }).catch(e => e);
+    expect(asyncErr.status).toBe(403);
+    expect(holds()).toHaveLength(0);
+    expect(personRequired).toEqual([11]);
+  } finally {
+    currentOrigin = "app";
+    Invocation.id = 0;
+    active = null;
   }
 });

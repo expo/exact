@@ -3,7 +3,7 @@
 //! top layer, its clip, what it inherits for hit testing, and the modal
 //! boundary a presentation draws for structural reads.
 
-use crate::source::{boxed, NoData, Source};
+use crate::source::{boxed, measure_dialogs, NoData, Source};
 use exact_kernel::{Kernel, Offer};
 use exact_runner::{Runner, Value};
 
@@ -855,6 +855,7 @@ fn a_modal_dialog_escapes_an_inert_ancestor_but_not_its_own_inert() {
     };
     let read = |dialog: &str| {
         let mut r = boot(contract::compile(&source(dialog)).unwrap());
+        measure_dialogs(&mut r);
         lay_out(&mut r);
         let open = [view(&r, "dialog"), view(&r, "menu")];
         r.top_layer(&open);

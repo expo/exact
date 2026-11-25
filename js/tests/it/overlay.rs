@@ -10,7 +10,8 @@ use exact_plan::{Plan, Value};
 use exact_runner::{Answer, DataSource, Store};
 
 const HBC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/overlay.hbc"));
-const GRANTS: &str = "net.fetch https://fixture.exact.test\nfs.read app:/x\n";
+const GRANTS: &str =
+    "net.fetch https://fixture.exact.test\nfs.read app:/x\nfs.write doc:/\ndoc.keep\n";
 
 const SRC: &str = r#"
 shape Item
@@ -51,6 +52,9 @@ const REFUSED: &[(&str, &str)] = &[
     ("store.keepKey()", "rejects"),
     ("store.key()", "rejects"),
     ("storage.readFile()", "rejects"),
+    ("storage.atomicWriteFile()", "rejects"),
+    ("storage.recentDocuments()", "rejects"),
+    ("storage.forgetDocument()", "rejects"),
 ];
 
 fn plan() -> Plan {

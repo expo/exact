@@ -919,10 +919,24 @@ pub(crate) fn moved(arena: &mut NodeArena, layout: &mut dyn LayoutMirror, slot: 
             || segments && arena.readers.segments.contains(s);
         if reads {
             rederive(arena, layout, s, false, &mut receipt);
+            // The transaction resolves the queued relative rows after its operations
+            if container && arena.readers.container.contains(s) {
+                queue_contained(arena, s);
+            }
             any = true;
         }
     }
     any
+}
+
+/// Queue `slot`'s relative rows to be resolved again where one is in a container unit, whose
+/// query containers may have moved (LLP 1123 D16); whether it was queued.
+pub(crate) fn queue_contained(arena: &mut NodeArena, slot: u32) -> bool {
+    let contained = (arena.style(slot).relative.iter()).any(|(_, unit, _)| unit.is_container());
+    if contained {
+        arena.relative.invalidate(slot);
+    }
+    contained
 }
 
 impl Kernel {

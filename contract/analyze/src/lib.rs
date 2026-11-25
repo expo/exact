@@ -439,7 +439,7 @@ pub const HANDLERS: [&str; 89] = [
     "swiperight",
     // Its mirror (Charlie, 2026-11-10).
     "swipeleft",
-    // The platform's discrete swipe in the node's `swipe-direction` (LLP
+    // The platform's discrete swipe in the node's `swipe-flick` direction (LLP
     // 1057.001 §8); no payload.
     "swipe",
     "refresh",

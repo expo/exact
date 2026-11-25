@@ -1,6 +1,7 @@
 //! @ref LLP 1115.004 D16 — Windows list/details.
 //! @ref LLP 1115.002 D4 — the root list stays in the page; details have pane blocks.
 use super::*;
+use exact_kernel::props::Presentation;
 use exact_kernel::{BlockAxis, HostBlock, HostCover, Kernel, NodeKey};
 use exact_runner::{instance::InstanceStep, Runner};
 use std::collections::BTreeSet;
@@ -289,12 +290,9 @@ impl<D: DataSource> Presenter<D> {
             .skip(1)
             .copied()
             .take_while(|id| {
-                !kernel.node(*id).is_some_and(|n| {
-                    matches!(
-                        n.props.str(PropId::NavigationPresentation),
-                        Some("modal" | "fullscreen")
-                    )
-                })
+                !kernel
+                    .node(*id)
+                    .is_some_and(|n| n.props.presentation().is_some())
             })
             .collect();
         let detail = routes.last().copied();
@@ -320,21 +318,8 @@ impl<D: DataSource> Presenter<D> {
                     base.is_some_and(|id| linked(id).is_some() || actions.contains_key(&id));
                 rule.current.filter(|_| detail.is_some() && !pushed)
             });
-        let placeholder = detail
-            .is_none()
-            .then(|| {
-                kernel
-                    .preorder_where(&[root], |_, p| {
-                        p.str(PropId::NavigationSplit) == Some("placeholder")
-                    })
-                    .into_iter()
-                    .find(|id| {
-                        kernel
-                            .node(*id)
-                            .is_some_and(|n| n.node_type == NodeType::View)
-                    })
-            })
-            .flatten();
+        // The runner's choice, the root route's own box, which asked for the split (LLP 1127 D1)
+        let placeholder = rule.placeholder.filter(|_| detail.is_none());
         let mut chevrons = BTreeSet::new();
         if let Some(list) = rule.list {
             for id in kernel.preorder_where(&[list], |_, p| {
@@ -366,7 +351,7 @@ impl<D: DataSource> Presenter<D> {
             inert: stack.len() > routes.len() + 1,
             hidden: stack.iter().skip(routes.len() + 1).any(|id| {
                 kernel.node(*id).is_some_and(|n| {
-                    n.props.str(PropId::NavigationPresentation) == Some("fullscreen")
+                    n.props.presentation() == Some(Presentation::FullScreen)
                         && !crate::navigation::over_page(&n)
                 })
             }),

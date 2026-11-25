@@ -219,7 +219,7 @@ extension Agent {
         while let cur = up {
             if let n = cur as? NodeView {
                 if n.disabled { return .blocked(n) }
-                if n.takesPress { return n.bounds.contains(n.local(p)) ? .node(n) : .nothing }
+                if n.takesPress { return n.pressInside(p) ? .node(n) : .nothing }
             }
             up = cur.superview
         }

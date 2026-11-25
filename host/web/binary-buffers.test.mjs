@@ -2,11 +2,12 @@
 // browser's does: the wasm target's module realms run the same prelude, and Hermes has none of these buffers.
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
 import { modulePrelude } from '../web-js/glue.mjs';
 
 const binary = readFileSync(new URL('../../js/src/binary.js', import.meta.url), 'utf8');
-const prelude = modulePrelude(new URL('../..', import.meta.url).pathname);
+const prelude = modulePrelude(fileURLToPath(new URL('../..', import.meta.url)));
 
 function realm() {
   const context = createContext({ Headers, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal });

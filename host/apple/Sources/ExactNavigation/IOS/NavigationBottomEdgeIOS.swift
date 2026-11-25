@@ -6,17 +6,8 @@ extension NavigationHost {
     /// The route's last in-flow scroller can reach under the tab bar and home indicator
     /// (LLP 1116 D2). Its bottom inset takes the route's cover so in-flow content clears
     /// the bar once. The cover still places an absolute footer above the bar.
-    /// A cover-fit page handles its own edges, except in a sheet that owns its safe area.
-    func reachBottom(_ c: RouteController, presented: Bool) {
-        // Until a scroller reaches the bottom edge the route's bottom cover
-        // pads its in-flow content above the bars, and its content box is
-        // the authored one: a scroller there ends that far above it. The
-        // cover it has without one, so a scroller that does not grow as the
-        // cover goes is at the edge either way.
-        let peers = arrangementScrollers(in: c, top: false)
-        let peer = contentScroller(of: c).flatMap { node in peers.contains(where: { $0 === node }) ? node : nil } ?? peers.first
-        let found = presented || presenter.viewportFit != "cover" ? (Self.bottomScroller(in: c.node, cover: c.bottomClearance, lifting: c.liftedBottomRows) ?? peer) : nil
-        let target = RouteGeometry.clearanceOff(c.node) & 4 != 0 ? nil : found
+    func reachBottom(_ c: RouteController, in stack: UIViewController, presented: Bool) {
+        let target = bottomEdgeScroller(of: c, in: stack, presented: presented)
         let projects = !c.nativeContentScrollEdges.contains(.bottom)
         // Collapse has already chosen the adjustment for a shared scroll view. A
         // bottom-only scroller takes UIKit's adjustment, including when it just gave up the top.
@@ -40,6 +31,36 @@ extension NavigationHost {
         c.projectContentScrollView(c.automaticBottomScroll, for: .bottom)
         #endif
         presenter.session?.log("navigation: route \(c.key) \(target == nil ? "keeps its content above the bottom edge" : "scrolls its content to the bottom edge")")
+    }
+
+    private func bottomEdgeScroller(of c: RouteController, in stack: UIViewController, presented: Bool) -> NodeView? {
+        let cover = !presented && presenter.viewportFit == "cover"
+        guard RouteGeometry.clearanceOff(c.node) & 4 == 0, !cover || underBottomTabBar(c, in: stack) else { return nil }
+        let peers = arrangementScrollers(in: c, top: false)
+        let peer = contentScroller(of: c).flatMap { node in peers.contains(where: { $0 === node }) ? node : nil } ?? peers.first
+        let padding = RouteGeometry.clearancePadding(c.node, edge: 2, inset: c.bottomClearance)
+        guard let found = Self.bottomScroller(in: c.node, cover: padding, lifting: c.liftedBottomRows) ?? peer else { return nil }
+        // A separate scroller with an open foot draws through the cover with a band
+        // (LLP 1131 D2). Inside a clipping wrapper the wrapper must grow with it.
+        if #available(iOS 26.0, tvOS 26.0, *), cover, found !== c.collapseScroll,
+           found.edgeEffectHidden(.bottom) || ControlBars(presenter).bars(of: found, in: c.node, top: false)?.isEmpty == true { return nil }
+        return found
+    }
+
+    /// An iPad can show its tabs at the top or in a sidebar. Only a bar in the
+    /// route's bottom safe area gives its scroller a native bottom edge.
+    private func underBottomTabBar(_ c: RouteController, in stack: UIViewController) -> Bool {
+        guard let tabs = stack.tabBarController else { return false }
+        if #available(iOS 18.0, tvOS 18.0, *), tabs.isTabBarHidden { return false }
+        guard let bar = RouteGeometry.shownBar(tabs.tabBar), bar.bounds.width > bar.bounds.height,
+              let holder = stack.viewIfLoaded, holder.window === bar.window else { return false }
+        // UIKit takes a pushed route's edges before attaching its view. Its authored
+        // frame is already in the destination's coordinates.
+        let attached = (c.bootSurface ?? c.viewIfLoaded).flatMap { $0.window === bar.window ? $0 : nil }
+        guard attached != nil || !Self.hidesBar(c) else { return false }
+        let view = attached ?? holder
+        let band = view.bounds.divided(atDistance: view.safeAreaInsets.bottom, from: .maxYEdge).slice
+        return !bar.convert(bar.bounds, to: view).intersection(band).intersection(c.node.frame).isEmpty
     }
 
     /// The scroller at a route's bottom edge: its last in-flow child, or

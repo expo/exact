@@ -1,0 +1,38 @@
+# prepare_plan and prepare_module reconcile and pump the live presence Keychain vault before commit, including during disposable validation passes
+
+**Status:** Open
+**Systems:** host/apple (abi preparation, presence_secrets, store); host/painted (delivery validation, reload)
+**Author:** Gemini 4 Neon
+**Date:** 2026-11-25
+**Severity:** P2
+**Related:** LLP 1184 (Halfway failure)
+
+Verification: verified by reading.
+
+At `9c0431fd5`, `Bridge::prepare_plan_carried` (`host/apple/src/abi.rs:764-774, 829-831`) and `Bridge::prepare_module_with_delivery` (`host/apple/src/abi.rs:651-679`) endow, reconcile, and pump the live presence Keychain/KV vault before `commit_plan` — including during disposable validation passes that are explicitly documented not to touch real storage or release effects.
+
+### Triggering sequence
+1. Any app with a presence-protected secret (`secret.keep <name> <policy>`, so `Capability::Presence` selects `store::endowed::<true>` at `host/apple/src/link.rs:638-639`) runs an OTA update preparation, dev hot reload, or cold-boot selected-update attempt via `ExactSession.prepare` (`host/apple/Sources/ExactKit/Session.swift:965-991`), which calls `exact_prepare_plan` (`host/apple/src/abi/exports.rs:519-529`) or `exact_prepare_module` (`host/apple/src/abi/exports.rs:552-562`).
+2. In `prepare_module_with_delivery` (`host/apple/src/abi.rs:634-679`), when `self.painted` is true, it constructs a disposable `validation` `DataSource`, calls `validation.activate_for_validation()` (`abi.rs:658`, which loads the engine so `validation.ready() == true`, e.g. `js/src/source.rs:296-304, 390-392`), and calls `self.prepare_plan_with_delivery(...)` (`abi.rs:665-672`) before discarding that host at line 678. It then calls `prepare_plan_carried` a second time for the real (still uncommitted) candidate (`abi.rs:683-693`).
+3. `prepare_plan_carried` unconditionally invokes `(io.endow)(data.grants(), data.app_id(), carried.is_none())` (`abi.rs:772`) -> `store::endowed::<true>` (`host/apple/src/store.rs:394-438`). Unlike snapshot reads at `store.rs:411-422` (gated on `fresh`), `store.rs:402-410` unconditionally calls `presence_secrets::keychain_backend` (`host/apple/src/presence_secrets.rs:299-317`) or `presence_secrets::agent_backend` (`host/apple/src/presence_secrets.rs:98-108`).
+4. `keychain_backend` runs `first_launch` (`presence_secrets.rs:310`) and `Backend::new(Box::new(vault), lines)` (`presence_secrets.rs:316`; `agent_backend` at line 106), which immediately executes `Backend::reconcile` (`runner/src/presence.rs:288-393`) against the live Keychain and KV store (`exact.presence`, `exact.presence.items`).
+5. `prepare_plan_carried` then calls `host.runner_mut().install_presence(backend, keystore)` (`abi.rs:829-831`), which sets `p.moves = r.data.ready()` and immediately calls `r.pump_presence()` (`runner/src/runner/presence_secrets.rs:363-370`).
+
+### Actual vs. expected result
+- **Actual:**
+  - `Backend::new` mutates the live Keychain and KV store during preparation (even if preparation fails or `exact_discard_plan` is called): `KeychainVault::generations` (`presence_secrets.rs:236`) deletes missing index entries, `reconcile` deletes older locked generations (`runner/src/presence.rs:349-351`), deletes mismatched-policy locked items and records (`presence.rs:333-341`), and whenever a locked generation exists beside a plain copy (`presence.rs:365-371`) deletes the plain copy and resets the record to `Intent::Locked`. If the live host has an `unprotect` paused or retrying at `step == 2` (`runner/src/presence.rs:928-940`, between `put_plain` and `delete_all_locked`), the candidate's `reconcile` deletes the newly written plain copy while the live host's retry subsequently calls `delete_all_locked`, permanently losing the secret.
+  - When `r.data.ready()` is `true` (always true for `validation` after `activate_for_validation()`, and for Rust `DataSource`s whose `ready()` defaults to `true` at `runner/src/runner/source.rs:1052-1054`), `install_presence` -> `pump_presence()` immediately executes queued `Op::Move` operations (`runner/src/presence.rs:955-1006`) against the real Keychain/KV — writing locked items and deleting plain copies (`can_lock == true`) or deleting plain copies and records (`can_lock == false`) — before any commit. If the candidate is discarded, the live host's `Backend` is left with stale cached occupancy and generation numbers.
+- **Expected:** As stated in `host/apple/src/abi.rs:661-663` (*"Validate carried-state answers and layout, without endowing real storage or releasing candidate effects. A refusal keeps the live host. The accepted validation runner is disposable, too."*) and `host/apple/src/abi.rs:755` (*"neither path releases effects until commit"*) as well as LLP 1031 D1 (*"It releases no requests, secret writes, font registration, presenter batches, or delegate callbacks"*), disposable validation and uncommitted preparation must not reconcile or pump the live presence vault.
+
+### Verification & sibling check
+- **Verified by reading** the full path across `host/apple/src/abi.rs`, `host/apple/src/store.rs`, `host/apple/src/presence_secrets.rs`, `runner/src/presence.rs`, `runner/src/runner/presence_secrets.rs`, `js/src/source.rs`, and `host/apple/Sources/ExactKit/Session.swift`.
+- **Sibling defect found in `host/painted` (Linux / Android / Windows):** `Presenter::prepare_logic` (`host/painted/src/presenter/delivery.rs:217-247`) activates a disposable `validation` source and calls `Host::boot_with` -> `Host::boot_decoded` (`host/painted/src/host.rs:284, 319-321`), which unconditionally runs `crate::presence_secrets::backend(...)` (calling `Backend::new` at `host/painted/src/presence_secrets.rs:232, 237`) and `runner.install_presence(...)` (pumping live `Op::Move` against disk/Android Keystore while `validation.ready() == true`). The same happens in `Presenter::reload_now` (`host/painted/src/presenter/replacement.rs:423-444`) before checking layout errors, `restore_time`, or shader commit.
+- `host/web` / `host/web-js` have no presence vault (`presenceSecrets: false`, LLP 1133.010 D15).
+
+### Suggested fix & regression test
+- Do not construct/reconcile a presence `Backend` or call `install_presence` during disposable validation or uncommitted carried preparation. For carried boots (`carried.is_some()`), occupancy is already in `carried.store`; defer installing or handing off the presence `Backend` until `commit_plan` (`host/apple/src/abi.rs:871-917`) (and for fresh uncommitted prepares such as cold-boot selected updates, keep `p.moves = false` / avoid mutating reconciliation until `commit_plan`, or defer `Backend` creation to commit for carried reloads while transferring/reusing the live backend). Apply the same guard to `host/painted/src/host.rs:284, 319-321` and `prepare_logic`/`reload_now`.
+- **Regression test:** In `host/apple/src/presence_secrets_tests.rs` (and a companion test in `host/painted`), seed a vault with (a) a plain copy + `Intent::Locked` (pending `Op::Move`) and (b) both plain + locked copies (in-flight `unprotect`), run `prepare_plan` and `prepare_module` (with `painted = true`) followed by `discard_plan` (and a refused candidate), and assert zero Keychain/KV mutations occur and the live host's backend state remains intact.
+
+### Siblings checked
+
+Checked host/painted (found same bug in host/painted/src/host.rs:284, 319-321 via prepare_logic at host/painted/src/presenter/delivery.rs:217-247 and reload_now at host/painted/src/presenter/replacement.rs:423-444); checked host/apple/src/abi/boot.rs (boot_fresh commits directly on success); checked host/web & host/web-js (no presence vault).

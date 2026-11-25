@@ -9,7 +9,8 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
    buttons, a `tablist`, a `dialog role="alertdialog"`); each host draws its own control.
    A data table is HTML's `table` (`thead`, `tr`, `th scope="col"`, `td colspan=2`), terms and their descriptions a `dl` (`dt`, `dd`).
 2. **Leave the rest unsaid:** controls, bars, type and dark mode are the platform's, and so
-   are a `list`'s rows: its children are rows, so draw no separator and no press. A
+   are a `list`'s rows: its children are rows, so draw no separator and no press. So are the
+   edges: measure no inset, keyboard, bar or device (`contract vocab edges`). A
    colour or size names a role (`-exact-secondary-label`, `font="-exact-footnote"`; `bun
    <exact2>/scripts/no-tells.mjs .` lists literals). Leave the accent unsaid: it is the
    platform's blue, and a filled button keeps its white label (a pale accent under
@@ -29,8 +30,10 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
    and sheet is a route (`routes`, `push`, a row that is a `link href=path(…)`): on the web
    that is its URL, so Back, reload, a shared link and a new tab work, and focus moves to the
    new screen. A screen chosen by `if page == …` over a state has none of these, and the
-   build warns (`lower-screen-by-state`). Tabs (a sidebar) and a
-   list whose rows push (beside its detail) need no code. The rows of a list the person deletes from swipe to
+   build warns (`lower-screen-by-state`). Tabs (a sidebar) need no code; a list beside its
+   detail on a wide window is one attribute on the list's route, `navigationSplit="split"`,
+   on a route positioned as the patterns place it (`position="absolute" inset=0`), which the web
+   needs (in an iOS tab only an iPad splits, where the tab's first route asks). The rows of a list the person deletes from swipe to
    delete and open a menu on a long press (`list-detail`, `contract vocab swipe`).
    `haptic("selection")` marks a choice in your own control, `haptic("success")` a task done.
    A chat's messages are bubbles in a transcript that opens at the newest and follows each
@@ -216,6 +219,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a chat header with an avatar, and day pills|`chat-header`|
 |a voice note's waveform, a bubble's tail (SVG in a row)|`waveform-and-tail`|
 |data the app ships and only reads (a JSON file `app.ts` imports)|`shipped-data`|
+|a floating button, a pinned row, a scroll bar's place, the keyboard, an iPhone Duo's fold|`edges`|
 |a long list or grid that loads more|`long-lists`|
 |a large local history with live arrivals and offline sends|[`large-live-list`](recipes/large-live-list.md)|
 |a document or article longer than a screen, a long Markdown note|`long-text`|

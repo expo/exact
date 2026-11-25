@@ -109,6 +109,7 @@ class Natives internal constructor(
         var session = 0L
         var slot = 0
         var disabled = false
+        var sizing: NativeViewSizing? = null
         var eventBinding = 0
         /** A media element's record ([MediaRecords]); whether a loan has started from it, and the loan's number, so a
          * report from an ended loan is dropped (LLP 1042.001 D3). */
@@ -641,7 +642,7 @@ class Natives internal constructor(
             nodes = null
             if (!e.parked) {
                 byView[e.view] = e
-                if (kind == 2) bindEvents(e)
+                if (kind == 2) bindEvents(e, json!!)
             }
             // A module's view is placed at once, at an empty box too: it came attached at 1 by 1, or pooled at its
             // last borrower's size.
@@ -691,10 +692,17 @@ class Natives internal constructor(
 
     private fun place(e: Element) {
         if (e.kind == 1) { e.frameWindow!!.reset(); placedVersion = -1 }
-        e.view.layoutParams = if (e.kind == 1) LayoutParams(e.w, e.h, android.view.Gravity.TOP or android.view.Gravity.LEFT) else LayoutParams(e.w, e.h)
-        e.view.measure(MeasureSpec.makeMeasureSpec(e.w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(e.h, MeasureSpec.EXACTLY))
+        val sizing = e.sizing?.takeIf { it.wraps }
+        e.view.layoutParams = sizing?.params(e.w, e.h) ?: if (e.kind == 1) LayoutParams(e.w, e.h, android.view.Gravity.TOP or android.view.Gravity.LEFT) else LayoutParams(e.w, e.h)
+        if (sizing != null) sizing.measure() else e.view.measure(MeasureSpec.makeMeasureSpec(e.w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(e.h, MeasureSpec.EXACTLY))
         e.view.layout(0, 0, e.w, e.h)
         e.dirty = true
+    }
+
+    override fun measureChildWithMargins(child: View, parentWidthMeasureSpec: Int, widthUsed: Int, parentHeightMeasureSpec: Int, heightUsed: Int) {
+        val sizing = byView[child]?.sizing
+        if (sizing?.wraps == true) sizing.measure()
+        else super.measureChildWithMargins(child, parentWidthMeasureSpec, widthUsed, parentHeightMeasureSpec, heightUsed)
     }
 
     /**
@@ -901,7 +909,7 @@ class Natives internal constructor(
         e.parked = false; waiting--
         if (pooled(e)) held++
         byView[view] = e
-        if (e.kind == 2) { bindEvents(e); e.parkedState = null }
+        if (e.kind == 2) { bindEvents(e, JSONObject(e.wanted)); e.parkedState = null }
         e.browser?.automation?.attach()
         if (e.w > 0 && e.h > 0 || e.kind == 2) place(e)
         // Its page is loaded afresh from `src`: what was asked of it meanwhile moved nothing.
@@ -1162,18 +1170,13 @@ class Natives internal constructor(
         invalidate(); poll()
     }
 
-    private fun bindEvents(e: Element) {
+    private fun bindEvents(e: Element, props: JSONObject) {
         val binding = ++e.eventBinding
-        val main = android.os.Handler(context.mainLooper)
-        modules[e.module]?.events(e.view) { kind, payload ->
-            // Modules may reply asynchronously; retirement or reuse must never retarget that reply.
-            main.post {
-                if (!e.parked && e.eventBinding == binding) {
-                    Exact.moduleEvent(e.id, e.slot, e.generation, e.session, kind, payload)
-                }
-            }
-        }
-        modules[e.module]?.let { lifecycle.made(e.view, "${e.module}:${e.id}:${e.slot}:${e.generation}", it) }
+        val module = modules[e.module] ?: return
+        val allocation = ModuleBinding(e.id, e.slot, e.generation, e.session)
+        e.sizing = allocation.bind(e.view, module, props.optBoolean("hasPreferred")) { !e.parked && e.eventBinding == binding }
+        e.sizing?.offer(props)
+        lifecycle.made(e.view, "${e.module}:${e.id}:${e.slot}:${e.generation}", module)
     }
 
     /** The frame whose view holds the window's focus, as exact2 was last told. */
@@ -1197,9 +1200,6 @@ class Natives internal constructor(
     }
 
     internal var retiring: ((View) -> Unit)? = null
-
-    private fun moduleProps(json: JSONObject): JSONObject =
-        json.optString("props").takeIf { it.isNotEmpty() }?.let { runCatching { JSONObject(it) }.getOrNull() } ?: JSONObject()
 
     /** [e]'s page, or the `about:blank` of a frame [Partitions] refuses, loaded silently as Apple's is. */
     private fun showFrame(e: Element, props: JSONObject, silently: Boolean = false) {
@@ -1303,10 +1303,12 @@ class Natives internal constructor(
                 if (e.w > 0 && e.h > 0) place(e)
             }
             else -> {
-                modules[e.module]?.update(e.view, moduleProps(json))
+                val changedOffer = e.sizing?.offer(json) == true
+                if (old == null || old.optString("props") != json.optString("props") || old.optBoolean("disabled") != e.disabled)
+                    modules[e.module]?.update(e.view, moduleProps(json))
                 bounds.bind(e.view)
                 // At an unchanged size a module must still lay out a new scale type before its view is recorded.
-                if (e.view.isLayoutRequested && e.w > 0 && e.h > 0) place(e)
+                if (changedOffer || e.view.isLayoutRequested && (e.sizing?.wraps == true || e.w > 0 && e.h > 0)) place(e)
             }
         }
         e.dirty = true
@@ -1397,6 +1399,7 @@ class Natives internal constructor(
     private fun retire(e: Element, reuse: Boolean = true) {
         if (e.kind == 1 || e.kind == 2) retiring?.invoke(e.view)
         if (e === focusedFrame) frameFocused(e, false)
+        e.sizing?.retire(); e.sizing = null
         e.eventBinding++
         if (pooled(e)) held--
         val module = e.module?.let { modules[it] }

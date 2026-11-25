@@ -57,10 +57,10 @@ fn static_readers_classify_and_run_child_derives_like_their_bodies() {
         ("singleton", "[1]", "    for x in VALUE key=x\n      image \"hero.png\"\n", Check::Pages(false)),
         ("rows", "[1, 2]", "    for x in VALUE key=x\n      image \"hero.png\"\n", Check::Pages(true)),
         ("stack", "stack(nav)", "    for x in VALUE key=x.id\n      image \"hero.png\"\n", Check::Pages(false)),
-        ("retained record", "item", "    for inner in [2] key=inner\n      if true\n        button testId=\"target\" press=save(VALUE.id) swiperight=save(VALUE.id) swipeleft=save(VALUE.id)\n          text \"Save\"\n", Check::Retained("kept")),
-        ("retained bound", "item.id", "    for inner in [2] key=inner\n      if true\n        button testId=\"target\" press=save(VALUE) swiperight=save(VALUE) swipeleft=save(VALUE)\n          text \"Save\"\n", Check::Retained("kept")),
-        ("retained item", "item.id", "    for inner in [2] key=inner\n      if true\n        button testId=\"target\" press=save(VALUE) swiperight=save(VALUE) swipeleft=save(VALUE)\n          text \"Save\"\n", Check::Retained("kept")),
-        ("retained string", "\"kept\"", "    button testId=\"target\" press=save(VALUE) swiperight=save(VALUE) swipeleft=save(VALUE)\n      text \"Save\"\n", Check::Retained("kept")),
+        ("retained record", "item", "    for inner in [2] key=inner\n      if true\n        button testId=\"target\" press=save(VALUE.id) swipe=save(VALUE.id) swipe-follow=\"right\"\n          text \"Save\"\n        button testId=\"target-left\" swipe=save(VALUE.id) swipe-follow=\"left\"\n          text \"Save\"\n", Check::Retained("kept")),
+        ("retained bound", "item.id", "    for inner in [2] key=inner\n      if true\n        button testId=\"target\" press=save(VALUE) swipe=save(VALUE) swipe-follow=\"right\"\n          text \"Save\"\n        button testId=\"target-left\" swipe=save(VALUE) swipe-follow=\"left\"\n          text \"Save\"\n", Check::Retained("kept")),
+        ("retained item", "item.id", "    for inner in [2] key=inner\n      if true\n        button testId=\"target\" press=save(VALUE) swipe=save(VALUE) swipe-follow=\"right\"\n          text \"Save\"\n        button testId=\"target-left\" swipe=save(VALUE) swipe-follow=\"left\"\n          text \"Save\"\n", Check::Retained("kept")),
+        ("retained string", "\"kept\"", "    column\n      button testId=\"target\" press=save(VALUE) swipe=save(VALUE) swipe-follow=\"right\"\n        text \"Save\"\n      button testId=\"target-left\" swipe=save(VALUE) swipe-follow=\"left\"\n        text \"Save\"\n", Check::Retained("kept")),
     ];
     for (name, value, view, check) in cases {
         let results: Vec<_> = [false, true].into_iter().map(|derived| {
@@ -108,8 +108,9 @@ fn static_readers_classify_and_run_child_derives_like_their_bodies() {
                 if runner.collections().len() != expected { return Err(format!("collections {}, expected {expected}", runner.collections().len())); }
             }
             if let Check::Retained(expected) = check {
-                for (kind, event) in [(EventKind::Press, Event::Press), (EventKind::Swiperight, Event::Swiperight), (EventKind::Swipeleft, Event::Swipeleft)] {
-                    let key = runner.kernel().find_by_test_id("target")[0];
+                // A node follows one way, so the left swipe is a second button's
+                for (kind, event, id) in [(EventKind::Press, Event::Press, "target"), (EventKind::Swiperight, Event::Swiperight, "target"), (EventKind::Swipeleft, Event::Swipeleft, "target-left")] {
+                    let key = runner.kernel().find_by_test_id(id)[0];
                     let binding = runner.capture_action_binding(key, kind).map_err(|e| format!("capture {e:?}"))?;
                     runner.dispatch_bound(&binding, event).map_err(|e| format!("dispatch {e:?}"))?;
                     if runner.slot("out").and_then(Value::as_str) != Some(expected) { return Err(format!("out {:?}", runner.slot("out"))); }

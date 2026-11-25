@@ -46,12 +46,17 @@ publishes that build to the Cloudflare Pages project `exact-docs`. For a pull re
 that holds the Cloudflare token uploads a build's files without running them.
 `bun run build:pages` makes what is uploaded: `dist.pages`, which is `dist` with each page at
 `<path>.html` (Pages redirects `/start` to `/start/` for a `start/index.html`), a `_headers` within
-Pages' 100 rules, and the worker. The worker (`worker/index.ts`) answers a request that prefers
+Pages' 100 rules, and the worker. It sets `SITE_PUBLISH=1`, so `tools/gen.ts` leaves out the pages
+`constants/navigation.ts` marks `hidden`: `/_components`, which only the tests open. `bun run build`
+keeps them: run it, not `build:pages`, before `bun exact.mjs test web`. The worker (`worker/index.ts`) answers a request that prefers
 `text/markdown` as `bun start` does, sends the Markdown to `ChatGPT-User`, `Claude-User` and
 `Perplexity-User` when they do not ask for it, and marks every host but the site's origin `noindex`. `bun
 run test:worker` tests the worker, and `bun run test:pages` the tree under `wrangler pages dev`.
 
-`constants/redirects.ts` holds the redirects. A moved page goes in `redirects`. A redirect or a
+`constants/redirects.ts` holds the redirects. A moved page goes in `redirects`. A page split from a
+guide takes its path from its heading, so renaming the heading moves the page. The routes block in
+`app.contract` records the paths: `tools/gen.ts` stops the build when a route there has no page and
+no redirect, and otherwise writes the block again. Commit the block that `bun run build` writes. A redirect or a
 rewrite for any other path goes in `nonPageRules`, as the fields of a rule in [Pages'
 syntax](https://developers.cloudflare.com/pages/configuration/redirects/): status 200 makes a
 rewrite, and `from` can have a splat. The build writes both lists to `dist/_redirects`. Pages

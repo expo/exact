@@ -711,3 +711,47 @@ fn a_common_character_after_a_cjk_bracket_is_shaped_in_the_brackets_run() {
     );
     assert_eq!(quote(&mut e, "x \u{300c}\u{201c}A"), alone);
 }
+
+#[test]
+fn platform_advances_reach_truncation_and_editing_geometry() {
+    let mut engine = engine(INTER, "Inter");
+    engine
+        .catalog
+        .borrow_mut()
+        .layout
+        .set_advance_measure(Some(Arc::new(|run| {
+            Some(parley::RunAdvances {
+                glyphs: run
+                    .positions
+                    .iter()
+                    .map(|p| parley::GlyphAdvance {
+                        advance: 19.,
+                        x_offset: p.x_offset as f32 * run.size / run.units_per_em,
+                    })
+                    .collect(),
+                reattach: Vec::new(),
+                space: None,
+                hyphen: None,
+            })
+        })));
+    let value = "AAAAA";
+    let mut s = spec(value, WhiteSpace::Nowrap);
+    let paragraph = engine.paragraph(&s, None);
+    let geometry = field::Geometry::new(&paragraph, value, false, 0., 0., None);
+    let cursor = field::Cursor {
+        offset: 2,
+        upstream: false,
+    };
+    assert_eq!(geometry.caret(cursor).0, 38.);
+    assert_eq!(geometry.hit(39., 1.).offset, 2);
+    assert_eq!(geometry.highlight(1, 3, None)[0].2, 38.);
+    assert_eq!(geometry.underlines(1, 3, 1.)[0].2, 38.);
+    let shown = paragraph.ellipsized(58.).unwrap();
+    let (_, mark) = cut_line(&shown, 0);
+    assert_eq!((mark.x, mark.w), (38., 19.));
+    s = spec("AA AA AA", WhiteSpace::Normal);
+    s.line_clamp = 1;
+    let shown = engine.paragraph(&s, Some(58.));
+    let (_, mark) = cut_line(&shown, 0);
+    assert_eq!((mark.x, mark.w), (38., 19.));
+}

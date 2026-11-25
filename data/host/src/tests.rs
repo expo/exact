@@ -784,6 +784,45 @@ fn the_kept_list_reads_and_forgets_under_doc_keep() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A `fs.forgetDocument` whose kept set cannot be saved propagates the I/O
+/// error rather than reporting `document ENOENT`, and keeps the document listed.
+#[test]
+#[cfg(unix)]
+fn forget_document_propagates_save_errors_instead_of_enoent() {
+    use exact_data::documents::kept;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("exact-doc-forget-err-{}", std::process::id()));
+    let _remove = Paths(dir.clone());
+    std::fs::create_dir_all(dir.join("set")).unwrap();
+    let file = dir.join("drawing.json");
+    std::fs::write(&file, "one").unwrap();
+    kept::open(9056, "test.storage.forget-err", &dir.join("set/kept.json"));
+    let doc = kept::keep(9056, &file, "", "readwrite").unwrap();
+    let run = |op: &str, args: serde_json::Value| {
+        let grants = "fs.read doc:/\nfs.write doc:/\ndoc.keep";
+        let payload =
+            serde_json::to_vec(&serde_json::json!({"version":1,"op":op,"args":args})).unwrap();
+        storage::response(super::native::run(
+            None,
+            grants,
+            grants,
+            &payload,
+            9056,
+            &Default::default(),
+        ))
+    };
+    let mode = std::fs::Permissions::from_mode;
+    std::fs::set_permissions(dir.join("set"), mode(0o555)).unwrap();
+    let err = run("fs.forgetDocument", serde_json::json!({"path": doc})).unwrap_err();
+    std::fs::set_permissions(dir.join("set"), mode(0o755)).unwrap();
+    assert!(!err.starts_with("document ENOENT:"), "{err}");
+    assert!(err.contains("could not save kept documents"), "{err}");
+    let listed = run("fs.recentDocuments", serde_json::json!({})).unwrap();
+    assert_eq!(listed[0]["path"], doc.as_str(), "document remains kept");
+    kept::end(9056);
+    exact_data::documents::forget(9056);
+}
+
 /// LLP 1069.010.000 D4: a kept file renamed while the app was closed is
 /// read at its new name through the path it was kept by.
 #[test]

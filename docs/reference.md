@@ -2092,10 +2092,10 @@ the app directly with `EXACT_IDENTITY` and `EXACT_PROFILE`.
 
 ### Build Android artifacts without a device
 
-From the app's directory, `bun exact.mjs android --release --no-install --json`
-builds an APK without querying adb. `bun exact.mjs android --bundle --json`
-builds a production App Bundle (`.aab`) without installing. Both report the
+From the app's directory, `bun exact.mjs android --release --no-install --json` builds an APK without querying adb. `bun exact.mjs android --bundle --json` builds a production App Bundle (`.aab`) without installing. Both report the
 artifact's absolute path. An outside app's outputs are `target/android/app/outputs/apk/release/app-release.apk` and `target/android/app/outputs/bundle/release/app-release.aab`.
+
+An app’s Kotlin can call `registerScreenCaptureCallback` on its front activity on Android 14 and later. Declare its install-time permission in `host.android` with `"permissions": ["android.permission.DETECT_SCREEN_CAPTURE"]`. The APK merges the app’s and packages’ allow-listed install-time permissions with grant-derived names, writing each permission once. A runtime permission comes from its grant line. Only a package declaring a POI car service may request `androidx.car.app.MAP_TEMPLATES`.
 
 For Android package visibility, put `"queries": [{"action": "android.intent.action.TTS_SERVICE"}]` in `host.android`. Entries take `{package}`, `{action}` or `{action, scheme}` under the same allow-list as a bound package's `manifest.queries`. The APK merges matching entries once. A package with a Kotlin POI car service declares `manifest.carAppService` in its Android implementation. [Android module implementations](../host/android/README.md#module-implementations-llp-1133001-d5)
 
@@ -2241,7 +2241,9 @@ update: refused:` with the URL it could not reach.
 
 A stream is a channel and a compatibility id: the binaries that run the same
 updates. A release build for a platform with an update store bakes production
-trust and needs one of two variables, and refuses without either:
+trust by default, except that an Android APK needs `EXACT_UPDATE_TRUST=production`.
+A production-trust build with an update store refuses to build unless one of
+these variables is set.
 
 - `EXACT_UPDATE_GENESIS=1` starts a new stream. The binary embeds sequence
   zero.
@@ -2281,6 +2283,13 @@ as source: the `.exact/` its builds write, and generated files in the Exact
 checkout. So commit, pass `--dirty`, and read the list. An app's first build
 for a platform edits `app.json`: commit after it. `push` always publishes the
 working tree.
+
+When the non-base language tables together reach 4 KiB gzipped, the JS web root
+includes a content-named file for each of them. A static host serves
+the files listed in `routes.json`'s `files` with
+`Cache-Control: public, max-age=31536000, immutable`. Keep earlier files while
+pages from those builds can still request them. The shell selects the launch
+language in its head, including on static hosting.
 
 ### When a staged update applies
 
@@ -2871,6 +2880,10 @@ driver refuses Android, Windows, Linux, tvOS, watchOS and a physical iPhone befo
 platform tool.
 
 ### Inspect work and native presentation
+
+On iOS and the JS web target, `check` and `verify` count the part of
+`-exact-hit-slop` that accepts a press. A clip cuts that region, and a front
+control takes the overlap. A `target` finding gives both the tap area and the drawn box.
 
 `perf <target> during "<operation>"`
 reports the work that operation caused in the named subtree. Development measurements
@@ -6757,6 +6770,11 @@ The package's Swift sources also have the `EXACT_DEVELOPMENT` compilation
 condition in a development build. SwiftPM products build in release
 configuration and the APK is non-debuggable in both trusts. A package can
 use the fact to select a vendor SDK's test mode.
+
+On Android, `--release` alone keeps `context.development` true and includes the
+Android overrides from `development.packages`, even in an upload-signed APK.
+Use `--bundle` for a production App Bundle or set `EXACT_UPDATE_TRUST=production`
+with `--release` for a production-trust APK.
 See [A package's configuration](contract-for-agents.md#a-packages-configuration).
 
 Both web targets load a placed package view from its bound web implementation
@@ -6787,7 +6805,19 @@ bun scripts/exact.mjs hatch avatar <app>     # in an app `exact new` made: bun e
 bun scripts/exact.mjs hatch --app <app>      # the app scope; --window for the window's
 ```
 
-The verb writes a stub for each target the app builds (Swift in
+Native view factories have their own roster in `app.json`. Each `modules` item is
+a unique tag string or an object with `tag` and optional `hosts`. Omitting
+`hosts` means every host. A list names one or more of `ios`, `tvos`, `macos`,
+`web`, `linux`, `windows` and `android`. For example,
+`{"tag":"compose-card","hosts":["android"]}` needs a factory in the Android
+artifact. Place `compose-card` under `if page.platform == "android"`, with
+`page` bound to `exactPage()`. Every host's build checks the use. Apple, Android
+and web builds report missing factories for their host as release errors or
+development warnings. A web factory table that needs the DOM at import time runs
+in system WebKit on macOS or the browser installed by web setup on Linux and Windows.
+The painted Linux and Windows hosts report native views as unavailable.
+
+The hatch verb writes a stub for each target the app builds (Swift in
 `modules/apple/`, the page module in `modules/web/`, Rust in
 `modules/linux/`), adds the word to
 `app.json` `hatches` with those platforms, and tells you the node to mark:
@@ -7580,12 +7610,14 @@ Windows send neither. A wheel, the keyboard and a programmatic scroll send
 neither
 ([events](contract-grammar.md#events)).
 
-`swipeleft` mirrors `swiperight`: the node follows the finger, and one action
-runs when it lifts 64 points or more that way. Both directions are the
-screen's, in a right-to-left layout too, and a node may have both
-([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
+An element takes one `swipe=action` and exactly one of `swipe-follow` or
+`swipe-flick` beside it. With `swipe-follow="right"` or `"left"`, a quoted
+literal, the node follows the finger, and one action runs when it lifts 64
+points or more that way; `tree` names the event `swiperight` or `swipeleft`.
+The direction is the screen's, in a right-to-left layout too, and a node
+follows one direction ([Swipe to reply](contract-for-agents.md#swipe-to-reply)).
 
-`swipe=action` with `swipe-direction` (`left`, `right`, `up` or `down`) is the
+With `swipe-flick` (`left`, `right`, `up` or `down`), `swipe` is the
 platform's discrete swipe: nothing follows the finger, and the action runs once
 when UIKit's swipe recognizer recognizes a swipe that way on the node or a view
 inside it, a text field included. UIKit arbitrates it with the other gestures

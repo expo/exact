@@ -158,7 +158,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     /** exact2's own thread, when it has one ([Owner]); null: exact2 runs here, on the main thread. */
     internal var owner: Owner? = null
         set(value) { field = value; value?.timerReader(this) }
-    private var timerTouch = false
+    internal var touchDown = false
     private var timerApplied = 0L
     /** When the ingest of the streams [timerReport] tells of began and ended (`System.nanoTime`), 0 when none. */
     private var ingestBegan = 0L
@@ -167,15 +167,15 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     internal fun timerReport() {
         val o = owner
         if (o != null) {
-            o.timerReport(this, timerTouch || scrolling.timerActive, samplerPosted, timerApplied, ingestBegan, ingestEnded)
+            o.timerReport(this, touchDown || scrolling.timerActive, samplerPosted, timerApplied, ingestBegan, ingestEnded)
             ingestBegan = 0L; ingestEnded = 0L
         }
-        else if (started && Native.timerObservation(timerTouch || scrolling.timerActive, samplerPosted, false, false)) pump()
+        else if (started && Native.timerObservation(touchDown || scrolling.timerActive, samplerPosted, false, false)) pump()
     }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) timerTouch = true
-        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) timerTouch = false
-        return try { super.dispatchTouchEvent(event) } finally { timerReport() }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) touchDown = true
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) touchDown = false
+        return try { contacts.dispatch(event) { super.dispatchTouchEvent(event) } } finally { timerReport() }
     }
     /** Scrolls sent to the owner that no published stream includes yet, and the feed's group with its translation in
      * the last stream: the group is drawn that far moved, less what the owner has yet to apply. */
@@ -273,7 +273,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     internal val fingers = Fingers(this)
 
     internal val textSelection = TextSelection(this)
-    private val contacts = Contacts(this, scrolling)
+    internal val contacts = Contacts(this, scrolling)
     internal fun hold(e: MotionEvent?) = contacts.hold(e)
     internal fun cancelContact(x: Float, y: Float, tool: Int) = contacts.scrollClaimed(x, y, tool)
 
@@ -1089,7 +1089,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             timerIdlePosted = true
             android.os.Looper.myQueue().addIdleHandler {
                 timerIdlePosted = false
-                if (Native.timerObservation(timerTouch || scrolling.timerActive, samplerPosted, false, true)) pump()
+                if (Native.timerObservation(touchDown || scrolling.timerActive, samplerPosted, false, true)) pump()
                 false
             }
         }

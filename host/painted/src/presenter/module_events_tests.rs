@@ -265,3 +265,72 @@ fn handled_native_events_deliver_the_payload_and_focus_transitions_once() {
     assert!(!p.reader_module_event(guest, key, session, "focus", String::new(), 2.));
     assert_ne!(p.focus, Some(guest));
 }
+
+#[test]
+fn module_size_reports_resize_auto_height_once_for_the_live_allocation() {
+    let source = r#"component App
+  view
+    column
+      wrap-text width=120 testId="view"
+      wrap-text width=100 testId="other"
+      box height=20 testId="after"
+"#;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (400., 400.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let view = id(&p, "view");
+    let key = p.host.kernel().node(view).unwrap().key;
+    let session = p.brush.native_session;
+    let other = id(&p, "other");
+    let other_key = p.host.kernel().node(other).unwrap().key;
+    let report =
+        |p: &mut Presenter<()>, who, k: exact_kernel::NodeKey, sess, size: serde_json::Value| {
+            p.reader_module_sizes(
+                &serde_json::json!([[who, k.index, k.generation, sess, size]]).to_string(),
+            )
+        };
+    let pair = serde_json::json!([40., 12.]);
+    assert!(!report(
+        &mut p,
+        view,
+        key,
+        session.wrapping_add(1),
+        pair.clone()
+    ));
+    assert!(!report(&mut p, view, other_key, session, pair.clone()));
+    assert!(!report(
+        &mut p,
+        view,
+        key,
+        session,
+        serde_json::json!([0., 12.])
+    ));
+    for (size, height) in [
+        (pair, 12.),
+        (serde_json::json!([80., 42.]), 42.),
+        (serde_json::Value::Null, 0.),
+    ] {
+        let batch = serde_json::json!([
+            [view, key.index, key.generation, session, size],
+            [other, other_key.index, other_key.generation, session, size]
+        ])
+        .to_string();
+        let pass = p.host.kernel().layout_stamp().2;
+        assert!(p.reader_module_sizes(&batch));
+        assert!(!p.reader_module_sizes(&batch));
+        assert_eq!(p.host.kernel().layout_stamp().2, pass + 1);
+        let frame = p.host.kernel().node(view).unwrap().frame;
+        assert_eq!((frame.width, frame.height), (120., height));
+        assert_eq!(
+            p.host.kernel().node(id(&p, "after")).unwrap().frame.y,
+            2. * height
+        );
+    }
+}

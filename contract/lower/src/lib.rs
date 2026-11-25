@@ -235,6 +235,7 @@ pub(crate) struct Lowerer<'a> {
     source_places: Option<&'a contract_syntax::Expanded>,
     /// The app's theme, resolved (LLP 1095 D4).
     pub theme: Vec<theme::ThemeEntry>,
+    var_tokens: var_tokens::FileTokens<'a>,
     sites: Option<Sites>,
     text_styles: Option<&'a mut warnings::TextStyles>,
     pub types: &'a Types,
@@ -403,14 +404,12 @@ pub fn lower_all(
         profile,
         warned.as_ref().map(|_| &mut text_styles),
     );
-    asset_errors.extend(routes::bottom_toolbar::check(checked, &mut notes));
+    asset_errors.extend(routes::placed(checked, &mut notes));
     if let Some((selection, out)) = warned {
-        out.extend(warnings::with_text_styles(
-            checked,
-            &text_styles,
-            notes,
-            selection,
-        ));
+        // Lowering's refusals hold the placement warning (`warnings::with_text_styles`)
+        let refused = result.is_err();
+        let earned = warnings::with_text_styles(checked, &text_styles, refused, notes, selection);
+        out.extend(earned);
     }
     asset_errors.extend(warnings::header_bar::refused(checked, profile));
     let result = match result {
@@ -455,6 +454,7 @@ fn lower_with_sites(
         b: nodes::builder(source_places),
         source_places,
         theme: Vec::new(),
+        var_tokens: var_tokens::FileTokens::new(file),
         sites: (output == SourceOutput::Mapped).then(|| Sites::declared(ex)),
         text_styles,
         types,
@@ -538,13 +538,11 @@ fn lower_with_sites(
         Err(fatal) => {
             let mut all = std::mem::take(&mut l.errors);
             for e in fatal {
-                if !all
-                    .iter()
-                    .any(|o| o.id == e.id && o.span == e.span && o.message == e.message)
-                {
+                if !all.contains(&e) {
                     all.push(e);
                 }
             }
+            handlers::swipe::supersede(&mut all);
             all.truncate(MAX_REFUSALS);
             values::name_template_holes(checked, &mut all);
             Err(all)
@@ -1092,7 +1090,7 @@ impl<'a> Lowerer<'a> {
                     sites.region(*tag);
                 }
                 self.arm_scopes.insert((*tag, 0), (arms[0], inner.clone()));
-                self.under_bindings(n.scoped_child_lists()[0].1, |l| {
+                self.under_repeat(n.scoped_child_lists()[0].1, |l| {
                     l.nodes(body, None, Some(arms[0]), &inner, locals, parent_tag)
                 })
             }
@@ -1146,14 +1144,14 @@ impl<'a> Lowerer<'a> {
             "keep-mounted" => return self.bind_keep_mounted(a, scope, locals, bindings),
             _ => {}
         }
-        let Some(mut target) = tags::attr_valued(&a.name, &a.value) else {
+        let Some(mut target) = handlers::swipe::attr_valued(tag, a) else {
             return Err(unknown_attr(tag, a));
         };
         // A reset that writes no row (`tags::attr_valued`).
         if matches!(target, tags::AttrTarget::Styles([])) {
             return Ok(());
         }
-        crate::var_tokens::carried(a)?;
+        crate::var_tokens::carried(a, &self.var_tokens)?;
         // @ref LLP 1021 §5.3, LLP 1133.025 D11 item 4 — stable menu ids,
         // never localized titles.
         if a.name == "-exact-menu" {
@@ -1398,8 +1396,8 @@ impl<'a> Lowerer<'a> {
                 } else if prop == exact_kernel::PropId::IntersectMargin {
                     glass = crate::intersect::margin(&a.value, a.span)?;
                     &glass
-                } else if let Some(width) = values::split_width(prop, &a.value) {
-                    glass = width;
+                } else if let Some(text) = values::split_literal(prop, &a.value) {
+                    glass = text;
                     &glass
                 // @ref LLP 1116.007 D3.1 — a symbol by another spelling is its role.
                 } else if let Some(role) = matches!(

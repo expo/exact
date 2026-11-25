@@ -74,6 +74,38 @@ final class FrameHealthMacTests: XCTestCase {
         overlay.setVisible(false)
     }
 
+    /// Share gives one text, the summary and then the agent report, and its picker offers Copy first: AppKit's picker
+    /// offers no Copy for text
+    func testShareGivesTheSummaryThenTheAgentReportAndOffersCopy() throws {
+        _ = NSApplication.shared
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlayMac(health: health)
+        var shared: String?
+        overlay.shareText { shared = $0 }
+        waitFor("the report is encoded") { shared != nil }
+        let text = try XCTUnwrap(shared)
+        XCTAssertTrue(text.hasPrefix("# Frame health, idle\n\nA summary of how smoothly this app is drawing, followed by detailed data for an AI agent.\n\n"
+            + "## What was measured\n\n- Frames: the frames Exact drew\n"), "the card's status, then the summary: \(text)")
+        let parts = text.components(separatedBy: "\n\n### Exact's frames (`\(health.source)`)\n\n")
+        XCTAssertEqual(parts.count, 2, text)
+        XCTAssertTrue(parts[0].hasSuffix("\n\n## Data for an AI agent\n\nThere is one report, because on the Mac and on iOS before 18 "
+            + "the card can't measure all screen updates. The JSON format is described in Exact's docs/contract-for-agents.md "
+            + "(search for exact.frame-health/2)."), text)
+        let json = try XCTUnwrap(parts[1].components(separatedBy: "```json\n").last?.components(separatedBy: "\n```").first)
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        XCTAssertEqual(report["format"] as? String, FrameHealthReport.format)
+        XCTAssertEqual(report["source"] as? String, health.source)
+        let pasteboard = NSPasteboard(name: .init("exact-test-\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        overlay.pasteboard = pasteboard
+        let copy = try XCTUnwrap(overlay.sharingServicePicker(NSSharingServicePicker(items: [text]), sharingServicesForItems: [text],
+            proposedSharingServices: []).first)
+        XCTAssertEqual(copy.title, "Copy")
+        copy.perform(withItems: [text])
+        waitFor("Copy writes the text") { pasteboard.string(forType: .string) == text }
+    }
+
     func testDesktopCardUsesHostSlotTakesClicksWithinItsBoundsAndClampsWithoutResizingTheApp() throws {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "desktop-frame-health")

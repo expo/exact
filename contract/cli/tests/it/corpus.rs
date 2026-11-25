@@ -836,7 +836,7 @@ fn contextmenu_and_double_click_keep_their_authored_arguments_and_do_not_take_a_
     magnify = value == "context"
   view
     column
-      button contextmenu=choose("context") dblclick=choose("double") swiperight=choose("right") testId="bubble"
+      button contextmenu=choose("context") dblclick=choose("double") swipe=choose("right") swipe-follow="right" testId="bubble"
         text "A message"
       column contextTarget="bubble" contextMagnify=magnify testId="preview"
         text "A message"

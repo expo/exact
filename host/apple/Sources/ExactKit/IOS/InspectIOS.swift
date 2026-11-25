@@ -121,17 +121,11 @@ package enum InspectHost {
         if shown(node) { return { [weak node] in node.flatMap { $0.window != nil && shown($0) ? $0.convert($0.bounds, to: nil) : nil } } }
         let presenter = session.presenter
         if let place = presenter.navigation.inspectPlace(of: node) { return place }
-        if let root = presenter.navigation.container, let tabs = NavigationTabs.of(root, presenter), let index = tabs.tabs.firstIndex(where: { $0 === node }),
-           let controller = presenter.navigation.tabController {
-            let bar = controller.tabBar
-            return { [weak bar, weak controller] in
-                // iPadOS's floating bar: the tab's item cell.
-                if let list = controller?.floatingTabList, let cell = list.cellForItem(at: IndexPath(item: index, section: 0)), cell.window != nil {
-                    return cell.convert(cell.bounds, to: nil)
-                }
-                guard let bar, bar.window != nil, !bar.isHidden else { return nil }
-                let boxes = buttonBoxes(in: bar)
-                return boxes.count == bar.items?.count && boxes.indices.contains(index) ? bar.convert(boxes[index], to: nil) : nil
+        if let root = presenter.navigation.container, let tabs = NavigationTabs.of(root, presenter),
+           tabs.tabs.contains(where: { $0 === node }), presenter.navigation.tabController != nil {
+            return { [weak session, weak node] in
+                guard let session, let node, case .success(let view)? = session.agentInstance.tabItem(node) else { return nil }
+                return view.convert(view.bounds, to: nil)
             }
         }
         return nil
@@ -245,7 +239,7 @@ package enum InspectHost {
                 return (session, nil, nil, "That is part of UIKit's navigation bar, not a view of the app.")
             }
             if let bar = v as? UITabBar {
-                if let id = session.presenter.segments.tab(at: window.convert(p, to: bar), in: bar) ?? tabNode(session, bar, p, window) { return (session, id, session.presenter.views[id] ?? bar, nil) }
+                if let id = session.presenter.segments.tab(at: window.convert(p, to: bar), in: bar) ?? tabNode(session, matching: { $0.convert($0.bounds, to: window).contains(p) }) { return (session, id, session.presenter.views[id] ?? bar, nil) }
                 return (session, nil, nil, "That is part of UIKit's tab bar, not a view of the app.")
             }
             // A segmented control standing in for a tablist: the tab under the point.
@@ -276,37 +270,23 @@ package enum InspectHost {
             let nav = session.presenter.navigation
             guard let tabs = nav.tabController, let list = tabs.floatingTabList, list.window === window,
                   let selected = tabs.selectedViewController?.viewIfLoaded else { continue }
-            if hit.isDescendant(of: list) {
-                var at: UIView? = hit
-                while let v = at, v !== list {
-                    if let cell = v as? UICollectionViewCell, let path = list.indexPath(for: cell), path.section == 0, case let index = path.item,
-                       let root = nav.container, let tablist = NavigationTabs.of(root, session.presenter), index < tablist.tabs.count {
-                        let id = tablist.tabs[index].id
-                        return (session, id, session.presenter.views[id] ?? cell, nil)
-                    }
-                    at = v.superview
-                }
-            } else if !(hit !== tabs.view && hit.isDescendant(of: tabs.view) && list.isDescendant(of: hit) && !selected.isDescendant(of: hit)) { continue }
+            guard hit.isDescendant(of: tabs.view), !hit.isDescendant(of: selected) else { continue }
+            if let id = tabNode(session, matching: { hit.isDescendant(of: $0) }) {
+                return (session, id, session.presenter.views[id] ?? hit, nil)
+            }
+            guard hit.isDescendant(of: list) || (list.isDescendant(of: hit) && !selected.isDescendant(of: hit)) else { continue }
             return (session, nil, nil, "That is part of UIKit's tab bar, not a view of the app.")
         }
         return nil
     }
 
-    /// The tab whose item UIKit's tab bar shows at `p`, or nil: the bar's
-    /// buttons, one per item, in order (`buttonBoxes`), else the agent's
-    /// lookup by accessibility element, which only an accessibility client
-    /// (VoiceOver, XCUITest) makes.
-    private static func tabNode(_ session: ExactSession, _ bar: UITabBar, _ p: CGPoint, _ window: UIWindow) -> UInt32? {
+    /// The authored tab for the control UIKit presents.
+    private static func tabNode(_ session: ExactSession, matching: (UIView) -> Bool) -> UInt32? {
         let nav = session.presenter.navigation
-        guard let root = nav.container, let tabs = NavigationTabs.of(root, session.presenter), let count = bar.items?.count, count > 0 else { return nil }
-        let boxes = buttonBoxes(in: bar)
-        if boxes.count == count, count <= tabs.tabs.count {
-            let at = window.convert(p, to: bar)
-            return boxes.firstIndex { $0.contains(at) }.map { tabs.tabs[$0].id }
-        }
+        guard let root = nav.container, let tabs = NavigationTabs.of(root, session.presenter) else { return nil }
         for tab in tabs.tabs {
             guard case .success(let control)? = session.agentInstance.tabItem(tab) else { continue }
-            if control.convert(control.bounds, to: window).contains(p) { return tab.id }
+            if matching(control) { return tab.id }
         }
         return nil
     }

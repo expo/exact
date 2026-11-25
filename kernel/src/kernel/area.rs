@@ -163,6 +163,7 @@ pub(super) fn area_holding(
 }
 
 /// The band a box observes and where it lies.
+#[derive(Clone, Copy)]
 pub(super) struct Space {
     /// The owner whose band it is, `None` for the session's.
     pub(super) owner: Option<u32>,

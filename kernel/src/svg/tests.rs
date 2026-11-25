@@ -554,3 +554,12 @@ fn filter_functions_read_numbers_units_and_names_as_css_does() {
         assert!(FilterList::parse(css).is_none(), "{css}");
     }
 }
+
+#[test]
+fn repeated_url_paints_are_refused_without_recursing() {
+    let repeated = "url(#a)".repeat(50_000);
+    assert_eq!(Paint::parse(&repeated), None);
+    assert_eq!(Paint::parse("url(#a) url(#b)"), None);
+    assert_eq!(crate::clip::ClipPath::parse(&repeated), None);
+    assert!(Paint::parse("url(#a) #ff0000").is_some());
+}

@@ -8,6 +8,9 @@
 //! no lookup lists (the `head` fields, the attributes admitted only on some
 //! tags, compile-time attributes, the two open sets) are named here beside them.
 
+pub use crate::handlers::swipe::{
+    event as swipe_event, retired as swipe_retired, row as swipe_row,
+};
 use crate::tags::{self, AttrTarget, Tag};
 use contract_syntax::{Attr, Expr, Span};
 use exact_kernel::{PropId, StyleCodec, StyleId};
@@ -116,6 +119,18 @@ pub const COMPILE_ATTRS: &[CompileAttr] = &[
         accepts: "`-exact-row-look=\"platform\"`",
         only: "an element; takes effect when it is a grouped list's row",
         note: "Yields background, border, padding and box-shadow rows to the grouped list's platform row. Elsewhere the element keeps its own look.",
+    },
+    CompileAttr {
+        name: "swipe-flick",
+        accepts: "`left`, `right`, `up` or `down`, literal or computed: `swipe-flick=\"down\"`",
+        only: "an element, beside `swipe`; on a native module's tag the name is the module's own prop or event, as its package declares",
+        note: "Makes `swipe` the platform's discrete swipe that way (LLP 1057.001 §8): the action runs once when iOS recognizes a quick flick; nothing follows the finger. `tree` lists the direction as `swipeDirection`.",
+    },
+    CompileAttr {
+        name: "swipe-follow",
+        accepts: "the quoted `\"left\"` or `\"right\"`, written on the element: `swipe-follow=\"right\"`",
+        only: "an element, beside `swipe`; on a native module's tag the name is the module's own prop or event, as its package declares",
+        note: "Makes `swipe` a swipe the node follows that way, a reply's: it follows up to 64 points freely and with resistance past them, and the action runs if it lifts at or past 64 points. Write `touch-action=\"pan-y\"` beside it, which leaves vertical drags to the page. `tree` names the event `swiperight` or `swipeleft`.",
     },
 ];
 
@@ -291,16 +306,26 @@ pub fn attrs() -> Vec<(&'static str, AttrTarget)> {
         .collect();
     sorted(&[ATTR_CANDIDATES, &styles].concat())
         .into_iter()
+        // A retired swipe name is a row for what the plan holds, no attribute to write (LLP 1057.001 §8)
+        .filter(|n| crate::handlers::swipe::retired(n).is_none())
         .filter_map(|n| tags::attr(n).map(|t| (n, t)))
         .collect()
 }
 
 /// Every old spelling with the name it became.
 pub fn renamed() -> Vec<(&'static str, &'static str)> {
-    sorted(RENAMED_CANDIDATES)
+    let mut out: Vec<(&'static str, &'static str)> = sorted(RENAMED_CANDIDATES)
         .into_iter()
         .filter_map(|n| tags::renamed(n).map(|t| (n, t)))
-        .collect()
+        .collect();
+    // The retired swipe names (LLP 1057.001 §8), each with what an element writes
+    out.extend([
+        ("swiperight", "swipe swipe-follow=\"right\""),
+        ("swipeleft", "swipe swipe-follow=\"left\""),
+        ("swipe-direction", "swipe-flick"),
+    ]);
+    out.sort_unstable_by_key(|(n, _)| *n);
+    out
 }
 
 /// Every HTML element Contract spells differently, with what to write.

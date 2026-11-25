@@ -199,7 +199,11 @@ impl NodeArena {
         {
             return false;
         }
-        let modal = |s| self.props(s).str(PropId::NavigationPresentation) == Some("modal");
+        let modal = |s| {
+            self.props(s)
+                .presentation()
+                .is_some_and(crate::props::Presentation::sheet_like)
+        };
         let mut parent = self.parent(slot);
         while let Some(header) = parent {
             parent = self.parent(header);

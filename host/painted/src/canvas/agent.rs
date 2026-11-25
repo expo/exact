@@ -204,20 +204,21 @@ impl<D: DataSource + Default> CanvasHost<D> {
             }
             _ => {}
         }
-        let scroll = serde_json::from_str::<serde_json::Value>(line)
-            .ok()
-            .filter(|r| r["op"] == "tap" && r.get("scrollDrag").is_some());
-        let reply = match scroll {
-            Some(request) => {
-                if live && request["probe"] != true {
-                    self.p.tick(self.now());
-                }
-                self.p
-                    .agent_scroll_drag(&request)
-                    .unwrap_or_else(|e| error(&e))
+        let request = serde_json::from_str::<serde_json::Value>(line).unwrap_or_default();
+        if let Some(aim) = self.p.reader_agent_tap(&request, self.scale) {
+            return aim.map_or_else(|e| error(&e), |contact| contact.to_string());
+        }
+        let reply = if request["op"] == "tap" && request.get("scrollDrag").is_some() {
+            if live && request["probe"] != true {
+                self.p.tick(self.now());
             }
-            None if live => handle_for_window(&mut self.p, line),
-            None => handle(&mut self.p, line),
+            self.p
+                .agent_scroll_drag(&request)
+                .unwrap_or_else(|e| error(&e))
+        } else if live {
+            handle_for_window(&mut self.p, line)
+        } else {
+            handle(&mut self.p, line)
         };
         if live {
             return reply;

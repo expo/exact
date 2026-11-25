@@ -1,0 +1,26 @@
+# Unconditional slice panic (markup-editor.wasm trap) in Editor::insert_pending when toggling a format off at a sticky caret after a nested construct of the same kind
+
+**Status:** Open
+**Systems:** markdown / WYSIWYG Markdown editor (Web WASM & native)
+**Author:** Gemini 4 Neon
+**Date:** 2026-11-25
+**Severity:** P1
+**Related:** LLP 1184 (Two sources of truth)
+
+Verification: verified by running.
+
+At `9c0431fd5`, `Editor::facts` (`markdown/editor/src/editor.rs:885-888`) queries `md::selection` (`markdown/src/selection.rs:63-70`), which tests `c.inner.start <= sel.start && sel.start <= c.inner.end`, while `Editor::insert_pending` (`markdown/editor/src/editor.rs:1299-1308`) calls `self.edit(format.name(), "", (p, p))` -> `md::edit::inline` (`markdown/src/edit.rs:202-206`), which instead filters on `c.outer.start <= sel.start && sel.end <= c.outer.end` and picks `.min_by_key(|c| c.outer.len())`. When a collapsed caret sits at or inside the closing delimiter of a nested construct of the same format inside an outer construct (e.g., `p = 9` after `**b**` in `"**a **b** c**"`), `md::selection` matches only the outer construct (`outer = 0..13`, `inner = 2..11`), so toggling the format sets `pending[format] = Some(false)`, whereas `md::edit::inline` selects the shorter inner construct (`outer = 4..9`, `inner = 6..7`), returning `oa = 4, ob = 6, ca = 7, cb = 9`. `markdown/editor/src/editor.rs:1308` then slices `&self.source[p as usize..*ca as usize]` (`&self.source[9..7]`) and panics unconditionally.
+
+**Triggering sequence.** Via the real web editor entry points (`host/web/markup-editor.js:432, 512, 663` -> `markdown/editor/src/abi.rs:145, 196, 212`):
+1. Load `"**a **b c**"` with caret at `7`, type `"*"` then `"*"` (producing `"**a **b** c**"` with `sel = (9, 9)` and `sticky = Some(9)` via `reconcile_range` at `editor.rs:785-786`), invoke `command("bold", "")` (Cmd/Ctrl+B), and type `"x"`.
+2. Equivalently: `"**a **b* c**"` at caret `8` + type `"*"` + `command("bold", "")` + type `"x"` (also `"__a __b_ c__"` + `"_"`), `"*a *b c*"` at caret `5` + type `"*"` + `command("italic", "")` + type `"x"` (also `"_a _b c_"` + `"_"`), or `"~~a ~~b~ c~~"` at caret `8` + type `"~"` + `command("strike", "")` + type `"x"`.
+
+**Actual vs. expected.** `Editor::insert_pending` panics on `&self.source[p as usize..*ca as usize]` (`slice index starts at 9 but ends at 7`, or `8..7` / `6..5`). In `markup-editor.wasm`, this aborts with `RuntimeError: Unreachable code should not be executed` while `ABI: RefCell<Abi>` (`markdown/editor/src/abi.rs:31, 45`) is mutably borrowed, permanently poisoning the WASM instance so every subsequent `mde_*` call on the page also traps; on native hosts calling `Editor` directly it crashes the process. Expected behavior is that toggling a format off inside an outer construct and typing plain text splits the enclosing outer construct cleanly without panicking.
+
+**Verification and siblings.** Verified by running all 6 trigger sequences (Bold `**` and `__`, Italic `*` and `_`, Strike `~~`) directly against `markup-editor.wasm` (built from `9c0431fd5`'s `markdown/` sources, last modified at `101bad76a`) in Bun; all 6 trapped with `RuntimeError: Unreachable code should not be executed` inside `mde_before_input` on typing `"x"`, and subsequent calls to `mde_new()` on the poisoned instance also trapped. Siblings checked: `markdown/src/edit.rs:569-577` (`split_inline`) already checks `c.inner.start < sel.start && sel.start < c.inner.end` and is unaffected; `markdown/src/edit.rs:283-286` (`link`) uses `outer` bounds (CommonMark forbids nested links, and `insert_pending` only runs for `Format::{Bold, Code, Italic, Strike}`); Apple native editors (`host/apple/Sources/ExactMarkdown/MarkupEditor{IOS,Mac}.swift` + `MarkupCommands.swift`) call `exact_markup_edit` directly without `insert_pending` (so they do not panic, though `md::edit::inline` still unwraps the inner construct rather than the outer at `outer.end`); `host/painted/src/text/markup.rs` is read-only.
+
+**Suggested fix and regression test.** Align the enclosing-construct lookup for collapsed selections (in `md::edit::inline` or a dedicated inner-containing query used by `insert_pending`) with `md::selection` by matching `c.inner.start <= sel.start && sel.end <= c.inner.end` (and guarding `*ob <= p && p <= *ca` before slicing in `Editor::insert_pending` at `editor.rs:1306-1308`, which also avoids corrupting an inner construct when `p == inner.outer.start < *ob`). Add regression tests in `markdown/editor/tests/editor.rs` covering bold (`**`/`__`), italic (`*`/`_`), and strike (`~~`) toggled off at a sticky caret immediately after a nested construct of the same kind, asserting no panic and valid split output.
+
+### Siblings checked
+
+Checked markdown/src/edit.rs:569-577 (split_inline uses inner bounds, unaffected), markdown/src/edit.rs:283-286 (link uses outer bounds; links do not nest in CommonMark and do not enter insert_pending), host/apple/Sources/ExactMarkdown/MarkupEditor{IOS,Mac}.swift + MarkupCommands.swift (no insert_pending; calls exact_markup_edit directly without slicing, though md::edit::inline still selects inner at outer.end), and host/painted/src/text/markup.rs (read-only).

@@ -33,3 +33,69 @@ pub(super) fn unused(em: &Em) -> Vec<&'static str> {
     ];
     left_out(ALL, used)
 }
+
+pub(super) fn text_field(parts: &exact_web::host::template::Parts) -> bool {
+    parts.tag == "textarea"
+        || parts.tag == "input"
+            && matches!(
+                parts
+                    .props
+                    .get("type")
+                    .map(String::as_str)
+                    .unwrap_or("text"),
+                "text" | "password" | "search" | "url" | "tel" | "email"
+            )
+}
+
+impl Em<'_> {
+    pub(super) fn field_value(&mut self, i: u32, expr: exact_plan::Code, e: &str, f: &str) -> bool {
+        use std::fmt::Write as _;
+        let plan = self.plan;
+        let input = plan
+            .node(exact_plan::NodesId(i))
+            .handlers
+            .iter()
+            .map(|h| plan.handler(h))
+            .find(|h| h.event == EventKind::Input && plan.action(h.action).writes.len != 0);
+        let echo = input.is_some_and(|h| echoes_input(plan, expr, h));
+        let filters = input.is_some() && !echo;
+        let set = if filters {
+            format!("{e}.$field=")
+        } else if echo {
+            format!("{e}.$echo=true;")
+        } else {
+            String::new()
+        };
+        let field = self.uses.rt("fieldValue");
+        let _ = write!(self.out, "{set}{field}({e},{f});");
+        filters
+    }
+}
+
+// A single assignment of the event value to the slot the field displays
+// needs only its ordinary binding, including while composing.
+fn echoes_input(
+    plan: &exact_plan::Plan,
+    expr: exact_plan::Code,
+    handler: &exact_plan::HandlersRow,
+) -> bool {
+    use exact_plan::Opcode::{LoadParam, LoadSlot, Return, StoreSlot, Unit};
+    use exact_runner::vm::instructions;
+    let code = plan.read_code(plan.code(expr)).0;
+    let mut expr = instructions(code).flatten();
+    let Some(slot) = expr.next().filter(|i| i.op == LoadSlot) else {
+        return false;
+    };
+    if !expr.next().is_some_and(|i| i.op == Return) {
+        return false;
+    }
+    let mut body = instructions(plan.code(plan.action(handler.action).body)).flatten();
+    body.next()
+        .is_some_and(|i| i.op == LoadParam && i.args[0] == u64::from(handler.args.len))
+        && body
+            .next()
+            .is_some_and(|i| i.op == StoreSlot && i.args[0] == slot.args[0])
+        && body.next().is_some_and(|i| {
+            i.op == Return || i.op == Unit && body.next().is_some_and(|i| i.op == Return)
+        })
+}

@@ -245,7 +245,6 @@ private final class KeyboardCheck: NSObject, UINavigationControllerDelegate {
 #endif
 
 private final class DuoModule: ExactModule {
-    private let arrangements = DuoArrangements()
     override func call(_ request: [String: Any]) throws -> [String: Any] {
         guard request["op"] as? String == "arrangementSupport" else { throw ExactNativeRefusal("Duo Lab does not support this operation; use arrangementSupport") }
         #if os(iOS)
@@ -254,14 +253,12 @@ private final class DuoModule: ExactModule {
         return ["available": false]
     }
     override func element(_ value: ExactElement) {
-        arrangements.update(value)
         #if os(iOS)
         options.update(value)
         check.update(value)
         #endif
     }
     override func elementEnded(_ value: ExactElement) {
-        arrangements.remove(value)
         #if os(iOS)
         options.remove(value)
         check.remove(value)

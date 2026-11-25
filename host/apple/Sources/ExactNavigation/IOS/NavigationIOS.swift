@@ -162,7 +162,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var besideIdentity: ContributionsIOS.Identity?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
-    /// whether its press navigated.
+    /// whether its press navigated. A route UIKit dropped as it moved its tab
+    /// comes back without it too (`whileTabsChange`).
     var unanimated = false
     var crossFading = false
     func retires(_ controller: UIViewController) -> Bool { presenter.modalHost.retires(controller) }
@@ -191,7 +192,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// How many reports changed the covers, and the last of them whose answer the runtime has applied, or that a reset
     /// made moot: while one is owed, a position Exact carries waits for its layout (`writeCarriedScrollsWhenAnswered`)
     var coversReported = 0, coversAnswered = 0
-    var coversAnswerOwed: Bool { coversAnswered < coversReported }
+    var coversAnswerOwed: Bool { coversAnswered < coversReported || (tabController as? TabController)?.left.covers == true }
     /// The report of the last header lifted in a batch (`coverLifted`), and the last report whose lift a delivery has
     /// released, just before the runtime's answer to it (`deliverCovers`): while a lift is unreleased a stack change
     /// waits, and a delivery releases only the lifts it told, so a later one holds until its own delivery's answer
@@ -391,7 +392,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             let panel = tabs?.panels[index].id
             var presented = false
             return (index == at ? Array(routes[range]) : routes).map { node -> RouteController in
-                presented = presented || ["modal", "fullscreen"].contains(node.props["navigationPresentation"] ?? "")
+                presented = presented || NavigationRules.presents(node.props["navigationPresentation"])
                 let c = controllers[node.id] ?? RouteController(node)
                 // The projected route keeps the page's scrolling when its root owns overflow.
                 c.pageScrollAxes = root.scroll.map { ($0.scrollsX, $0.scrollsY) }
@@ -440,8 +441,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // title collapsed when the stack was laid out in the window before it
         // had that root.
         tabPanels = []; adoptedTablist = nil; tablistAppearanceNone = false
-        // A stack whose list rows push is the split's at every size (LLP 1127 D2); while the runner cannot
-        // say, the stack is installed pushed, and asked again on the main queue's next turn (`reshape`)
+        // A stack whose root route asks for the split, or on an iPad outside a tab whose list's rows push, is the split's
+        // at every size (LLP 1127 D1, D2, D19); while the runner cannot say, the stack is installed pushed, and asked
+        // again on the main queue's next turn (`reshape`)
         switch splitRule(first.first) {
         case .some(.some(let rule)): return installSplit(p, first: first, rule: rule, in: parent)
         case .none: askSplitNextTurn()
@@ -758,11 +760,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         // A presented navigation fills its sheet; the primary owner the root,
         // which no presentation resizes (LLP 1123 D1)
-        if let top = primaryOwner {
-            fitOwner()
-            placeOwner()
-            top.view.layoutIfNeeded()
-        }
+        let left = leaveToTabsChange { $0.layout = true }
+        if !left { layOutOwner() }
         for (id, c) in controllers where !routeIDs.contains(id) { end(c) }
         controllers = controllers.filter { routeIDs.contains($0.key) }
         presenter.modalHost.updatePermissions()
@@ -772,7 +771,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         reportCovers()
         refitForBars()
         // A route that left every stack gives its block back (LLP 1123 D2)
-        presenter.owners.publish()
+        if !left { presenter.owners.publish() }
         settled = true
     }
 
@@ -1271,13 +1270,19 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             // Tree updates during UIKit's transition retain their latest
             // intent. Apply it once the native stack is available again.
             runHeldSync()
-            presenter.session?.view?.fit()
+            let left = leaveToTabsChange {
+                $0.fit = true
+                $0.input = true
+            }
+            if !left { presenter.session?.view?.fit() }
             presenter.syncModal()
             // What the settled route shows has pixels (the swipe may have
             // left a band of it unpainted, or a cancelled pop the source).
             presenter.paintVisibleText()
-            presenter.flushPendingFocus()
-            presenter.elementScrolls.flush()
+            if !left {
+                presenter.flushPendingFocus()
+                presenter.elementScrolls.flush()
+            }
             #if os(iOS)
             presenter.syncScrollsToTop() // the route now on top owns the status-bar tap
             #endif

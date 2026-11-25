@@ -631,6 +631,7 @@ pub(crate) fn css_text_in(
                 | StyleId::SafeAreaExtendBoundsLeft
                 | StyleId::ScrollInsetAdjustment
                 | StyleId::ScrollIndicatorAdjustment
+                | StyleId::SafeAreaTrack
                 | StyleId::ScrollEdgeEffectSoft
                 | StyleId::ScrollEdgeEffectHard
                 | StyleId::ScrollEdgeEffectHidden

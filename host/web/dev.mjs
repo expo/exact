@@ -3,6 +3,7 @@
 // LAN clients can read plans, errors and generations (LLP 1023 D8); the agent
 // carrier and installer stay loopback-only. Games serve HTTP during the first build.
 import { buildingServer } from '../../game/dev.mjs';
+import { bundleHostModule } from '../web-js/glue.mjs';
 import { acceptModuleReply, failedPhase, phased, phasedAsync } from './dev-phase.mjs';
 import { cacheBuildInputs, readDevBuilds as readBuilds, nativeWatchPaths, watchDirectoryInputs, watchModuleSources } from './dev-watch.mjs';
 import { directoryInputNames } from '../../scripts/cargo-dep-info.mjs';
@@ -1463,7 +1464,7 @@ const serve = async (req, res) => {
     return;
   }
   const file = url.pathname === '/' ? '/index.html' : url.pathname;
-  if (file === '/dev.js') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(readFileSync(resolve(root, 'host/web/dev.js'))); return; }
+  if (file === '/dev.js') { res.writeHead(200, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(await bundleHostModule(root, 'dev.js')); return; }
   // The module artifact as it is now, not as the last build copied it: a reload picks up an edit (LLP 1067 D5).
   if (file.startsWith('/modules/') && app.modules.web) { const body = readModuleFile(app.modules.web, file); res.writeHead(body ? 200 : 404, { 'content-type': 'text/javascript', 'cache-control': 'no-store' }); res.end(body); return; }
   try {

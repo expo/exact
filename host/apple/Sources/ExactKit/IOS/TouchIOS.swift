@@ -297,6 +297,7 @@ extension Agent {
         }
         // A plain tap's aim: the target's own press (`AgentAddressedTap.swift`).
         let press = (req["aim"] as? [String: Any])?["press"] as? Bool == true
+        if press, at["at"] == nil, at["x"] == nil, at["y"] == nil, let refusal = inertDialogTap(req) { return refusal }
         // A row a grouped list draws, or its toggle's or detail button's
         // control (LLP 1084 D5): the finger aims at UIKit's cell or
         // accessory, never the hidden authored node beneath it.
@@ -328,7 +329,7 @@ extension Agent {
         if flat == nil, target === v, let title = presenter.navigation.titleSurface(for: v) { target = title; barred = true }
         #endif
         // A tab a tab bar shows, UIKit's or the one its tablist is drawn as: its item there.
-        if flat == nil, target === v, let item = tabItem(v) {
+        if flat == nil, target === v, let item = tabItem(v, forPress: true) {
             switch item {
             case .failure(let refusal): return ["error": "tap #\(v.id): \(refusal.why)"]
             case .success(let control): target = control; region = control.bounds; barred = true

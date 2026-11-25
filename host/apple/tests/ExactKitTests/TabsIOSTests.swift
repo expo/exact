@@ -195,6 +195,13 @@ final class TabsIOSTests: XCTestCase {
         let session = try fixture("EXACT_SEARCH_TABS_PLAN")
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         XCTAssertEqual(tabs.mode, .tabSidebar)
+        let search = try node(session, "tab-find")
+        let agent = Agent(session: session)
+        waitFor("UIKit presents the pinned search tab") {
+            guard case .success(let view)? = agent.tabItem(search), let model = tabs.tabs.first(where: { $0 is UISearchTab }),
+                  let frame = model.frame(in: tabs.view), !frame.isEmpty else { return false }
+            return view.convert(view.bounds, to: tabs.view) == frame
+        }
         tabs.sidebar.isHidden = false
         let route = try XCTUnwrap(tabs.selectedViewController?.stackRoutes.first as? RouteController)
         until("the route clears the sidebar") { route.view.safeAreaInsets.left > 100 }
@@ -356,6 +363,51 @@ final class TabsIOSTests: XCTestCase {
         until("UIKit's label again") { search.title == platform.title }
         XCTAssertEqual(search.image, platform.image, "UIKit's symbol again")
         if #available(iOS 26.0, *) { until("no field, no activation") { !search.automaticallyActivatesSearch } }
+    }
+
+    func testTouchingEachTabsLayoutCenterSelectsIt() throws {
+        guard ProcessInfo.processInfo.environment["EXACT_TOUCH_PORT"] != nil else {
+            throw missing("touch", "UIKit selects the tab at the reported center")
+        }
+        let session = try fixture("EXACT_MORE_TABS_PLAN"), agent = Agent(session: session)
+        let window = try XCTUnwrap(window), scene = try XCTUnwrap(window.windowScene)
+        let touch = try TouchRunner(self)
+        defer { touch.connection.cancel() }
+        let controller = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        let stacks = try XCTUnwrap(controller.viewControllers), items = try XCTUnwrap(controller.tabBar.items)
+        let names = ["home", "barless", "three", "four", "five", "six"]
+        guard stacks.count == names.count else { return XCTFail("expected a controller for each tab") }
+        XCTAssertGreaterThan(items.count, 1)
+        let tabs = try names.map { try node(session, "tab-" + $0) }
+        // Start with an unselected tab so a missed touch cannot pass.
+        for index in Array(names.indices.dropFirst()) + [0] {
+            let tab = tabs[index]
+            let detail = try XCTUnwrap(agent.layout(["id": Int(tab.id)])["node"] as? [String: Any])
+            let hidden = try XCTUnwrap((detail["visible"] as? [String: Any])?["hidden"] as? Bool)
+            let space = try XCTUnwrap(detail["space"] as? [String: Any])
+            let box = try XCTUnwrap(space["viewport"] as? [String: Double])
+            let width = try XCTUnwrap(box["w"]), height = try XCTUnwrap(box["h"])
+            if !items.contains(stacks[index].tabBarItem) {
+                XCTAssertTrue(hidden, names[index])
+                XCTAssertEqual(width, 0)
+                XCTAssertEqual(height, 0)
+                continue
+            }
+            XCTAssertFalse(hidden, names[index])
+            XCTAssertGreaterThanOrEqual(width, 20)
+            XCTAssertGreaterThanOrEqual(height, 20)
+            let center = CGPoint(x: try XCTUnwrap(box["x"]) + width / 2, y: try XCTUnwrap(box["y"]) + height / 2)
+            let point = window.convert(agent.windowPoint(center), to: scene.coordinateSpace)
+            let aim = agent.aim(["id": Int(tab.id), "aim": ["press": true]])
+            let named = try XCTUnwrap(aim["aim"] as? [String: Any], "\(aim)")
+            XCTAssertEqual(named["point"] as? [Double], [Agent.r2(point.x), Agent.r2(point.y)])
+            var request = try TouchRunner.aim(point, in: window)
+            request["op"] = "tap"
+            XCTAssertEqual(try touch.ask(request)["done"] as? Bool, true)
+            until("only the touched tab is selected") {
+                tabs.allSatisfy { ($0.props["accessibilitySelected"] == "true") == ($0 === tab) }
+            }
+        }
     }
 
     /// A tap the agent delivers asks the app's delegate as UIKit asks it on
@@ -567,6 +619,94 @@ private final class RecordingTabDelegate: NSObject, UITabBarControllerDelegate {
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         calls.append("shouldSelect controller")
         return true
+    }
+}
+
+final class FloatingTabIOSTests: XCTestCase {
+    func testFloatingTabsWithTheSameTitleHaveTheirOwnCells() throws {
+        guard #available(iOS 18.0, *), UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad tab list") }
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "UIKit lays out its tab cells in a regular-width window")
+        }
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let session = ExactApp.shared.makeSession(label: "tab cells")
+        defer { session.destroy() }
+        let agent = Agent(session: session)
+        let animations = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(false)
+        defer { UIView.setAnimationsEnabled(animations) }
+        for count in [3, 6] {
+            let controller = UITabBarController()
+            let pages = (0..<count).map { _ -> UIViewController in
+                let page = UIViewController()
+                page.tabBarItem = UITabBarItem(title: "Shared", image: nil, tag: 0)
+                return page
+            }
+            if count == 3 {
+                controller.mode = .tabSidebar
+                controller.tabs = pages.enumerated().map { index, page in
+                    UITab(title: "Shared", image: nil, identifier: "panel-\(index)") { _ in page }
+                }
+            } else {
+                controller.viewControllers = pages
+                XCTAssertTrue(controller.tabs.isEmpty)
+            }
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            for sidebar in count == 3 ? [false, true] : [false] {
+                controller.sidebar.isHidden = !sidebar
+                window.layoutIfNeeded()
+                waitFor("UIKit presents all \(count) tabs in the requested bar") {
+                    guard let list = controller.shownTabBar as? UICollectionView else { return false }
+                    return list.visibleCells.count == count && (list.bounds.height > list.bounds.width) == sidebar
+                }
+                let list = try XCTUnwrap(controller.shownTabBar as? UICollectionView)
+                let sample = try XCTUnwrap(list.visibleCells.first)
+                let frame = sample.convert(sample.bounds, to: controller.view)
+                let layout = UICollectionViewFlowLayout()
+                layout.itemSize = frame.size
+                let other = UICollectionView(frame: frame, collectionViewLayout: layout)
+                other.isUserInteractionEnabled = false
+                other.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "unrelated")
+                let data = UICollectionViewDiffableDataSource<Int, Int>(collectionView: other) { list, path, _ in
+                    list.dequeueReusableCell(withReuseIdentifier: "unrelated", for: path)
+                }
+                var snapshot = NSDiffableDataSourceSnapshot<Int, Int>()
+                snapshot.appendSections([0])
+                snapshot.appendItems([0])
+                data.apply(snapshot, animatingDifferences: false)
+                controller.view.addSubview(other)
+                other.layoutIfNeeded()
+                XCTAssertEqual(other.visibleCells.first.map { $0.convert($0.bounds, to: controller.view) }, frame)
+                defer { other.removeFromSuperview(); withExtendedLifetime(data) {} }
+                var visited = Set<ObjectIdentifier>()
+                for (index, page) in pages.enumerated() {
+                    // Hosted XCTest loads accessibility. Make these cells as unidentifiable by
+                    // accessibility as the cold simulator's, even with the client attached.
+                    var pending: [UIView] = list.visibleCells
+                    while let view = pending.popLast() {
+                        view.isAccessibilityElement = false
+                        view.accessibilityIdentifier = nil
+                        view.accessibilityLabel = ""
+                        pending += view.subviews
+                    }
+                    let shown = try XCTUnwrap(controller.shownTabBar)
+                    XCTAssertTrue(shown === list)
+                    guard case .success(let view) = agent.presentedTabItem(page.tabBarItem, in: shown, controller: controller) else {
+                        return XCTFail("no cell for tab \(index)")
+                    }
+                    XCTAssertTrue(list.visibleCells.contains { $0 === view })
+                    if count == 6 {
+                        controller.selectedIndex = index
+                        window.layoutIfNeeded()
+                    }
+                    let model = count == 3 ? controller.tabs[index] : controller.selectedTab
+                    XCTAssertEqual(view.convert(view.bounds, to: list), model?.frame(in: list))
+                    XCTAssertTrue(visited.insert(ObjectIdentifier(view)).inserted)
+                }
+            }
+        }
     }
 }
 #endif

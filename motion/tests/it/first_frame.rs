@@ -541,3 +541,168 @@ fn an_idle_clock_origin_waits_for_the_present_or_its_release() {
         assert_eq!(e.held_since(), None);
     }
 }
+
+#[test]
+fn cancelling_pending_tracks_or_taking_a_hold_leaves_no_stale_pending_keys() {
+    use exact_motion::{FilterKind, FilterStep, FilterValue, PathCommand, PathValue};
+
+    // Path transition cancelled to None and to a non-interpolable shape before present_frame.
+    let cmd = |verb: u8, x: f64, y: f64| PathCommand {
+        verb,
+        args: [x, y, 0.0, 0.0, 0.0, 0.0, 0.0],
+    };
+    let line = |x: f64| PathValue(vec![cmd(b'M', 0.0, 0.0), cmd(b'L', x, 0.0)]);
+    let tri = PathValue(vec![
+        cmd(b'M', 0.0, 0.0),
+        cmd(b'L', 10.0, 0.0),
+        cmd(b'L', 5.0, 5.0),
+    ]);
+    for cancel_to in [None, Some(tri)] {
+        let mut e = engine(1.0, linear());
+        e.observe_path(NODE, Some(line(10.0)));
+        e.observe_path(NODE, Some(line(20.0)));
+        assert!(e.held_since().is_some());
+        e.set_unshown([NODE]);
+        e.observe_path(NODE, cancel_to);
+        e.observe_path(NODE, None);
+        e.set_transitions(NODE, Transitions(Vec::new())).unwrap();
+        e.present_frame(0.016, 0.016).unwrap();
+        assert_eq!(e.held_since(), None);
+        assert!(e.at_rest(NODE), "cancelled path must leave node at rest");
+    }
+
+    // Filter transition cancelled to None and to a non-interpolable list before present_frame.
+    let blur = |r: f64| FilterValue(vec![FilterStep::new(FilterKind::Blur, r)]);
+    let sep = FilterValue(vec![FilterStep::new(FilterKind::Sepia, 1.0)]);
+    for cancel_to in [None, Some(sep)] {
+        let mut e = engine(1.0, linear());
+        e.observe_filter(NODE, Some(blur(0.0)), true);
+        e.observe_filter(NODE, Some(blur(8.0)), false);
+        assert!(e.held_since().is_some());
+        e.set_unshown([NODE]);
+        e.observe_filter(NODE, cancel_to, false);
+        e.observe_filter(NODE, None, false);
+        e.set_transitions(NODE, Transitions(Vec::new())).unwrap();
+        e.present_frame(0.016, 0.016).unwrap();
+        assert_eq!(e.held_since(), None);
+        assert!(e.at_rest(NODE), "cancelled filter must leave node at rest");
+    }
+
+    // Single hold and transform hold taking over pending transitions clear self.pending.
+    let mut e = engine(1.0, linear());
+    observe(&mut e, 1.0);
+    assert!(e.held_since().is_some());
+    e.set_unshown([NODE]);
+    let hold = e
+        .begin_hold(NODE, Property::Opacity, 0.01, Some(Value::scalar(1.0)))
+        .unwrap()
+        .unwrap();
+    assert!(e.end_hold(hold.token, 0.02, HoldEnd::Cancel).unwrap());
+    e.set_transitions(NODE, Transitions(Vec::new())).unwrap();
+    e.present_frame(0.03, 0.03).unwrap();
+    assert_eq!(e.held_since(), None);
+    assert!(
+        e.at_rest(NODE),
+        "settled hold takeover must leave node at rest"
+    );
+
+    let mut e = engine(1.0, linear());
+    for (p, v0, v1) in [
+        (Property::Translate, Value::ZERO, Value::new(10.0, 0.0)),
+        (Property::Scale, Value::new(1.0, 1.0), Value::new(2.0, 2.0)),
+    ] {
+        e.observe(Change {
+            node: NODE,
+            property: p,
+            value: v0,
+            velocity: None,
+        })
+        .unwrap();
+        e.observe(Change {
+            node: NODE,
+            property: p,
+            value: v1,
+            velocity: None,
+        })
+        .unwrap();
+    }
+    assert!(e.held_since().is_some());
+    e.set_unshown([NODE]);
+    let pair = e
+        .begin_transform_hold(
+            NODE,
+            0.01,
+            Some([Value::new(10.0, 0.0), Value::new(2.0, 2.0)]),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(e
+        .end_hold(pair.translate().token, 0.02, HoldEnd::Cancel)
+        .unwrap());
+    assert!(e
+        .end_hold(pair.scale().token, 0.02, HoldEnd::Cancel)
+        .unwrap());
+    e.set_transitions(NODE, Transitions(Vec::new())).unwrap();
+    e.present_frame(0.03, 0.03).unwrap();
+    assert_eq!(e.held_since(), None);
+    assert!(
+        e.at_rest(NODE),
+        "settled transform hold must leave node at rest"
+    );
+}
+
+#[test]
+fn timeline_unbind_while_unpresentable_does_not_hold() {
+    use exact_motion::NamedTimeline;
+
+    let mut e = Engine::new();
+    e.set_start_on_frame(true, 0.0).unwrap();
+    e.set_animations(NODE, &pulse("pulse 1s infinite")).unwrap();
+    e.set_animation_timeline(
+        NODE,
+        Some((
+            NamedTimeline::Scroll {
+                scroller: 1,
+                x: false,
+            },
+            [0.0, 100.0],
+        )),
+    );
+    e.set_presentable(false).unwrap();
+    e.advance(0.25).unwrap();
+    e.set_animation_timeline(NODE, None);
+    assert_eq!(e.animation_plays(NODE)[0].pending, None);
+    assert_eq!(e.held_since(), None);
+    assert_eq!(e.held_deadline(), None);
+}
+
+#[test]
+fn release_overdue_releases_all_overdue_pending_clocks() {
+    let mut e = Engine::new();
+    e.set_start_on_frame(true, 0.0).unwrap();
+    // Paused plays create pending idle clock origins with no pending plays of their own.
+    for (node, name, at) in [(10, "A", 0.0), (11, "B", 0.5), (12, "C", 1.0)] {
+        e.advance(at).unwrap();
+        e.set_animations(node, &pulse("pulse 1s infinite paused"))
+            .unwrap();
+        e.set_animation_clock(node, Some(name));
+    }
+    assert_eq!(e.held_since(), Some(0.0));
+    e.advance(2.6).unwrap();
+    e.release_overdue(2.6).unwrap();
+    assert_eq!(
+        e.held_since(),
+        Some(1.0),
+        "both 0.0 and 0.5 are overdue at 2.6; 1.0 remains pending"
+    );
+    // Live joiners on A and B start immediately; a joiner on C still waits.
+    for (node, name, waits) in [(20, "A", false), (21, "B", false), (22, "C", true)] {
+        e.set_animation_clock(node, Some(name));
+        e.set_animations(node, &pulse("pulse 1s infinite")).unwrap();
+        assert_eq!(
+            e.animation_plays(node)[0].pending.is_some(),
+            waits,
+            "clock {name}"
+        );
+    }
+}

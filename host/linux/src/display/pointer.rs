@@ -157,7 +157,7 @@ mod tests {
     count = count + 1
   view
     column
-      box testId="row" width=400 height=100 swiperight=reply touch-action="pan-y" transition="translate -exact-spring(300, 30, 1)"
+      box testId="row" width=400 height=100 swipe=reply swipe-follow="right" touch-action="pan-y" transition="translate -exact-spring(300, 30, 1)"
         text "swipe"
       text `${count}` testId="count"
 "#).unwrap();

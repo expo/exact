@@ -768,7 +768,13 @@
       "id": 262,
       "name": "navigationSplit",
       "kind": "str",
-      "_comment": "@ref LLP 1116.004 D1.2: on a stack's root route, \"none\" keeps a wide window's stack pushed, and a positive width (CSS px, points) is the list column's when the stack splits, splitting a list the host's rule does not find; on iPad, \"split\" on the first route puts a split view in its tab or window at the platform column width, even for a custom primary without a directory list. A tab stays a stack by default. Other hosts keep their own admission and widths. LLP 1127 D19. @ref LLP 1116.006 D2: \"placeholder\" on a box in the root route is the detail pane's while nothing is selected, in place of the platform's; the lowerer makes it `display: none`, which the web shell overrides there."
+      "_comment": "@ref LLP 1127 D1: on a stack's root route, \"split\" or a width, a whole number from 1 to 999999 in digits with no leading zero (CSS px, points: the list column's preferred width), asks for the split, and \"none\" pushes on every host; unsaid, the web and an iPhone push, and the Mac (LLP 1115.002 D4), the painted hosts and an iPad outside a tab (LLP 1127 D19, D22) split a list whose rows push. On iPad, \"split\" on the first route puts a split view in its tab or window at the platform column width, even for a custom primary without a directory list; a tab stays a stack by default. @ref LLP 1116.006 D2: \"placeholder\" on a plain box that is the root route's own child is the detail pane's while nothing is selected, in place of the platform's, and asks for the split; the lowerer makes it `display: none`, which the web shell overrides there."
+    },
+    {
+      "id": 328,
+      "name": "arrangement",
+      "kind": "str",
+      "_comment": "@ref LLP 1188 D3: a box whose two children are UIKit's primary and secondary panes on iOS 27.1 and later (UIArrangementViewController): split or overlay, each optionally followed by horizontal or vertical; none, or no word, is CSS's layout, as it is on every other host."
     },
     {
       "id": 221,
@@ -2099,6 +2105,36 @@
       "name": "navigationUndimmedDetent",
       "kind": "str",
       "_comment": "@ref LLP 1123 D7: the tallest word of a sheet route's `navigationDetent` at which the sheet dims nothing and is nonmodal: at or below it the screen under the sheet stays live, its touches, its accessibility and its reads, and the sheet begins no modal boundary. Unsaid, every detent dims and the sheet is modal. UIKit's `largestUndimmedDetentIdentifier`, SwiftUI's `presentationBackgroundInteraction(.enabled(upThrough:))`."
+    },
+    {
+      "id": 329,
+      "name": "navigationPopoverAnchor",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: the `id` of the element a popover route is anchored to, its source: UIKit's `sourceView`, the anchor's whole box. Read on a route presented as a popover."
+    },
+    {
+      "id": 330,
+      "name": "navigationPopoverMargins",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: one to four lengths in points, top right bottom left as `padding` expands them: how far a popover route keeps from the window's edges. UIKit's `popoverLayoutMargins`; unsaid, the platform's."
+    },
+    {
+      "id": 331,
+      "name": "navigationPopoverArrows",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `any`, or any of `up`, `down`, `left` and `right`: the directions a popover route's arrow may point. UIKit's `permittedArrowDirections`; unsaid, any."
+    },
+    {
+      "id": 332,
+      "name": "navigationPopoverOverlapsSource",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `true` or `false` (the default): whether a popover route may cover its anchor where it cannot fit beside it. UIKit's `canOverlapSourceViewRect`."
+    },
+    {
+      "id": 333,
+      "name": "navigationPopoverAdaptation",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `sheet` (the default) or `none`: what a popover route becomes in a compact-width window, a sheet as UIKit adapts it, or still a popover."
     }
   ],
   "_enums": "Wire discriminant is the 0-based index. An unknown discriminant is a typed decode rejection, never a fallback. refused: keywords the wire carries and the compiler refuses an author, because no presenter builds them (LLP 1043.000 §3 D1); `contract vocab` lists the others. No wire reads it, so it is outside the digest.",
@@ -2666,8 +2702,31 @@
       ],
       "default": "auto"
     },
+    "SafeAreaTrack": {
+      "values": [
+        "live",
+        "observed-max"
+      ],
+      "default": "live"
+    },
     "LayoutMarginsPreserved": {
       "_comment": "@ref LLP 1123 D8: `-exact-preserves-superview-layout-margins`, the keywords of the layout_margins_preserved row, not a wire enum: false is 0, true 1.",
+      "values": [
+        "false",
+        "true"
+      ],
+      "default": "false"
+    },
+    "ListInsetsContentToSafeArea": {
+      "_comment": "@ref LLP 1123 D15: `-exact-list-insets-content-to-safe-area`, the keywords of the list_insets_content_to_safe_area row, not a wire enum: true, UIKit's default, is 0 and false 1.",
+      "values": [
+        "true",
+        "false"
+      ],
+      "default": "true"
+    },
+    "ListCellMarginsFollowReadableWidth": {
+      "_comment": "@ref LLP 1123 D15: `-exact-list-cell-margins-follow-readable-width`, the keywords of the list_cell_margins_follow_readable_width row, not a wire enum: false, UIKit's default, is 0 and true 1.",
       "values": [
         "false",
         "true"
@@ -6034,6 +6093,31 @@
       "refusesPercent": true,
       "default": 0,
       "_comment": "@ref LLP 1123 D7: `-exact-keyboard-dismiss-padding: <length>`, on a scroller: how far above the keyboard a finger dragging it in an interactive dismiss mode starts the keyboard following, UIKit's `keyboardDismissPadding`. A negative length is 0. Not layout. Not inherited."
+    },
+    {
+      "bit": 315,
+      "field": "safe_area_track",
+      "rare": true,
+      "codec": "enum:SafeAreaTrack",
+      "_comment": "@ref LLP 1123 D9 (\"Moving edges\"): `-exact-safe-area-track: live | observed-max`, on a reader: under `live`, the initial value, its lengths read the band as it is; under `observed-max`, they read the largest band its owner's host has reported for the owner's current configuration, while its readouts stay live. For a capture, the declaring node's. Not inherited."
+    },
+    {
+      "bit": 316,
+      "field": "list_insets_content_to_safe_area",
+      "codec": "u8",
+      "keywords": "ListInsetsContentToSafeArea",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: `-exact-list-insets-content-to-safe-area: true | false`, a native table's `insetsContentViewsToSafeArea`: whether its cells' and headers' content views are inset from its safe area. For a table a native view lends the host, read from the box whose scroll policy it takes; a box that says nothing leaves the table's own choice. Not layout. Not inherited."
+    },
+    {
+      "bit": 317,
+      "field": "list_cell_margins_follow_readable_width",
+      "codec": "u8",
+      "keywords": "ListCellMarginsFollowReadableWidth",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: `-exact-list-cell-margins-follow-readable-width: false | true`, a native table's `cellLayoutMarginsFollowReadableWidth`: whether its cells' margins keep their content within the readable width. For a table a native view lends the host, read from the box whose scroll policy it takes; a box that says nothing leaves the table's own choice. Not layout. Not inherited."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15; 30 is `filter`, LLP 1003.002), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",

@@ -1263,3 +1263,60 @@ fn a_resized_track_follows_its_header_and_releases_its_cells() {
     layout(&mut k);
     assert_eq!(widths(&k), [32.0, 22.0, 22.0, 32.0]);
 }
+
+/// Large `colspan` + `rowspan=0` tables track active spans sparsely and cap
+/// explicit tracks at `i16::MAX` instead of allocating O(rows × Σcolspan).
+#[test]
+fn large_colspan_rowspan_table_stays_sparse_and_capped() {
+    let wide_row = tag(
+        "tr",
+        (0..200)
+            .map(|_| cell(&[(COLSPAN, 1000), (ROWSPAN, 0)], 10.0, 10.0))
+            .collect(),
+    );
+    let mut rows = Vec::with_capacity(1_001);
+    rows.push(wide_row);
+    for _ in 0..1_000 {
+        rows.push(tag("tr", Vec::new()));
+    }
+    let k = lay_out(tag("table", rows));
+    assert_eq!(k.table_size(2), Some((1_001, i16::MAX as u32)));
+
+    // Overlapping downward spans with distinct expiries preserve exact HTML §4.9.12.1 placement.
+    // 2 table, 3 tbody:
+    // row 0 (4): td 5 (col 0, rowspan 1), td 7 (col 1, rowspan 3)
+    // row 1 (9): td 10 (colspan 2, rowspan 2 -> col 0, overlaps col 1), td 12 (col 2)
+    // row 2 (14): td 15 (skips 0..2 -> col 2)
+    // row 3 (17): td 18 (spans expired -> col 0)
+    let k = lay_out(tag(
+        "table",
+        vec![tag(
+            "tbody",
+            vec![
+                tag(
+                    "tr",
+                    vec![cell(&[], 10.0, 10.0), cell(&[(ROWSPAN, 3)], 10.0, 10.0)],
+                ),
+                tag(
+                    "tr",
+                    vec![
+                        cell(&[(COLSPAN, 2), (ROWSPAN, 2)], 10.0, 10.0),
+                        cell(&[], 10.0, 10.0),
+                    ],
+                ),
+                tag("tr", vec![cell(&[], 10.0, 10.0)]),
+                tag("tr", vec![cell(&[], 10.0, 10.0)]),
+            ],
+        )],
+    ));
+    let at = |id| {
+        let p = k.table_place(id).unwrap();
+        (p.row, p.rows, p.column, p.columns)
+    };
+    assert_eq!(at(5), (0, 1, 0, 1));
+    assert_eq!(at(7), (0, 3, 1, 1));
+    assert_eq!(at(10), (1, 2, 0, 2));
+    assert_eq!(at(12), (1, 1, 2, 1));
+    assert_eq!(at(15), (2, 1, 2, 1));
+    assert_eq!(at(18), (3, 1, 0, 1));
+}

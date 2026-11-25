@@ -221,7 +221,7 @@ impl<D: DataSource> Runner<D> {
                 target()
             )));
         }
-        let grants = self.data.grants();
+        let grants = self.module_grants();
         let granted = |line: &str, id: &str| {
             grants.lines().any(|l| {
                 let mut words = l.split_whitespace();

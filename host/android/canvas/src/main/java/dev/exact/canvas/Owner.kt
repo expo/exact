@@ -855,6 +855,12 @@ internal object Exact {
     fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String) =
         field { Native.moduleEvent(id, slot, generation, session, kind, payload) }
 
+    fun moduleSizes(reports: Collection<() -> org.json.JSONArray?>) = field {
+        val sizes = org.json.JSONArray()
+        for (report in reports) report()?.let(sizes::put)
+        if (sizes.length() > 0) Native.moduleSizes(sizes.toString())
+    }
+
     fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long) =
         field { Native.frameLoaded(id, slot, generation, session) }
 

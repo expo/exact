@@ -420,7 +420,6 @@ pub fn check(done: Option<DoneFn>, ctx: *mut c_void) -> u32 {
         .name("exact-update".into())
         .spawn(move || {
             let (line, download) = run_check();
-            lock(&SNAPSHOT).checking = false;
             let mut json = format!("{{\"line\":{}", quote(&line));
             if let Some(d) = download {
                 json.push_str(&format!(
@@ -435,6 +434,7 @@ pub fn check(done: Option<DoneFn>, ctx: *mut c_void) -> u32 {
             if let Some(f) = done {
                 f(ctx as *mut c_void, json.as_ptr(), json.len());
             }
+            lock(&SNAPSHOT).checking = false;
         });
     if spawned.is_err() {
         lock(&SNAPSHOT).checking = false;

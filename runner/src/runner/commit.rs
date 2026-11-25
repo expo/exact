@@ -1245,7 +1245,7 @@ impl<D: DataSource> Runner<D> {
         }
         // A store's presence call: the host's backend, on the store's own
         // path, never a module's (LLP 1133.010 D13).
-        if let Some(dispatch) = self.presence_call(&request.body) {
+        if let Some(dispatch) = self.presence_call(&request.body, request.grants.as_deref()) {
             return dispatch;
         }
         // A module's name called from data code: the runner's admission, then

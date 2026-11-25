@@ -9,5 +9,7 @@
     "id": "com.exact.material-specimens",
     "name": "Material Specimens"
   },
+  "host": { "android": { "minimumOS": "10" } },
+  "modules": ["text-reference"],
   "rust": { "data": { "crate": "hello-data", "type": "hello_data::Hello", "source": "hello_data::Hello" } }
 }

@@ -427,9 +427,14 @@ impl Lowerer<'_> {
             routes::bottom_toolbar::check_row(&self.nav_place, tag, expanded, *span)?;
         }
         self.check_route_parts(&self.nav_place, tag, expanded)?;
-        let nav_place = self
-            .nav_place
-            .enter(first, tag, expanded, children, *span)?;
+        let nav_place = self.nav_place.enter(
+            first,
+            tag,
+            expanded,
+            children,
+            *span,
+            t.node_type == NodeType::View,
+        )?;
         // @ref LLP 1038 D8 — only the first root selects navigation; an
         // iframe's `navigate` is its guest's (LLP 1020.002 D2). The history
         // swipe and the ways through history offered are the root's too
@@ -496,7 +501,11 @@ impl Lowerer<'_> {
                     a.span,
                 );
             }
-            if let Some(a) = expanded.iter().find(|a| a.name == "swipe") {
+            if let Some(a) = expanded
+                .iter()
+                .find(|a| a.name == "swipe")
+                .filter(|_| crate::handlers::swipe::flick(tag, expanded))
+            {
                 return err(
                     "lower-swipe-direction",
                     "`swipe` on a run inside a paragraph: the run is drawn in its paragraph's text, with no view of its own for the platform's swipe to be recognized on; put `swipe` on the paragraph or make the run a box (LLP 1057.001 §8)",
@@ -690,9 +699,16 @@ impl Lowerer<'_> {
                 continue;
             }
             if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a)
-                .or_else(|| crate::handlers::swipe::refusal(expanded, a))
+                .or_else(|| crate::handlers::swipe::refusal(tag, expanded, a))
             {
-                self.errors.push(e);
+                // Once for a component used more than once, whose uses share the written span
+                if !self.errors.iter().any(|x| x.id == e.id && x.span == e.span) {
+                    self.errors.push(e);
+                }
+                continue;
+            }
+            // Judged above or in the written views: the follow selector is the handler's name (`swipe::event`)
+            if crate::handlers::swipe::skipped(tag, a) {
                 continue;
             }
             if let Err(e) = self.attr(
@@ -799,6 +815,15 @@ impl Lowerer<'_> {
                 };
                 origins.resize(bindings.len(), origin);
             }
+        }
+        // A following swipe's kind, which its selector names (LLP 1057.001 §8)
+        if let Some(kind) = EventKind::from_name(crate::handlers::swipe::event(tag, expanded))
+            .filter(|k| *k != EventKind::Swipe)
+        {
+            handlers
+                .iter_mut()
+                .filter(|h| h.0 == EventKind::Swipe)
+                .for_each(|h| h.0 = kind);
         }
         if let Some(a) = &custom {
             let control = contract_syntax::payload_control(tag, attrs);
@@ -1037,6 +1062,8 @@ impl Lowerer<'_> {
             let mut style = warnings::TextStyle {
                 native: native_font,
                 parent_horizontal_flex: self.parent_horizontal_flex,
+                split: (expanded.iter().rev().find(|a| a.name == "navigationSplit"))
+                    .and_then(|a| crate::routes::split_text(&a.value)),
                 font: expanded
                     .iter()
                     .rev()

@@ -47,6 +47,7 @@ test "the total grows"
   (`color="AccentColor"`), never a hex, which stays the same in dark mode; its label
   stays the platform's (`color="-exact-secondary-label"`), and a title is a heading,
   never a big `font-size`.
+- Android follows the default text paint at the displayed size. On Android 10 with Roboto at 12 sp and 320 dpi, the native `8` advances 14 px and the other tabular digits advance 13 px.
 - Tabular digits stabilize equal-length digit changes, not `99` → `100`; reserve
   space for the formatted range when adjacent content must stay still.
 - Give the readout an `aria-label` that says what the number is; VoiceOver reads the

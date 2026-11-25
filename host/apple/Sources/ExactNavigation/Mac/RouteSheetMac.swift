@@ -302,7 +302,7 @@ extension NavigationHost {
         let segments = NavigationRules.segments(presentations: prefix.map { $0.props["navigationPresentation"] })
         for segment in segments.reversed() where !segment.isEmpty {
             let base = routes[segment.lowerBound], route = routes[segment.upperBound - 1]
-            guard segment.lowerBound > 0, base.props["navigationPresentation"] == "modal" else { break }
+            guard segment.lowerBound > 0, NavigationRules.sheetLike(base.props["navigationPresentation"]) else { break }
             if !concerned, keptSheets[route.id] != nil { return found }
             if !concerned, let known = sheets.first(where: { $0.route === route }) { found.insert(known, at: 0) } else {
                 switch SheetHeader.read(route: route, back: back) {

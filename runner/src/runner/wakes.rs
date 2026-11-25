@@ -294,9 +294,14 @@ impl<D: DataSource> Runner<D> {
             id: hash | 3 << 62,
             ..how
         };
+        // Events raised for one action are one wake, which ends once: a
+        // repeated id joins the wake it already has.
         let w = &mut self.wakes;
-        w.waiting
-            .push_back(Wake::new(how, CallOrigin::Action, Some(action)));
+        let known = |wake: &Wake| wake.how.id == how.id;
+        if !(w.current.as_ref().is_some_and(known) || w.waiting.iter().any(known)) {
+            w.waiting
+                .push_back(Wake::new(how, CallOrigin::Action, Some(action)));
+        }
         self.wake_invocation(Some(row), args, how, None);
         Ok(())
     }

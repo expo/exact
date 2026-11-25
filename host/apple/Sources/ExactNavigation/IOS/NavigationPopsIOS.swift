@@ -46,9 +46,10 @@ extension NavigationHost {
     }
 
     /// Whether `route` is in flight from a pop UIKit committed: any but a
-    /// swipe still under way, which commits only at its end.
+    /// swipe still under way, which commits only at its end, and a route UIKit
+    /// took out with its tab's root, to move the tab.
     private func committed(_ route: RouteController) -> Bool {
-        inFlight(route) && popCoordinator(of: route)?.initiallyInteractive != true
+        inFlight(route) && popCoordinator(of: route)?.initiallyInteractive != true && !leftWithRoot(route)
     }
 
     /// The routes UIKit popped that the router has not followed: committed

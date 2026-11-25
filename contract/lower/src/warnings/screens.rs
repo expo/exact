@@ -210,7 +210,7 @@ impl<'a> App<'a> {
                         };
                         out.push(LowerError {
                             id: "lower-screen-by-state",
-                            message: format!("this `{what}` swaps the page between screens by state: on the web the browser's Back leaves the app, a reload loses the place and no screen can be linked, and on iOS no screen gets a Back button or the edge swipe. Make each screen a route: `routes` with a path for each, `push` to open one (a list's row pushes its detail) and `back` to return; a wide window then shows the list beside its detail (`contract vocab screen`, docs/recipes/navigation-stack.md). Top-level sections are tabs, each a route (docs/recipes/tabs.md)"),
+                            message: format!("this `{what}` swaps the page between screens by state: on the web the browser's Back leaves the app, a reload loses the place and no screen can be linked, and on iOS no screen gets a Back button or the edge swipe. Make each screen a route: `routes` with a path for each, `push` to open one (a list's row pushes its detail) and `back` to return; where the stack's root route asks, `navigationSplit=\"split\"`, a wide window shows the list beside its detail (`contract vocab screen`, docs/recipes/navigation-stack.md). Top-level sections are tabs, each a route (docs/recipes/tabs.md)"),
                             span: node.span(),
                         });
                         continue;

@@ -3,7 +3,8 @@
 //! process's, and parallel tests would share it.
 
 use exact_kernel::motion::{motion_node, PaintMotion};
-use exact_kernel::style::wide::{self, Keep, WideMark};
+use exact_kernel::style::wide::{self, Colors, Keep, WideMark};
+use exact_kernel::wire::LOOK_HOVER;
 use exact_kernel::{ColorValue, Kernel, NodeType, Op, RowValue, StyleId, StyleProps, StyleValue};
 use exact_motion::{Engine, Property};
 
@@ -73,6 +74,84 @@ fn the_wide_table_reclaims_what_no_holder_holds() {
         panic!("not wide")
     };
     let keep = Keep::of(|m| m.color(ColorValue::Wide(kept_id)));
+
+    // State looks held by a live kernel, by a cloned arena after its kernel
+    // drops, and by a kept `Op::SetLooks` must all survive sweeps.
+    let look_patch = |bg: &str, shadow: Option<&str>| {
+        let mut s = StyleProps::default();
+        s.set_dynamic(StyleId::BackgroundColor, &StyleValue::Text(bg.into()))
+            .unwrap();
+        if let Some(shadow) = shadow {
+            s.set_dynamic(StyleId::BoxShadow, &StyleValue::Text(shadow.into()))
+                .unwrap();
+        }
+        s
+    };
+    let mut looks_kernel = Kernel::with_monospace();
+    let look_bg_css = p3(9_997);
+    let look_shadow_css = format!("0 2px 4px {}", p3(9_996));
+    let look_patch_live = look_patch(&look_bg_css, Some(&look_shadow_css));
+    let ColorValue::Wide(look_bg_id) = look_patch_live.background_color.unwrap() else {
+        panic!("look bg not wide")
+    };
+    let RowValue::BoxShadow(shadows) = look_patch_live.get(StyleId::BoxShadow) else {
+        panic!("look shadow missing")
+    };
+    let ColorValue::Wide(look_shadow_id) = shadows.0[0].color else {
+        panic!("look shadow not wide")
+    };
+    batch += 1;
+    looks_kernel
+        .apply(
+            0,
+            batch,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::View,
+                },
+                Op::SetLooks {
+                    id: 1,
+                    looks: vec![(LOOK_HOVER, look_patch_live)],
+                },
+            ],
+        )
+        .unwrap();
+
+    let mut clone_source = Kernel::with_monospace();
+    let clone_look_patch = look_patch(&p3(9_995), None);
+    let ColorValue::Wide(clone_look_id) = clone_look_patch.background_color.unwrap() else {
+        panic!("clone look not wide")
+    };
+    batch += 1;
+    clone_source
+        .apply(
+            0,
+            batch,
+            &[
+                Op::CreateView {
+                    id: 1,
+                    node_type: NodeType::View,
+                },
+                Op::SetLooks {
+                    id: 1,
+                    looks: vec![(LOOK_HOVER, clone_look_patch)],
+                },
+            ],
+        )
+        .unwrap();
+    let cloned_looks_arena = clone_source.arena().clone();
+    drop(clone_source);
+
+    let kept_look_patch = look_patch(&p3(9_994), None);
+    let ColorValue::Wide(kept_look_id) = kept_look_patch.background_color.unwrap() else {
+        panic!("kept look not wide")
+    };
+    let kept_look_op = Op::SetLooks {
+        id: 1,
+        looks: vec![(LOOK_HOVER, kept_look_patch)],
+    };
+    let keep_look_op = Keep::of(|m| kept_look_op.colors(m));
 
     // A colour transition, from one wide colour to another, started now.
     let mut moving = Kernel::with_monospace();
@@ -169,10 +248,26 @@ fn the_wide_table_reclaims_what_no_holder_holds() {
     batch += 1;
     busy.apply(0, batch, &[in_flight]).unwrap();
     assert_eq!(shown(&busy), p3_text(7_777));
-    // The idle kernel's colour and the kept one survived every sweep.
+    // The idle kernel's colour, the kept one, and all state look colours survived every sweep.
     assert_eq!(shown(&idle), idle_colour);
     assert!(wide::wide(kept_id).is_some());
-    drop(keep);
+    assert_eq!(
+        wide::wide(look_bg_id).unwrap().text.as_ref(),
+        p3_text(9_997)
+    );
+    assert_eq!(
+        wide::wide(look_shadow_id).unwrap().text.as_ref(),
+        p3_text(9_996)
+    );
+    assert_eq!(
+        wide::wide(clone_look_id).unwrap().text.as_ref(),
+        p3_text(9_995)
+    );
+    assert_eq!(
+        wide::wide(kept_look_id).unwrap().text.as_ref(),
+        p3_text(9_994)
+    );
+    drop((keep, keep_look_op, cloned_looks_arena, looks_kernel));
 
     // A full table of held colours refuses a new one, and the refusal is
     // the caller's to report: no patch can be made of it, so the row keeps

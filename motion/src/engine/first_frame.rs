@@ -206,7 +206,7 @@ impl Engine {
             .filter_map(|play| play.pending);
         let latest = curves
             .chain(plays)
-            .chain(self.clock_held_since())
+            .chain(self.clock_held_begins())
             .filter_map(overdue)
             .reduce(f64::max);
         match latest {
@@ -252,10 +252,6 @@ impl Engine {
         let at = move |begin: f64| (begin <= cohort).then_some(at.map_or(begin, |t| t.max(begin)));
         let keys = std::mem::take(&mut self.pending);
         for key in keys {
-            if self.unshown.contains(&key.0) {
-                self.pending.insert(key);
-                continue;
-            }
             let Some(curve) = self
                 .slots
                 .get_mut(&key)
@@ -264,16 +260,21 @@ impl Engine {
             else {
                 continue;
             };
-            if let Some(begin) = curve.pending {
-                match at(begin) {
-                    Some(t) => {
-                        curve.start += t - begin;
-                        curve.pending = None;
-                        self.dirty.insert(key);
-                    }
-                    None => {
-                        self.pending.insert(key);
-                    }
+            let Some(begin) = curve.pending else {
+                continue;
+            };
+            if self.unshown.contains(&key.0) {
+                self.pending.insert(key);
+                continue;
+            }
+            match at(begin) {
+                Some(t) => {
+                    curve.start += t - begin;
+                    curve.pending = None;
+                    self.dirty.insert(key);
+                }
+                None => {
+                    self.pending.insert(key);
                 }
             }
         }

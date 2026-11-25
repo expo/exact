@@ -130,6 +130,54 @@ test.each([
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('an installed Android cohort keeps its original receipt and permission ceiling', async () => {
+  const foreground = 'android.permission.FOREGROUND_SERVICE';
+  const required = [foreground];
+  const { root, app, build, cohort, pusher, published } = harness(classifyArtifacts, 4, {
+    rustModule: false, planRequires: { androidPermissions: required },
+  });
+  try {
+    Object.assign(cohort.compat.inputs, { platform: 'android', androidLinked: { permissions: [foreground] } });
+    const metadata = { app: app.manifest.app, host: {}, icons: [], keys: cohort.compat.inputs.keys, store: cohort.compat.inputs.store };
+    build.binary = { sha256: cohort.binary, sourceInputs: { version: 1, metadata, files: [], directories: [], absent: [], links: [] } };
+    const file = binaryInputFile(build);
+    cohort.binaryInputs = { sha256: file.sha256, bytes: file.bytes.length };
+    const push = () => pusher({ _: [root], origin: root, keys: root });
+    expect(await push()).toBe(0);
+    expect(published[0].compat.id).toBe(cohort.compat.id);
+    expect(published[0].pendingInputs).toEqual([]);
+    app.manifest.host = { android: { permissions: [foreground] } };
+    expect(await push()).toBe(0);
+    expect(published[1].pendingInputs).toEqual(['host']);
+    const capture = 'android.permission.DETECT_SCREEN_CAPTURE';
+    app.manifest.host.android.permissions.push(capture);
+    required.push(capture);
+    await expect(push()).rejects.toThrow('androidPermissions');
+    expect(published).toHaveLength(2);
+  } finally { fs.rmSync(root, {recursive:true, force:true}); }
+});
+
+test('Android host inputs compare app permission declarations as a set', () => {
+  const { root, app, binaryInputChanges } = harness();
+  try {
+    const network = 'android.permission.ACCESS_NETWORK_STATE', capture = 'android.permission.DETECT_SCREEN_CAPTURE';
+    const compat = { inputs: { platform: 'android', androidLinked: { permissions: [network, capture] } } };
+    for (const [before, after, changed] of [
+      [[capture], undefined, ['host']],
+      [undefined, [capture], ['host']],
+      [[network, capture], [capture, network, capture], []],
+      [[network, capture], [capture], ['host']],
+      [[network], [capture], ['host']],
+      [undefined, [], []],
+    ]) {
+      app.manifest.host = { android: before ? {permissions: before} : {} };
+      const evidence = { metadata: nativeManifestMetadata(app.manifest, 'android'), files: [], directories: [], absent: [], links: [] };
+      app.manifest.host = { android: after ? {permissions: after} : {} };
+      expect(binaryInputChanges(null, app, compat, [], evidence)).toEqual(changed);
+    }
+  } finally { fs.rmSync(root, {recursive:true, force:true}); }
+});
+
 test("a package's native configuration is a binary input, recorded by digest (LLP 1133.021 §9 item 7)", () => {
   const { root, app, binaryInputChanges } = harness();
   const key = 'push-test-config-sentinel', manifest = { app: { id: 'fixture', name: 'Fixture' }, packages: { '@exact/maps': { android: { apiKey: { env: 'PUSH_TEST_MAPS_KEY' } } } } };
@@ -1199,6 +1247,7 @@ test('a change to the data crate supersedes its cohort, and another native chang
     app.manifest.deploy.signing = { key: 'test', keys: { test: raw } };
     app.manifest.deploy.store = { android: 'A' };
     Object.assign(cohort.compat.inputs, { platform: 'android', rustMode: 'off', dataCrate: { tree: crate }, keys: { test: raw }, formatVersion: 4, kernelSchema: '0'.repeat(16) });
+    app.manifest.host = { android: { permissions: ['android.permission.DETECT_SCREEN_CAPTURE'] } };
     const metadata = { ...nativeManifestMetadata(app.manifest, 'android'), store: cohort.compat.inputs.store, keys: cohort.compat.inputs.keys };
     build.version = 1;
     build.binary = { sha256: cohort.binary, sourceInputs: binarySourceInputs({ files: [{ path: code, sha256: sha256(fs.readFileSync(code)) }],
@@ -1214,6 +1263,12 @@ test('a change to the data crate supersedes its cohort, and another native chang
     const candidate = async () => (await streamCandidates(app, origin, await streams(origin, app, 'prod', { builds: bindings.readBuilds() }), env))[0];
     const table = async (update) => classify({ app, origin, opts: {}, channel: 'prod', snapshot: { dirty: false, changes: [] }, release: 'edited', bundle: update.bundle,
       compat: {}, builds: {}, platforms: ['android'], wantOrigin: false, candidates: new Map([[stream.compatibilityId, update]]) });
+    const declared = app.manifest.host.android.permissions;
+    delete app.manifest.host.android.permissions;
+    const removed = await candidate();
+    expect(removed.build.pendingInputs).toEqual(['host']);
+    expect((await table(removed)).rows.find(r => r.kind === 'binary').pendingInputs).toEqual(['host']);
+    app.manifest.host.android.permissions = declared;
     fs.writeFileSync(code, 'new activity');
     const noted = await candidate();
     expect([noted.superseded, noted.nativeData, noted.build.pendingInputs]).toEqual([[], [], ['app/native/code.kt']]);
@@ -1356,4 +1411,34 @@ test('updates require the raster renditions installed by their Apple cohort', ()
     expect(result.missing[0]).toContain('appleRasterIcons');
   }
   expect(classifyArtifacts(candidate({ 'two.svg': red }), { ...cohort, compat: { inputs: { store: { L: 'A' } } } }).bundle).toBe(false);
+});
+
+test('older cohorts reject bundles that add, change, or remove plan-bound requirements', () => {
+  const base = {
+    commands: '1111111111111111',
+    iconFillRules: ['evenodd'],
+    atomFace: ['source', 'label'],
+    alternateIcons: ['dark'],
+    faces: [{ signature: 'add(number)', face: { doors: ['apple'] } }],
+    controls: [{ control: { kind: 'go' }, digest: 'a' }],
+  };
+  const makeCohort = inputs => ({ sources: {}, binary: 'same', compat: { inputs: { store: { L: 'A' }, ...inputs } } });
+  const makeCandidate = (requires, extra = []) => ({ binary: { sha256: 'same' }, graph: { sources: {}, artifacts: [{ name: 'app.plan', requires }, ...extra] } });
+  expect(classifyArtifacts(makeCandidate(base), makeCohort(base)).bundle).toBe(true);
+  for (const key of Object.keys(base)) {
+    const missing = { ...base };
+    delete missing[key];
+    const r = classifyArtifacts(makeCandidate(base), makeCohort(missing));
+    expect(r.bundle, `missing ${key}`).toBe(false);
+    expect(r.missing[0]).toContain(key);
+    const differed = { ...base, [key]: ['other'] };
+    expect(classifyArtifacts(makeCandidate(base), makeCohort(differed)).bundle, `changed ${key}`).toBe(false);
+  }
+  for (const key of ['alternateIcons', 'faces', 'controls']) {
+    const removed = { ...base, [key]: null };
+    expect(classifyArtifacts(makeCandidate(removed), makeCohort(base)).bundle, `removed ${key}`).toBe(false);
+  }
+  const widget = { name: 'plans/card.plan', requires: { iconFillRules: ['evenodd'], atomFace: ['source', 'label'] } };
+  expect(classifyArtifacts(makeCandidate({}, [widget]), makeCohort({})).bundle).toBe(false);
+  expect(classifyArtifacts(makeCandidate({}, [widget]), makeCohort({ iconFillRules: ['evenodd'], atomFace: ['source', 'label'] })).bundle).toBe(true);
 });

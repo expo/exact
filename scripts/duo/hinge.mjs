@@ -62,16 +62,48 @@ export function partialFoldDisplay(udid, since, timeout) {
   const seconds = Math.min(600, Math.max(60, Math.ceil((Date.now() - since) / 1000) + 1));
   const run = spawnSync('xcrun', ['simctl', 'spawn', udid, 'log', 'show', '--last', `${seconds}s`, '--style', 'ndjson',
     '--predicate', predicate], { encoding: 'utf8', timeout });
-  let inner, angle;
+  let inner, angle, fresh = false;
   if (run.status === 0) for (const line of run.stdout.split('\n')) {
     const e = logEntry(line);
     if (!e) continue;
     const pose = /^DCMPose: ([-.\d]+)°/.exec(e.message);
     if (pose && e.t >= since) angle = Number(pose[1]);
     const swap = /^(?:STARTING:|COMPLETED:|transitioning )\s+\.cover:(?:\w+→)?(\w+) \.inner:(?:\w+→)?(\w+)/.exec(e.message);
-    if (swap) inner = swap[2] === 'pri';
+    if (swap) { inner = swap[2] === 'pri'; fresh = e.t >= since; }
   }
-  return { inner, angle };
+  return { inner, angle, fresh };
+}
+
+/** Whether the app took a fold, within `within` milliseconds (LLP 1188 D4). The simulator reports its hinge before UIKit tells
+ * the app of it, moves the scene to the other display and divides the window, each in its own time. `before` is the host's
+ * sample (`layout simulatorRotation`) from before the fold, with the app's `viewport` then, and `still` whether the last fold the
+ * app took was to this angle, if one was. SpringBoard's word (`display`) is of this fold where it is `fresh`. */
+export async function foldTaken({ ask, degrees, display, before, still, within = 5000, quiet = 1000, pause = 50 }) {
+  const partial = degrees > 0 && degrees < 180, since = performance.now(), end = since + within;
+  const left = () => Math.max(1, Math.ceil(end - performance.now())), late = () => performance.now() - since > quiet;
+  const isPartial = (angle) => angle > 0 && angle < 180, near = (a, b) => Math.abs(a - b) < 0.1;
+  const reply = (request) => waitAtMost(ask(request), left() + 1000, () => ({}));
+  for (;;) {
+    const sample = await reply({ op: 'layout', simulatorRotation: true });
+    if (sample.error) throw new Error(sample.error);
+    const springboard = () => display(Math.min(3000, left()));
+    // UIKit's angle at a partial fold is not the hinge's, so it is the new one once it has moved from the last; a first fold can
+    // find the device there already
+    const moved = () => !isPartial(before.angle) || !near(sample.angle, before.angle) || (still ?? (late() && near(springboard().angle ?? sample.angle, sample.angle)));
+    const told = partial ? isPartial(sample.angle) && moved() : Number.isFinite(sample.angle) && Math.abs(sample.angle - degrees) < 1;
+    if (told && sample.ready) {
+      // A partial fold that is nearly closed, or starts on the cover, can leave either display active: SpringBoard says which
+      // as it starts the swap, and the display the app is on stands if it says nothing within `quiet`
+      const word = partial && (degrees < 90 || !before.inner) ? springboard() : { fresh: true, inner: partial || degrees === 180 };
+      const inner = word.fresh ? word.inner : late() ? sample.inner : undefined;
+      const { env, viewport } = sample.inner === inner ? await reply({ op: 'layout' }) : {};
+      // The displays have no size in common
+      const resized = inner === before.inner || viewport?.w !== before.viewport?.w || viewport?.h !== before.viewport?.h;
+      if (env && resized && env['horizontal-viewport-segments'] * env['vertical-viewport-segments'] === (partial && inner ? 2 : 1)) return true;
+    }
+    if (performance.now() >= end) return false;
+    await sleep(pause);
+  }
 }
 
 export async function rotateSimulator({ duo, fold, display, issue, ask, land }, orientation) {

@@ -431,10 +431,12 @@ impl Editor {
     fn snap(&self, p: u32) -> u32 {
         self.proj.canonical(p)
     }
-
-    /// The app wrote a value. The changed middle is replaced and the selection
-    /// carried through it; the history resets, as it does on Apple (LLP 1045 D1).
+    /// Replace the changed middle and clear undo (LLP 1045 D1).
     pub fn set_value(&mut self, text: &[u16]) -> Change {
+        self.rewrite_value(text, false)
+    }
+    /// A filter preserves an endpoint inside the replaced span.
+    pub fn rewrite_value(&mut self, text: &[u16], filtered: bool) -> Change {
         let text = clean(text);
         if text == self.source {
             return Change::default();
@@ -467,6 +469,8 @@ impl Editor {
                 p
             } else if p >= end {
                 p + inserted - (end - a)
+            } else if filtered {
+                p.min(a + inserted)
             } else {
                 a + inserted
             }) as u32

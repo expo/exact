@@ -216,7 +216,10 @@ impl<D: DataSource> Runner<D> {
         // The implementation answers: bound as in production, or, for an
         // interface that is its own substitute, told it runs under the agent.
         if self.route(row) != super::Route::Substitute {
-            let request = self.as_cause(cause, |r| r.bound_request(row, args, None));
+            let mut request = self.as_cause(cause, |r| r.bound_request(row, args, None));
+            if row.send {
+                request.body = super::bound::with_authority(&request.body, self.module_grants());
+            }
             let lines = self.extensions.declared.lines.clone();
             let slot = self.native_slot();
             let Some(handler) = slot.extension_handler() else {

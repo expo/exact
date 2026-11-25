@@ -30,6 +30,7 @@ mod frames;
 mod lifecycle;
 mod presents;
 mod service;
+mod session_end;
 mod tray;
 use frames::{next_frame_deadline, presentation_resumes, FrameSchedule};
 

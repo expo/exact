@@ -95,6 +95,20 @@ pub(crate) fn headers(
             let _ = write!(scripts, " 'sha256-{hash}'");
         }
     }
+    if let Some(inline) = crate::page::inline_js_entry(shell) {
+        let text = inline.replace("\r\n", "\n").replace('\r', "\n");
+        let token = format!(
+            " 'sha256-{}'",
+            exact_data::envelope::base64(&Sha256::digest(text.as_bytes()))
+        );
+        let already = exact
+            .iter()
+            .find(|(name, _)| name == "script-src")
+            .is_some_and(|(_, value)| value.contains(&token));
+        if !already {
+            scripts.push_str(&token);
+        }
+    }
     if let Some((_, value)) = exact.iter_mut().find(|(name, _)| name == "script-src") {
         value.push_str(&scripts);
     }

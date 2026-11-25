@@ -834,6 +834,10 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
         }
         let text = match value {
             PropValue::Str(_) if id == PropId::AtomFaces => faces.clone(),
+            // @ref LLP 1123 D7 — a popover route is this host's sheet until its own popovers (stage 4)
+            PropValue::Str(s) if id == PropId::NavigationPresentation && s == "popover" => {
+                "modal".into()
+            }
             PropValue::Str(s) => s.to_string(),
             PropValue::Bool(b) => b.to_string(),
             PropValue::Int(i) => i.to_string(),
@@ -920,7 +924,7 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             // LLP 1053.000.000 D1: written, read by no rule, drawn nowhere.
             PropId::GlassGroup => "glassGroup",
             // Interactive glass and a menu's order are UIKit's; a page has neither.
-            PropId::GlassInteractive | PropId::MenuOrder => continue,
+            PropId::GlassInteractive | PropId::MenuOrder | PropId::Arrangement => continue,
             // A page has no tip system (LLP 1035.006.000 D4).
             PropId::Tip | PropId::TipMessage | PropId::TipImage | PropId::TipDone => continue,
             PropId::RetainFocus => "retainFocus",

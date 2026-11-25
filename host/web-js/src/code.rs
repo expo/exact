@@ -47,6 +47,8 @@ pub struct Scope {
     pub rows: Option<String>,
     /// Row slots available in this scope, excluding slots owned by descendants.
     pub row_slots: BTreeSet<usize>,
+    /// Enclosing arms whose owned state, resources and mutations live on `rows`.
+    pub owned_arms: BTreeSet<u32>,
     /// The JavaScript expression of the instance path in force, where the
     /// plan has a child's resource (LLP 1035.005.004 D8): each region
     /// crossed, with its arm or its row's key.
@@ -62,7 +64,7 @@ impl Scope {
         }
     }
 
-    fn row_member(&self, rows: &str, name: String) -> String {
+    pub(crate) fn row_member(&self, rows: &str, name: String) -> String {
         if self.capture {
             format!(
                 "{rows}[{}]",

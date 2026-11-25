@@ -235,7 +235,7 @@ pub(crate) fn derive(
                 modes.extend(grant.device.ios_modes);
                 tasks.extend(grant.device.ios_tasks);
             }
-            "linux" => {
+            "linux" | "android" => {
                 android.extend(grant.device.android);
                 features.extend(grant.device.android_features);
                 for pair in grant.device.android_services {
@@ -344,7 +344,7 @@ pub(crate) fn derive(
         Vec::new()
     };
     let (bonjour, local_source, multicast) = local_network_reach(&ceiling);
-    if multicast && platform == "linux" {
+    if multicast && matches!(platform, "linux" | "android") {
         android.push("android.permission.CHANGE_WIFI_MULTICAST_STATE");
     }
     android.sort_unstable();
@@ -406,7 +406,7 @@ fn privacy_policy(
     devices: &[exact_runner::device::DeviceGrant<'_>],
 ) -> Result<(), String> {
     let health = devices.iter().any(|g| g.device.name.starts_with("health-"));
-    if !health || !matches!(platform, "linux" | "ios") {
+    if !health || !matches!(platform, "linux" | "android" | "ios") {
         return Ok(());
     }
     let manifest: Value = std::fs::read_to_string(app_dir.join("app.json"))
@@ -417,7 +417,7 @@ fn privacy_policy(
         return Ok(());
     }
     let why = "grant-privacy-policy: an app granting `device.health-read` or `device.health-write` names its privacy policy in app.json, `\"privacy_policy\": \"https://…\"` (LLP 1133.026 D4)";
-    if platform == "linux" {
+    if matches!(platform, "linux" | "android") {
         return Err(why.into());
     }
     if std::env::var_os("OUT_DIR").is_some() {
@@ -701,8 +701,8 @@ fn sign_in(ceiling: &str, platform: &str) -> Result<Value, String> {
     }
     let audiences = match platform {
         "web" => json!({ "apple": apple, "google": google }),
-        "android" => json!({ "google": google }),
-        _ => json!({ "apple": ["<the bundle ID>"], "google": google }),
+        "ios" | "macos" => json!({ "apple": ["<the bundle ID>"], "google": google }),
+        _ => json!({ "google": google }),
     };
     Ok(json!({ "apple": apple, "google": google, "audiences": audiences, "notes": notes }))
 }

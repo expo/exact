@@ -46,6 +46,37 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// The reader reports preferred content sizes in dp, once per frame and binding.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_module_sizes(&mut self, json: &str) -> bool {
+        type Row = (ViewId, u32, u32, u64, Option<(f32, f32)>);
+        let Ok(rows) = serde_json::from_str::<Vec<Row>>(json) else {
+            return false;
+        };
+        let kernel = self.host.kernel();
+        let mut changed = Vec::new();
+        for (id, index, generation, session, size) in rows {
+            let key = exact_kernel::NodeKey { index, generation };
+            if session == self.brush.native_session
+                && kernel
+                    .node(id)
+                    .is_some_and(|n| n.key == key && n.node_type == NodeType::NativeView)
+                && size.is_none_or(|(w, h)| w.is_finite() && h.is_finite() && w > 0. && h > 0.)
+                && kernel.arena().intrinsic(index) != size
+            {
+                changed.push((id, size));
+            }
+        }
+        if changed.is_empty() {
+            return false;
+        }
+        if let Some(error) = self.host.set_intrinsics(changed) {
+            self.host.log(error);
+        }
+        self.dirty = true;
+        true
+    }
+
     /// A native module may only answer for the session and allocation its painted view represents.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_module_event(
@@ -696,6 +727,25 @@ impl<D: DataSource> Presenter<D> {
         } else {
             self.held &= !bit;
         }
+    }
+
+    /// Run `pointer` with `modifiers` held, as the seat that sent a pointer
+    /// event held them when it sent it, then give the keyboard back its own:
+    /// a host whose pointer and keys reach it on separate queues (Linux's
+    /// Wayland window) keeps each event's modifiers in that event's order.
+    pub fn with_pointer_modifiers<R>(
+        &mut self,
+        modifiers: exact_runner::KeyModifiers,
+        pointer: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let keyboard = self.held;
+        self.held = u8::from(modifiers.shift)
+            | u8::from(modifiers.ctrl) << 2
+            | u8::from(modifiers.alt) << 4
+            | u8::from(modifiers.meta) << 6;
+        let result = pointer(self);
+        self.held = keyboard;
+        result
     }
 
     /// The modifiers held, as a `key` event carries them.

@@ -1,5 +1,5 @@
 //! The app's native-module roster (LLP 1024 D1): the tags its module
-//! artifact serves, declared in `app.json` as `"modules": ["tag", …]`, and
+//! artifact serves, declared in `app.json` under `modules`, and
 //! the views its packages serve (`package_views`). A module tag neither
 //! names is `bake-unknown-module`, so a typo
 //! is a named diagnostic in the dev loop and in every build, never an empty
@@ -22,23 +22,190 @@ pub(crate) use packages::implementation_imports;
 pub use packages::{bound, plan_packages, rust_packages, write_desktop_packages, Bound};
 pub use slot::{native_slot, NativeSelection, NativeSlot};
 
-/// The roster in `manifest`, each name checked against the tag grammar.
-pub fn roster(manifest: &Manifest) -> Result<Vec<String>, String> {
+/// The app's native view declarations, in manifest order (the compatibility input).
+pub struct ModuleRoster<'a>(Vec<(&'a str, Option<Vec<&'a str>>)>);
+
+impl<'a> ModuleRoster<'a> {
+    /// Tags whose factories this host must supply.
+    pub fn tags_on(&self, platform: &str) -> Vec<&'a str> {
+        self.0
+            .iter()
+            .filter(|(_, hosts)| hosts.as_ref().is_none_or(|h| h.contains(&platform)))
+            .map(|(tag, _)| *tag)
+            .collect()
+    }
+
+    fn hosts(&self, tag: &str) -> Option<&[&str]> {
+        self.0.iter().find(|(t, _)| *t == tag)?.1.as_deref()
+    }
+}
+
+/// Read both manifest spellings at the boundary, before checking any host.
+pub fn roster(manifest: &Manifest) -> Result<ModuleRoster<'_>, String> {
+    let mut rows = Vec::new();
     let Some(value) = manifest.json.get("modules") else {
-        return Ok(Vec::new());
+        return Ok(ModuleRoster(rows));
     };
-    let names = value
+    let items = value
         .as_array()
         .ok_or("app.json `modules` is a list of custom-element tags")?;
-    names
-        .iter()
-        .map(|name| match name.as_str() {
-            Some(tag) if contract_lower::is_module_tag(tag) => Ok(tag.to_owned()),
-            _ => Err(format!(
-                "app.json `modules`: {name} is not a lowercase custom-element name (LLP 1024 D1)"
-            )),
-        })
-        .collect()
+    for (i, item) in items.iter().enumerate() {
+        let error = |why: &str| format!("app.json modules[{i}] {item}: {why}");
+        let tag = item
+            .as_str()
+            .or_else(|| item.get("tag")?.as_str())
+            .filter(|tag| contract_lower::is_module_tag(tag))
+            .ok_or_else(|| error("expected a lowercase custom-element name (LLP 1024 D1)"))?;
+        if let Some(key) = item
+            .as_object()
+            .and_then(|o| o.keys().find(|k| *k != "tag" && *k != "hosts"))
+        {
+            return Err(error(&format!("unknown key `{key}`")));
+        }
+        if rows.iter().any(|(t, _)| *t == tag) {
+            return Err(error(&format!("duplicate tag `{tag}`")));
+        }
+        let hosts = if let Some(list) = item.get("hosts") {
+            let list = list
+                .as_array()
+                .filter(|l| !l.is_empty())
+                .ok_or_else(|| error("hosts needs at least one platform"))?;
+            Some(
+                list.iter()
+                    .map(|p| {
+                        p.as_str()
+                            .filter(|p| HATCH_PLATFORMS.contains(p))
+                            .ok_or_else(|| {
+                                error(&format!(
+                                    "unknown host {p}. Choose from {}",
+                                    HATCH_PLATFORMS.join(", ")
+                                ))
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
+        } else {
+            None
+        };
+        rows.push((tag, hosts));
+    }
+    Ok(ModuleRoster(rows))
+}
+
+const OTHER_PLATFORM: u16 = 1 << HATCH_PLATFORMS.len();
+const HATCH_HOSTS: u16 = OTHER_PLATFORM - 1;
+const ALL_PLATFORMS: u16 = HATCH_HOSTS | OTHER_PLATFORM;
+
+// The sets of hosts on which the condition can be true and false. For an
+// unknown expression both answers remain possible, including in an else arm.
+fn platform_test(expr: &contract_syntax::Expr, pages: &[&str]) -> (u16, u16) {
+    use contract_syntax::{BinOp, Expr, UnOp};
+    match expr {
+        Expr::Bool(true, _) => (ALL_PLATFORMS, 0),
+        Expr::Bool(false, _) => (0, ALL_PLATFORMS),
+        Expr::Unary(UnOp::Not, value, _) => {
+            let (yes, no) = platform_test(value, pages);
+            (no, yes)
+        }
+        Expr::Binary(op @ (BinOp::And | BinOp::Or), a, b, _) => {
+            let (ay, an) = platform_test(a, pages);
+            let (by, bn) = platform_test(b, pages);
+            if *op == BinOp::And {
+                (ay & by, an | bn)
+            } else {
+                (ay | by, an & bn)
+            }
+        }
+        Expr::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b, _) => {
+            let (base, field, host) = match (a.as_ref(), b.as_ref()) {
+                (Expr::Member(base, field, _), Expr::Str(host, _))
+                | (Expr::Str(host, _), Expr::Member(base, field, _)) => (base, field, host),
+                _ => return (ALL_PLATFORMS, ALL_PLATFORMS),
+            };
+            let bit = exact_plan::Plan::hatch_platform_bit(host);
+            if bit == 0
+                || field != "platform"
+                || !matches!(&**base, Expr::Ident(name, _) if pages.contains(&name.as_str()))
+            {
+                return (ALL_PLATFORMS, ALL_PLATFORMS);
+            }
+            if *op == BinOp::Eq {
+                (bit, ALL_PLATFORMS ^ bit)
+            } else {
+                (ALL_PLATFORMS ^ bit, bit)
+            }
+        }
+        _ => (ALL_PLATFORMS, ALL_PLATFORMS),
+    }
+}
+
+fn check_platforms(
+    file: &File,
+    roster: &ModuleRoster,
+    targets: u16,
+    errors: &mut Vec<CompileError>,
+) {
+    use contract_syntax::Node;
+    for c in &file.components {
+        let pages: Vec<_> = c
+            .resources
+            .iter()
+            .filter(|r| {
+                r.source == "exactPage"
+                    && r.placeholder.is_none()
+                    && r.gate.is_none()
+                    && r.each.is_none()
+            })
+            .map(|r| r.name.as_str())
+            .collect();
+        let nodes = Node::walk_with(&c.view, (targets, pages), |node, (reach, pages)| {
+            let (yes, no) = match node {
+                Node::When { cond, .. } => platform_test(cond, pages),
+                _ => (ALL_PLATFORMS, ALL_PLATFORMS),
+            };
+            let children = node.scoped_child_lists();
+            std::array::from_fn(|arm| {
+                let (children, binds) = children[arm];
+                let mask = reach & [yes, no][arm];
+                (!children.is_empty() && mask != 0).then(|| {
+                    let visible = pages
+                        .iter()
+                        .copied()
+                        .filter(|p| !binds.contains(p))
+                        .collect();
+                    (mask, visible)
+                })
+            })
+        });
+        for (node, (reach, pages)) in nodes {
+            let Node::Element { tag, span, .. } = node else {
+                continue;
+            };
+            let Some(hosts) = roster.hosts(tag) else {
+                continue;
+            };
+            let allowed = hosts
+                .iter()
+                .fold(0, |mask, h| mask | exact_plan::Plan::hatch_platform_bit(h));
+            if reach & !allowed != 0 {
+                let page = pages.first().copied().unwrap_or("hostPage");
+                let guard = hosts
+                    .iter()
+                    .map(|h| format!(r#"{page}.platform == "{h}""#))
+                    .collect::<Vec<_>>()
+                    .join(" || ");
+                let message = format!("`{tag}` is served on {}. Put `if {guard}` at this use with {page} bound to exactPage().", hosts.join(", "));
+                errors.push(CompileError {
+                    pass: "bake",
+                    id: "bake-module-host".into(),
+                    message,
+                    span: *span,
+                    file: None,
+                    related: Box::new([]),
+                });
+            }
+        }
+    }
 }
 
 /// The `data-*` words in `manifest`, each checked against HTML's spelling
@@ -55,8 +222,7 @@ pub fn hatch_words(manifest: &Manifest) -> Result<Vec<String>, String> {
 }
 
 /// The platforms a hatch word may name (LLP 1075.003.000.001 §5).
-pub const HATCH_PLATFORMS: [&str; 7] =
-    ["ios", "tvos", "macos", "web", "linux", "windows", "android"];
+pub use contract_syntax::MODULE_PLATFORMS as HATCH_PLATFORMS;
 
 /// The words `platform`'s module handles (LLP 1075.003.000.001 §4.3, §5),
 /// sorted: every word of a plain list, and of the object form the words
@@ -670,8 +836,12 @@ fn words(manifest: &Manifest, kind: &Words) -> Result<Vec<String>, String> {
 /// Every module tag, `data-` word and `hatch` word in `file` against what the
 /// app at `app_root` declares; the package views the file places, for the
 /// plan's `views` table.
-pub(super) fn check(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<CompileError>> {
-    let (views, mut errors) = match check_modules(file, app_root) {
+pub(super) fn check(
+    file: &File,
+    app_root: &Path,
+    profile: contract_lower::Profile,
+) -> Result<Vec<PackageView>, Vec<CompileError>> {
+    let (views, mut errors) = match check_modules(file, app_root, profile) {
         Ok(views) => (views, Vec::new()),
         Err(errors) => (Vec::new(), errors),
     };
@@ -757,11 +927,12 @@ fn check_words(used: Vec<(String, Span)>, app_root: &Path, kind: &Words) -> Vec<
 
 /// Each module tag `file` places against the app's roster and the views its
 /// packages serve (`crate::package_views`); the package views it places.
-fn check_modules(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<CompileError>> {
+fn check_modules(
+    file: &File,
+    app_root: &Path,
+    profile: contract_lower::Profile,
+) -> Result<Vec<PackageView>, Vec<CompileError>> {
     let used = contract_lower::module_tags(file);
-    if used.is_empty() {
-        return Ok(Vec::new());
-    }
     let refusal = |id: &str, message: String, span: Span| CompileError {
         pass: "bake",
         id: id.into(),
@@ -770,12 +941,19 @@ fn check_modules(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<C
         file: None,
         related: Box::new([]),
     };
-    let roster = Manifest::read(app_root)
-        .and_then(|m| roster(&m))
-        .map_err(|message| vec![refusal("app-manifest", message, Span::default())])?;
+    let manifest =
+        Manifest::read(app_root).map_err(|m| vec![refusal("app-manifest", m, Span::default())])?;
+    let roster =
+        roster(&manifest).map_err(|m| vec![refusal("app-manifest", m, Span::default())])?;
+    if used.is_empty() {
+        return Ok(Vec::new());
+    }
     let packages = crate::package_views::declared(app_root)
         .map_err(|e| vec![refusal(e.id, e.message, Span::default())])?;
-    if let Some(view) = packages.values().find(|v| roster.contains(&v.tag)) {
+    if let Some(view) = packages
+        .values()
+        .find(|v| roster.0.iter().any(|(tag, _)| *tag == v.tag))
+    {
         return Err(vec![refusal(
             "bake-view-twice",
             format!(
@@ -785,11 +963,11 @@ fn check_modules(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<C
             used.iter().find(|(t, _)| *t == view.tag).map_or_else(Span::default, |u| u.1),
         )]);
     }
-    let known: Vec<&str> = (roster.iter().map(String::as_str))
+    let known: Vec<&str> = (roster.0.iter().map(|(tag, _)| *tag))
         .chain(packages.keys().map(String::as_str))
         .collect();
     let mut placed = Vec::new();
-    let errors: Vec<CompileError> = used
+    let mut errors: Vec<CompileError> = used
         .into_iter()
         .filter(|(tag, _)| {
             if let Some(view) = packages.get(tag) {
@@ -819,6 +997,17 @@ fn check_modules(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<C
             )
         })
         .collect();
+    if roster.0.iter().any(|(_, hosts)| hosts.is_some()) {
+        let other = matches!(profile, contract_lower::Profile::Terminal)
+            || app_root.join("terminal.contract").is_file()
+            || manifest.json.get("watch").is_some();
+        check_platforms(
+            file,
+            &roster,
+            if other { ALL_PLATFORMS } else { HATCH_HOSTS },
+            &mut errors,
+        );
+    }
     if errors.is_empty() {
         Ok(placed)
     } else {

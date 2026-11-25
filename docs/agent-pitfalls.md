@@ -459,9 +459,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 - **A native sidebar separator needs another touch to redraw.** Cause: a native
   module's own sidebar table reloads its rows during a row's selection and selects
   the same row again. Keep the cells and update selection only when it changes;
-  reload when the row data changes. A list whose rows push needs no table of its own:
-  beside its detail a grouped list is UIKit's sidebar list (LLP 1127), which UI
-  Gallery's tests compare before and after an extra touch
+  reload when the row data changes. A list beside its detail needs no table of its own:
+  its route asks (`navigationSplit="split"`, LLP 1127), and UIKit's split keeps the
+  detail's row selected, which UI Gallery's tests compare before and after an extra touch
   (`apps/ui-gallery/tests/GalleryUITests.swift`).
 - **A sideways swipe on a row opens it.** Cause: the row has no swipe actions. A
   `UITableView` or SwiftUI `List` row with none is selected by a horizontal drag of any
@@ -1323,16 +1323,12 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   a text field commits on Enter and on blur, as in HTML. Fix: submit on `submit`
   (Return, a form's button) and keep `change` for normalizing the draft.
   (The Bluesky clone's muted words dialog, 2026-10-08.)
-- **A text field shows an edit its action refused or normalized.** A field bound with
-  `value=text input=edit`, where `edit` ignores a blank value, shows the blank while
-  `text` keeps the old value, and the next keystroke builds on what is shown; so does
-  one whose action or source normalizes `-2` to the `0` it already held. Cause: on
-  the web (both targets) a text field is re-set only when what its binding reads
-  changes, so an unchanged binding does not overwrite the edit. Fix: bind the field to draft state that `edit` always writes, and on commit
-  (`change`, Enter, `blur`) write the accepted value or reset the draft to it, which
-  changes the bound value and redraws the field; the guide's "Editing a value: the field's contract" has the recipe. (Authoring bench, LLP 1087, t2-todo:
-  two builders, about 10 minutes each, 2026-10-04; t1-tip, a normalized count,
-  2026-10-05.)
+- **Skipping an assignment keeps the rejected text visible.** On the web JS
+  target, a live filter assigns the accepted value on every edit, including
+  when it equals the previous value. An action that only validates, or a data
+  layer that suppresses the assignment, leaves the draft in place. Keep raw
+  text in state for a number that can be half-typed, then parse on commit.
+  See "Editing a value: the field's contract" in the guide.
 
 - **A checkbox bound to a resource field does not tick until the save answers.** With
   `checked=form.terms change=editTerms`, where `editTerms` sends a mutation that
@@ -1381,12 +1377,13 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   bench, LLP 1087, t4-kanban: about 15 minutes, 2026-10-04.) **Candidate
   diagnostic:** the compiler could warn on a `pan` without `touch-action`.
 
-- **`swipeleft` is not swipe-to-delete.** A row given `swipeleft`, or built from
-  `pan`, `panrelease` and `translate`, follows the finger and runs one action when it
-  lifts, but reveals no Delete button and is not the platform's swipe action. Fix:
-  `delete=remove(item.id)` on the list's row (`contract vocab swipe`): on iOS UIKit's
-  own swipe action, which a full swipe performs. Cause: `swipeleft` and `swiperight`
-  are the reply gesture's (a message bubble), one action at the gesture's end.
+- **`swipe-follow="left"` is not swipe-to-delete.** A row given `swipe` with
+  `swipe-follow="left"`, or built from `pan`, `panrelease` and `translate`, follows the
+  finger and runs one action when it lifts, but reveals no Delete button and is not the
+  platform's swipe action. Fix: `delete=remove(item.id)` on the list's row (`contract
+  vocab swipe`): on iOS UIKit's own swipe action, which a full swipe performs. Cause: a
+  swipe the node follows is the reply gesture's (a message bubble), one action at the
+  gesture's end.
   Actions other than Delete are a swipe row written by hand (the next pitfall).
   (Ledger2 DIARY, "Needed: swipe gesture", about 15 minutes, 2026-10-04.)
 
@@ -1420,17 +1417,19 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
     a time and the actions VoiceOver reads (`apps/messages` paints its own circles in
     hex and is no model for the rest).
 
-- **A `swiperight` or `swipeleft` hears nothing from a finger on iOS.** A mouse drag fires it on
-  the web and macOS, in a drive and in a test, while a real touch on an iPhone
-  does nothing. Cause: with `touch-action` at `auto` a horizontal pan is the
-  platform's, as in a browser, so the swipe never begins. Fix:
+- **A swipe the node follows (`swipe-follow`) hears nothing from a finger on iOS.** A mouse
+  drag fires it on the web and macOS, in a drive and in a test, while a real touch on an
+  iPhone does nothing. Cause: with `touch-action` at `auto` a horizontal pan is the
+  platform's, as in a browser, so the swipe never begins. In a painted content region's
+  picture a row with a `swipeIndicator` child or a resting transform also stays still,
+  since the picture's route follows only a row with neither. Fix:
   `touch-action="pan-y"` on the swiped node, which leaves vertical scrolling to the
   page. The bubble follows the finger with or without a `transition`; the one
   Messages gives it, `transition="translate -exact-spring(300, 30, 1)"`, springs it
   back after the lift and does not arm the gesture
   ([Swipe to reply](contract-for-agents.md#swipe-to-reply)). (Chat2 DIARY, about 20
   minutes; reproduced with `agent ios --touch platform`, 2026-10-04.) **Candidate
-  diagnostic:** the compiler could warn on a `swiperight` without `touch-action`, as on a `pan`.
+  diagnostic:** the compiler could warn on a `swipe-follow` without `touch-action`, as on a `pan`.
 
 - **A dragged piece snaps back, lands on the wrong square, or a tap moves it.** A
   board has no drop target; build the drag from the pointer events (Chess DIARY,

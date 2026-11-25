@@ -21,6 +21,7 @@ struct Identity {
     activatable: bool,
 }
 struct Witness {
+    epoch: u64,
     origin: Rc<()>,
     /// Each painted node's key, parent and (a box's) scroll bounds: one
     /// table, sized once per paint.
@@ -167,6 +168,10 @@ impl State {
             at = node.parent;
         }
         true
+    }
+    /// A layout fact for a box the picture omitted must belong to that picture.
+    pub(super) fn shows_epoch(&self, epoch: u64) -> bool {
+        !self.active || self.witness().is_some_and(|w| w.epoch == epoch)
     }
     /// The node the acknowledged picture painted at `id`, if it painted one.
     pub(super) fn painted_key(&self, id: ViewId) -> Option<NodeKey> {
@@ -315,6 +320,7 @@ impl<D: DataSource> Presenter<D> {
         let limits = self.collection_scroll_limits();
         let kernel = self.host.kernel();
         let mut witness = Witness {
+            epoch: kernel.epoch(),
             origin: self.display.origin.clone(),
             nodes: IdMap::default(),
             document: self.live_document(),
@@ -433,6 +439,8 @@ impl<D: DataSource> Presenter<D> {
         }
         // Something shows the session from here on.
         self.unshown = false;
+        // A lift cuts its picture from the pixels whose boxes it reads
+        self.shown = None;
         // Consume once, even after reload. A retained pixel handle never pins
         // an old native paragraph/picture after this acknowledgement.
         let picture = frame.picture.borrow_mut().take();
@@ -442,6 +450,7 @@ impl<D: DataSource> Presenter<D> {
                 let model_scroll = std::mem::take(&mut picture.witness.model_scroll);
                 self.brush.replace_presentation(picture.paint);
                 self.boxes = picture.boxes;
+                self.keep_shown(pixels, f32::from_bits(scale));
                 self.boxes_page = picture.page;
                 self.boxes_serial += 1;
                 self.ranges.shown.set(picture.session);

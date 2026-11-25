@@ -20,6 +20,7 @@ import java.io.File
 fun interface Drive {
     /** The first frame after successful startup, even with an empty page: called once, on the main thread. */
     fun contentReady()
+    fun windowEntered() {}
 }
 
 /**
@@ -101,7 +102,8 @@ open class ExactActivity : Activity() {
      */
     protected open fun drive(scroll: (Float) -> Unit): Drive? = null
     private var driver: Drive? = null
-    private lateinit var view: ExactView
+    internal lateinit var view: ExactView
+        private set
     /** The process's gamepads ([Pads]): every key and motion event is offered to them first. */
     private val pads: Pads get() = Pads.attach(this)
 
@@ -109,8 +111,18 @@ open class ExactActivity : Activity() {
         pads.key(event, requests.padInput) || super.dispatchKeyEvent(event)
     override fun dispatchGenericMotionEvent(event: android.view.MotionEvent): Boolean =
         pads.motion(event, requests.padInput) || super.dispatchGenericMotionEvent(event)
+    override fun onEnterAnimationComplete() {
+        super.onEnterAnimationComplete()
+        driver?.windowEntered()
+    }
+    internal var windowTouch = false
+        private set
     /** Every touch of the window, seen by a drag out of the app first ([DragOut.touched]). */
     override fun dispatchTouchEvent(event: android.view.MotionEvent): Boolean {
+        when (event.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> windowTouch = true
+            android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL -> windowTouch = false
+        }
         DragOut.touched(event)
         if (event.actionMasked == android.view.MotionEvent.ACTION_DOWN && ::root.isInitialized) {
             root.access.touched()

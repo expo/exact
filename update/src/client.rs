@@ -90,7 +90,7 @@ pub struct CheckRequest {
 pub struct DownloadedCheck {
     dir: PathBuf,
     head: String,
-    envelope: Result<crate::Envelope, String>,
+    downloaded: Result<crate::store::Downloaded, String>,
     embedded: HashMap<String, Option<EmbeddedAsset>>,
     check: std::sync::Arc<()>,
 }
@@ -113,11 +113,11 @@ impl CheckRequest {
                 .or_insert_with(|| embedded_asset(&self.assets_root, name))
                 .clone()
         };
-        let envelope = self.store.download(&self.head, fetch, &mut embedded);
+        let downloaded = self.store.download(&self.head, fetch, &mut embedded);
         DownloadedCheck {
             dir: self.store.dir().to_path_buf(),
             head: self.head,
-            envelope,
+            downloaded,
             embedded: self.embedded,
             check: self.check,
         }
@@ -331,14 +331,15 @@ impl Client {
         drop(downloaded.check);
         let collect = std::sync::Arc::strong_count(&self.checks) == 1;
         self.embedded.extend(downloaded.embedded);
-        let envelope = match downloaded.envelope {
-            Ok(envelope) => envelope,
+        let head = downloaded.head;
+        let downloaded = match downloaded.downloaded {
+            Ok(downloaded) => downloaded,
             Err(why) => return Outcome::Refused(why),
         };
         let mut embedded = |name: &str| self.embedded.get(name).cloned().flatten();
         match self
             .store
-            .finish_check(envelope, &downloaded.head, &mut embedded, collect)
+            .finish_check(downloaded, &head, &mut embedded, collect)
         {
             Ok(Check::Current { .. }) => Outcome::Current,
             Ok(Check::Staged { entry, seq, .. }) => Outcome::Staged { entry, seq },
@@ -733,6 +734,56 @@ mod tests {
         assert_eq!(status.running_seq, 0);
         c.boot_succeeded(&c.generation()).unwrap();
         assert!(!c.succeeded);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A check whose pre-fetch snapshot skipped `write_entry` (seeing the
+    /// staged bundle as current) must not resurrect that bundle as `Staged`
+    /// after `prepare_activation` refuses it for corruption in the meantime.
+    #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+    )]
+    fn finish_check_does_not_resurrect_a_corrupt_entry_refused_during_fetch() {
+        let base = temp("toctou-resurrect");
+        let mut client = Client::open_at(&base, &base, COMPAT, b"embedded", Some(ORIGIN)).unwrap();
+        let serve = |url: &str| {
+            Ok(if url.ends_with("exact.json") {
+                head(1, b"plan one")
+            } else {
+                b"plan one".to_vec()
+            })
+        };
+        let Outcome::Staged { entry, seq: 1 } = client.check(&mut |url| serve(url)) else {
+            panic!("seq 1 should stage");
+        };
+        // Start a check while seq 1 is still intact so `download` skips `write_entry`.
+        let downloaded = client.begin_check().unwrap().fetch(&mut |url| serve(url));
+        // Before `finish_check` runs, corrupt `app.plan` and refuse it via `prepare_activation`.
+        let plan = client.dir().join("entries").join(&entry).join("app.plan");
+        std::fs::remove_file(&plan).unwrap();
+        std::fs::write(&plan, b"rotten!!").unwrap();
+        assert!(client.prepare_activation().is_err());
+        assert!(!client.status().staged);
+        assert_eq!(client.status().selected_seq, 0);
+
+        // `finish_check` must refuse instead of re-staging the corrupt entry.
+        let outcome = client.finish_check(downloaded);
+        assert!(
+            matches!(&outcome, Outcome::Refused(_)),
+            "expected refusal, got {outcome:?}"
+        );
+        assert!(!client.status().staged);
+        assert_eq!(client.status().selected_seq, 0);
+
+        // A fresh check now repairs and stages seq 1 cleanly.
+        assert!(matches!(
+            client.check(&mut |url| serve(url)),
+            Outcome::Staged { seq: 1, .. }
+        ));
+        let prepared = client.prepare_activation().unwrap().unwrap();
+        assert_eq!(&*prepared.plan, b"plan one");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

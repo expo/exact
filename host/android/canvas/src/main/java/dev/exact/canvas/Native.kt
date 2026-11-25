@@ -158,6 +158,8 @@ object Native {
      * key said it does: 0 Enter with no action, 2 done, 3 go, 4 next, 5 previous, 6 search, 7 send, 16 Tab, 17
      * Shift+Tab. exact2 does that: Enter's `key` handlers, `change` and `submit`, then the move or the leave. */
     @JvmStatic external fun fieldAction(id: Int, generation: Int, action: Int)
+    /** Preferred content sizes from one reader frame, keyed by session and allocation. */
+    @JvmStatic external fun moduleSizes(reports: String)
     /** A module event, checked against the session and allocation carried by its painted view. */
     @JvmStatic external fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String)
     @JvmStatic external fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long)

@@ -48,10 +48,10 @@ export const classifications = [
     ["painted:host/painted/src/canvas/device.rs", "CanvasHost::chrome CanvasHost::configure CanvasHost::set_window"],
     ["painted:host/painted/src/canvas/frames.rs", "CanvasHost::frame_period CanvasHost::frame_rates CanvasHost::frame_turn CanvasHost::window_frames"],
     ["painted:host/painted/src/canvas/jni.rs", "Java_dev_exact_canvas_Native_bar Java_dev_exact_canvas_Native_bars"],
-    ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_orientationApplied"],
+    ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_moduleSizes Java_dev_exact_canvas_Native_orientationApplied"],
     ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_framePeriod"],
     ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_moved Java_dev_exact_canvas_Native_scrolled"],
-    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::orientation_applied CanvasHost::page_hidden"],
+    ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::module_sizes CanvasHost::orientation_applied CanvasHost::page_hidden"],
     ["painted:host/painted/src/canvas/surface.rs", "CanvasHost::bar CanvasHost::bars"],
     ["painted:host/painted/src/content_region/presenter.rs", "Presenter::frame_with_canvas_tick"],
     ["painted:host/painted/src/height.rs", "Host::layout Host::layout_anchored Host::set_control_text_styles Host::set_field_font_size Host::set_height_owner"],
@@ -70,7 +70,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/field_scroll.rs", "Presenter::set_caret_visible Presenter::set_caret_opacity"],
     ["painted:host/painted/src/presenter/hosted.rs", "Presenter::reader_fields"],
     ["painted:host/painted/src/presenter/links.rs", "Presenter::inline_run_at Presenter::set_url_opener"],
-    ["painted:host/painted/src/presenter/palette.rs", "Presenter::set_palette"],
+    ["painted:host/painted/src/presenter/palette.rs", "Presenter::accent_seed Presenter::set_palette"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::set_pointer_kind"],
     ["painted:host/painted/src/presenter/preferences.rs",
       "Presenter::apply_live Presenter::follow_local_offset Presenter::page_execution Presenter::refresh_place Presenter::refresh_windows_place " +
@@ -147,9 +147,10 @@ export const classifications = [
     ["painted:host/painted/src/presenter/clipboard.rs", "Presenter::clipboard_action"],
     ["painted:host/painted/src/presenter/collection.rs", "Presenter::collection_scroll_turn Presenter::dispatch_authored_scroll"],
     ["painted:host/painted/src/presenter/contact.rs",
-      "Presenter::contact_live Presenter::contact_position Presenter::pan_candidate Presenter::pointer_cancel Presenter::pointer_down Presenter::pointer_down_counted " +
+      "Presenter::contact_live Presenter::contact_position Presenter::pointer_cancel Presenter::pointer_down Presenter::pointer_down_counted " +
       "Presenter::pointer_abandoned Presenter::pointer_lost Presenter::pointer_move Presenter::pointer_up " +
       "Presenter::pointerdown_prevents_focus Presenter::press_lifted"],
+    ["painted:host/painted/src/presenter/contact/candidate.rs", "Presenter::pan_candidate Presenter::starts_toward"],
     ["painted:host/painted/src/presenter/contact/mouse.rs", "Presenter::pointer_down_with_clicks"],
     ["painted:host/painted/src/presenter/contact/pinch.rs", "Presenter::allows_touch_zoom Presenter::begin_transform_pinch Presenter::drive_transform_pinch Presenter::pinch_binding Presenter::tracking_transform_pinch Presenter::transform_finger"],
     ["painted:host/painted/src/presenter/control.rs", "Presenter::commit_control_value Presenter::key_click Presenter::toggle_control Presenter::toggle_control_with_press"],
@@ -157,7 +158,9 @@ export const classifications = [
       "FieldTextLayout::runs FieldTextLayout::same_shape Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_scroll_text_line Presenter::access_select Presenter::access_selection Presenter::access_editor Presenter::accessible_field_view Presenter::enabled_access_view Presenter::access_text_layout " +
       "Presenter::access_view"],
     ["painted:host/painted/src/text/field.rs", "FieldTextRun::character_metrics FieldTextRun::same_metrics"],
-    ["painted:host/painted/src/presenter/drag_out.rs", "Presenter::ask_drag Presenter::drag_of Presenter::drag_source_at Presenter::inside Presenter::lift_source_at"],
+    ["painted:host/painted/src/presenter/drag_out.rs",
+      "Presenter::ask_drag Presenter::carried_values Presenter::drag_of Presenter::drag_source_at Presenter::inside Presenter::lift_source_at " +
+      "Presenter::mouse_lift Presenter::mouse_lift_of Presenter::mouse_lifts Presenter::set_lifter"],
     ["painted:host/painted/src/presenter/reader_selection.rs",
       "Presenter::reader_select Presenter::report_selection Presenter::selection_policy Presenter::selection_reports"],
     ["painted:host/painted/src/presenter/reader_selection/mouse.rs",
@@ -165,7 +168,8 @@ export const classifications = [
     ["painted:host/painted/src/presenter/edit_menu.rs", "Presenter::edit_menu_action Presenter::edit_menu_at Presenter::edit_menu_key Presenter::edit_menu_valid Presenter::field_menu_default Presenter::open_edit_menu"],
     ["painted:host/painted/src/presenter/events.rs",
       "Presenter::clear_removed_focus Presenter::cursor_at Presenter::focus_place Presenter::follow_pointer Presenter::hold_modifier Presenter::hover " +
-      "Presenter::hover_at Presenter::memory_warning Presenter::modifiers Presenter::move_focus_serviced Presenter::restore_focus Presenter::set_window_active Presenter::submit_event"],
+      "Presenter::hover_at Presenter::memory_warning Presenter::modifiers Presenter::move_focus_serviced Presenter::restore_focus Presenter::set_window_active Presenter::submit_event " +
+      "Presenter::with_pointer_modifiers"],
     ["painted:host/painted/src/presenter/field.rs", "Presenter::apply_field_edit Presenter::before_input Presenter::drain_field_select_tasks Presenter::field_select Presenter::set_range_text"],
     ["painted:host/painted/src/presenter/hatch.rs", "Presenter::hatch_act"],
     ["painted:host/painted/src/presenter/hosted.rs",
@@ -316,6 +320,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/display_frame.rs",
       "Presenter::acknowledge Presenter::display_complete Presenter::display_frame Presenter::display_presented Presenter::panel_complete Presenter::panel_frame Presenter::panel_lost " +
       "Presenter::submitted_picture SubmittedFrame::carried SubmittedFrame::image SubmittedFrame::mirror"],
+    ["painted:host/painted/src/presenter/drag_out.rs", "Presenter::keep_shown"],
   ]),
   group("hatch clocks", ["subscription"], "live hatch attachment and its timer/frame registration", "UI-owned",
     "host/painted/src/presenter/hatch.rs scopes hatches to live nodes, advances registered clocks and retires removed attachments; callbacks can dispatch through the current host.", [
@@ -458,7 +463,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/glide.rs", "Presenter::reveal_glides"],
     ["painted:host/painted/src/presenter/hatch.rs", "Presenter::wake_due_ms Presenter::wants_frames"],
     ["painted:host/painted/src/presenter/height_drag.rs", "Presenter::height_candidate"],
-    ["painted:host/painted/src/presenter/layout_json.rs", "Presenter::layout_json"],
+    ["painted:host/painted/src/presenter/layout_json.rs", "Presenter::layout_json Presenter::laid_out_display_none"],
     ["painted:host/painted/src/presenter/links.rs", "Presenter::inline_hit"],
     ["painted:host/painted/src/presenter/media.rs", "Presenter::media_json"],
     ["painted:host/painted/src/presenter/painter.rs",
@@ -1231,8 +1236,9 @@ export const classifications = [
     ["painted:host/painted/src/presenter/back.rs", "Presenter::back_key_down"],
     ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_button Presenter::bar_colors Presenter::content_scroller Presenter::read_bars"],
     ["painted:host/painted/src/presenter/contact.rs",
-      "Presenter::canvas_input_live Presenter::contact_down Presenter::depth Presenter::feedback_contains Presenter::focus_on_down Presenter::input_live " +
+      "Presenter::canvas_input_live Presenter::contact_down Presenter::feedback_contains Presenter::focus_on_down Presenter::input_live " +
       "Presenter::pointer_lift Presenter::pointer_moved Presenter::retire_acknowledged_pointer Presenter::retire_pointer"],
+    ["painted:host/painted/src/presenter/contact/candidate.rs", "Presenter::depth"],
     ["painted:host/painted/src/presenter/contact/mouse.rs", "Presenter::mouse_click_target"],
     ["painted:host/painted/src/presenter/control.rs", "Presenter::click_control Presenter::dispatch_control_press Presenter::menu_geometry Presenter::menu_press Presenter::set_control_value Presenter::size_controls"],
     ["painted:host/painted/src/presenter/edit_menu.rs", "Presenter::make_edit_menu Presenter::menu_field"],
@@ -1263,7 +1269,7 @@ export const classifications = [
       "Presenter::reveal_before_paint Presenter::clear_of_sticky Presenter::hold_fragment Presenter::reveal_shift Presenter::scroll_by Presenter::scroll_element_by " +
       "Presenter::open_arrived Presenter::scroll_element_into_view Presenter::scroll_into_with Presenter::scroll_page_by Presenter::scroll_to_fragment Presenter::sticky_at"],
     ["painted:host/painted/src/presenter/scrollbar.rs", "Presenter::scrollbar_pointer"],
-    ["painted:host/painted/src/presenter/scrollers.rs", "Presenter::claims_at Presenter::hidden_scrollers Presenter::scroll_bounds_of Presenter::scroll_to_completion Presenter::touch_kept"],
+    ["painted:host/painted/src/presenter/scrollers.rs", "Presenter::claims_at Presenter::hidden_scrollers Presenter::module_ancestor Presenter::scroll_bounds_of Presenter::scroll_to_completion Presenter::touch_kept"],
     ["painted:host/painted/src/presenter/select.rs", "Presenter::menu_key Presenter::select_key Presenter::selected_row"],
     ["painted:host/painted/src/presenter/shortcuts.rs", "Presenter::shortcut"],
     ["painted:host/painted/src/presenter/snap.rs", "Presenter::resnap_scrollers"],
@@ -1287,6 +1293,7 @@ export const classifications = [
   ]),
   group("UI facts", ["subscription"], "current session, viewport, page or rendered geometry", "UI-owned",
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/viewport.rs and page.rs settle facts of the live session; these entries carry no app/account operation identity.", [
+    ["painted:host/painted/src/presenter/events.rs", "Presenter::reader_module_sizes"],
     ["painted:host/painted/src/presenter/arrange_geometry.rs", "Presenter::arrange_base Presenter::list_port"],
     ["painted:host/painted/src/presenter/preferences.rs", "Presenter::apply_scheme Presenter::midi_unavailable Presenter::scheme_of"],
     ["painted:host/painted/src/presenter/range_frame.rs", "Presenter::read_ranges"],
@@ -1343,7 +1350,7 @@ export const classifications = [
       "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::borrowed_files_chosen Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
       "Presenter::document_picker Presenter::finish_portal_picks Presenter::finish_save Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
     ["painted:host/painted/src/presenter/file_dialog.rs",
-      "FileDialog::start_folder declared_types Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
+      "FileDialog::start_folder declared_types Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::file_exports_done_by Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
       "Presenter::serve_file_dialogs Presenter::take_file_dialogs"],
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",

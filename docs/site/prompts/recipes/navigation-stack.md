@@ -3,7 +3,7 @@ Give the Exact app in this folder a navigation stack: a list that pushes a detai
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not name the screens, propose them from the app's data (the list, the detail, the sheet) and ask me before you write code.
-3. In app.contract, make each screen a route under `routes nav`, never an `if` over state: a route gets Back, links and split. Draw them in a `for` over `stack(nav)`, each with its own `navigationKey`.
+3. In app.contract, make each screen a route under `routes nav`, never an `if` over state: a route gets Back and links, and a list beside its detail on a wide window where its route says `navigationSplit="split"` (`bun exact.mjs pattern list-detail`). Draw them in a `for` over `stack(nav)`, each with its own `navigationKey`.
 4. Give each route a `header` with one heading: `aria-level=1` for a large title, 2 for an inline one. A list row that only navigates is a `link href=path(…)`, pushed by a `follow` action.
 5. Make the sheet a route with `navigationPresentation="modal"`, and its Cancel `id="back"`, the root's `navigationBack`. Ask before a delete with a `dialog role="alertdialog"`, its `aria-label` the question.
 6. Keep each `testId` unique: routes stay mounted. In app.test.contract, add a test that adds an item, opens it, and deletes it after the alert. Use `clock settle` after a push, a sheet or an alert, and `clock data` before you read a save.

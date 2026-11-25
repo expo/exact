@@ -9,7 +9,10 @@
 
 use crate::forma_params::AppParams;
 use contract_lower::params::{self, ParamToken};
+use contract_syntax::DesignSource;
 use serde_json::{json, Value};
+use std::cell::OnceCell;
+use std::collections::HashMap;
 
 /// The most references the walker follows: past it, the line it is on wins.
 pub const HOPS: usize = 8;
@@ -26,6 +29,54 @@ pub struct Step {
     pub name: String,
 }
 
+/// Package lines in source order. A lookup reads only as far as the first
+/// package that declares the name, and later lookups reuse those reads.
+pub struct PackageTokens<'a> {
+    sources: &'a [DesignSource],
+    lines: Vec<OnceCell<HashMap<String, (bool, exact_forma::Token)>>>,
+}
+
+impl<'a> PackageTokens<'a> {
+    /// The package designs visible to this request.
+    pub fn new(sources: &'a [DesignSource]) -> Self {
+        Self {
+            sources,
+            lines: (0..sources.len()).map(|_| OnceCell::new()).collect(),
+        }
+    }
+
+    /// The first package declaring `name`. Editing a token excludes icons.
+    pub fn package_line(
+        &self,
+        name: &str,
+        icons: bool,
+    ) -> Option<(&DesignSource, &exact_forma::Token)> {
+        self.sources
+            .iter()
+            .zip(&self.lines)
+            .find_map(|(source, cell)| {
+                let lines = cell.get_or_init(|| {
+                    let mut lines = HashMap::new();
+                    if let Ok(d) = exact_forma::parse(&source.text) {
+                        for (icon, token) in d
+                            .tokens
+                            .into_iter()
+                            .map(|t| (false, t))
+                            .chain(d.icons.into_iter().map(|t| (true, t)))
+                        {
+                            lines
+                                .entry(token.name.value.clone())
+                                .or_insert((icon, token));
+                        }
+                    }
+                    lines
+                });
+                let (icon, token) = lines.get(name)?;
+                (icons || !icon).then_some((source, token))
+            })
+    }
+}
+
 /// The designs a walk reads: the app's (its file and text) and each package
 /// design, parsed once.
 pub struct Designs<'a> {
@@ -34,7 +85,7 @@ pub struct Designs<'a> {
     /// The app's design, parsed (none when it has none or it does not parse).
     pub app: Option<exact_forma::Design>,
     /// Each package design, with its source.
-    pub packages: Vec<(&'a contract_syntax::DesignSource, exact_forma::Design)>,
+    pub packages: PackageTokens<'a>,
     /// The app's params and components.
     pub app_params: &'a AppParams,
     /// Each role's row spelling (`AccentColor`, `-exact-secondary-label`),
@@ -43,7 +94,7 @@ pub struct Designs<'a> {
     /// Each param's first `params` line in the app's design, by token, its
     /// index there: found once ([`Designs::set`]).
     pub lines: std::cell::OnceCell<std::collections::HashMap<String, usize>>,
-    /// The params, the app's lines and the packages' lines by name, each
+    /// The params and the app's lines by name, each
     /// the first, found once ([`Names`]).
     pub names: std::cell::OnceCell<Names>,
 }
@@ -55,8 +106,6 @@ pub struct Names {
     /// (in the tokens, then the icons: `false`, `true`), its index
     app: std::collections::HashMap<String, (bool, usize)>,
     roles: std::collections::HashMap<String, (bool, usize)>,
-    /// the package, (tokens or icons), its index
-    packages: std::collections::HashMap<String, (usize, bool, usize)>,
 }
 
 impl<'a> Designs<'a> {
@@ -72,11 +121,7 @@ impl<'a> Designs<'a> {
             names: std::cell::OnceCell::new(),
             file,
             app: text.and_then(|t| exact_forma::parse(t).ok()),
-            packages: app
-                .packages
-                .iter()
-                .filter_map(|p| Some((p, exact_forma::parse(&p.text).ok()?)))
-                .collect(),
+            packages: PackageTokens::new(&app.packages),
             app_params: app,
             roles: vocab
                 .roles
@@ -148,9 +193,6 @@ impl<'a> Designs<'a> {
             .map(String::as_str)
     }
 
-    /// The app's line `name` reads (a token or an icon): by its name, else
-    /// a role's override in either spelling. With the name the fold
-    /// publishes it by (a role's row spelling).
     /// [`Names`], made on first use.
     fn names(&self) -> &Names {
         self.names.get_or_init(|| {
@@ -174,22 +216,18 @@ impl<'a> Designs<'a> {
                     *at += 1;
                 }
             }
-            for (k, (_, d)) in self.packages.iter().enumerate() {
-                for (i, t) in d.tokens.iter().enumerate() {
-                    n.packages
-                        .entry(t.name.value.clone())
-                        .or_insert((k, false, i));
-                }
-                for (i, t) in d.icons.iter().enumerate() {
-                    n.packages
-                        .entry(t.name.value.clone())
-                        .or_insert((k, true, i));
-                }
-            }
             n
         })
     }
 
+    /// Whether the app declares this exact token or icon spelling.
+    pub fn defines(&self, name: &str) -> bool {
+        self.names().app.contains_key(name)
+    }
+
+    /// The app's line `name` reads (a token or an icon): by its name, else
+    /// a role's override in either spelling. With the name the fold
+    /// publishes it by (a role's row spelling).
     fn app_token(&self, name: &str) -> Option<(String, &exact_forma::Token)> {
         let d = self.app.as_ref()?;
         let line = |(icon, i): (bool, usize)| if icon { &d.icons[i] } else { &d.tokens[i] };
@@ -203,17 +241,18 @@ impl<'a> Designs<'a> {
     }
 
     /// A package's line `name` reads: a token, or an icon (stage 13).
-    fn package_token(
+    pub fn package_token(
         &self,
         name: &str,
     ) -> Option<(&contract_syntax::DesignSource, &exact_forma::Token)> {
-        let &(k, icon, i) = self.names().packages.get(name)?;
-        let (s, d) = &self.packages[k];
-        Some((*s, if icon { &d.icons[i] } else { &d.tokens[i] }))
+        self.packages.package_line(name, true)
     }
 
     /// The param whose IR token `name` is.
     fn param(&self, name: &str) -> Option<&ParamToken> {
+        if self.app_params.tokens.is_empty() {
+            return None;
+        }
         let &i = self.names().params.get(name)?;
         self.app_params.tokens.get(i)
     }
@@ -356,6 +395,13 @@ impl<'a> Designs<'a> {
         let base = self.base(p);
         let param = self.set(p).map_or(Value::Null, |e| line(self.file, e));
         Some(json!({"token": token, "app": app, "base": base, "param": param}))
+    }
+
+    /// Add the levels of a resolved or explained param to its reply.
+    pub fn annotate_named(&self, name: &str, out: &mut Value) {
+        if let Some(p) = self.param(name) {
+            self.annotate(p, out);
+        }
     }
 
     /// Param `p`'s additions to a `resolve` or `explain` answer: each of

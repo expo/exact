@@ -55,7 +55,7 @@ final class NavigationHost {
     /// The modal route the root shows painted in the window, on its ground.
     var paintedModal: NodeView? {
         guard let selection, selection.at > 0, selection.stack.indices.contains(selection.at), let route = presenter.views[selection.stack[selection.at]],
-              route.props["navigationPresentation"] == "modal", !sheets.contains(where: { $0.route === route }) else { return nil }
+              NavigationRules.sheetLike(route.props["navigationPresentation"]), !sheets.contains(where: { $0.route === route }) else { return nil }
         return route
     }
     /// What is shown, read again with no batch: a sheet left, a window came.
@@ -86,7 +86,7 @@ final class NavigationHost {
     private func ground(_ routes: [NodeView], inPanel: Bool, grounded: inout Set<UInt32>) {
         for route in routes {
             route.panelRouteRoot = inPanel && route === routes.first
-            guard !route.panelRouteRoot, route.props["navigationPresentation"] == "modal" else { continue }
+            guard !route.panelRouteRoot, NavigationRules.sheetLike(route.props["navigationPresentation"]) else { continue }
             let painted = (route.cgColor("background_color")?.alpha ?? 0) > 0 || route.style["background_image"] != nil
             // In its sheet the route stands on the sheet's own ground (D7.4).
             guard !painted, !sheets.contains(where: { $0.route === route }), !presenter.dialogs.owns(route) else { continue }
@@ -183,13 +183,13 @@ final class NavigationHost {
                 // nothing covers it.
                 let overPage = routes.indices.contains(selected) && {
                     let route = routes[selected], presentation = route.props["navigationPresentation"]
-                    return presentation == "modal" || presentation == "fullscreen" && (route.wrote("background_color") || route.wrote("background_image"))
+                    return NavigationRules.sheetLike(presentation) || presentation == "fullscreen" && (route.wrote("background_color") || route.wrote("background_image"))
                 }()
                 // The lowest route in a sheet: it and the sheets on it are shown, and the route they stand over.
                 let lowest = stack == at && nav === roots.first ? sheeted.first.flatMap { low in routes.firstIndex { $0 === low.base } } : nil
                 // A stack that splits (D4) shows its list and the route its pane shows, and the list stays live beside its detail.
                 let splits = stack == at && nav === roots.first && split.active, beside = splits ? split.shown?.detail : nil
-                let covered = routes.indices.contains(selected) && ["modal", "fullscreen"].contains(routes[selected].props["navigationPresentation"] ?? "")
+                let covered = routes.indices.contains(selected) && NavigationRules.presents(routes[selected].props["navigationPresentation"])
                 for (index, route) in routes.enumerated() {
                     let under = lowest.map { index == $0 - 1 || sheeted.contains { $0.route === route } } ?? false
                     // A route still in its sheet is shown until the sheet has gone (`DialogHost.syncRoutes`).

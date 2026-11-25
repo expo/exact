@@ -34,7 +34,7 @@ another connection follows D10's ten-second Web Lock wait. A timeout returns
 **iPad split views (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** LLP 1127 D19. An iPad tab splits only when its first route says `navigationSplit="split"`. The untabbed directory default stays automatic. Column counts, display mode, split behaviour, compact column, column width controls and a split event wait for an app that needs them. A presented route as the root of a split is deferred.
 
 **Expanded (James, 2026-11-24: "We can make the ruling"):** `swipe=action`
-with `swipe-direction` (LLP 1057.001 §8), the platform's discrete swipe in one
+with `swipe-flick` (LLP 1057.001 §8), the platform's discrete swipe in one
 direction, built on iOS. Exact Chat is the consumer: its composer bar puts the
 keyboard away on a flick down. Take: none offered; waived by James, whom
 Charlie gave the call. Still out: Android's recognizer, and a swipe on what
@@ -208,6 +208,10 @@ which build the bake, not the wasm), the router sweep on the JS target,
 delivery's bake without `app.wasm`, and animated images on the agent's clock — LLP
 1071 §7, "Retiring the wasm target on the web". Games stay on the wasm target
 (Charlie, 2026-09-29).
+
+**Expanded (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0):**
+the web JS target loads the chosen language with the entry. It fetches other languages on demand
+when the non-base tables together cost at least 4 KiB gzipped (AM2a, LLP 1071 §7, “Localized strings”).
 
 **Expanded (Charlie, 2026-09-17: one impressive demo on iPhone, macOS and web):**
 Exact Live combines crew chat, photos, a runbook and background jobs in one
@@ -403,6 +407,9 @@ native modules — a hyphenated tag is a `NativeView` backed by the app's one
 module artifact — with a photo-editor example as the consumer. Unblocks a
 platform widget without a host change or a new node type. Take: LLP 1024 §7's
 (§Components loses no line; `terminal` and friends stay out as built-in tags).
+
+**Expanded (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).**
+Pocket Lab can name the hosts serving each native-module tag. Every build checks its platform guards, and each artifact supplies its host's factories (LLP 1024 D1).
 
 **Expanded (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).**
 Pocket Lab can answer calls and announce watched topics from its own Kotlin in an Android
@@ -738,7 +745,7 @@ commands, writes on the location (`todo add milk`), and printing a GUI app
   - **Its host work:** the Canvas host (LLP 1076 §3.3) and the GPU painter.
     **Expanded (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).**
     Pocket Lab may colour Android’s bars through their elements and the root accent (LLP 1115.001 D11).
-  - **Parley's Android arm** (`text/parley-android`, LLP 1085.000).
+  - **Parley's Android arm** (`text/parley-android`, LLP 1085.000). **Decided for advances (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).** Every Android painted label measures and draws with the glyph advances of a default `TextView` in the same font and size, and breaks where those advances say. Read them from Android or verify them against it across fonts and API levels. A hard-coded rounding rule cannot supply them. Break strategies, fallback and complex-script shaping remain open (LLP 1085.000 §8).
   - **Hosted Back (Charlie, 2026-11-24, "recs ok"; panel 4–0).** Module and hatch views share system Back and its predictive gesture with the route and dismissible layers through the root dispatcher (LLP 1115.001 D6).
   - **A place in the sweep.**
 
@@ -1208,6 +1215,11 @@ names no take; `:focus-within` remains out.
 selectMode preserve; no undo step — for now”. Consumer: the issue's editor
 replacing `@name` with a reference. LLP 1069.001 records the web, AppKit, UIKit and Linux implementations
 and remaining host limits. Take: none named; this feature lane is explicitly approved.
+
+**Text-field filters (Charlie, 2026-11-24, "recs ok").** LLP 1102 §3.16 and
+1069.001 D4 admit reconciling the edited text field when its synchronous
+`input` action assigns state its value reads. This unblocks a live digits
+filter even when rejecting a character leaves the accepted value equal.
 
 **Restated (Charlie, 2026-09-27, LLP 1069.001):** the tag count guards against
 invented components, not HTML's own elements. A built-in tag is an HTML
@@ -2493,11 +2505,11 @@ This half matters more than the feature half.
 
 ## Moving something off this list
 
-Write one line naming what it unblocks, and take something off the doing-list in the same PR.
-If nothing can come off, Charlie may waive the take in writing; the waiver is recorded beside the entry, in his words. Without a take or a waiver, the answer is no. **Restated (Charlie, 2026-09-27):** the take stays the default; the waiver
-exists so that an exception is a visible act and not drift.
+Write one line naming what it unblocks, and take something off the doing-list in the same PR. If nothing can come off, Charlie may waive the take in writing; the waiver is recorded beside the entry, in his words. Without a take or a waiver, the answer is no. **Restated (Charlie, 2026-09-27):** the take stays the default; the waiver exists so that an exception is a visible act and not drift.
 
 **App-owned Android queries (Charlie, 2026-11-24, "recs ok").** `host.android.queries` takes the package, action and action-with-scheme entries and allow-lists of a package’s `manifest.queries` (LLP 1133.030 D9). This lets an app’s Kotlin discover installed speech engines.
+
+**App-owned Android permissions (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).** `host.android.permissions` shares the package allow-list of install-time permissions. Adding `android.permission.DETECT_SCREEN_CAPTURE` lets Pocket Lab count system screenshots in its own Kotlin. AG1 keeps a framework screenshot event off the doing-list (LLP 1133.030 D9).
 
 **Package-owned Android POI service (Charlie, 2026-11-24, "recs ok").** LLP 1133.030 D9 admits one package's Kotlin point-of-interest service, with a ranged minimum car API, the generated template descriptor, an optional service-bound map permission and host validation enforced by Exact.
 

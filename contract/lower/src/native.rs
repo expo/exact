@@ -215,31 +215,12 @@ pub fn module_tags(file: &File) -> Vec<(String, Span)> {
 }
 
 pub(crate) fn module_tags_in(nodes: &[Node]) -> Vec<(String, Span)> {
-    fn walk(nodes: &[Node], out: &mut Vec<(String, Span)>) {
-        for n in nodes {
-            match n {
-                Node::Element {
-                    tag,
-                    children,
-                    span,
-                    ..
-                } => {
-                    if is_module_tag(tag) {
-                        out.push((tag.clone(), *span));
-                    }
-                    walk(children, out);
-                }
-                node => {
-                    for list in node.child_lists() {
-                        walk(list, out);
-                    }
-                }
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(nodes, &mut out);
-    out
+    Node::walk(nodes)
+        .filter_map(|n| match n {
+            Node::Element { tag, span, .. } if is_module_tag(tag) => Some((tag.clone(), *span)),
+            _ => None,
+        })
+        .collect()
 }
 
 impl Lowerer<'_> {

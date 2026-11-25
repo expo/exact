@@ -30,15 +30,17 @@ fn literal_text(e: &Expr) -> String {
         _ => "…".into(),
     }
 }
-/// `navigationSplit`'s column width written as a number: its text, as the
-/// prop carries it (LLP 1116.004 D1.2).
-pub(crate) fn split_width(prop: PropId, e: &Expr) -> Option<Expr> {
-    match e {
-        Expr::Number(n, span) if prop == PropId::NavigationSplit => {
-            Some(Expr::Str(n.to_string(), *span))
-        }
-        _ => None,
+/// `navigationSplit` as the prop carries it where the compiler knows its text (`routes::split_text`): that text, one
+/// string literal, so every reader of the plan, the runner's scan of a tab's ask included, reads the value the compiler
+/// judged (LLP 1127 D1, D19). A switch stays itself, for its own refusal.
+pub(crate) fn split_literal(prop: PropId, e: &Expr) -> Option<Expr> {
+    if prop != PropId::NavigationSplit || matches!(e, Expr::Str(..)) {
+        return None;
     }
+    if matches!(crate::routes::untyped(e), Expr::Bool(..)) {
+        return None;
+    }
+    crate::routes::split_text(e).map(|text| Expr::Str(text, e.span()))
 }
 /// `glassGroup`'s value to compile (LLP 1053.000.000 D1, 1053.000.000.000
 /// D1): each literal spacing, at the top and in every arm of a choice, is 0 to
@@ -1130,16 +1132,32 @@ pub(crate) fn check_prop_value(
             }
         }
     }
-    // @ref LLP 1116.004 D1.2, LLP 1116.006 D2 — a stack's split on a wide window: off, or the list column's
-    // width; or, on a box in the root route, the detail pane's placeholder.
-    if prop == PropId::NavigationSplit
-        && matches!(value, Expr::Str(s, _) if s != "none" && s != "split" && s != "placeholder" && !s.parse::<f64>().is_ok_and(|w| w.is_finite() && w > 0.0))
-    {
-        return err(
-            "lower-attr-value",
-            "`navigationSplit` takes \"split\" (a split view in an iPad tab or window), \"none\" (the stack pushes on a wide window too) or the list column's width, a positive number, on the root route; or \"placeholder\" on a box in it, which the detail pane shows while nothing is selected",
-            span,
-        );
+    // @ref LLP 1127 D1 — a stack's split, asked on its root route: "split", or the list column's width;
+    // "none" pushes on every host; or, on a box in the root route, the detail pane's placeholder, which asks too.
+    // Only a value as written is judged: a computed one is the app's at run time, where every host
+    // reads the words it knows and takes any other as saying nothing
+    if prop == PropId::NavigationSplit {
+        let refusal = match (crate::routes::split_text(value), crate::routes::untyped(value)) {
+            (_, Expr::Bool(b, _)) => Some(format!(
+                "`navigationSplit={b}` is not a value: the attribute says how the stack splits and is no switch. Write \"split\" for a list beside its detail, or \"none\" for no split"
+            )),
+            (Some(s), _) if s == "auto" => Some(
+                "`navigationSplit=\"auto\"` is not a value: leave the attribute out for each host's own default, or write \"split\" for a list beside its detail, a width in px, or \"none\" to push on every host".to_string(),
+            ),
+            (Some(s), _)
+                if ["split", "none", "placeholder"].contains(&s.as_str())
+                    || exact_kernel::props::split_width(&s).is_some() =>
+            {
+                None
+            }
+            (Some(s), _) => Some(format!(
+                "`navigationSplit=\"{s}\"` is not a value: a stack's root route takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\", and a plain box that is its own child \"placeholder\""
+            )),
+            (None, _) => None,
+        };
+        if let Some(message) = refusal {
+            return err("lower-attr-value", message, span);
+        }
     }
     // A prop that takes one of a few words, and what its refusal says.
     let words: Option<(&[&str], &str)> = match prop {
@@ -1151,11 +1169,15 @@ pub(crate) fn check_prop_value(
         // @ref LLP 1123 D7 — a sheet route's choices, each one UIKit property.
         PropId::NavigationEdgeAttachedInCompactHeight => Some((&["true", "false"], "`navigationEdgeAttachedInCompactHeight` takes \"true\" (in a short window, as an iPhone's in landscape, the sheet rests on the screen's bottom edge as it does in a tall one) or \"false\" (the default: the platform's, a sheet that covers the short window's height)")),
         PropId::NavigationScrollExpands => Some((&["true", "false"], "`navigationScrollExpands` takes \"true\" (scrolling the sheet's content at its top grows the sheet to its next detent) or \"false\" (the content scrolls and the sheet keeps its height); unsaid, the platform's: it grows on a sheet with several detents")),
+        PropId::NavigationPopoverOverlapsSource => Some((&["true", "false"], "`navigationPopoverOverlapsSource` takes \"true\" (the popover may cover its anchor where it cannot fit beside it) or \"false\" (the default: it keeps beside its anchor)")),
+        PropId::NavigationPopoverAdaptation => Some((&["sheet", "none"], "`navigationPopoverAdaptation` takes \"sheet\" (the default: in a compact-width window, as an iPhone's in portrait, the popover is a sheet, as the platform adapts it) or \"none\" (a popover there too)")),
         PropId::NavigationSizing => Some((&["page", "form", "automatic"], "`navigationSizing` takes \"page\" (the default: a page sheet), \"form\" (a form sheet, centred at a standard size in a regular-width window) or \"automatic\" (the platform's choice)")),
         // @ref LLP 1115.000 D5.5 — the ways the navigation root offers now.
         PropId::NavigationHistory => Some((&["back forward", "back", "forward", "none"], "`navigationHistory` takes \"back forward\" (the default: Back and Forward, wherever the router has somewhere to go), \"back\", \"forward\" or \"none\", the ways through history the navigation root offers now")),
         // @ref LLP 1115.000 D7.3 — Return presses a focused pressable under the node, as Chromium's Enter does.
         PropId::ReturnPresses => Some((&["descendants", "none"], "`-exact-return-presses` takes \"descendants\" (Return presses a focused button under this node, as Space does) or \"none\" (the default: Return is the dialog's default button's)")),
+        // @ref LLP 1188 D3 — two parts that stand together, as UIKit arranges them.
+        PropId::Arrangement => Some((crate::routes::arrangement::WORDS, crate::routes::arrangement::TAKES)),
         PropId::FocusGuide => Some((&["auto"], "`focusGuide` takes \"auto\"")),
         PropId::MenuOrder => Some((&["fixed", "priority", "automatic"], "`menuOrder` takes \"fixed\" (the rows as written, wherever the menu opens), \"priority\" (the first row nearest the finger) or \"automatic\" (the default: the platform's order, which on iOS shows a menu that opens upward last row first)")),
         PropId::Wakelock => Some((&["screen", "none"], "`wakelock` takes \"screen\" (the display stays awake while this element is displayed) or \"none\" (the default)")),

@@ -868,8 +868,13 @@ fn check_svg_attrs_with(
     let element = is_element(tag) || (matches!(tag, "svg" | "text") && in_svg);
     for a in attrs {
         // A module tag's own prop named like an SVG attribute (`fx`)
-        // is the module's (LLP 1024 D1).
-        if crate::native::leftover(tag, a) {
+        // is the module's (LLP 1024 D1), and a swipe's selector or retired
+        // name the swipe rules judge (LLP 1057.001 §8); `swipe` itself is
+        // refused below, as every handler but `press` is.
+        if crate::native::leftover(tag, a)
+            || matches!(a.name.as_str(), "swipe-flick" | "swipe-follow")
+            || crate::handlers::swipe::retired(&a.name).is_some()
+        {
             continue;
         }
         // A `clipPath` by reference clips SVG elements (LLP 1055.000 D10);

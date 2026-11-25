@@ -133,6 +133,7 @@ struct Parser {
     /// Expressions (and prefix operators) open around the current token.
     depth: u32,
     view_depth: usize,
+    platform_matches: Vec<(String, Span)>,
     /// The tree depth of the expression last parsed.
     last: usize,
     /// Free calls of a method's name (`trim(s)`), each with its refusal: refused

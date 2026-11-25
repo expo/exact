@@ -508,6 +508,29 @@ component App
     }
 
     #[test]
+    fn a_shrink_to_fit_parent_offers_a_module_room_for_its_first_measurement() {
+        for (parents, expected) in [
+            ("row width=240\n      column padding=10", 215.),
+            ("column width=0\n      column min-width=240", 235.),
+        ] {
+            let source = format!("component App\n  view\n    {parents}\n        wrap-text margin-left=5 testId=\"module\"\n");
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&source),
+                (),
+                (400., 400.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            let offer = props(&mut p);
+            assert_eq!(offer["autoWidth"], expected, "{parents}");
+            assert_eq!(offer["autoHeight"], true);
+        }
+    }
+
+    #[test]
     fn module_props_and_hit_answers_identify_the_session_despite_reload_collisions() {
         let source = "component App\n  view\n    native-menu width=100 height=40 testId=\"menu\"\n";
         let (mut p, error) = Presenter::boot_with(

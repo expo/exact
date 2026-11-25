@@ -21,6 +21,7 @@
 
 use crate::path_crates::path_crates;
 use contract::Manifest;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -272,7 +273,7 @@ impl Compat {
 }
 
 /// The compatibility id of the app at `app_dir` built for `platform`
-/// (`ios`, `macos`, `linux`, `web`) and `target` (the triple), with the
+/// (`ios`, `macos`, `linux`, `windows`, `web`) and `target` (the triple), with the
 /// data crate's grants when the caller has a `DataSource` to ask (the bake
 /// does; command-line callers can supply the declarations from its receipt),
 /// and whether that source hands the executor work no grant names
@@ -378,6 +379,11 @@ pub fn compatibility_id_pinned(
     settings: &serde_json::Value,
     host_work: bool,
 ) -> Result<Compat, String> {
+    let platform = if target.contains("android") {
+        "android"
+    } else {
+        platform
+    };
     // A receipt that does not say links the executor: it cannot be shown unneeded.
     let host_work =
         host_work || module.is_some_and(|m| m["typescriptHostWork"].as_bool() != Some(false));
@@ -441,7 +447,7 @@ pub fn compatibility_id_pinned(
         if compat.inputs["store"]["L"] != "0" {
             compat.inputs["typescriptModule"] = serde_json::Value::String(sha.into());
         }
-        if target.contains("android") {
+        if platform == "android" {
             compat.inputs["hermesBytecode"] = meta["bytecodeVersion"].clone();
         }
         compat.id = compatibility_digest(&compat.inputs);
@@ -462,7 +468,7 @@ pub fn compatibility_id_pinned(
     crate::reach::derive(app_dir, platform, plan.as_ref(), &mut compat)?;
     localizations(platform, &mut compat);
     crate::sandbox::derive(app_dir, platform, plan.as_ref(), &mut compat);
-    if target.contains("android") {
+    if platform == "android" {
         crate::channels::derive(app_dir, &manifest.json, &mut compat)?;
     }
     // The plans that ship, each resolved once (the receipt writes the entry
@@ -477,12 +483,27 @@ pub fn compatibility_id_pinned(
     // From the plan that ships, which the APK's build reads: a TypeScript
     // bake's marks the resources its module answers, which link the host's
     // I/O, and the `app.contract` plan alone does not.
-    if let (true, Some(ships)) = (target.contains("android"), ships) {
+    if let (true, Some(ships)) = (platform == "android", ships) {
         compat.inputs["androidLinked"] = android_linked(
             ships,
             compat.inputs["grantCeiling"].as_str(),
             &contract::native::app_text(app_dir),
         );
+        if std::env::var_os("OUT_DIR").is_some() {
+            println!("cargo:rerun-if-env-changed=EXACT_ANDROID_MANIFEST_PERMISSIONS");
+        }
+        if let Ok(inventory) = std::env::var("EXACT_ANDROID_MANIFEST_PERMISSIONS") {
+            let names: Vec<String> = serde_json::from_str(&inventory)
+                .map_err(|e| format!("merged Android manifest permissions: {e}"))?;
+            if names.windows(2).any(|pair| pair[0] >= pair[1]) || names.iter().any(String::is_empty)
+            {
+                return Err(
+                    "the merged Android permission inventory must contain sorted, unique names"
+                        .into(),
+                );
+            }
+            compat.inputs["androidLinked"]["permissions"] = serde_json::json!(names);
+        }
         compat.id = compatibility_digest(&compat.inputs);
     }
     crate::icon_rules::apply(&mut compat, ships, entries)?;
@@ -520,28 +541,28 @@ pub fn compatibility_id_pinned(
     Ok(compat)
 }
 
-/// The faced tools this platform's binary compiles a door for (LLP 1133.023
-/// D8), and on the Mac those its tools helper lists (LLP 1111.000 D1): each
-/// one's signature and face join the id, so a plan that changes one is a
-/// binary change. tvOS (an `ios` bake for a tvOS target) and the web
-/// compile none.
-fn faces(compat: &mut Compat, plan: &exact_plan::Plan, platform: &str, target: &str) {
+/// The faced tools compiled into this binary's doors (LLP 1133.023 D8, LLP 1111.000 D1).
+pub(crate) fn faces_of(plan: &exact_plan::Plan, platform: &str, target: &str) -> Option<Value> {
     let doors: &[&str] = match platform {
-        _ if target.contains("tvos") => return,
+        _ if target.contains("tvos") => return None,
         "ios" => &["apple"],
         "macos" => &["apple", "mcp"],
-        "android" => &["android"],
-        _ => return,
+        _ if platform == "android" || target.contains("android") => &["android"],
+        _ => return None,
     };
-    let faced: Vec<serde_json::Value> = (0..plan.tools.len())
+    let faced: Vec<Value> = (0..plan.tools.len())
         .filter_map(|i| {
-            let face: serde_json::Value = serde_json::from_str(plan.str(plan.tools[i].face)).ok()?;
+            let face: Value = serde_json::from_str(plan.str(plan.tools[i].face)).ok()?;
             let named = face["doors"].as_array()?;
             named.iter().any(|d| doors.iter().any(|door| d == door)).then(|| serde_json::json!({ "signature": contract::faces::tool_signature(plan, i), "face": face }))
         })
         .collect();
-    if !faced.is_empty() {
-        compat.inputs["faces"] = serde_json::json!(faced);
+    (!faced.is_empty()).then(|| serde_json::json!(faced))
+}
+
+fn faces(compat: &mut Compat, plan: &exact_plan::Plan, platform: &str, target: &str) {
+    if let Some(faced) = faces_of(plan, platform, target) {
+        compat.inputs["faces"] = faced;
         compat.id = compatibility_digest(&compat.inputs);
     }
 }
@@ -600,7 +621,7 @@ pub(crate) fn compatibility_digest(inputs: &serde_json::Value) -> String {
     digest[..16].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn commands_digest() -> String {
+pub(crate) fn commands_digest() -> String {
     let mut h = Sha256::new();
     for name in contract_syntax::HOST_COMMANDS {
         let shape = match *name {
@@ -630,7 +651,7 @@ pub(crate) fn compatibility_with_trust(
     grants: Option<&str>,
     trust: &str,
 ) -> Result<Compat, String> {
-    use serde_json::{json, Value};
+    use serde_json::json;
     if !matches!(trust, "production" | "development") {
         return Err("EXACT_UPDATE_TRUST must be production or development".into());
     }
@@ -649,11 +670,16 @@ pub(crate) fn compatibility_with_trust(
     // `deploy.store.android` is "0", not the native default of "A": Android
     // apps shipped binary-only, and "A" asks a production build for keys and
     // a stream.
-    let android = target.contains("android");
+    let android = platform == "android" || target.contains("android");
     let platform = if android { "android" } else { platform };
     let store = if android {
         match manifest.json.pointer("/deploy/store/android") {
             None => "0".to_string(),
+            Some(value) => value.as_str().unwrap_or("").to_string(),
+        }
+    } else if platform == "windows" {
+        match manifest.json.pointer("/deploy/store/windows") {
+            None => "A".to_string(),
             Some(value) => value.as_str().unwrap_or("").to_string(),
         }
     } else {
@@ -665,6 +691,11 @@ pub(crate) fn compatibility_with_trust(
     let binary_only = store == "0";
     if platform == "linux" && target.contains("-windows") && !binary_only {
         return Err("the headless Linux host on Windows has no update store; set deploy.store.linux to \"0\"".into());
+    }
+    if platform == "windows" && !binary_only {
+        return Err(
+            "the Windows host has no update store; set deploy.store.windows to \"0\"".into(),
+        );
     }
     let keys = if binary_only {
         Value::Null
@@ -756,6 +787,11 @@ pub(crate) fn compatibility_with_trust(
         })
         .unwrap_or_default();
     icons.sort();
+    // The TV and the watch bake as "ios"; a package's `targets` names them apart.
+    let module_platform = ["tvos", "watchos"]
+        .into_iter()
+        .find(|p| target.contains(&format!("-{p}")))
+        .unwrap_or(platform);
     let mut inputs = json!({
         "kernelSchema": format!("{:016x}", exact_kernel::SCHEMA_DIGEST),
         "formatVersion": exact_plan::FORMAT_VERSION,
@@ -790,7 +826,7 @@ pub(crate) fn compatibility_with_trust(
         "gpuSurfaces": gpu_surfaces(app_dir, manifest)?,
         // @ref LLP 1024 D3/D4 — the roster and the table's ABI: a new tag
         // is a binary change, never a bundle (LLP 1047 D8).
-        "nativeModules": match contract::native::roster(manifest)? {
+        "nativeModules": match contract::native::roster(manifest)?.tags_on(module_platform) {
             tags if tags.is_empty() => Value::Null,
             tags => json!({ "appleAbi": 3, "webAbi": 1, "tags": tags }),
         },
@@ -915,12 +951,7 @@ pub(crate) fn compatibility_with_trust(
     // Which GPU artifact owns which surface (LLP 1009 D6): the manifest's
     // modules, bound into the cohort — a routing change is a new binary. An
     // app with one artifact carries no key, so its id and bytes are as before.
-    // The TV and the watch bake as "ios"; a package's `targets` names them apart.
-    let gpu_platform = ["tvos", "watchos"]
-        .into_iter()
-        .find(|p| target.contains(&format!("-{p}")))
-        .unwrap_or(platform);
-    let modules = contract::package_gpu::modules(app_dir, &manifest.json, gpu_platform)?;
+    let modules = contract::package_gpu::modules(app_dir, &manifest.json, module_platform)?;
     if modules.as_object().is_some_and(|m| !m.is_empty()) {
         inputs["gpuModules"] = modules;
     }
@@ -1462,3 +1493,6 @@ mod file_handlers_tests;
 #[cfg(test)]
 #[path = "compat_watch_sync_tests.rs"]
 mod watch_sync_tests;
+#[cfg(test)]
+#[path = "compat_windows_tests.rs"]
+mod windows_tests;

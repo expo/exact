@@ -21,12 +21,12 @@
 
 use exact_runner::Delivery;
 use exact_update::{Client, Generation, PreparedSelection, Status};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 /// The head is a pointer card (LLP 1026 D11); a file is a plan or an asset.
@@ -39,8 +39,7 @@ pub struct Updates {
     /// downloads.
     status: Arc<Mutex<Status>>,
     checking: Arc<AtomicBool>,
-    lines: Receiver<String>,
-    tx: Sender<String>,
+    lines: Arc<Mutex<VecDeque<String>>>,
     wake: UnixStream,
     signal: UnixStream,
     /// A boot's note — the selected entry refused at boot — taken once.
@@ -83,7 +82,6 @@ impl Updates {
     pub fn from_client(client: Client) -> Result<Updates, String> {
         let status = client.status();
         let generation = client.generation();
-        let (tx, lines) = channel();
         let (wake, signal) = UnixStream::pair().map_err(|e| format!("the update wake: {e}"))?;
         wake.set_nonblocking(true)
             .map_err(|e| format!("the update wake: {e}"))?;
@@ -91,8 +89,7 @@ impl Updates {
             client: Arc::new(Mutex::new(client)),
             status: Arc::new(Mutex::new(status)),
             checking: Arc::new(AtomicBool::new(false)),
-            lines,
-            tx,
+            lines: Arc::new(Mutex::new(VecDeque::new())),
             wake,
             signal,
             note: None,
@@ -179,7 +176,7 @@ impl Updates {
         let client = Arc::clone(&self.client);
         let status = Arc::clone(&self.status);
         let checking = Arc::clone(&self.checking);
-        let tx = self.tx.clone();
+        let lines = Arc::clone(&self.lines);
         let Ok(mut signal) = self.signal.try_clone() else {
             self.checking.store(false, Ordering::SeqCst);
             return false;
@@ -188,9 +185,14 @@ impl Updates {
             .name("exact-update".into())
             .spawn(move || {
                 let line = run_check(&client, &status);
+                {
+                    let mut queued = lock(&lines);
+                    queued.push_back(line);
+                    if queued.len() == 1 {
+                        let _ = signal.write_all(&[1]);
+                    }
+                }
                 checking.store(false, Ordering::SeqCst);
-                let _ = tx.send(line);
-                let _ = signal.write_all(&[1]);
                 wake();
             });
         if spawned.is_err() {
@@ -201,15 +203,21 @@ impl Updates {
     }
 
     /// A finished check's line, when one landed since the last take —
-    /// `current` · `staged seq N` · `refused: …`; the wake bytes go with it.
+    /// `current` · `staged seq N` · `refused: …`. The wake descriptor stays
+    /// readable while more completed outcomes remain queued.
     pub fn take_line(&mut self) -> Option<String> {
+        let mut queued = lock(&self.lines);
+        let line = queued.pop_front();
         let mut buf = [0u8; 64];
         while let Ok(n) = (&self.wake).read(&mut buf) {
             if n == 0 {
                 break;
             }
         }
-        self.lines.try_recv().ok()
+        if !queued.is_empty() {
+            let _ = (&self.signal).write_all(&[1]);
+        }
+        line
     }
 
     /// Pin a staged candidate without changing live state.
@@ -499,14 +507,13 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&base);
         let client = Client::open_at(&base, &base, COMPAT, b"embedded plan", Some(ORIGIN)).unwrap();
-        let (tx, lines) = channel();
         let (wake, signal) = UnixStream::pair().unwrap();
+        wake.set_nonblocking(true).unwrap();
         let mut updates = Updates {
             client: Arc::new(Mutex::new(client)),
             status: Arc::new(Mutex::new(stale_status())),
             checking: Arc::new(AtomicBool::new(false)),
-            lines,
-            tx,
+            lines: Arc::new(Mutex::new(VecDeque::new())),
             wake,
             signal,
             note: None,
@@ -523,6 +530,39 @@ mod tests {
         assert_eq!(delivery.stream, "embedded");
         assert_eq!(delivery.seq, 0);
         assert!(updates.take_note().unwrap().contains("booted entry zero"));
+        drop(updates);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn take_line_keeps_fd_readable_until_every_queued_outcome_is_taken() {
+        let base = crate::TempDir(
+            std::env::temp_dir().join(format!("exact-linux-wake-queue-{}", std::process::id())),
+        );
+        let _ = std::fs::remove_dir_all(&base);
+        let client = Client::open_at(&base, &base, COMPAT, b"embedded plan", Some(ORIGIN)).unwrap();
+        let mut updates = Updates::from_client(client).unwrap();
+        {
+            let mut queued = lock(&updates.lines);
+            queued.push_back("current".into());
+            queued.push_back("staged seq 2".into());
+            (&updates.signal).write_all(&[1, 1]).unwrap();
+        }
+
+        let readable = |wake: &UnixStream| match (&*wake).read(&mut [0u8; 1]) {
+            Ok(n) => n > 0,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => false,
+            Err(e) => panic!("unexpected wake read error: {e}"),
+        };
+
+        assert_eq!(updates.take_line().as_deref(), Some("current"));
+        assert!(
+            readable(&updates.wake),
+            "second queued outcome must keep the wake fd readable"
+        );
+        assert_eq!(updates.take_line().as_deref(), Some("staged seq 2"));
+        assert!(!readable(&updates.wake));
+        assert_eq!(updates.take_line(), None);
         drop(updates);
         let _ = std::fs::remove_dir_all(base);
     }

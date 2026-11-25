@@ -100,6 +100,9 @@ abstract class ExactExtension(val context: ExtensionContext) {
     /** Every prop of a view [view] made, replaced. */
     open fun update(view: android.view.View, props: JSONObject) {}
 
+    /** Bind a package view's preferred content size for this use of its node. */
+    open fun sizing(view: android.view.View, events: NativeViewSizing) {}
+
     /** The view's node is gone. */
     open fun destroyView(view: android.view.View) {}
     /** The hosted view's activity lifecycle, separate from the session's foreground fact (LLP 1133.021). */
@@ -842,6 +845,7 @@ internal object Extensions {
             return made
         }
         override fun update(view: android.view.View, props: JSONObject) { extension(name)?.update(view, props) }
+        override fun sizing(view: android.view.View, events: NativeViewSizing) { extension(name)?.sizing(view, events) }
         override fun events(view: android.view.View, emit: (String, String) -> Unit) { emits[view] = emit }
         override fun lifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {
             extension(name)?.viewLifecycle(view, event, state)

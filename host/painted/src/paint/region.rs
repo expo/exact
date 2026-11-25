@@ -152,6 +152,7 @@ struct NodePaint {
     key: NodeKey,
     id: ViewId,
     pointer_hit: bool,
+    visible: bool,
     scrollbar: bool,
     paint: BoxPaint,
     payload: Payload,
@@ -506,6 +507,7 @@ impl Picture {
                 pointer_hit: node
                     .computed_row(exact_kernel::StyleId::PointerEvents, |s| s.pointer_events)
                     != exact_kernel::PointerEvents::None,
+                visible: super::paints(scene.kernel, id, None),
                 scrollbar: node.style.scrollbar_width != exact_kernel::ScrollbarWidth::None,
                 paint,
                 payload,
@@ -884,6 +886,7 @@ impl<'a> Replay<'a> {
                             },
                             shape_clips: Vec::new(),
                             pointer_hit: n.pointer_hit,
+                            visible: n.visible,
                             projective: None,
                             affine: Some((parent, g.outer.rect)),
                             unpress: Transform::identity(),
@@ -1038,6 +1041,7 @@ mod hit_tests {
                 rounded_border: None,
                 shape_clips: Vec::new(),
                 pointer_hit: true,
+                visible: true,
                 id: 1,
                 rect: bbox(ts, rect),
                 clip: None,

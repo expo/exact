@@ -1,7 +1,7 @@
 import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
 import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from "../drag-input.js";
 import { picker, track, iframeLoading, localAssetURL, host, agentMode, pageFacts, pageNative, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
-import { resolveShortcuts, pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
+import { resolveShortcuts, pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, fieldText, replaceFieldText, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
 import { send } from "./commit.js";
 import { attach } from "./input.js";
 export function appSource(el, name, value, then) {
@@ -264,7 +264,7 @@ export function refreshSymbols() {
     tintFit(el);
   }
 }
-export function writeValue(el, value) {
+export function writeValue(el, value, filtered = host.inputField === el) {
   // An option's value getter falls back to its label, so a bound value equal to the label is written still: the
   // attribute holds it when the label changes.
   if (el.localName === "option") {
@@ -274,40 +274,24 @@ export function writeValue(el, value) {
     return;
   }
   if (el.exactMarkup) {
-    el.exactMarkup.setValue(value);
+    el.exactMarkup.setValue(value, filtered);
     return;
   }
   if (el instanceof HTMLTextAreaElement) {
     el.exactSourceValue = String(value);
   }
+  value = fieldText(el, value);
   const old = el.value;
   if (old === value) {
     heldValues.delete(el);
     return;
   }
   if (composing.has(el)) {
-    heldValues.set(el, value);
+    heldValues.set(el, [value, filtered]);
     return;
   }
   heldValues.delete(el);
-  if (typeof el.setRangeText !== "function" || valuedControl(el) || old === "" || document.activeElement !== el) {
-    el.value = value;
-    return;
-  }
-  let a = 0, z = 0;
-  while (a < old.length && a < value.length && old[a] === value[a]) {
-    a++;
-  }
-  while (z < old.length - a && z < value.length - a && old[old.length - 1 - z] === value[value.length - 1 - z]) {
-    z++;
-  }
-  const end = old.length - z, text = value.slice(a, value.length - z), { selectionStart: s0, selectionEnd: s1 } = el, carry = (p) => p <= a ? p : p >= end ? p + text.length - (end - a) : a + text.length;
-  el.setRangeText(text, a, end, "preserve");
-  if (el.value !== value) {
-    el.value = value;
-  } else {
-    el.setSelectionRange(carry(s0), Math.max(carry(s0), carry(s1)));
-  }
+  replaceFieldText(el, value, filtered);
 }
 export function syncMarkup(el) {
   if (el.exactMarkup) {

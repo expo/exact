@@ -1058,6 +1058,7 @@ fn every_concepts_code_compiles_and_its_names_are_its_own() {
     let mut failures = Vec::new();
     for name in [
         "scroll",
+        "edges",
         "loading",
         "plural",
         "choice",

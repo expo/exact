@@ -417,6 +417,7 @@ test('WebMCP navigation retries the current page after a failed download', () =>
 
 test('WebMCP navigation reports a pending current-page download that fails', () => withPage({}, async page => {
   const release = Promise.withResolvers();
+  await page.addInitScript(() => sessionStorage.setItem('exact.generation-reload', '1'));
   await page.route(websiteChunk, async route => {
     await release.promise;
     await route.abort('internetdisconnected');

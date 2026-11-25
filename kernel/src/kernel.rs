@@ -38,14 +38,17 @@ mod intrinsic;
 mod keyboard;
 pub(crate) mod margins;
 pub(crate) mod observe;
+mod observed_max;
 pub(crate) mod owner;
 mod owner_update;
 mod provenance;
 pub(crate) mod readers;
+mod regions;
 mod replacement;
 mod segments;
 mod session_update;
 pub(crate) mod targets;
+mod window_map;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
 mod scroll_terms;
@@ -69,10 +72,12 @@ pub use owner_update::{
     decode_registration, encode_registration, BarRegion, OwnerChrome, OwnerUpdate, VerticalBarEdge,
 };
 pub use provenance::{Contribution, Operation};
+pub use regions::{RegionKind, ReservedRegion};
 pub use scroll_terms::ScrollTerms;
 pub use session_update::SessionUpdate;
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;
+pub use window_map::WindowMap;
 
 /// How many receipts the kernel retains for late readers.
 pub const RECEIPT_RING: usize = 64;
@@ -659,17 +664,14 @@ impl Kernel {
             // the shell too. No failed derived cache is reused on recovery.
             self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
         }
-        let counted = result.is_ok() && region.provisional_chrome;
-        if counted {
-            self.provisional_layouts += 1;
-        }
+        let provisional = region.provisional_chrome;
         let mut result = result?;
         // Top-layer subtrees are independent of the region's publication.
         if let Err(e) = self.lay_out_blocks(slot, &mut result.shell) {
             self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
             return Err(e.into());
         }
-        if !counted && engine(&mut self.layout).provisional_chrome() {
+        if provisional || engine(&mut self.layout).provisional_chrome() {
             self.provisional_layouts += 1;
         }
         Ok(result)
@@ -1076,6 +1078,7 @@ impl Kernel {
             (!self.on_demand).then(|| Box::new(LayoutTree::new()) as Box<dyn LayoutMirror>);
         self.selectors.clear();
         self.receipts.clear();
+        self.awaiting.clear();
         self.incarnation += 1;
         self.epoch += 1;
         self.wide_changed();

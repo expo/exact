@@ -177,7 +177,7 @@ impl Emitter<'_> {
                 children,
                 ..
             } => {
-                let (props, handlers) = self.attrs(attrs)?;
+                let (props, handlers) = self.attrs(tag, attrs)?;
                 format!(
                     "(.element {} {} [{}] [{}] {})",
                     string(tag),

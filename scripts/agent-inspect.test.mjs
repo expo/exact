@@ -544,11 +544,11 @@ test('compact reports expose measured stages and preserve unknown evidence', () 
   const shared = { ...report, coreSinceReload: { callbacks: '600', frameIntervals: '599', missedFrames: '2', lateFrames: '3',
       frameTimeBoundsNs: { median: [16500000, 17000000], p99: [33000000, 33500000], maximum: [48000000, null] },
       workBoundsNs: { median: [4000000, 4500000], p99: [17000000, 17500000], maximum: [20000000, 20500000] } },
-    otherSources: [{ source: 'ui-update', retainedEvents: 16 }], selection: "one-source; the card's Share gives ui-update as a report of its own" };
+    otherSources: [{ source: 'ui-update', retainedEvents: 16 }], selection: "one-source; the card's Share gives ui-update's report beside it" };
   const sharedText = renderFrameHealthReport(shared);
   expect(sharedText).toContain('since reset: 600 callbacks · frame intervals 599 · missed 2 · late 3');
   expect(sharedText).toContain('frame time median 16.50–17.00 ms, p99 33.00–33.50 ms, maximum 48.00–∞ ms · work median 4.00–4.50 ms, p99 17.00–17.50 ms, maximum 20.00–20.50 ms');
-  expect(sharedText).toContain("other sources: ui-update (16 retained) · one-source; the card's Share gives ui-update as a report of its own");
+  expect(sharedText).toContain("other sources: ui-update (16 retained) · one-source; the card's Share gives ui-update's report beside it");
   const powered = structuredClone(report);
   powered.hitches[0][4] += 2 ** 23 + 2 ** 16 + 2 ** 33 + 2 ** 34 + 2 ** 36;
   expect(renderFrameHealthReport(powered)).toContain('workload motion · thermal serious · low power true');

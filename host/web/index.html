@@ -253,7 +253,7 @@
   /* LLP 1116.004 D1: a wide window (900 px and up, the navigation glue's `WIDE`) adapts what the app left unsaid, as the
      projection marks it. A root tab bar whose placement is unsaid is a sidebar: the root's column turns, the tabs
      are rows beside their labels; neutral.css supplies their selected state. An authored colour
-     still wins; the layout is the platform's. A stack whose root route is a list whose rows push shows that route
+     still wins; the layout is the platform's. A stack whose root route asks for the split (LLP 1127 D1) shows that route
      as a column beside the detail, as a split view does: `navigationSplit` wide (320 by default), its rows without
      the disclosure (they select, not push), the row whose press pushed the detail shown marked. Across a fold, two
      viewport segments side by side, the list fills the segment at its inline start and the detail starts after the
@@ -272,8 +272,8 @@
   #exact-root [data-exact-split="detail"] { inset-inline-start: var(--exact-split-detail, var(--exact-split, 320px)) !important; }
   /* LLP 1116.006 D2: a split showing no detail fills the detail pane with one quiet line, centred, in the secondary
      label's colour, which asks for a choice as a web app's empty pane does, where an iPad's says "No Selection" (in
-     English: the web host has no strings table of its own; LLP 1115.000 D4.16). A box of
-     the root route marked `navigationSplit="placeholder"`, the author's own, takes the pane instead: a centred
+     English: the web host has no strings table of its own; LLP 1115.000 D4.16). The root
+     route's own child box marked `navigationSplit="placeholder"`, the author's own, takes the pane instead: a centred
      column at the pane's width (the navigation glue sets it), its alignment the author's. The lowerer hides that box
      wherever no split shows it (a phone, a detail shown, a host that does not split). */
   #exact-root [data-exact-split-empty]::before { content: "Select an item"; position: absolute; inset: 0; inset-inline-start: var(--exact-split-detail, var(--exact-split, 320px)); display: flex; align-items: center; justify-content: center; padding: 16px; color: var(--exact-secondary-label); font-size: 1.25rem; text-align: center; pointer-events: none; }

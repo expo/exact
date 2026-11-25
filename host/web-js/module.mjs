@@ -18,12 +18,97 @@ import { awaitBuildOutput, cargoCheckout, refuseStdLockfile, WEB_STD, WEB_SIZE, 
 import { rustDataOf, undeclaredDataCrate } from '../../scripts/app-shells.mjs';
 import { appCrates, linkedCrate } from '../../scripts/cargo-check.mjs';
 import { SETUP_FETCHES, withHostDeployment } from '../../scripts/filesystem.mjs';
-import { replaceBuild } from '../web/serve.mjs';
+import { withoutBase } from './route-pattern.js';
+import { buildTreeFile, replaceBuild, webContentType } from '../web/serve.mjs';
 import { webPackageBindingChanged } from '../../js/bake/src/package-config.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
 import { keptProducts } from '../../scripts/kept.mjs';
 import { RustMissing, compilerFrom, fromSet, fromSets, fetchedTool, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
 import { EXE, slashRelative, within } from '../../scripts/paths.mjs';
+// Most tables use only ECMAScript at import time. Detect a host read even under
+// `typeof` or a caught exception, so an answer for the build VM never qualifies a browser-only branch.
+async function scriptModuleTags(dist, base, factoryTags) {
+  const vm = await import('node:vm');
+  const options = { strings: false, wasm: false };
+  const properties = vm.runInNewContext('Object.getOwnPropertyDescriptors(globalThis)', {}, { contextCodeGeneration: options });
+  delete properties.globalThis;
+  let hostRead = false;
+  const context = vm.createContext(new Proxy(Object.defineProperties(Object.create(null), properties), {
+    get(target, key) {
+      if (typeof key === 'string' && !Object.hasOwn(target, key)) {
+        hostRead = true;
+        throw new ReferenceError(key);
+      }
+      return Reflect.get(target, key);
+    },
+  }), { codeGeneration: options });
+  const origin = 'https://exact.invalid', modules = new Map();
+  function load(url) {
+    if (modules.has(url.href)) return modules.get(url.href);
+    const path = url.origin === origin && withoutBase(url.pathname, base);
+    const file = path && buildTreeFile(dist, path);
+    if (!file) throw new Error(url.href);
+    const module = new vm.SourceTextModule(readFileSync(file.path, 'utf8'), {
+      context, identifier: url.href, initializeImportMeta(meta) { meta.url = url.href; },
+    });
+    modules.set(url.href, module);
+    return module;
+  }
+  let timer;
+  try {
+    const module = load(new URL(base + 'modules/index.js', origin));
+    await module.link((specifier, parent) => {
+      if (!/^(?:\.{1,2}\/|\/)/.test(specifier)) throw new Error(specifier);
+      return load(new URL(specifier, parent.identifier));
+    });
+    await Promise.race([module.evaluate({ timeout: 2000 }), new Promise((_, reject) => { timer = setTimeout(reject, 2000); })]);
+    const tags = factoryTags(module.namespace);
+    return hostRead ? null : tags;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
+/** Read the table in the staged page when its initialization needs a browser. */
+export async function webModuleTags(dist, base, required, release) {
+  const entry = resolve(dist, 'modules/index.js');
+  if (!existsSync(entry)) return [];
+  let view, server, timer;
+  try {
+    const { factoryTags } = await import('../../scripts/launch-modules.mjs');
+    const tags = await scriptModuleTags(dist, base, factoryTags);
+    if (tags) return tags;
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const url = new URL(request.url);
+      const path = url.origin === server.url.origin && withoutBase(url.pathname, base);
+      const file = path && buildTreeFile(dist, path, request.headers.get('Accept') ?? '');
+      if (!file) return new Response(null, { status: 404 });
+      return new Response(Bun.file(file.path), { headers: {
+        'Content-Type': webContentType(file.route),
+        'Content-Security-Policy': "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'",
+      } });
+    } });
+    let backend = 'webkit';
+    if (process.platform !== 'darwin') {
+      const { chromium } = await import('../../scripts/agent-launch.mjs');
+      const chrome = chromium();
+      if (chrome.unavailable) throw new Error(chrome.unavailable);
+      backend = { type: 'chrome', path: chrome.executable };
+    }
+    view = new Bun.WebView({ backend });
+    const read = async () => {
+      await view.navigate(new URL(base, server.url).href);
+      return view.evaluate(`(async () => (${factoryTags})(await import(new URL('./modules/index.js', document.baseURI))))()`);
+    };
+    return await Promise.race([read(), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('module initialization timed out')), 15000);
+    })]);
+  } catch (cause) {
+    const message = `web: cannot read the factory roster for ${required.join(', ')}: ${cause.message}`;
+    if (release) throw new Error(message, { cause });
+    console.warn(`warning: ${message}`);
+    return null;
+  } finally { clearTimeout(timer); view?.close(); server?.stop(true); }
+}
+
 /** The development URL for frames/<name>.contract. */
 export const frameURL = name => '/__dev/frames/' + encodeURIComponent(name).replaceAll("'", '%27');
 

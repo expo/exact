@@ -729,7 +729,7 @@ view-if       = "if" expr block(node) [ "else" ( view-if | block(node) ) ] ;
 for           = "for" IDENT [ "," IDENT ] "in" expr "key" "=" expr block(node) ;
 view-match    = "match" expr block(view-case) ;
 view-case     = "case" "some" "(" IDENT ")" block(node)
-              | "case" "none" block(node) ;
+              | "case" "none" block(node) | "case" STRING block(node) ;
 children      = "children" NL ;
 special-word  = "document" | "switch" | "multiple" ;
 ```
@@ -748,7 +748,8 @@ arguments; its name starts uppercase to distinguish it from an element.
 
 A `for` key is a string, number, or boolean, with unique stable values required
 for useful row identity. Its optional second binding is the numeric row index.
-`if` conditions are boolean and `match` subjects are options. Root regions are
+`if` conditions are boolean. Match an option with `case some(value)` and
+`case none`. Match `page.platform` with a quoted host name per case. Root regions are
 refused: wrap them in an element. `children` requires a declared slot.
 
 ## Expressions and types
@@ -1391,6 +1392,9 @@ the app's own control to press it.
 `type` on a `select` chooses an enabled option by value, else by its one label;
 on a date, time or range input it sets the value in HTML's format; on a checkbox
 it takes `true` or `false`, on a radio `true`. A target out of view is scrolled into view first.
+A plain `tap` the host refuses as covered is scrolled into view again and pressed once more when that
+moved it (an Android keyboard leaving between the two gives the navigation bar its room back, which
+can park the target under it); one nothing scrolls clear is refused.
 An input step ends with what it settled (an answer given in the input's turn,
 and its mutation's `then`; on a native host, not one given while another
 answer's storage is in flight, LLP 1097); otherwise the clock stands still between steps:
@@ -2274,7 +2278,7 @@ host.
 | Zero or one frame record (the action takes it or leaves it) | on an `iframe`: `currententrychange`, `navigatesuccess` and `navigateerror` (`FrameNavigation`), `capture` (`FrameCapture`), `download` (`FrameDownload`), `newwindow` (`FrameNewWindow`) and `userpromptopened` (`FrameUserPrompt`) |
 | Zero or one `MIDIMessageEvent` (the action takes it or leaves it) | `midimessage`, on an element with `midiinputs=` ([MIDI](#midi-exactmidi-sendmidi-midimessage)) |
 | Zero or one `MouseEvent` (the action takes it or leaves it) | `press`: the modifier keys held, `shiftKey`, `ctrlKey`, `altKey`, `metaKey` (a shift-click, a ⌘-click; all false from a keyboard or assistive activation), and where the pointer was, `clientX`, `clientY`, from the viewport (0, 0 from a keyboard or assistive activation, as Chrome's; a popover's `left`/`top` can open it there, LLP 1021 D2) |
-| None | `enterpictureinpicture`, `leavepictureinpicture`, `beforeunload`, `cancel`, `close`, `scrollend`, `scrolldragstart`, `focus`, `blur`, `submit`, `load`, `dblclick`, `swiperight`, `swipeleft`, `swipe`, `refresh`, `loadedmetadata`, `play`, `playing`, `pause`, `ended`, `waiting`, `seeking`, `seeked`, `ratechange`, `volumechange`, `canplay`, `reachstart`, `reachend` |
+| None | `enterpictureinpicture`, `leavepictureinpicture`, `beforeunload`, `cancel`, `close`, `scrollend`, `scrolldragstart`, `focus`, `blur`, `submit`, `load`, `dblclick`, `swipe`, `refresh`, `loadedmetadata`, `play`, `playing`, `pause`, `ended`, `waiting`, `seeking`, `seeked`, `ratechange`, `volumechange`, `canplay`, `reachstart`, `reachend` |
 
 On text fields and textareas, `input` reports every edit. An `input` handler
 should update raw draft state so live search, validation and button enablement
@@ -2675,7 +2679,10 @@ begins; `dragstart`, `drag` and `dragend` are refused for now
 and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
 carries ([recipe](recipes/drag-out.md)). On iOS, iPadOS and Android a press
 held on the node lifts it into another app, and on the Mac and the web a mouse
-drags it.
+drags it. In Linux's Wayland window a mouse drags its `text` (UTF-8, as
+`text/plain;charset=utf-8` and `UTF8_STRING`) and its `url` (as
+`text/uri-list` and `text/x-moz-url`), as a copy; a node carrying files
+alone does not lift there.
 
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).
@@ -2685,9 +2692,17 @@ its own question, and calls the host command `close()` once it is answered,
 which closes the window without asking again (on the web, `window.close()`, which
 a browser honours only for a window a script opened). Windows asks it as the Mac
 does, before its close button, Alt+F4 or the taskbar's Close window closes the
-window (a window that `keepRunning` hides asks nothing), and its bare `close()`
-closes the window and ends the one-window app without asking again. iOS and
-Linux close no window. `head edited=…` marks the document
+window (a window that `keepRunning` hides asks nothing) and before a sign-out,
+restart or shutdown ends the app (a handler that keeps the window keeps the
+session, and Windows names the app as preventing it; a critical end asks
+nothing), and its bare `close()`
+closes the window and ends the one-window app without asking again. A Wayland
+window asks before its title-bar close or the desktop's close command, and
+`close()` ends the app without asking again. SIGTERM, SIGINT and SIGHUP
+end the Wayland app without asking. A second termination signal ends the
+process immediately. iOS has no window-close event.
+
+`head edited=…` marks the document
 as unsaved: on macOS the dot in the window's close button, beside the proxy icon
 of the file the window opened;
 other hosts show nothing (a declared deviation: the web has no unsaved mark).
@@ -2923,6 +2938,16 @@ extended), and when `setSelectionRange` changes the selection, collapsed
 included; typing and a plain caret move do not fire it. Its payload is the
 `InputEvent`.
 
+On the web JS target, a text field (including search) or textarea shows its
+bound `value` after its own `input` action assigns state that expression
+read. Assigning the old value counts. For `value=form.name` the slot is
+`form`, including when a child receives the name from its parent and calls
+the parent's action. A guard that skips the assignment, a data layer that
+issues no write, validation and a save awaiting a reply all leave the draft
+visible. A later change to the binding updates the field normally. The
+caret follows the accepted part of the edit. The wasm and native hosts
+still use their existing value-change behavior.
+
 While an input method composes in a text field or a textarea (Japanese kana
 before its kanji, pinyin, a Korean syllable), `input` fires at every change
 with the composing text in the value, as the DOM's does, on every host that
@@ -2938,7 +2963,8 @@ composition goes on. One that writes a different value (trimmed,
 upper-cased, cut to a length) does not interrupt the person either: on every
 host that composes, the value is held while the text composes and lands when
 the composition ends, committed or cancelled, so the rewrite shows a moment
-later (the last value written, where there were several).
+later. The latest accepted value takes precedence even if the input method
+sends no further `input`.
 
 `setSelectionRange(id, start, end)` and `setSelectionRange(id, start, end,
 direction)` are the field's own method, by its `id`, after the commit's tree

@@ -49,16 +49,21 @@ pub enum Operation {
     /// The host's clearance of what its container's own chrome or a box beside the routes covers,
     /// and of the band nested containment withholds from a pane (D11).
     ContainerClearance,
+    /// The host's clearance of what is still owed in a native view, through the view's own
+    /// controller, where its declaration consents (D15). That controller is no owner's, so no
+    /// owner update reports it; it is here to keep the hosts' ledgers numbered alike.
+    NativeViewInsets,
 }
 
 impl Operation {
     /// Every operation, in wire order (`OwnerUpdate::encode`).
-    pub const ALL: [Operation; 5] = [
+    pub const ALL: [Operation; 6] = [
         Operation::AdditionalInsets,
         Operation::SafeAreaPadding,
         Operation::BarReservation,
         Operation::KeyboardInsets,
         Operation::ContainerClearance,
+        Operation::NativeViewInsets,
     ];
 }
 

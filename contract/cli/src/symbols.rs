@@ -188,7 +188,12 @@ impl Graph {
         }
         out.extend_from_slice(b"],\"references\":[");
         count = 0;
+        // A platform match compares its single written subject in each lowered arm.
+        let mut written = std::collections::HashSet::new();
         for reference in &self.references {
+            if !written.insert((reference.span, reference.to)) {
+                continue;
+            }
             let to = match &selected {
                 Some(selected) => match selected[reference.to] {
                     Some(to) => to,

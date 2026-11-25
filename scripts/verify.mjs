@@ -41,7 +41,7 @@
 // the console session's desktop and its window captured (`desktopShot`), since that, not the headless picture, is what a
 // person sees there.
 //
-//   bun scripts/verify.mjs [web|ios|windows|android] --app <name> [--sim <udid|name>] [--shots <dir>] [--rescroll] [--strict] [--json]
+//   bun scripts/verify.mjs [web|ios|windows|android] --app <name> [--sim <udid|name>] [--duo <udid|name>|none] [--shots <dir>] [--rescroll] [--strict] [--json]
 import { LAUNCH_MEDIA } from './agent-prefer.mjs';
 import { toolEnv } from './tools.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -58,6 +58,7 @@ import { selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
 import { axGroup, byRule, FIRST, firstGrounds, groups, launchNotes, placesOf, RELAUNCH, ruleOf, largeRemedy, iosNavigationContent, iosTabBar } from './verify-findings.mjs';
 import { cargoDiagnosticFilter } from './cargo-check.mjs';
+import { duoLeg } from './verify-duo.mjs';
 export { byRule, groups, ruleOf, largeRemedy };
 
 import { serverModules } from './app-imports.mjs';
@@ -599,6 +600,31 @@ export function tourNews(visited, toured) {
   return toured.map((l) => ({ ...l, lines: l.lines.filter((line) => !said.has(key(line))) }));
 }
 
+/** `verify ios` on an iPhone Duo (verify-duo.mjs): the first screen and the tests' ends, in each pose. `passed` names the
+ * tests that passed on the other simulator, by file and place; one that fails here is the leg's `failed`. */
+async function onDuo(app, { pick, shots, running, freshServer, passed }) {
+  const [{ open }, { runTests }, { checkOp }, { authoredTests }] = await Promise.all([import('./agent.mjs'), import('./agent-test.mjs'), import('./agent-check.mjs'), import('./app.mjs')]);
+  const check = async (s, screen, pose) => {
+    if (systemAlert(await s.state())) throw new Error('a system alert is up');
+    const shot = screen === FIRST ? resolve(shots, `ios-duo-${pose.replace(/\W+/g, '-')}.png`) : null;
+    const [run] = (await checkOp(s, ['light'], { ...(shot ? { shots: () => shot } : {}), accept: ACCEPT })).check;
+    if (run.incomplete) throw new Error(run.incomplete);
+    return { screen, pose, size: [run.viewport.w, run.viewport.h], scheme: run.scheme, ...(shot ? { shot } : {}), findings: run.findings, accepted: run.accepted, lines: run.findings.map((f) => f.line), hidden: 0, advice: [] };
+  };
+  const drive = async ({ atScreen, atResult }) => {
+    if (running) await freshServer();
+    const s = await open({ host: 'ios', app: app.selector, storage: 'verify-duo', env: { EXACT_AGENT_STORAGE_FRESH: '1' }, ...hostOpen('ios', app) });
+    try { await s.clock('data'); await s.clock('settle'); await atScreen(s, FIRST); } finally { await s.close(); }
+    if (running) await freshServer();
+    for (const [i, file] of authoredTests(app.dir).entries()) {
+      await runTests({ host: 'ios', file, app: app.selector, running, storage: `verify-duo${i}`, replayShots: resolve(shots, 'duo', String(i)), ...hostOpen('ios', app),
+        atEnd: (t, { name, failures }) => atScreen(t, name, failures.length ? null : undefined),
+        atResult: (t) => atResult(t.failures.length && passed.has(`${basename(file)} ${t.index}`) ? { name: t.name, file: basename(file), failures: t.failures } : null) });
+    }
+  };
+  return duoLeg({ pick, check, drive, remembered: resolve(app.dir, '.exact', 'simulator') });
+}
+
 /** One launch at `size` (null: the device's own) on a fresh scratch store: the app's data landed and its
  * transitions ended, then `check both`, its captures kept in `shots`. A run per scheme, `{ screen, size, scheme,
  * asked, shot, findings, lines, hidden }` (`lines`: check's own text for it, with a line for a resource that
@@ -825,7 +851,7 @@ async function relaunch(host, app, test, fresh, shots) {
 }
 
 const BOX = /\s*\[-?\d+,-?\d+ \d+×\d+\]/g;
-const sizeOf = (r) => r.size.join('x'), schemeOf = (r) => r.asked ?? r.scheme, screenOf = (r) => r.screen ?? FIRST;
+const sizeOf = (r) => r.pose ?? r.size.join('x'), schemeOf = (r) => r.asked ?? r.scheme, screenOf = (r) => r.screen ?? FIRST;
 const screenName = (screen) => (screen === FIRST || screen === RELAUNCH || screen.startsWith('line ') ? screen : quoted(screen, 28));
 /** The findings of every screen, launch and scheme, each once: a line found at several (its box aside, which a width
  * moves) is shown once, tagged with the screens it was on unless it was on all, and with the widths and schemes of
@@ -851,7 +877,7 @@ const KINDS_FROM = 10; // findings from which the closing line says their kinds
 
 /** The report's lines and its problem count, from what each stage gave; `full`, every finding of each group, one a line,
  *  which verify writes to `listed` (a path the report names when the groups leave any line out). */
-export function report({ host, built, compiler = [], server, tested, checks, ax = [], relaunched, refused = [], reloads = [], large = [], fixed = { lines: [], accepted: [] }, scrolled = null, desktop = null, launch = [], shots, copied, own = [], accept = [], ms, cwd = process.cwd(), listed = null, strict = false }) {
+export function report({ host, built, compiler = [], server, tested, checks, ax = [], relaunched, refused = [], reloads = [], large = [], fixed = { lines: [], accepted: [] }, scrolled = null, desktop = null, duo = null, launch = [], shots, copied, own = [], accept = [], ms, cwd = process.cwd(), listed = null, strict = false }) {
   const out = [], full = [];
   const all = listed ? `${listed} lists them all` : 'verify --json lists them all';
   let failedTests = 0, findings = 0, broken = 0;
@@ -937,9 +963,10 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
     findings += fixed.lines.length; for (const l of fixed.lines) { counted(ruleOf(l)); acceptable.add(ruleOf(l)); }
   }
   // What app.json's `verify.accept` names as the app's design: said once each, not counted; an entry that took nothing is named.
-  const accepted = [...distinctFindings(runs.map((r) => ({ ...r, lines: (r.accepted ?? []).map((f) => f.line) }))), ...fixed.accepted.map((f) => f.line), ...axSaid.accepted];
+  const judged = [...runs, ...(duo?.runs ?? [])];
+  const accepted = [...distinctFindings(judged.map((r) => ({ ...r, lines: (r.accepted ?? []).map((f) => f.line) }))), ...fixed.accepted.map((f) => f.line), ...axSaid.accepted];
   const took = (e, f) => f.accept?.finding === e.finding && f.accept?.node === e.node;
-  const idle = accept.filter((e) => ![...runs, ...ax].some((r) => (r.accepted ?? []).some((f) => took(e, f))) && !fixed.accepted.some((f) => took(e, f)));
+  const idle = accept.filter((e) => ![...judged, ...ax].some((r) => (r.accepted ?? []).some((f) => took(e, f))) && !fixed.accepted.some((f) => took(e, f)));
   if (accepted.length || idle.length) {
     out.push(`accepted (app.json verify.accept, not counted): ${plural(accepted.length, 'finding')}`, ...accepted.slice(0, SHOWN));
     if (accepted.length > SHOWN) out.push(`  … and ${accepted.length - SHOWN} more (${all})`);
@@ -1005,6 +1032,26 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
       findings += found.length; counted('scrolling', found.length);
     }
   }
+  // The app on an iPhone Duo (LLP 1188 D4): what its poses and the keyboard show that the phone did not.
+  if (duo?.why) out.push(`iPhone Duo: not read (${duo.why})`);
+  else if (duo) {
+    // The other simulator's node has another id; on the Duo a pose that moves a node says the same of it as the first did
+    const key = (r, f, ...rest) => [screenOf(r), f.kind, ...rest].join('\n'), elsewhere = (r, f) => key(r, f, f.node?.replace(`#${f.id}`, ''));
+    const already = new Set(runs.flatMap((r) => (r.findings ?? []).map((f) => elsewhere(r, f)))), each = new Map();
+    for (const r of duo.runs) for (const f of r.findings.filter((f) => !already.has(elsewhere(r, f)))) {
+      const at = key(r, f, f.node ?? f.line, f.detail?.with);
+      each.set(at, { screen: screenOf(r), line: each.get(at)?.line ?? f.line, poses: [...(each.get(at)?.poses ?? []), r.pose] });
+    }
+    const lines = [...each.values()].map(({ screen, line, poses }) => line.replace(/^(\s*)/, `$1(${screenName(screen)}, ${poses.join(', ')}) `));
+    if (duo.error) lines.push(`  unread   the drive of ${duo.device} ended: ${duo.error}`);
+    else if (!duo.runs.length) lines.push(`  unread   no screen was read on ${duo.device}`);
+    const head = `iPhone Duo (${duo.device}), ${[...new Set(duo.runs.map((r) => r.pose))].join(', ') || 'no pose'}, ${plural(new Set(duo.runs.map(screenOf)).size, 'screen')}: ${lines.length ? plural(lines.length, 'more finding') : 'nothing more'}`;
+    out.push(head, ...byRule(lines), ...duo.notes.map((n) => `  note     ${n}`));
+    if (lines.length) full.push(head, ...lines);
+    findings += lines.length; for (const l of lines) { counted(ruleOf(l)); acceptable.add(ruleOf(l)); }
+  }
+  failedTests += duo?.failed?.length ?? 0;
+  for (const t of duo?.failed ?? []) for (const f of t.failures) out.push(`  FAIL on an iPhone Duo "${t.name}" (${t.file}): ${firstLine(f).replace(`${t.name}: `, '')}`);
   // The relaunch on a test's store (LLP 1116.005 D7): what came back, or each problem, counted as findings.
   if (relaunched?.error) { broken++; out.push(`relaunch: could not drive: ${firstLine(relaunched.error)}`); }
   else if (relaunched) {
@@ -1050,10 +1097,10 @@ export function report({ host, built, compiler = [], server, tested, checks, ax 
 async function deviceMain(argv, emitJSON, declined, ended) {
   const args = guardFlags('verify', argv);
   const value = (flag) => args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : undefined;
-  const json = args.includes('--json'), sim = value('--sim'), copyTo = value('--shots');
+  const json = args.includes('--json'), sim = value('--sim'), copyTo = value('--shots'), duoPick = value('--duo');
   // The app's variant (LLP 1030.008 D3), for every process verify starts; the app it resolves claims it.
   if (value('--variant')) { process.env.EXACT_VARIANT = value('--variant'); delete process.env.EXACT_VARIANT_APP; }
-  const flagged = new Set([args.indexOf('--app') + 1, args.indexOf('--sim') + 1, args.indexOf('--shots') + 1, args.indexOf('--variant') + 1].filter((i) => i > 0));
+  const flagged = new Set([args.indexOf('--app') + 1, args.indexOf('--sim') + 1, args.indexOf('--shots') + 1, args.indexOf('--duo') + 1, args.indexOf('--variant') + 1].filter((i) => i > 0));
   const { resolveApp } = await import('./app.mjs');
   const app = resolveApp(value('--app'));
   const named = args.find((a, i) => !a.startsWith('-') && !flagged.has(i)), chosen = named ? { host: named } : shippedHost('verify', app.manifest);
@@ -1107,7 +1154,7 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   }
   const launch = (size, n) => checkAt(host, app, size, host === 'web' ? `verify.${tag}.t${n}` : 'verify', shots)
     .catch((e) => [{ size: null, label: size ? size.join('x') : host, error: e.message }]);
-  let tested, firsts, relaunched = null, scrolled = null, desktop = null, results = [], replayStore = null, running = null, toured = [], serverSaid = server?.why ? { said: `${server.why}; the tests use whatever answers there` } : null;
+  let tested, firsts, relaunched = null, scrolled = null, desktop = null, duo = null, results = [], replayStore = null, running = null, toured = [], serverSaid = server?.why ? { said: `${server.why}; the tests use whatever answers there` } : null;
   const compiling = compilerWarningsOf(app);
   if (owned) {
     try { running = await startServer(app.dir, server, 'verify'); }
@@ -1177,6 +1224,10 @@ async function deviceMain(argv, emitJSON, declined, ended) {
       scrolled = await scrolling(app, shots, { key, force: args.includes('--rescroll') });
       serverHealth();
     }
+    if (host === 'ios' && duoPick !== 'none' && (app.manifest.host?.ios?.deviceFamily ?? ['iphone']).includes('iphone')) {
+      duo = await onDuo(app, { pick: duoPick, shots, running, freshServer, passed: new Set(results.filter((t) => !t.failures.length).map((t) => `${t.file} ${t.index}`)) });
+      serverHealth();
+    }
     if (host === 'windows') {
       if (running) await freshServer();
       desktop = await desktopShot(app, shots);
@@ -1198,7 +1249,7 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   const checks = [...firsts.flat(), ...ends, ...(relaunched?.runs ?? [])];
   const axReads = [...firsts.map((runs) => runs.ax), ...results.map((t) => t.end?.runs?.ax), relaunched?.runs?.ax].filter(Boolean);
   const compiler = await compiling;
-  const kept = [...new Set([...checks.map((c) => c.shot), relaunched?.shot, desktop?.shot])].filter((p) => p && existsSync(p));
+  const kept = [...new Set([...checks.map((c) => c.shot), ...(duo?.runs ?? []).map((r) => r.shot), relaunched?.shot, desktop?.shot])].filter((p) => p && existsSync(p));
   // `--shots <dir>`: every capture of this run copied out, under its own name (LLP 1116.008 D2).
   // The screenshots a test took itself (its `screenshot` steps) come too, named by the test as the ends are.
   const own = [];
@@ -1222,13 +1273,13 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   // LLP 1163 D2: where the launch colour is not the first screen's, on the hosts that show one before the first frame
   const launchNote = ['ios', 'android', 'web'].includes(host) ? launchNotes(app.manifest, firstGrounds(firsts.flat()), host, host === 'ios' ? await builtGround(app) : null) : [];
   const findingsFile = resolve(shots, `${host}-findings.txt`), listed = relative(process.cwd(), findingsFile);
-  const r = report({ host, built, compiler, server: serverSaid, tested, checks, ax: axReads, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, launch: launchNote, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict') });
+  const r = report({ host, built, compiler, server: serverSaid, tested, checks, ax: axReads, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, duo, launch: launchNote, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict') });
   if (r.full.length) writeFileSync(findingsFile, r.full.join('\n') + '\n'); else rmSync(findingsFile, { force: true });
   writeFileSync(resolve(shots, 'last.json'), JSON.stringify({ ...lastRuns(app), [host]: Date.now() - started }) + '\n');
   if (json) {
     const testsOut = tested?.results ? { ...tested, results: results.map(({ name, file, failures, end }) => ({ name, file, failures, ...(end?.shot && existsSync(end.shot) ? { shot: end.shot } : {}), ...(end?.error ? { endError: end.error } : {}) })) } : tested;
     const relaunchOut = relaunched && (({ runs, large, ...rest }) => rest)(relaunched);
-    emitJSON({ host, built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, ax: axReads, reloads, large, fixed, launch: launchNote, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), screenshots: kept, problems: r.problems, axUnread: r.axUnread, exit: r.exit, ms: Date.now() - started });
+    emitJSON({ host, built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, ax: axReads, reloads, large, fixed, launch: launchNote, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), ...(duo ? { duo } : {}), screenshots: kept, problems: r.problems, axUnread: r.axUnread, exit: r.exit, ms: Date.now() - started });
   } else { say(r.lines.slice(0, -1)); ended(r.lines.at(-1)); }
   // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
   (await import('./evidence.mjs')).recordRun(app.selector, { host, what: 'verify', result: `${r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean'}${r.axUnread ? `${r.problems ? ', and' : ', but'} the accessibility tree was not read whole` : ''}`, timing: 'agent', sim });

@@ -97,8 +97,8 @@ pub extern "C" fn mde_load(h: u32, len: u32) {
 
 /// The app wrote the input as its value.
 #[no_mangle]
-pub extern "C" fn mde_set_value(h: u32, len: u32) -> u32 {
-    with(h, len, |e, text| bits(e.set_value(text)))
+pub extern "C" fn mde_set_value(h: u32, len: u32, filtered: bool) -> u32 {
+    with(h, len, |e, text| bits(e.rewrite_value(text, filtered)))
 }
 
 /// The platform selection is `from..to`; `placed_*` is the selection the host
