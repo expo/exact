@@ -346,6 +346,8 @@ pub struct Store {
     /// A selected entry rejected while opening, retained until the host asks
     /// for the launch candidate so it can publish the fallback note/status.
     launch_refusal: Option<(String, String)>,
+    /// The selection this process refused at boot ([`Store::entry_refused`]).
+    refused: Option<String>,
 }
 
 /// The selected entry, validated: it exists, it parses, and it is this app's
@@ -413,6 +415,7 @@ impl Store {
             view: None,
             sunset: None,
             launch_refusal: None,
+            refused: None,
         };
         let mut rewrite = false;
         match read_record(&store.record_path()) {
@@ -673,9 +676,10 @@ impl Store {
     /// The selected entry was refused before it could run and this process
     /// booted entry zero instead. The durable failure count and selection stay
     /// intact for crash recovery; only this process's running identity moves
-    /// to the embedded generation.
+    /// to the embedded generation. The entry is not staged: the next launch
+    /// retries it, and activating it here would clear its failure count.
     pub fn entry_refused(&mut self) {
-        self.running = None;
+        self.refused = self.running.take();
         self.running_seq = self.embedded.seq;
     }
 
@@ -733,6 +737,7 @@ impl Store {
             view: self.view.clone(),
             sunset: self.sunset.clone(),
             launch_refusal: self.launch_refusal.clone(),
+            refused: self.refused.clone(),
         }
     }
 
@@ -961,13 +966,15 @@ impl Store {
     }
 
     /// The bundle waiting for this process: held pending, or selected for
-    /// the next launch and not the one this process booted (LLP 1030 D5/D7).
+    /// the next launch and neither the one this process booted nor the one it
+    /// refused at boot (LLP 1030 D5/D7).
     pub fn staged(&self) -> Option<Staged> {
         let view = match self.validate(self.record.pending.clone()) {
             Some(pending) => pending,
             None => {
                 let view = self.view.as_ref()?;
-                if self.running.as_deref() == Some(view.sha.as_str()) {
+                let sha = Some(view.sha.as_str());
+                if self.running.as_deref() == sha || self.refused.as_deref() == sha {
                     return None;
                 }
                 view.clone()

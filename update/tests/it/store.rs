@@ -267,12 +267,18 @@ fn a_refused_selection_reports_entry_zero_as_the_running_generation() {
     assert_eq!(status.stream, "embedded");
     assert_eq!(status.running_seq, EMBEDDED_SEQ);
     assert_eq!(status.selected_seq, 4, "the durable selection still failed");
+    assert!(!status.staged, "nothing new is staged");
+    assert!(launch.prepare_activation().unwrap().is_none());
 
     let record = std::fs::read_to_string(temp.path().join("record.json")).unwrap();
     assert!(
         record.contains("\"failures\":1"),
         "the refusal is still counted"
     );
+
+    origin.serving(&Bundle::new(5, b"plan five"));
+    origin.check(&mut launch).unwrap();
+    assert!(launch.status().staged, "a newer bundle is staged");
 }
 
 // ------------------------------------------------------------------- refusals
