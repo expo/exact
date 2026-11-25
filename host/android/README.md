@@ -581,8 +581,19 @@ table and the four rows it adds. A report paints the page again; a role D4 leave
 blue) keeps its table pair.
 
 **One accent.** A control, a field's focused indicator and a filled button paint in the node's `accent-color` where it sets one, else
-in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a switch's thumb, a filled button's title):
-the device’s `primary` and `onPrimary`. Desktop Linux keeps the painter’s blue when no palette is reported. The root’s `accent-color` supplies the RGB seed for the bars’ Material tonal-spot scheme at the device’s contrast level.
+in `AccentColor`, with `AccentColorText` drawn on it (a check, a switch's thumb, a filled button's title):
+the device’s `primary` and `onPrimary`, or the design’s `AccentColor` with its `AccentColorText` or else the ink that
+reads on it. Desktop Linux keeps the painter’s blue when no palette is reported. The root’s `accent-color` supplies the
+RGB seed for the bars’ Material tonal-spot scheme at the device’s contrast level.
+
+**A design's accent seeds the scheme** (LLP 1115.001 D4). Where the app's design says `AccentColor`, the presenter
+replaces the reader's palette with Material's tonal-spot scheme from it (`SchemeTonalSpot`, Material Color
+Utilities), light from the accent's light value and dark from its dark one, at the device's contrast level: every
+role, and the bars' swatches from the light seed's palettes. A role the palette maps is no seed. A root
+`accent-color` tints the controls and seeds the bars (above) and leaves the rest to the device. Not reached: home-screen
+widgets, the launch window, the pull-to-refresh disc, the framework's date and time dialogs, and a paragraph's
+selection highlight, handles and toolbar read the device's resources, and the Compose date and time pickers take
+only the primary roles of an accent a node writes.
 
 **An icon button is Material's** (D9; `host/painted/src/paint/icon_button.rs`): a button holding a symbol and no
 title is a round 40 dp container round a 24 dp icon (the `icon-button-` rows, Compose Material 3 1.4's
@@ -1144,7 +1155,7 @@ A level-1 heading is the same small bar: Material's medium and large bars, which
 | Colour | The root tablist’s `background-color`, through the gesture bar. Defaults to `surfaceContainer` | `surfaceContainer` |
 | Destinations | the root tablist's tabs that name a panel, sharing the width 8 dp apart | 3 to 5, the same (`NavigationBarItemHorizontalPadding`) |
 | Symbol and label | a 24 dp symbol 16 dp from the top, its label under it (label-medium, 12/16 sp), 16 dp from the bottom | the same |
-| Active indicator | a 56 by 32 dp pill in `secondaryContainer` behind the selected symbol or lone label, seeded by the root accent when written | 56 by 32 dp in the theme’s `secondaryContainer` |
+| Active indicator | a 56 by 32 dp pill in `secondaryContainer` behind the selected symbol or lone label, seeded by the root accent when written, else by the design’s `AccentColor` | 56 by 32 dp in the theme’s `secondaryContainer` |
 | Colours | the selected symbol uses `onSecondaryContainer` and its label uses `secondary` from the same seed. A lone label on a seeded indicator uses `onSecondaryContainer` when `secondary` falls below 4.5:1 against the pill. Unselected destinations use the tablist’s ink, defaulting to `onSurfaceVariant`, at 38 % when disabled | `NavigationBarItemDefaults.colors` reads the theme’s selected and unselected roles |
 | Badge | a tab's badge box (LLP 1075.003 §9.9): its text, label-small in `onError` on an `error` pill at least 16 dp square, 4 dp either side of the text, its start 12 dp before the symbol's end and 14 dp into it; not run on a device | `Badge` with content in a `BadgedBox` (`BadgeTokens`, `Badge.kt`, read at the pinned version) |
 

@@ -941,6 +941,7 @@ impl<D: DataSource> Presenter<D> {
     /// stale.
     pub(crate) fn after_commit(&mut self) -> Option<String> {
         self.dirty |= self.brush.paint_epoch != Some(self.host.kernel().epoch());
+        self.sync_accent_seed();
         self.finish_commit()
     }
 

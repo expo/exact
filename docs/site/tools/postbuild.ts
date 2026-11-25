@@ -162,8 +162,9 @@ function prerequisites(p: Page): string {
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }
+const WHEN_TO_USE = `Use Exact when a person wants one app, written once, for the web, iOS, macOS, Android, Linux, Windows, tvOS, watchOS, Android TV or the terminal, or a website. [Agent resources](${ORIGIN}/agents.md) says how to start.`;
 const SOURCE = 'The source is the [expo/exact](https://github.com/expo/exact) repository. Its [AGENTS.md](https://github.com/expo/exact/blob/main/AGENTS.md) has the instructions for coding agents.';
-const llms = `# ${site.name}\n\n> ${site.description}\n\n${SOURCE}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n${bySection(pages, mdUrl, p => `: ${p.description}`)}\n`;
+const llms = `# ${site.name}\n\n> ${site.description}\n\n${WHEN_TO_USE}\n\n${SOURCE}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n${bySection(pages, mdUrl, p => `: ${p.description}`)}\n`;
 for (const file of ['llms.txt', 'assets/llms.txt']) writeFileSync(join(DIST, file), llms);
 const SITEMAP_SUMMARY = "A page index for agents: each page's Markdown URL, its type, the date it last changed, a summary, and what to read before it.";
 writeFileSync(

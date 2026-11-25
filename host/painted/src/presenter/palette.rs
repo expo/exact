@@ -234,6 +234,94 @@ impl Palette {
         })
     }
 
+    /// Material's tonal-spot scheme seeded by an app's accent (LLP 1115.001
+    /// D4), light from its light value and dark from its dark one, at a
+    /// Material contrast level: every role, as Compose's `ColorScheme` built
+    /// from that colour has it, and the swatches the bars read a readable tone
+    /// from, in the reader's order ([`ReaderPalette::from_words`]).
+    pub(crate) fn seeded(seed: [[u8; 3]; 2], contrast: f32) -> (Palette, BarSwatches) {
+        use material_colors::{
+            color::Rgb, dynamic_color::DynamicScheme, palette::TonalPalette,
+            scheme::variant::SchemeTonalSpot,
+        };
+        let [light, dark] = [0, 1].map(|i| {
+            let [r, g, b] = seed[i];
+            let contrast = Some(f64::from(contrast));
+            SchemeTonalSpot::new(Rgb::new(r, g, b).into(), i == 1, contrast).scheme
+        });
+        let argb = |c: Rgb| u32::from_be_bytes([0xFF, c.red, c.green, c.blue]);
+        // In [`Material`]'s order.
+        let roles = |s: &DynamicScheme| {
+            [
+                s.primary(),
+                s.on_primary(),
+                s.secondary_container(),
+                s.surface(),
+                s.on_surface(),
+                s.on_surface_variant(),
+                s.surface_container_low(),
+                s.surface_container(),
+                s.surface_container_high(),
+                s.surface_container_highest(),
+                s.outline_variant(),
+                s.error(),
+                s.primary_container(),
+                s.on_primary_container(),
+                s.inverse_primary(),
+                s.secondary(),
+                s.on_secondary(),
+                s.on_secondary_container(),
+                s.tertiary(),
+                s.on_tertiary(),
+                s.tertiary_container(),
+                s.on_tertiary_container(),
+                s.background(),
+                s.on_background(),
+                s.surface_variant(),
+                s.surface_tint(),
+                s.inverse_surface(),
+                s.inverse_on_surface(),
+                s.on_error(),
+                s.error_container(),
+                s.on_error_container(),
+                s.outline(),
+                s.scrim(),
+                s.surface_bright(),
+                s.surface_dim(),
+                s.surface_container_lowest(),
+            ]
+            .map(argb)
+        };
+        // Tones 10 to 90, 95 and 99, then the light and dark palette keys.
+        let family = |of: fn(&DynamicScheme) -> &TonalPalette, key: fn(&DynamicScheme) -> Rgb| {
+            let tones = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 99].map(|t| of(&light).tone(t));
+            let mut out = [0; 13];
+            for (o, c) in out
+                .iter_mut()
+                .zip(tones.into_iter().chain([key(&light), key(&dark)]))
+            {
+                *o = argb(c);
+            }
+            out
+        };
+        let swatches = [
+            family(
+                |s| &s.primary_palette,
+                DynamicScheme::primary_palette_key_color,
+            ),
+            family(
+                |s| &s.secondary_palette,
+                DynamicScheme::secondary_palette_key_color,
+            ),
+            family(|s| &s.error_palette, DynamicScheme::error_palette_key_color),
+        ];
+        let palette = Palette {
+            light: roles(&light),
+            dark: roles(&dark),
+        };
+        (palette, swatches)
+    }
+
     /// What `role` is on this device under a scheme, at an opacity in
     /// percent: the device's colour is opaque, and the opacity is the role's.
     fn color(&self, role: Material, dark: bool, percent: u32) -> Color {
@@ -292,16 +380,29 @@ impl Palette {
 
 /// The accent a control paints in where its node sets no `accent-color`
 /// (LLP 1115.001 D4, "one accent"), and what is drawn on it: the
-/// `AccentColor` and `AccentColorText` roles as the host reported them.
-/// `None` on a host that reports nothing, whose painter keeps its own.
+/// `AccentColor` and `AccentColorText` roles as the host reported them. A
+/// design that replaces `AccentColor` gives the accent, with its own
+/// `AccentColorText` or else the ink that reads on it, as an authored
+/// `accent-color` has. `None` on a host that reports nothing, whose painter
+/// keeps its own.
 pub(crate) fn reported_accent(dark: bool) -> Option<([u8; 4], [u8; 4])> {
     static TINT: std::sync::LazyLock<Option<(u8, u8)>> = std::sync::LazyLock::new(|| {
         Some((roles::role("AccentColor")?, roles::role("AccentColorText")?))
     });
     let (accent, on) = (*TINT)?;
-    let accent = roles::reported(ColorValue::Role(accent), dark)?;
-    let on = ColorValue::Role(on).resolve(dark);
-    Some((crate::paint::rgba(accent), crate::paint::rgba(on)))
+    let reported = roles::reported(ColorValue::Role(accent), dark)?;
+    let on_color = || crate::paint::rgba(ColorValue::Role(on).resolve(dark));
+    Some(match roles::painted_override(ColorValue::Role(accent)) {
+        None => (crate::paint::rgba(reported), on_color()),
+        Some(design) => {
+            let design = crate::paint::rgba(design.resolve(dark));
+            let ink = match roles::overridden(on) {
+                Some(_) => on_color(),
+                None => crate::paint::look::ink_on(design),
+            };
+            (design, ink)
+        }
+    })
 }
 
 /// What a presenter keeps of the reported colours.
@@ -309,6 +410,10 @@ pub(crate) fn reported_accent(dark: bool) -> Option<([u8; 4], [u8; 4])> {
 pub(super) struct State {
     pub contrast: super::contrast::State,
     pub material_contrast: f32,
+    /// The device's palette as the reader last told it, and the app's
+    /// accent that replaces it with a scheme of its own.
+    device: Option<ReaderPalette>,
+    seed: Option<[[u8; 3]; 2]>,
     /// The reported table's generation this presenter last painted from,
     /// and the palette, whose roles past the table's (read by [`material`])
     /// can change while the table does not.
@@ -322,7 +427,55 @@ impl<D: DataSource> Presenter<D> {
             self.colors.material_contrast = palette.contrast;
             self.dirty = true;
         }
-        self.apply_palette(&palette.roles, &palette.swatches);
+        self.set_device_palette(*palette);
+    }
+
+    fn set_device_palette(&mut self, palette: ReaderPalette) {
+        self.colors.device = Some(palette);
+        self.colors.seed = self.accent_seed();
+        self.apply_reader_palette();
+    }
+
+    /// After a commit: an accent the design now says, changes or drops
+    /// seeds the scheme again, or gives the device's back.
+    pub(super) fn sync_accent_seed(&mut self) {
+        if self.colors.device.is_none() {
+            return;
+        }
+        let seed = self.accent_seed();
+        if seed != self.colors.seed {
+            self.colors.seed = seed;
+            self.apply_reader_palette();
+        }
+    }
+
+    /// The design's `AccentColor`, light and dark, that seeds Material's
+    /// scheme (LLP 1115.001 D4). A role the palette maps is no seed: it
+    /// would be seeded by its own seeded colour.
+    fn accent_seed(&self) -> Option<[[u8; 3]; 2]> {
+        let _roles = self.host.runner().bind_roles();
+        let mapped = |c: &ColorValue| match c {
+            ColorValue::Role(id) => ROLES
+                .iter()
+                .any(|(name, ..)| roles::role(name) == Some(*id)),
+            _ => false,
+        };
+        let accent = roles::overridden(roles::accent()).filter(|c| !mapped(c))?;
+        Some([false, true].map(|dark| {
+            let [r, g, b, _] = crate::paint::rgba(accent.resolve(dark));
+            [r, g, b]
+        }))
+    }
+
+    fn apply_reader_palette(&mut self) {
+        let Some(device) = self.colors.device else {
+            return;
+        };
+        let (roles, swatches) = match self.colors.seed {
+            Some(seed) => Palette::seeded(seed, self.colors.material_contrast),
+            None => (device.roles, device.swatches),
+        };
+        self.apply_palette(&roles, &swatches);
     }
 
     /// The device's palette, as its shell resolved it (LLP 1115.001 D4):
@@ -333,7 +486,11 @@ impl<D: DataSource> Presenter<D> {
     /// in place, a later one transitions, LLP 1095 D6) and nothing kept
     /// from a paint under the old colours stands.
     pub fn set_palette(&mut self, palette: &Palette) {
-        self.apply_palette(palette, &BarSwatches::default());
+        self.set_device_palette(ReaderPalette {
+            roles: *palette,
+            contrast: self.colors.material_contrast,
+            swatches: BarSwatches::default(),
+        });
     }
 
     fn apply_palette(&mut self, palette: &Palette, swatches: &BarSwatches) {
@@ -355,6 +512,26 @@ impl<D: DataSource> Presenter<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_seed_gives_materials_tonal_spot_scheme_in_the_readers_order() {
+        let (palette, swatches) = Palette::seeded([[0x24, 0x5c, 0x46]; 2], 0.);
+        // Google's Material Color Utilities, SchemeTonalSpot(#245c46), standard contrast.
+        assert_eq!(
+            palette.rgba(Material::Primary, false),
+            [0x1e, 0x6a, 0x4f, 0xff]
+        );
+        assert_eq!(
+            palette.rgba(Material::SecondaryContainer, true),
+            [0x35, 0x4b, 0x41, 0xff]
+        );
+        assert_eq!(
+            palette.rgba(Material::OnSecondaryContainer, false),
+            [0x35, 0x4b, 0x41, 0xff]
+        );
+        // The primary family's tone 40 is the light scheme's `primary`.
+        assert_eq!(swatches[0][3], palette.light[Material::Primary as usize]);
+    }
 
     #[test]
     fn role_words_keep_the_device_palette_and_carry_optional_contrast() {

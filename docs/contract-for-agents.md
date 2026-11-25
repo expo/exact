@@ -3908,7 +3908,9 @@ view's tint; macOS's AppKit uses it where the user's system accent is
 Multicolour). The web, Linux and Windows never read it: there the root's
 `accent-color` is the accent the controls take, and the web's `AccentColor`
 keyword stays the browser's, so an app that wants one accent everywhere writes
-it on the root.
+it on the root. On Android a design's `AccentColor` (an `app.forma` theme) is
+the controls' accent too, and it seeds Material's whole scheme in place of the
+device's wallpaper palette (LLP 1115.001 D4); a root `accent-color` only tints.
 
 Keep `id` and `testId` separate:
 
@@ -8685,7 +8687,7 @@ status bar: of what the bar sits over, the declaration painted on top wins.
 `auto` follows the winner's `color-scheme`, else the page's scheme; without a valid
 declaration iOS follows the page's scheme. Android resolves `navigation-bar-style` for navigation icons in the same scope, independently.
 Without an explicit icon style, each Android system bar follows its projected header’s or root tablist’s ink, then the page’s scheme (LLP 1105 D7).
-The element’s `background-color` fills the bar through the system band. Its `color` supplies the title, Up arrow, action icons and unselected destinations, defaulting to black or white on an authored background and to the device roles otherwise. On Android, the root’s `accent-color` seeds Material’s tonal-spot colours for the indicator, selected symbol and label, and enabled, untinted text actions. With gesture navigation, Android can choose the
+The element’s `background-color` fills the bar through the system band. Its `color` supplies the title, Up arrow, action icons and unselected destinations, defaulting to black or white on an authored background and to the device roles otherwise. On Android, the root’s `accent-color` seeds Material’s tonal-spot colours for the indicator, selected symbol and label, and enabled, untinted text actions; the design’s `AccentColor` seeds the whole scheme in place of the device’s palette (LLP 1115.001 D4). With gesture navigation, Android can choose the
 handle colour from what the page actually paints. Android's modal routes are
 pages that cover the bar; native sheet detents and transition completion are not
 available there (see `host/android/README.md`, Edge to edge). On iOS a flip shows in
