@@ -604,18 +604,18 @@ component SplitDocument
   view
     main navigationKey=\`\${top(nav).id}\` navigationBack="back" position="relative"
       for e in stack(nav) key=e.id
-        column navigationKey=\`\${e.id}\` position="absolute" inset=0
+        column navigationKey=\`\${e.id}\` navigationSplit="split" position="absolute" inset=0
           if e.name == "home"
             list
               button "Open" press=open
           if e.name == "detail"
             button "Back" id="back" press=back
 `, (_, html) => {
-    for (const path of ['', 'detail']) {
+    for (const path of ['', 'detail']) { // the served page keeps the ask the projection reads, with none of its marks
       const page = html(path);
       expect(page).toContain('data-exact-list');
       expect(page).toContain('data-exact-router-press="true"');
-      expect(page).not.toMatch(/\sdata-exact-split="/);
+      expect(page).toMatch(/navigationSplit="split"/); expect(page).not.toMatch(/\sdata-exact-split="/);
     }
   });
 }, 30000);

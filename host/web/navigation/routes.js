@@ -155,7 +155,7 @@ const WIDE_WIDTH = 900, WIDE = `(min-width: ${WIDE_WIDTH}px)`, wide = () => {
   return cols === 1 || rects.length > 0 && rects.every(([, , width]) => width >= WIDE_WIDTH);
 };
 // Base wide navigation on the space within each horizontal segment
-let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map();
+let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map(), shownPlaceholders = new WeakMap();
 const activationRequired = new WeakSet(), activated = new WeakSet();
 const sheet = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"));
 // @ref LLP 1115.000 D4.8 (amended 2026-11-12) — a narrow sheet opens at the height iOS opens it at: the detent
@@ -293,7 +293,7 @@ export const overPage = (route) => {
 };
 // A route that shows the page it covers: a sheet, or a full-screen route whose author wrote its background, which composites over that page as CSS has it (Charlie, 2026-11-10). neutral.css gives a full-screen route a clear colour no author writes, so its computed colour tells whether the author wrote one, `transparent` included; a server render computes none (render.mjs). One that paints nothing hides the page, on the root's ground.
 let pressedRow = null, pendingRow = null;
-const excluded = (el) => el.hasAttribute("popover") || el.hasAttribute("data-exiting") || getComputedStyle(el).display === "none";
+const excluded = (el) => el.hasAttribute("popover") || el.hasAttribute("data-exiting") || el.getAttribute("navigationSplit") === "placeholder" || getComputedStyle(el).display === "none";
 const rowPress = (el) => el.getAttribute("data-exact-router-press");
 const rowHref = (el) => el.getAttribute("href") || null;
 const linked = (href) => href?.startsWith("/") && !href.startsWith("//") && routeMatches(href);
@@ -323,7 +323,7 @@ function listRows(list) {
   return rows;
 }
 /** The root route's pushing list: the first `data-exact-list` in document order reachable from the route (no `navigationKey`,
-* popover, leaving or undisplayed element on the way, itself included), not in a list taken (a sideways list is none) nor sideways,
+* popover, placeholder, leaving or undisplayed element on the way, itself included), not in a list taken (a sideways list is none) nor sideways,
 * whose rows push; else `retained` with no rows. From the lists (`querySelectorAll`, the light DOM `children` walked), each predicate read
 * once an element a search: the walk's answer for a DOM the search leaves alone (`listRows`, `linked` don't change it); one taken out meanwhile is skipped. (Exported for its test.) */
 export function pushingList(route, retained = splitLists.get(route)) {
@@ -367,30 +367,28 @@ export function pushingList(route, retained = splitLists.get(route)) {
   }
   return empty;
 }
+/** The route's own child box written `navigationSplit="placeholder"` (LLP 1127 D1): it asks, and shows while nothing is selected. */
+const ownPlaceholder = (route) => route ? viewChildren(route).find((box) => box.getAttribute("navigationSplit") === "placeholder" && !box.hasAttribute("navigationKey") && !box.hasAttribute("data-exiting")) : undefined;
+/** The list column's width `navigationSplit` names, a whole number of px from 1 to 999999 (exact_kernel `split_width`), else 0. */
+const splitWidth = (said) => /^[1-9]\d{0,5}$/.test(said ?? "") ? Number(said) : 0;
 /** Recheck authored admission even while narrow. Projection's visibility/inert never opt a list out. */
 export function splitOf([route]) {
   // A rendered document has route and handler facts but no browser layout.
   if (!SPLITS || typeof globalThis.getComputedStyle !== "function" || typeof globalThis.matchMedia !== "function") {
-    if (route) {
-      splitLists.delete(route);
-    }
-    return {
-      width: 0,
-      list: null,
-      rows: []
-    };
+    route && splitLists.delete(route);
+    return { width: 0, list: null, rows: [] };
   }
-  const said = route?.getAttribute("navigationSplit"), explicit = Number(said), named = Number.isFinite(explicit) && explicit > 0;
+  // @ref LLP 1127 D1, D22 — the web splits only a stack whose root route asks: "split", a width, or a placeholder box of its own
+  const said = route?.getAttribute("navigationSplit"), explicit = splitWidth(said), named = explicit > 0;
+  const asked = named || said === "split" || !!ownPlaceholder(route);
   const found = route && said !== "none" && !sheet(route) ? pushingList(route) : null;
-  const placed = route && said !== "none" && !sheet(route) && /^(absolute|fixed)$/.test(getComputedStyle(route).position);
-  const atFold = placed && (found || named) ? foldColumns(route) : null;
-  const width = atFold ? atFold.list : placed && wide() ? named ? explicit : found ? 320 : 0 : 0;
-  if (route) {
-    if (found && (width || splitLists.has(route))) {
-      splitLists.set(route, found.list);
-    } else {
-      splitLists.delete(route);
-    }
+  const placed = asked && route && said !== "none" && !sheet(route) && /^(absolute|fixed)$/.test(getComputedStyle(route).position);
+  const atFold = placed ? foldColumns(route) : null;
+  const width = atFold ? atFold.list : placed && wide() ? named ? explicit : 320 : 0;
+  if (route && found && (width || splitLists.has(route))) {
+    splitLists.set(route, found.list);
+  } else if (route) {
+    splitLists.delete(route);
   }
   return {
     width,
@@ -1399,8 +1397,10 @@ export const navigation = {
           }
         }
         row?.toggleAttribute("data-exact-split-row", true);
-        // @ref LLP 1116.006 D2 — a split showing no detail fills the detail pane, as an iPad's split view does: the platform's placeholder (the shell draws `data-exact-split-empty`), or the author's, a box of the root route marked `navigationSplit="placeholder"` (which the lowerer hides everywhere else), at the pane's width.
-        const empty = split > 0 && detail < 0, own = routes[0]?.querySelector("[navigationSplit=\"placeholder\"]"), box = viewParent(routes[0]);
+        // @ref LLP 1116.006 D2 — a split showing no detail fills the detail pane, as an iPad's split view does: the platform's placeholder (the shell draws `data-exact-split-empty`), or the author's, a box of the root route marked `navigationSplit="placeholder"` (which the lowerer hides everywhere else), at the pane's width. Only the route's own box is marked: one a page module moved anywhere else is shown no more.
+        const empty = split > 0 && detail < 0, own = ownPlaceholder(routes[0]), box = viewParent(routes[0]);
+        const was = routes[0] && shownPlaceholders.get(routes[0]);
+        if (routes[0]) { if (was && was !== own) { was.removeAttribute("data-exact-split-placeholder"); } shownPlaceholders.set(routes[0], own); }
         own?.toggleAttribute("data-exact-split-placeholder", empty);
         box?.toggleAttribute("data-exact-split-empty", empty && !own);
         if (empty) {

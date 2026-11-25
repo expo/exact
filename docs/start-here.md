@@ -30,8 +30,10 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
    and sheet is a route (`routes`, `push`, a row that is a `link href=path(…)`): on the web
    that is its URL, so Back, reload, a shared link and a new tab work, and focus moves to the
    new screen. A screen chosen by `if page == …` over a state has none of these, and the
-   build warns (`lower-screen-by-state`). Tabs (a sidebar) and a
-   list whose rows push (beside its detail) need no code. The rows of a list the person deletes from swipe to
+   build warns (`lower-screen-by-state`). Tabs (a sidebar) need no code; a list beside its
+   detail on a wide window is one attribute on the list's route, `navigationSplit="split"`,
+   on a route positioned as the patterns place it (`position="absolute" inset=0`), which the web
+   needs (in an iOS tab only an iPad splits, where the tab's first route asks). The rows of a list the person deletes from swipe to
    delete and open a menu on a long press (`list-detail`, `contract vocab swipe`).
    `haptic("selection")` marks a choice in your own control, `haptic("success")` a task done.
    A chat's messages are bubbles in a transcript that opens at the newest and follows each

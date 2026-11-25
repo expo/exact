@@ -840,7 +840,7 @@ component SplitDocumentAgent
   view
     main navigationKey=\`\${top(nav).id}\` navigationBack="back" width="100%" height="100%" position="relative" testId="navigation"
       for e in stack(nav) key=e.id
-        column navigationKey=\`\${e.id}\` position="absolute" inset=0 testId=\`route-\${e.name}\`
+        column navigationKey=\`\${e.id}\` navigationSplit="split" position="absolute" inset=0 testId=\`route-\${e.name}\`
           if e.name == "home"
             list
               link href="/a" testId="row-alpha"

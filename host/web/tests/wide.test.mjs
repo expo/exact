@@ -2,11 +2,11 @@ import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
 // LLP 1116.004 D1 in a real browser at a phone's width (390) and a desktop's (1280): the shell's stylesheet and the
 // navigation glue's projection (navigation.js, which both web targets run) over nodes as the hosts write them. A root
 // tab bar whose placement is unsaid is a sidebar on a wide window and a bar on a phone; an arrangement the app wrote
-// stays its own. A stack whose root route is a list whose rows push shows that route beside its top on a wide window
-// (the list live, its disclosure gone, the row whose press pushed the detail marked, no Back in the detail, and while
-// nothing is selected the platform's placeholder in the pane or the author's own) and pushes on a phone;
-// `navigationSplit` opts out or names the width; a sheet stays a sheet; a resize changes nothing else. At a
-// desktop width `check` advises (D1.3) on a tab bar left along the bottom and on a list that pushes unsplit.
+// stays its own. A stack whose root route asks for the split (LLP 1127 D1: "split", a width or a placeholder box of its
+// own) shows that route beside its top on a wide window (the list live, its disclosure gone, the row whose press pushed
+// the detail marked, no Back in the detail, and while nothing is selected the platform's placeholder in the pane or the
+// author's own) and pushes on a phone; "none" or no ask pushes; a sheet stays a sheet; a resize changes nothing else. At a
+// desktop width `check` advises (D1.3) on a tab bar left along the bottom, and holds its advice for a list (LLP 1127 D1).
 import { test, expect } from 'bun:test';
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
@@ -24,7 +24,9 @@ const style = withLook(readFileSync(resolve(WEB, 'index.html'), 'utf8')).match(/
 const chevron = '<img data-symbol-source="symbol:forward-chevron" alt="" style="width:17px;height:17px">';
 const abs = 'position:absolute;inset:0;display:flex;flex-direction:column';
 // A route of rows (`rows` true: each row writes the router and draws the disclosure), as the hosts write a `list` of `button`s; `inner` after it.
-const list = (id, key, rows = true, extra = '', inner = '') => `<div navigationKey="${key}" id="${id}" style="${abs}" ${extra}><header><h1>People</h1></header>
+// It asks for the split (LLP 1127 D1) where its rows push, unless `extra` says its own `navigationSplit`.
+const asks = (rows, extra) => rows && !/navigationSplit=/.test(extra) ? `navigationSplit="split" ${extra}` : extra;
+const list = (id, key, rows = true, extra = '', inner = '') => `<div navigationKey="${key}" id="${id}" style="${abs}" ${asks(rows, extra)}><header><h1>People</h1></header>
   <div data-exact-list role="list" id="${id}-list">${['ada', 'bo'].map(n => `<button id="${id}-${n}" data-exact-on="press" data-exact-router-press="${rows}" style="display:flex"><span data-exact-text>${n}</span>${rows ? chevron : ''}</button>`).join('')}</div>${inner}</div>`;
 const detail = (id, key, extra = '') => `<div navigationKey="${key}" id="${id}" style="${abs}" ${extra}><header><h2>${id}</h2></header><div>${id}</div></div>`;
 const tabs = (bar) => `<main id="nav" navigationKey="2" navigationBack="back" style="width:100%;height:100%;display:flex;flex-direction:column;position:relative">
@@ -281,7 +283,7 @@ check('a list whose rows push is beside its detail on a wide window, and pushes 
   await evaluate(`select('2')`);
   await size(1280);
   expect(await evaluate(`[shown('r1'), shown('r2'), box('r1')[2], document.getElementById('r1-bo').hasAttribute('data-exact-split-row')]`)).toEqual([true, true, 320, true]);
-  // The other tab's rows do not write the router: the stack stays unsplit, with no placeholder.
+  // The other tab's route does not ask: the stack stays unsplit, with no placeholder.
   expect(await evaluate(`[document.getElementById('t1').hasAttribute('data-exact-split'), placeholder('p2')]`)).toEqual([false, null]);
   // A row that is a link (LLP 1115.000 D4.4) is followed from the document's capture phase (input-glue.js, router.js),
   // so its commit lands within the click, before a listener nearer the row would hear it: its row is marked all the same.
@@ -311,6 +313,10 @@ check('the author\'s placeholder in the root route takes the detail pane while n
     // A phone: the list alone, the author's box nowhere.
     await size(390);
     expect(await evaluate(`[box('r1'), getComputedStyle(document.getElementById('own')).display, placeholder('nav')]`)).toEqual([[0, 0, 390, 800], 'none', null]);
+    // Wide again, the box moved out of the route by a page module is the author's placeholder no more, wherever it went
+    await size(1280);
+    await evaluate(`{ const wrap = document.createElement('div'); document.getElementById('nav').after(wrap); wrap.append(document.getElementById('own')); push('1', '/'); }`);
+    expect(await evaluate(`[document.getElementById('own').hasAttribute('data-exact-split-placeholder'), getComputedStyle(document.getElementById('own')).display]`)).toEqual([false, 'none']);
   });
 }, 60000);
 
@@ -410,11 +416,11 @@ check('a list and its detail split at the fold, whatever the window\'s width or 
 // Stage 6d's projection inputs. These DOM fixtures test navigation.js, not
 // whether either compiler emits the facts; compiled-plan coverage is separate.
 const ruleStack = body => `<main id="nav" navigationKey="2" navigationBack="back" style="width:100%;height:100%;position:relative">
-  <div id="r1" navigationKey="1" style="${abs}"><header><h1>People</h1></header>${body}</div>${detail('r2', 2)}</main>`;
+  <div id="r1" navigationKey="1" navigationSplit="split" style="${abs}"><header><h1>People</h1></header>${body}</div>${detail('r2', 2)}</main>`;
 
 check('a served document stays unsplit across resize until its target adopts it', () => {
   const body = '<div data-exact-list><button data-exact-router-press="true">Open</button></div>';
-  const stack = ruleStack(body).replace('id="r1"', 'id="r1" navigationSplit="280"');
+  const stack = ruleStack(body).replace('navigationSplit="split"', 'navigationSplit="280"');
   return inChrome(page(stack, [], true), async (evaluate, size) => {
     const state = `[document.getElementById('r1').getAttribute('data-exact-split'), document.getElementById('r2').getAttribute('data-exact-split'), document.getElementById('r1').style.getPropertyValue('--exact-split'), document.getElementById('r1').inert, document.getElementById('r2').inert]`;
     expect(await evaluate(state)).toEqual([null, null, '', false, false]);
@@ -425,7 +431,10 @@ check('a served document stays unsplit across resize until its target adopts it'
   });
 }, 60000);
 
-check('split admission reads list and outer press facts, not roles or decorative chevrons', () => {
+// The list the rule finds in route r1, by its id ("" for none), or null where it finds none
+const splitList = `import('/navigation.js').then(({ pushingList }) => pushingList(document.getElementById('r1'))?.list.id ?? null)`;
+
+check('the split\'s list is found from list and outer press facts, not roles or decorative chevrons', () => {
   const link = '<a href="/item/a">A</a>';
   const cases = [
     ['link without a chevron', `<div data-exact-list role="presentation">${link}</div>`, true],
@@ -437,43 +446,70 @@ check('split admission reads list and outer press facts, not roles or decorative
     ['another route before a list', `<div navigationKey="nested"><div data-exact-list>${link}</div></div>`, false],
     ['route key inside list rows', `<div data-exact-list><div navigationKey="nested">${link}</div></div>`, true],
     ['sideways outer list', `<div data-exact-list style="display:flex;flex-direction:row"><div data-exact-list>${link}</div></div>`, true],
+    ['a list in the placeholder', `<div navigationSplit="placeholder"><div data-exact-list>${link}</div></div>`, false],
   ];
   return inChrome(page(ruleStack(''), ['/item/a']), async evaluate => {
     const observed = [];
     for (const [name, body] of cases) {
-      // A new root identity isolates each admission case from retained-list state.
-      const route = `<div id="r1" navigationKey="1" style="${abs}">${body}</div>`;
-      observed.push([name, await evaluate(`document.getElementById('r1').outerHTML = ${JSON.stringify(route)}; select(2); document.getElementById('r1').hasAttribute('data-exact-split')`)]);
+      // A new root identity isolates each case from the list retained for the one before.
+      const route = `<div id="r1" navigationKey="1" navigationSplit="split" style="${abs}">${body}</div>`;
+      observed.push([name, await evaluate(`document.getElementById('r1').outerHTML = ${JSON.stringify(route)}; select(2); ${splitList}`) !== null]);
     }
-    expect(observed).toEqual(cases.map(([name, , splits]) => [name, splits]));
+    expect(observed).toEqual(cases.map(([name, , found]) => [name, found]));
   });
 }, 60000);
 
-check('a later pushing list wins over a retained empty list, whose identity alone can retain the split', () => {
+check('the web splits only a stack whose root route asks: "split", a width or a placeholder box of its own', () => {
+  const rows = `<div data-exact-list><button data-exact-on="press" data-exact-router-press="true">Open${chevron}</button></div>`;
+  const own = '<div navigationSplit="placeholder" style="display:none">Pick one</div>';
+  const cases = [
+    ['a list whose rows push, unasked', '', rows, false],
+    ['"split" with no list', 'navigationSplit="split"', '', true],
+    ['a width with no list', 'navigationSplit="280"', '', true],
+    ['its own placeholder box', '', own, true],
+    ['a placeholder in a box of the route', '', `<div>${own}</div>`, false],
+    ['"none"', 'navigationSplit="none"', rows, false],
+    ['a fraction of a px', 'navigationSplit="280.5"', rows, false],
+    ['a word no host reads', 'navigationSplit="auto"', rows, false],
+    ['"none" over its own placeholder', 'navigationSplit="none"', own, false],
+    ['its own placeholder animating out, gone at once as on the native hosts', '', own.replace('<div ', '<div data-exiting '), false],
+  ];
+  return inChrome(page(ruleStack('')), async evaluate => {
+    const observed = [];
+    for (const [name, said, body] of cases) {
+      const route = `<div id="r1" navigationKey="1" ${said} style="${abs}"><header><h1>People</h1></header>${body}</div>`;
+      observed.push([name, await evaluate(`document.getElementById('r1').outerHTML = ${JSON.stringify(route)}; select(2); document.getElementById('r1').hasAttribute('data-exact-split')`)]);
+    }
+    expect(observed).toEqual(cases.map(([name, , , splits]) => [name, splits]));
+  });
+}, 60000);
+
+check('a later pushing list wins over a retained empty list, whose identity alone keeps it the split\'s list', () => {
   const body = `<div data-exact-list id="first"><button data-exact-on="press" data-exact-router-press="true">Open${chevron}</button></div>
     <div data-exact-list id="later" style="display:none"><a id="later-row" href="/item/b">B</a></div>`;
   return inChrome(page(ruleStack(body), ['/item/b']), async evaluate => {
     expect(await evaluate(`document.getElementById('r1').hasAttribute('data-exact-split')`)).toBe(true);
     await evaluate(`document.getElementById('first').textContent = 'No Results'; document.getElementById('later').style.display = 'block'; push(2, '/item/b', [[1, '/'], [2, '/item/b']])`);
     expect(await evaluate(`document.getElementById('later-row').hasAttribute('data-exact-split-row')`)).toBe(true);
+    // The route asks, so the split stays, and the emptied list is still the one its identity retains
     await evaluate(`document.getElementById('later').textContent = 'No Results'; select(2)`);
-    expect(await evaluate(`document.getElementById('r1').hasAttribute('data-exact-split')`)).toBe(true);
-    // The first empty list was not the retained candidate after the later one pushed.
+    expect(await evaluate(`Promise.all([document.getElementById('r1').hasAttribute('data-exact-split'), ${splitList}])`)).toEqual([true, 'later']);
+    // The first empty list was not the retained candidate after the later one pushed
     await evaluate(`document.getElementById('later').remove(); select(2)`);
-    expect(await evaluate(`[document.getElementById('r1').hasAttribute('data-exact-split'), back('r2')]`)).toEqual([false, true]);
+    expect(await evaluate(`Promise.all([document.getElementById('r1').hasAttribute('data-exact-split'), ${splitList}])`)).toEqual([true, null]);
   });
 }, 60000);
 
-check('a bare plan rechecks sideways admission on a resize that stays above the wide threshold', () => {
+check('a bare plan rechecks the split\'s list on a resize that stays above the wide threshold, and the ask holds the split', () => {
   const body = `<div data-exact-list id="resize-list"><button data-exact-on="press" data-exact-router-press="true">Open${chevron}</button></div>`;
   const html = page(ruleStack(body)) + '<style>@media (min-width:1100px) { #resize-list { display:flex;flex-direction:row } }</style>';
   // No exactViewport runtime and no authored or visible default placeholder.
   return inChrome(html, async (evaluate, size) => {
     expect(await evaluate(`[document.querySelector('[navigationSplit="placeholder"]') === null, document.querySelector('[data-exact-split-empty]') === null, document.getElementById('r1').hasAttribute('data-exact-split')]`)).toEqual([true, true, true]);
     await size(1200);
-    expect(await evaluate(`[getComputedStyle(document.getElementById('resize-list')).flexDirection, document.getElementById('r1').hasAttribute('data-exact-split'), back('r2')]`)).toEqual(['row', false, true]);
+    expect(await evaluate(`Promise.all([getComputedStyle(document.getElementById('resize-list')).flexDirection, document.getElementById('r1').hasAttribute('data-exact-split'), back('r2'), ${splitList}])`)).toEqual(['row', true, false, null]);
     await size(1000);
-    expect(await evaluate(`[document.getElementById('r1').hasAttribute('data-exact-split'), back('r2')]`)).toEqual([true, false]);
+    expect(await evaluate(`Promise.all([document.getElementById('r1').hasAttribute('data-exact-split'), back('r2'), ${splitList}])`)).toEqual([true, false, 'resize-list']);
   }, 1000);
 }, 60000);
 
@@ -504,7 +540,7 @@ check('a detail no row pushed marks the row the app says is current', () => {
   });
 }, 60000);
 
-check('check advises on a bottom tab bar and an unsplit pushing list at a desktop width, and on neither at a phone\'s', () => {
+check('check advises on a bottom tab bar at a desktop width, holds its advice for a list, and advises on neither at a phone\'s', () => {
   const positioned = BAR.replace('style="display:flex;flex-direction:row"', 'style="display:flex;flex-direction:row;position:absolute;left:0;right:0;bottom:0"');
   const html = page(tabs(positioned).replaceAll(chevron, '').replace('id="r1" style="position:absolute', 'id="r1" style="position:relative')) + `<script type="module">
     import { observe } from './check.js';
@@ -514,7 +550,7 @@ check('check advises on a bottom tab bar and an unsplit pushing list at a deskto
     await evaluate(`select('1')`);
     expect(await evaluate('advice()')).toEqual(['tabbar bar']);
     await evaluate(`select('2')`);
-    expect(await evaluate('advice()')).toEqual(['tabbar bar', 'push r2']);
+    expect(await evaluate('advice()')).toEqual(['tabbar bar']);
     await size(390);
     expect(await evaluate('advice()')).toEqual([]);
   });
@@ -528,8 +564,8 @@ check('the split and sidebar leave check nothing to advise', () => inChrome(page
 }), 60000);
 
 // LLP 1116.005 D3: each route keeps its own scroll (LLP 1038 §7: mounted rows keep theirs), on a phone and through a
-// split. A route of `n` tall rows over its own scroller; `rows` writes the router, so its stack splits.
-const tall = (id, key, n, rows = false) => `<div navigationKey="${key}" id="${id}" style="${abs}"><header><h2>${id}</h2></header><div id="${id}-scroll" ${rows ? 'data-exact-list' : ''} style="flex:1 1 0%;min-height:0;overflow:auto">${
+// split. A route of `n` tall rows over its own scroller; `rows` writes the router, and its stack asks to split.
+const tall = (id, key, n, rows = false) => `<div navigationKey="${key}" id="${id}" style="${abs}" ${asks(rows, '')}><header><h2>${id}</h2></header><div id="${id}-scroll" ${rows ? 'data-exact-list' : ''} style="flex:1 1 0%;min-height:0;overflow:auto">${
   Array.from({ length: n }, (_, i) => rows ? `<button data-exact-on="press" data-exact-router-press="true" style="display:flex;height:50px"><span data-exact-text>${i}</span>${chevron}</button>` : `<div style="height:50px">${i}</div>`).join('')}</div></div>`;
 
 check('a pushed route opens at its top, and Back finds the list where it was', () => inChrome(page(`<main id="nav" navigationKey="1" navigationBack="back" style="width:100%;height:100%;position:relative">${tall('r1', 1, 60, true)}</main>`), async (evaluate, size) => {
@@ -569,8 +605,9 @@ check('retained visit URLs restore href selection after adoption, replace and sa
     expect(await evaluate(marks)).toEqual([]);
     await evaluate(`document.getElementById('row-a').removeAttribute('data-exact-router-press'); select(3)`);
     expect(await evaluate(marks)).toEqual(['row-a']);
+    // A hidden list marks no row, and the route's ask holds the split
     await evaluate(`document.getElementById('rows').style.display = 'none'; select(3)`);
-    expect(await evaluate(`[${marks}, document.getElementById('r1').hasAttribute('data-exact-split')]`)).toEqual([[], false]);
+    expect(await evaluate(`[${marks}, document.getElementById('r1').hasAttribute('data-exact-split')]`)).toEqual([[], true]);
     await evaluate(`document.getElementById('rows').style.display = ''; select(3)`);
     expect(await evaluate(marks)).toEqual(['row-a']);
   });

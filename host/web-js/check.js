@@ -634,17 +634,12 @@ export function observe(views, inactive = () => false) {
     }
   }
   // LLP 1116.004 D1.3: a phone's layout at a desktop width, as advice (never a finding): a root tab bar stretched along
-  // the window's bottom, and a stack the projection did not split whose root route's list pushed the detail shown. A
-  // list at the root may push or not (a settings list's steppers): nothing says, so nothing is advised.
+  // the window's bottom. The advice for a list beside its detail is LLP 1127 D1's, held until its qualification (§3).
   const advice = [];
   if (W >= 900) for (const nav of document.querySelectorAll('#exact-root [navigationBack]')) {
     const bar = [...nav.querySelectorAll('[role="tablist"]')].find((l) => l.parentElement?.closest('[navigationKey]') === nav && l.querySelector(':scope > [role="tab"][aria-controls]'));
     const bb = bar?.getBoundingClientRect();
     if (bb && !nav.hasAttribute('data-exact-sidebar') && bb.width >= W * 0.75 && bb.bottom >= H - 2 && bb.height * 4 < bb.width) advice.push({ kind: 'tabbar', id: viewOf(bar), w: r2(bb.width) });
-    const key = nav.getAttribute('navigationKey'), top = [...nav.querySelectorAll('[navigationKey]')].find((r) => r !== nav && r.getAttribute('navigationKey') === key && r.parentElement.closest('[navigationKey]') === nav);
-    const first = top && [...top.parentElement.children].find((r) => r.hasAttribute('navigationKey'));
-    if (!first || first === top || first.hasAttribute('data-exact-split') || first.getAttribute('navigationSplit') === 'none' || /^(modal|fullscreen)$/.test(top.getAttribute('navigationPresentation') ?? '')) continue;
-    if (first.querySelector('[role="list"] :is(button, a[href])')) advice.push({ kind: 'push', id: viewOf(top) });
   }
   // The scheme the page draws in: a light-dark() probe in the root, whatever the system says.
   const root = document.getElementById('exact-root'), probe = document.createElement('span');

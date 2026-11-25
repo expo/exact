@@ -31,10 +31,10 @@ unsaid: a hex stays the same in dark mode while the controls change.
   character (▦ ☏ ★) or an emoji.
 - **Compose for a wide window by what the content is.** One number and its actions: a
   centred column, `max-width` a phone's width or a little more. A list and its detail, or a
-  dashboard of cards: two columns. A root tab bar is a sidebar and a list whose rows push
-  (`forward-chevron`) sits beside its detail, with nothing to write ([tabs](tabs.md),
-  [a navigation stack](navigation-stack.md)); a layout chosen by width (`exactViewport()`):
-  [columns that wrap on a phone](responsive-columns.md).
+  dashboard of cards: two columns. A root tab bar is a sidebar ([tabs](tabs.md)), and a list
+  sits beside its detail where its route asks, `navigationSplit="split"`, on a route placed
+  as the patterns place it (`pattern list-detail`); a layout chosen by width
+  (`exactViewport()`): [columns that wrap on a phone](responsive-columns.md).
 - **A route is a page.** Its title is the `head` title, else the selected route's
   `header` heading, else the app's name, before startup too. Focus follows a push and
   returns on Back; a sheet is a dialog to a screen reader. A menu takes focus when it

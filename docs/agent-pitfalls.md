@@ -459,9 +459,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 - **A native sidebar separator needs another touch to redraw.** Cause: a native
   module's own sidebar table reloads its rows during a row's selection and selects
   the same row again. Keep the cells and update selection only when it changes;
-  reload when the row data changes. A list whose rows push needs no table of its own:
-  beside its detail a grouped list is UIKit's sidebar list (LLP 1127), which UI
-  Gallery's tests compare before and after an extra touch
+  reload when the row data changes. A list beside its detail needs no table of its own:
+  its route asks (`navigationSplit="split"`, LLP 1127), and UIKit's split keeps the
+  detail's row selected, which UI Gallery's tests compare before and after an extra touch
   (`apps/ui-gallery/tests/GalleryUITests.swift`).
 - **A sideways swipe on a row opens it.** Cause: the row has no swipe actions. A
   `UITableView` or SwiftUI `List` row with none is selected by a horizontal drag of any

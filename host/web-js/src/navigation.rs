@@ -26,7 +26,8 @@ pub(super) fn unused(em: &Em, roots: bool) -> Vec<&'static str> {
     });
     let used = [
         any(&|n| role_can(plan, n, &["tablist"])),
-        // A split's list is a list node's element, unless the route names the split's width.
+        // A split is asked by `navigationSplit` (LLP 1127 D1); a plan with a list keeps the code,
+        // though only an ask runs it on the web.
         super::commands::lists(plan)
             || any(&|n| property(plan, n, PropId::NavigationSplit).is_some()),
         any(&|n| {

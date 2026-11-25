@@ -320,9 +320,7 @@ export function line(f, nodes) {
 function advise(a, width, nodes) {
   const who = named(a.id, nodes);
   if (a.kind === 'menu') return `  advice   ${who}: a person sees this open menu as UIKit's ${a.context ? 'context menu' : 'pull-down'}, which the system places, sizes and scrolls to fit the screen; the driver paints it in the page to drive it, so its rows are not judged (\`--touch platform\` presents UIKit's)`;
-  return `  advice   ${who}: ${a.kind === 'tabbar'
-    ? `a bottom tab bar ${r0(a.w)} px wide along a ${width}-px window; placed as docs/recipes/tabs.md places it (the last child of the root's flex column, unpositioned) a wide window draws it as a sidebar, or lay out a rail of your own when the window is wide`
-    : `the list beneath pushed this detail over the whole ${width}-px window where they would fit side by side; a row that pushes draws the disclosure (\`image "symbol:forward-chevron"\`, last in the row) and a wide window shows the list beside its detail, or set \`navigationSplit\` on the list's route (contract vocab navigationSplit)`}`;
+  return `  advice   ${who}: a bottom tab bar ${r0(a.w)} px wide along a ${width}-px window; placed as docs/recipes/tabs.md places it (the last child of the root's flex column, unpositioned) a wide window draws it as a sidebar, or lay out a rail of your own when the window is wide`;
 }
 
 /** The text a check prints: per scheme, its findings (at most SHOWN, then a count), or one line saying there are none; then its advice. */
