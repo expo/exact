@@ -274,6 +274,11 @@ extension NodeView {
         bars.top += own.top - oldOwn.top; bars.bottom += own.bottom - oldOwn.bottom
         sv.contentInset = inset
         sv.verticalScrollIndicatorInsets = bars
+        // UIKit's indicator adjustment would add its own top and bottom to the band; the scroll view adds its safe area
+        // instead while it is off (`ScrollView.safeIndicatorInset`)
+        if let scroll = sv as? ScrollView, scroll.automaticallyAdjustsScrollIndicatorInsets != (own == .zero) {
+            scroll.automaticallyAdjustsScrollIndicatorInsets = own == .zero
+        }
         fitScroll()
         if atEnd { sv.layoutIfNeeded() }
         sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: atEnd ? end() : top - scrollTopInset(sv)), in: sv, clamped: !sv.isTracking && !sv.isDragging && !sv.isDecelerating)

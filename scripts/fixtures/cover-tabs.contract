@@ -3,8 +3,9 @@
 // under it, drawn on under the bar (PageEdgesIOSTests). `shape` picks a variant:
 // `bare` (the issue's), `padded` (the route padded by env(safe-area-inset-bottom)),
 // `footer` (a caption under the scroller: no band), `short` (content that fits),
-// `list` (a virtualized list) and `titled` (a large title, and a line over the
-// scroller). The buttons that pick one are placed absolutely, out of flow.
+// `list` (a virtualized list), `titled` (a large title, and a line over the
+// scroller) and `riding` (a large title, and a control bar over the scroller
+// that rides it). The buttons that pick one are placed absolutely, out of flow.
 routes nav
   tab home "/"
   tab other "/other"
@@ -21,10 +22,15 @@ component CoverTabs
         column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
           for e in t.stack key=e.id
             column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0 display="flex" flex-direction="column" padding-bottom=(shape == "padded" ? "env(safe-area-inset-bottom)" : "0px")
-              if shape == "titled"
+              if shape == "titled" or shape == "riding"
                 header
                   text "Home" role="heading" aria-level=1
+              if shape == "titled"
                 text "Over the scroller" testId="lead" padding=12
+              if shape == "riding"
+                row testId="lead" padding=12
+                  button testId="lead-action"
+                    text "Filter"
               if shape == "list"
                 list testId="list" appearance="none" virtualized=true flex=1 min-height=0
                   for i in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] key=i
@@ -37,7 +43,7 @@ component CoverTabs
               if shape == "footer"
                 text "Signed in as Ada" testId="footer" padding=16
               row position="absolute" top=80 right=8 gap=4
-                for s in ["bare", "padded", "footer", "short", "list", "titled"] key=s
+                for s in ["bare", "padded", "footer", "short", "list", "titled", "riding"] key=s
                   button press=use(s) testId=`use-${s}`
                     text s
       row role="tablist"

@@ -989,5 +989,26 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertEqual(bar.bounds.height, barHeight, accuracy: 0.5, "the title stays large, as it does over a hand-built table below a header")
         XCTAssertEqual(lead.convert(lead.bounds, to: nil), leadFrame, "the line over the scroller stays")
     }
+
+    /// A banded scroller's indicators count the band and its own safe area once each: UIKit's indicator adjustment,
+    /// which would add its own top and bottom (and under a large title it hangs over, a top of its own) to the band,
+    /// is off while the band is on, as on a large title's collapse scroller under a control bar that rides it (UI
+    /// Gallery's detail screens), and its indicators run from the content's top to its foot.
+    func testABandedScrollersIndicatorsCountTheBandAndItsSafeAreaOnce() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("COVER_TABS")
+        let p = session.presenter, routeNode = try node(session, "route-home")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id])
+        let list = { p.views.values.first { $0.props["testId"] == "list" && $0.window != nil } }
+        p.press(try node(session, "use-riding").id)
+        until("the control bar rides the large title and the scroller is banded at both edges") {
+            !route.ridingBars.isEmpty && (list()?.pageBand.top ?? 0) > 0.5 && (list()?.pageBand.bottom ?? 0) > 0.5
+        }
+        let sv = try XCTUnwrap(list()?.scrollView)
+        XCTAssertFalse(sv.automaticallyAdjustsScrollIndicatorInsets, "the band's writer holds UIKit's indicator adjustment off")
+        XCTAssertEqual(sv.verticalScrollIndicatorInsets.top, sv.adjustedContentInset.top, accuracy: 0.5, "the indicator starts at the content's top")
+        XCTAssertEqual(sv.verticalScrollIndicatorInsets.bottom, sv.adjustedContentInset.bottom, accuracy: 0.5, "and ends at its foot")
+    }
 }
 #endif
