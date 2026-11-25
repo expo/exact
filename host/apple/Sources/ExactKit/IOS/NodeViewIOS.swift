@@ -810,19 +810,6 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         }
     }
 
-    /// The direct child of a canvas this node is under, when that child is
-    /// placed by the surface: the node whose `placement` maps this subtree.
-    package var placedAncestor: NodeView? {
-        guard Self.placedViews.count > 0 else { return nil }
-        var v: UIView? = self
-        while let n = v {
-            if let node = n as? NodeView, (node.placement != nil || node.placementHidden) { return node }
-            if n.superview?.canvasOverlayOwner != nil { return nil }
-            v = n.superview
-        }
-        return nil
-    }
-
     /// A homography applied to a point (row major, projective).
     static func map(_ h: [Double], _ p: CGPoint) -> CGPoint {
         let w = h[6] * p.x + h[7] * p.y + h[8]

@@ -202,10 +202,13 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// then its depth (larger nearer); `nil` is the kernel's frame.
     /// Hit-testing inverts it, nearest child first; accessibility reports the
     /// mapped box.
-    package var placement: [Double]?
+    package var placement: [Double]? {
+        didSet { notePlacement(wasPlaced: oldValue != nil || placementHidden) }
+    }
     private var hiddenBeforePlacement = false
     package var placementHidden = false {
         didSet {
+            notePlacement(wasPlaced: placement != nil || oldValue)
             if placementHidden && !oldValue { hiddenBeforePlacement = hostHidden }
             if placementHidden { isHidden = true }
             else if oldValue { isHidden = hiddenBeforePlacement }
@@ -700,16 +703,11 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
                                port.width, port.height].map(Double.init))
     }
 
-    /// The direct child of a canvas this node is under, when that child is
-    /// placed by the surface: the node whose `placement` maps this subtree.
-    var placedAncestor: NodeView? {
-        var v: NSView? = self
-        while let n = v {
-            if let node = n as? NodeView, (node.placement != nil || node.placementHidden) { return node }
-            if n.superview?.canvasOverlayOwner != nil { return nil }
-            v = n.superview
-        }
-        return nil
+    private func notePlacement(wasPlaced: Bool) {
+        let placed = placement != nil || placementHidden
+        guard placed != wasPlaced else { return }
+        if placed { Self.placedViews.add(self) }
+        else { Self.placedViews.remove(self) }
     }
 
     /// A homography applied to a point (row major, projective).
