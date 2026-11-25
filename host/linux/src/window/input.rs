@@ -1,6 +1,9 @@
 //! Desktop input follows the painted presenter's pointer, keyboard and composition paths.
+use super::drop::{Pointed, Press};
 use exact_painted::{presenter::ime::Target, presenter::PointerKind, Presenter};
 use exact_runner::DataSource;
+use std::cell::Cell;
+use std::rc::Rc;
 use winit::{
     dpi::{LogicalPosition, LogicalSize},
     event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent},
@@ -14,6 +17,19 @@ pub(super) const SCROLL_LINE: f32 = 48.;
 pub(super) struct Input {
     pointer: Option<(f32, f32)>,
     buttons: u32,
+    /// Whether the drag listener hands the window its whole pointer, each
+    /// event with its seat and a button with its serial, which winit's lack,
+    /// so winit's pointer is not heard (Wayland; LLP 1094.000 D13).
+    listened: bool,
+    /// The seat whose pointer the window follows: the last to move over it,
+    /// and while it holds a button, the only one heard.
+    seat: Option<u32>,
+    /// The left button's press while it is held.
+    left: Option<Press>,
+    /// The left press while it alone is held, which a lift names.
+    held: Rc<Cell<Option<Press>>>,
+    /// Whether the pointer is over the window.
+    inside: bool,
     previous_click: Option<(f64, (f32, f32), u32)>,
     focused: bool,
     occluded: bool,
@@ -36,6 +52,108 @@ impl Input {
         self.focused && !self.occluded
     }
 
+    /// Take the pointer from the drag listener, keeping the left press
+    /// while it alone is held in `held`.
+    pub(super) fn listen(&mut self, held: Rc<Cell<Option<Press>>>) {
+        self.listened = true;
+        self.held = held;
+    }
+
+    /// The drag listener ended: the window takes winit's pointer, and the
+    /// contact the listener's was holding is lost.
+    pub(super) fn unlisten<D: DataSource>(
+        &mut self,
+        presenter: &mut Presenter<D>,
+        now_ms: f64,
+    ) -> Result<(), String> {
+        self.listened = false;
+        self.lose(presenter, now_ms)
+    }
+
+    /// What seat `seat`'s pointer did on the window's surface, as the drag
+    /// listener heard it. While a seat holds a button only it is heard.
+    pub(super) fn pointed<D: DataSource>(
+        &mut self,
+        presenter: &mut Presenter<D>,
+        window: &Window,
+        seat: u32,
+        pointed: Pointed,
+        now_ms: f64,
+    ) -> Result<(), String> {
+        if self.buttons != 0 && self.seat != Some(seat) {
+            return Ok(());
+        }
+        match pointed {
+            Pointed::Entered(point) | Pointed::Moved(point) => {
+                self.seat = Some(seat);
+                self.inside = true;
+                self.moved(presenter, window, point, now_ms)?;
+            }
+            Pointed::Left if self.seat == Some(seat) => self.left(presenter, window, now_ms)?,
+            Pointed::Left => {}
+            Pointed::Button {
+                serial,
+                button,
+                pressed,
+            } => {
+                // Linux's `BTN_LEFT` to `BTN_EXTRA`, as winit names them
+                let bit = match button {
+                    0x110 => 1,
+                    0x111 => 2,
+                    0x112 => 4,
+                    0x113 => 8,
+                    0x114 => 16,
+                    _ => return Ok(()),
+                };
+                self.seat = Some(seat);
+                if bit == 1 {
+                    self.left = pressed.then_some(Press { seat, serial });
+                }
+                self.button(presenter, window, bit, pressed, now_ms)?;
+            }
+            Pointed::Wheel { lines, x, y } => {
+                let line = if lines { SCROLL_LINE } else { 1. };
+                self.wheel(presenter, window, x * line, y * line);
+            }
+            Pointed::Lost if self.seat == Some(seat) => self.lose(presenter, now_ms)?,
+            Pointed::Lost => {}
+        }
+        Ok(())
+    }
+
+    /// The pointer went away with whatever it held.
+    fn lose<D: DataSource>(&mut self, presenter: &mut Presenter<D>, now_ms: f64) -> Result<(), String> {
+        self.pointer = None;
+        self.inside = false;
+        self.buttons = 0;
+        self.left = None;
+        self.held.set(None);
+        self.previous_click = None;
+        presenter.pointer_lost(now_ms)
+    }
+
+    /// The drag out of the window that `press` lifted ended, and the
+    /// compositor kept its release: the window lets go of that press, and
+    /// of the pointer if it left meanwhile. A newer press stays held.
+    pub(super) fn ended<D: DataSource>(
+        &mut self,
+        presenter: &mut Presenter<D>,
+        press: Press,
+        now_ms: f64,
+    ) -> Result<(), String> {
+        if self.left != Some(press) {
+            return Ok(());
+        }
+        self.left = None;
+        self.buttons &= !1;
+        self.held.set(None);
+        if !self.inside && self.buttons == 0 {
+            self.pointer = None;
+            presenter.pointer_lost(now_ms)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn handle<D: DataSource>(
         &mut self,
         presenter: &mut Presenter<D>,
@@ -51,6 +169,8 @@ impl Input {
                     presenter.ime_end();
                     presenter.pointer_lost(now_ms)?;
                     self.buttons = 0;
+                    self.left = None;
+                    self.held.set(None);
                     self.session = None;
                     self.preedit = Preedit::Idle;
                     presenter.forget_pads();
@@ -62,38 +182,20 @@ impl Input {
                 self.occluded = occluded;
                 presenter.surface_lifecycle(occluded, !self.focused);
             }
+            // The drag listener hands the window its whole pointer, in its seats' order
+            WindowEvent::CursorMoved { .. }
+            | WindowEvent::CursorEntered { .. }
+            | WindowEvent::CursorLeft { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+                if self.listened => {}
             WindowEvent::CursorMoved { position, .. } => {
                 let position = position.to_logical::<f32>(window.scale_factor());
-                let point = (position.x, position.y);
-                if self.previous_click.is_some_and(|(_, origin, _)| {
-                    (point.0 - origin.0).abs() > 5. || (point.1 - origin.1).abs() > 5.
-                }) {
-                    self.previous_click = None;
-                }
-                self.pointer = Some(point);
-                if !pointer_mapped(presenter, window) {
-                    return Ok(());
-                }
-                presenter.set_pointer_kind(PointerKind::Mouse);
-                presenter.pointer_move(point.0, point.1, now_ms)?;
-                let cursor = presenter
-                    .cursor_at(point.0, point.1)
-                    .name()
-                    .parse::<CursorIcon>()
-                    .unwrap_or(CursorIcon::Default);
-                window.set_cursor(cursor);
+                self.moved(presenter, window, (position.x, position.y), now_ms)?;
             }
-            WindowEvent::CursorLeft { .. } => {
-                if self.buttons == 0 {
-                    self.pointer = None;
-                    presenter.pointer_lost(now_ms)?;
-                }
-                window.set_cursor(CursorIcon::Default);
-            }
+            WindowEvent::CursorEntered { .. } => self.inside = true,
+            WindowEvent::CursorLeft { .. } => self.left(presenter, window, now_ms)?,
             WindowEvent::MouseInput { state, button, .. } => {
-                let Some((x, y)) = self.pointer else {
-                    return Ok(());
-                };
                 let bit = match button {
                     MouseButton::Left => 1,
                     MouseButton::Right => 2,
@@ -102,47 +204,17 @@ impl Input {
                     MouseButton::Forward => 16,
                     _ => return Ok(()),
                 };
-                let down = state == ElementState::Pressed;
-                presenter.set_pointer_kind(PointerKind::Mouse);
-                if down {
-                    self.buttons |= bit;
-                } else {
-                    self.buttons &= !bit;
-                }
-                if !pointer_mapped(presenter, window) {
-                    self.previous_click = None;
-                    presenter.pointer_lost(now_ms)?;
-                    return Ok(());
-                }
-                if bit == 1 {
-                    if down {
-                        let clicks = self.clicks(now_ms, (x, y));
-                        presenter.pointer_down_with_clicks(x, y, now_ms, clicks)?;
-                    } else {
-                        presenter.pointer_up(x, y, now_ms)?;
-                    }
-                } else {
-                    self.previous_click = None;
-                    presenter.pointer_aux(bit, down, x, y, now_ms);
-                }
+                self.button(presenter, window, bit, state == ElementState::Pressed, now_ms)?;
             }
             WindowEvent::MouseWheel { delta, .. } => {
-                self.previous_click = None;
-                if !pointer_mapped(presenter, window) {
-                    return Ok(());
-                }
-                if let Some((x, y)) = self.pointer {
-                    let (dx, dy) = match delta {
-                        MouseScrollDelta::LineDelta(dx, dy) => {
-                            (-dx * SCROLL_LINE, -dy * SCROLL_LINE)
-                        }
-                        MouseScrollDelta::PixelDelta(position) => {
-                            let position = position.to_logical::<f32>(window.scale_factor());
-                            (-position.x, -position.y)
-                        }
-                    };
-                    presenter.wheel_at(x, y, dx, dy);
-                }
+                let (dx, dy) = match delta {
+                    MouseScrollDelta::LineDelta(dx, dy) => (-dx * SCROLL_LINE, -dy * SCROLL_LINE),
+                    MouseScrollDelta::PixelDelta(position) => {
+                        let position = position.to_logical::<f32>(window.scale_factor());
+                        (-position.x, -position.y)
+                    }
+                };
+                self.wheel(presenter, window, dx, dy);
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 sync_modifiers(presenter, modifiers.state())
@@ -253,6 +325,99 @@ impl Input {
             presenter.ime_end();
             self.preedit = Preedit::Idle;
         }
+    }
+
+    /// The pointer moved to `point`, in points.
+    fn moved<D: DataSource>(
+        &mut self,
+        presenter: &mut Presenter<D>,
+        window: &Window,
+        point: (f32, f32),
+        now_ms: f64,
+    ) -> Result<(), String> {
+        if self.previous_click.is_some_and(|(_, origin, _)| {
+            (point.0 - origin.0).abs() > 5. || (point.1 - origin.1).abs() > 5.
+        }) {
+            self.previous_click = None;
+        }
+        self.pointer = Some(point);
+        if !pointer_mapped(presenter, window) {
+            return Ok(());
+        }
+        presenter.set_pointer_kind(PointerKind::Mouse);
+        presenter.pointer_move(point.0, point.1, now_ms)?;
+        let cursor = presenter
+            .cursor_at(point.0, point.1)
+            .name()
+            .parse::<CursorIcon>()
+            .unwrap_or(CursorIcon::Default);
+        window.set_cursor(cursor);
+        Ok(())
+    }
+
+    /// The pointer left the window; a held button keeps it.
+    fn left<D: DataSource>(
+        &mut self,
+        presenter: &mut Presenter<D>,
+        window: &Window,
+        now_ms: f64,
+    ) -> Result<(), String> {
+        self.inside = false;
+        if self.buttons == 0 {
+            self.pointer = None;
+            presenter.pointer_lost(now_ms)?;
+        }
+        window.set_cursor(CursorIcon::Default);
+        Ok(())
+    }
+
+    /// The wheel turned by (`dx`, `dy`) points, down and right positive.
+    fn wheel<D: DataSource>(&mut self, presenter: &mut Presenter<D>, window: &Window, dx: f32, dy: f32) {
+        self.previous_click = None;
+        if !pointer_mapped(presenter, window) {
+            return;
+        }
+        if let Some((x, y)) = self.pointer {
+            presenter.wheel_at(x, y, dx, dy);
+        }
+    }
+
+    /// Button `bit` went down or up at the pointer.
+    fn button<D: DataSource>(
+        &mut self,
+        presenter: &mut Presenter<D>,
+        window: &Window,
+        bit: u32,
+        down: bool,
+        now_ms: f64,
+    ) -> Result<(), String> {
+        let Some((x, y)) = self.pointer else {
+            return Ok(());
+        };
+        presenter.set_pointer_kind(PointerKind::Mouse);
+        if down {
+            self.buttons |= bit;
+        } else {
+            self.buttons &= !bit;
+        }
+        self.held.set(self.left.filter(|_| self.buttons == 1));
+        if !pointer_mapped(presenter, window) {
+            self.previous_click = None;
+            presenter.pointer_lost(now_ms)?;
+            return Ok(());
+        }
+        if bit == 1 {
+            if down {
+                let clicks = self.clicks(now_ms, (x, y));
+                presenter.pointer_down_with_clicks(x, y, now_ms, clicks)?;
+            } else {
+                presenter.pointer_up(x, y, now_ms)?;
+            }
+        } else {
+            self.previous_click = None;
+            presenter.pointer_aux(bit, down, x, y, now_ms);
+        }
+        Ok(())
     }
 
     fn clicks(&mut self, now_ms: f64, point: (f32, f32)) -> u32 {

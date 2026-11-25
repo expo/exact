@@ -6,6 +6,7 @@
 //! node names it (a shipped `assets/…` name or an `app:/` path), which the
 //! reader resolves as it does a `video`'s.
 use super::*;
+use exact_kernel::NodeKey;
 
 /// What the reader drags: the node's box and the finger's point in the
 /// view's pixels, whether an assistive service started it, then its text,
@@ -197,14 +198,7 @@ impl<D: exact_runner::DataSource> Presenter<D> {
     /// The drag of `id` held at (`x`, `y`): its box as it shows, within its
     /// clip (a card a scroller cuts off is dragged as its shown part).
     fn drag_of(&mut self, id: ViewId, x: f32, y: f32, service: bool) -> Option<DragOut> {
-        let painted = self.box_of(id)?;
-        let mut rect = painted.rect;
-        if let Some(clip) = painted.clip {
-            let (left, top) = (rect.0.max(clip.0), rect.1.max(clip.1));
-            let right = (rect.0 + rect.2).min(clip.0 + clip.2);
-            let bottom = (rect.1 + rect.3).min(clip.1 + clip.3);
-            rect = (left, top, (right - left).max(0.), (bottom - top).max(0.));
-        }
+        let rect = self.shown_box(id)?;
         let props = |prop| {
             self.host
                 .kernel()
@@ -238,4 +232,222 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             files,
         })
     }
+}
+
+impl<D: exact_runner::DataSource> Presenter<D> {
+    /// `id`'s box as it shows, in points: within its clip, so a card a
+    /// scroller cuts off is dragged as its shown part.
+    fn shown_box(&mut self, id: ViewId) -> Option<(f32, f32, f32, f32)> {
+        let painted = self.box_of(id)?;
+        let rect = painted.rect;
+        let Some(clip) = painted.clip else {
+            return Some(rect);
+        };
+        let (left, top) = (rect.0.max(clip.0), rect.1.max(clip.1));
+        let right = (rect.0 + rect.2).min(clip.0 + clip.2);
+        let bottom = (rect.1 + rect.3).min(clip.1 + clip.3);
+        Some((left, top, (right - left).max(0.), (bottom - top).max(0.)))
+    }
+}
+
+/// A desktop host that lifts a mouse's drags (LLP 1094.000 D13): which of
+/// D1's values it offers, and what it does with a lift, answering whether
+/// it took it.
+pub struct Lifter {
+    /// The values the host offers; a node carrying none of them is not a
+    /// source there.
+    pub offers: Offers,
+    /// Take a lift; false leaves the contact as if nothing had armed.
+    pub lift: Box<dyn FnMut(Lift) -> bool>,
+}
+
+/// Which of D1's values a host's drag offers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Offers {
+    /// `text`.
+    pub text: bool,
+    /// `url`.
+    pub url: bool,
+    /// `files`.
+    pub files: bool,
+}
+
+impl Offers {
+    /// The node props that hold what a host offers.
+    fn props(self) -> impl Iterator<Item = PropId> {
+        [
+            (self.text, PropId::DataTransferText),
+            (self.url, PropId::DataTransferUrl),
+            (self.files, PropId::DataTransferFiles),
+        ]
+        .into_iter()
+        .filter_map(|(offered, prop)| offered.then_some(prop))
+    }
+}
+
+/// What a desktop host lifts by the mouse (LLP 1094.000 D13): the values it
+/// offers from what the node carries, its picture as the frame showed it,
+/// and where the press held it in that picture, in the window's logical
+/// coordinates.
+pub struct Lift {
+    /// `text`, empty for none or when not offered.
+    pub text: String,
+    /// `url`, empty for none or when not offered.
+    pub url: String,
+    /// Each file as the node names it, none when not offered.
+    pub files: Vec<String>,
+    /// The node's box, within its clip, cut from the frame last shown.
+    pub picture: Option<LiftPicture>,
+    /// The press, relative to the picture's top left.
+    pub hotspot: (f32, f32),
+}
+
+/// A lifted node's pixels: premultiplied RGBA rows, `scale` pixels a point.
+pub struct LiftPicture {
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels.
+    pub height: u32,
+    /// The frame's pixels a point.
+    pub scale: f32,
+    /// Its rows, top first.
+    pub rgba: Vec<u8>,
+}
+
+impl<D: exact_runner::DataSource> Presenter<D> {
+    /// Hand the drags a mouse lifts to `lifter`, the desktop host's own
+    /// (LLP 1094.000 D13); none lifts nothing by the mouse.
+    pub fn set_lifter(&mut self, lifter: Option<Lifter>) {
+        self.lifter = lifter;
+        self.shown = None;
+    }
+
+    /// The node a mouse press on `hit` arms, and a digest of what it offers
+    /// (LLP 1094.000 D13): the innermost node that drags a value the host
+    /// offers, unless a
+    /// disabled or inert node, a text input, a control, a link or a node
+    /// that hears `press` comes first, each of which takes a mouse press
+    /// itself (LLP 1057.001 rule 3), as AppKit's views do.
+    pub(in crate::presenter) fn mouse_lift(&self, hit: NodeKey) -> Option<(NodeKey, u64)> {
+        let offers = self.lifter.as_ref()?.offers;
+        if self.agent || exact_runner::agent::carried() || self.page_inert() {
+            return None;
+        }
+        let kernel = self.host.kernel();
+        let mut at = kernel.node_by_key(hit);
+        while let Some(node) = at {
+            if node.props.bool(PropId::Disabled) == Some(true) || !self.input_live(node.key) {
+                return None;
+            }
+            let offered = |prop| node.props.str(prop).is_some_and(|value: &str| !value.is_empty());
+            if node.props.bool(PropId::Draggable) == Some(true) && offers.props().any(offered) {
+                return Some((node.key, Self::carried(&node, offers)));
+            }
+            let presses = node.props.link().is_some()
+                || exact_kernel::ControlKind::of(node.node_type, node.props).is_some()
+                || self.host.runner().handlers_of(node.id).contains(&EventKind::Press);
+            if node.node_type == NodeType::TextInput || presses {
+                return None;
+            }
+            at = node.parent.and_then(|parent| kernel.node(parent));
+        }
+        None
+    }
+
+    /// A digest of what `node` carries that the host offers, to tell at the
+    /// lift whether it changed since the press.
+    fn carried(node: &exact_kernel::NodeRef<'_>, offers: Offers) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut digest = std::collections::hash_map::DefaultHasher::new();
+        for prop in offers.props() {
+            node.props.str(prop).hash(&mut digest);
+        }
+        digest.finish()
+    }
+
+    /// Lift `source`, armed at the press on `hit` carrying `carried`, held
+    /// at `origin`, if the press still arms it as the Mac checks: the hit
+    /// still mounted, the search from it finding the same source carrying
+    /// the same, painted. Whether the host took it.
+    pub(in crate::presenter) fn mouse_lifts(
+        &mut self,
+        hit: Option<NodeKey>,
+        source: NodeKey,
+        carried: u64,
+        origin: (f32, f32),
+        now_ms: f64,
+    ) -> bool {
+        let Some(lift) = self.mouse_lift_of(hit, source, carried, origin) else {
+            return false;
+        };
+        let Some(lifter) = self.lifter.as_mut() else {
+            return false;
+        };
+        if !(lifter.lift)(lift) {
+            return false;
+        }
+        if let Err(e) = self.pointer_cancel(now_ms) {
+            self.host.log(e);
+        }
+        true
+    }
+
+    fn mouse_lift_of(&mut self, hit: Option<NodeKey>, source: NodeKey, carried: u64, origin: (f32, f32)) -> Option<Lift> {
+        if self.mouse_lift(hit?)? != (source, carried) {
+            return None;
+        }
+        let id = self.host.kernel().node_by_key(source)?.id;
+        let drag = self.drag_of(id, origin.0, origin.1, false)?;
+        let rect = self.shown_box(id)?;
+        if rect.2 <= 0. || rect.3 <= 0. {
+            return None;
+        }
+        // The box, its scale and its pixels are one acknowledged frame's
+        let picture = self.shown.as_ref().and_then(|(pixels, scale)| {
+            let px = |v: f32| (v * scale).round() as i32;
+            let cut = [px(rect.0), px(rect.1), px(rect.2), px(rect.3)];
+            crop(pixels, cut).map(|rgba| LiftPicture {
+                width: cut[2] as u32,
+                height: cut[3] as u32,
+                scale: *scale,
+                rgba,
+            })
+        });
+        let hotspot = (origin.0 - rect.0, origin.1 - rect.1);
+        let offers = self.lifter.as_ref()?.offers;
+        Some(Lift {
+            text: if offers.text { drag.text } else { String::new() },
+            url: if offers.url { drag.url } else { String::new() },
+            files: if offers.files { drag.files } else { Vec::new() },
+            picture,
+            hotspot,
+        })
+    }
+
+    /// Keep the frame `pixels` shown at `scale`, for a lift's picture, while
+    /// the plan has a node that drags and a host lifts by the mouse.
+    pub(in crate::presenter) fn keep_shown(&mut self, pixels: Option<&Arc<Pixmap>>, scale: f32) {
+        let drags = self.lifter.is_some()
+            && *self.plan_drags.get_or_insert_with(|| {
+                exact_runner::uses(self.host.runner().plan()).has(exact_runner::Capability::DragOut)
+            });
+        self.shown = pixels.filter(|_| drags).map(|pixels| (pixels.clone(), scale));
+    }
+}
+
+/// The premultiplied RGBA rows of `pixmap` within `rect` (x, y, width,
+/// height in pixels), when all of it lies in the pixmap.
+fn crop(pixmap: &Pixmap, rect: [i32; 4]) -> Option<Vec<u8>> {
+    let [x, y, width, height] = rect.map(|v| usize::try_from(v).ok());
+    let (x, y, width, height) = (x?, y?, width?, height?);
+    let stride = pixmap.width() as usize * 4;
+    if x + width > pixmap.width() as usize || y + height > pixmap.height() as usize {
+        return None;
+    }
+    let data = pixmap.data();
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for row in y..y + height {
+        rgba.extend_from_slice(&data[row * stride + x * 4..row * stride + (x + width) * 4]);
+    }
+    Some(rgba)
 }

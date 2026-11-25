@@ -433,6 +433,8 @@ impl<D: DataSource> Presenter<D> {
         }
         // Something shows the session from here on.
         self.unshown = false;
+        // A lift cuts its picture from the pixels whose boxes it reads
+        self.shown = None;
         // Consume once, even after reload. A retained pixel handle never pins
         // an old native paragraph/picture after this acknowledgement.
         let picture = frame.picture.borrow_mut().take();
@@ -442,6 +444,7 @@ impl<D: DataSource> Presenter<D> {
                 let model_scroll = std::mem::take(&mut picture.witness.model_scroll);
                 self.brush.replace_presentation(picture.paint);
                 self.boxes = picture.boxes;
+                self.keep_shown(pixels, f32::from_bits(scale));
                 self.boxes_page = picture.page;
                 self.boxes_serial += 1;
                 self.ranges.shown.set(picture.session);

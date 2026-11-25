@@ -23,6 +23,9 @@ pub(super) enum Candidate {
         handle: NodeKey,
         target: NodeKey,
     },
+    /// A mouse's lift of `source`, armed at the press with a digest of what
+    /// it carried (LLP 1094.000 D13).
+    Lift { source: NodeKey, carried: u64 },
 }
 impl Candidate {
     fn node(&self) -> NodeKey {
@@ -31,6 +34,7 @@ impl Candidate {
             Candidate::Transform(b) => b.handle,
             Candidate::Height { handle, .. } => handle,
             Candidate::Swipe(key) | Candidate::Pan(key) => key,
+            Candidate::Lift { source, .. } => source,
         }
     }
     /// The candidate's own axis rule, at the slop (LLP 1057.001 §1).
@@ -39,7 +43,10 @@ impl Candidate {
             Candidate::Arrange(_) | Candidate::Height { .. } => dy.abs() > dx.abs(),
             Candidate::Swipe(_) => dx.abs() > dy.abs(),
             // A grouped row lifts in any direction (LLP 1094 D6).
-            Candidate::Transform(_) | Candidate::Pan(_) | Candidate::Group(_) => true,
+            Candidate::Transform(_)
+            | Candidate::Pan(_)
+            | Candidate::Group(_)
+            | Candidate::Lift { .. } => true,
         }
     }
 }
@@ -339,14 +346,20 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// Every candidate of a contact on `hit`: innermost first, then reorder >
-    /// transform > height > pan > swipe on one node (LLP 1057.001 §1).
+    /// transform > height > pan > swipe > a mouse's lift on one node (LLP
+    /// 1057.001 §1; LLP 1094.000 D8, D13).
     pub(super) fn candidates(&self, hit: NodeKey) -> Vec<Candidate> {
+        let lift = (!self.direct())
+            .then(|| self.mouse_lift(hit))
+            .flatten()
+            .map(|(source, carried)| Candidate::Lift { source, carried });
         let ranked = [
             self.arrange_candidate(hit),
             self.transform_candidate(hit),
             self.height_candidate(hit),
             self.pan_candidate(hit),
             self.swipe_candidate(hit).map(Candidate::Swipe),
+            lift,
         ];
         let mut found: Vec<_> = ranked
             .into_iter()
@@ -915,13 +928,28 @@ impl<D: DataSource> Presenter<D> {
                 contact.candidate = contact.candidate.filter(takes_move);
                 rest.retain(takes_move);
             }
-            if let Some(next) = contact
-                .candidate
-                .into_iter()
-                .chain(rest)
-                .find(|c| c.accepts(dx, dy))
-            {
+            // A mouse's swipe takes only a direction it would start in, so
+            // another falls through to the candidates after it, a lift's
+            // among them (LLP 1094.000 D13)
+            let starts = |c: &Candidate| match *c {
+                Candidate::Swipe(key) if !self.direct() => {
+                    let ways = match &contact.retained {
+                        Some(retained) => retained.swipe_ways(),
+                        None => self.swipe_ways(key),
+                    };
+                    let view = self.host.kernel().node_by_key(key).map(|n| n.id);
+                    let shown = view.map_or(0., |v| self.host.presented(v).translate.0 as f64);
+                    ways.starts(dx, shown)
+                }
+                _ => true,
+            };
+            let mut queue = contact.candidate.into_iter().chain(rest);
+            if let Some(next) = queue.find(|c| c.accepts(dx, dy) && starts(c)) {
                 contact.candidate = Some(next);
+                // Keep the candidates after a lift for the host to decline it to
+                if matches!(next, Candidate::Lift { .. }) {
+                    contact.rest = queue.collect();
+                }
             }
         }
         if let Some(Candidate::Pan(key)) = contact.candidate {
@@ -973,6 +1001,18 @@ impl<D: DataSource> Presenter<D> {
             if dx.abs().max(dy.abs()) <= slop {
                 self.contact = Some(contact);
                 return Ok(false);
+            }
+            if let Some(Candidate::Lift { source, carried }) = contact.candidate {
+                // The host takes the drag from here, and the contact ends; a
+                // lift the press no longer arms, or the host declines, goes
+                // on as if none had armed, the candidates after it next
+                let (hit, origin) = (contact.hit, contact.origin);
+                self.contact = Some(contact);
+                if self.mouse_lifts(hit, source, carried, origin, now_ms) {
+                    return Ok(true);
+                }
+                contact = self.contact.take().unwrap();
+                contact.candidate = None;
             }
             if contact.candidate.is_some() {
                 if let Some(key) = contact.feedback.take() {

@@ -353,7 +353,8 @@ impl<D: DataSource> Presenter<D> {
                         }
                     })
                 }
-                Candidate::Group(_) => (true, true),
+                // A mouse's lift takes a drag in any direction (LLP 1094.000 D13).
+                Candidate::Group(_) | Candidate::Lift { .. } => (true, true),
                 // A `pan` hears what its `touch-action` does not give to
                 // scrolling, as a browser cancels a pointer it pans with.
                 Candidate::Pan(key) => kernel.node_by_key(key).map_or((false, false), |n| {

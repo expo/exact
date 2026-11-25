@@ -165,6 +165,9 @@ impl<D: DataSource> Presenter<D> {
             agent: _,
             booting: _,
             content_registration: _,
+            lifter: _,
+            shown,
+            plan_drags,
         } = self;
         // Turns still wait for the frame; none of the old tree's do.
         if let Some(waiting) = deferred_collections {
@@ -196,6 +199,9 @@ impl<D: DataSource> Presenter<D> {
         *field_history = Default::default();
         *field_drag = None;
         drag_in.reset();
+        // A new plan's frames are the ones a lift cuts its picture from
+        *shown = None;
+        *plan_drags = None;
         *mouse_selection = Default::default();
         #[cfg(any(target_os = "android", test))]
         {
