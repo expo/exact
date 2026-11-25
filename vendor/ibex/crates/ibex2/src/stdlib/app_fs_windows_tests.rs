@@ -270,6 +270,22 @@ fn removing_a_folder_detaches_a_file_while_its_reader_keeps_reading() {
 }
 
 #[test]
+fn atomic_write_replaces_a_file_while_its_reader_keeps_reading() {
+    use std::io::Read;
+    let f = Fixture::new();
+    f.call(FsOp::WriteFile, "app:/data/note", None, Some(b"old"))
+        .unwrap();
+    // std shares read, write and delete, as most readers do.
+    let mut reader = fs::File::open(f.path.join("data/note")).unwrap();
+    f.call(FsOp::AtomicWriteFile, "app:/data/note", None, Some(b"new"))
+        .unwrap();
+    assert_eq!(fs::read(f.path.join("data/note")).unwrap(), b"new");
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"old");
+}
+
+#[test]
 fn removing_a_folder_with_a_locked_file_still_removes_its_other_entries() {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
