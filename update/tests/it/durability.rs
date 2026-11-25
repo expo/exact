@@ -638,3 +638,51 @@ fn a_held_entry_whose_plan_rotted_is_staged_again() {
     let prepared = store.prepare_activation().unwrap().unwrap();
     assert_eq!(&*prepared.plan, b"plan four");
 }
+
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+)]
+fn repeated_entry_refused_and_fallback_first_pixel_preserve_crash_recovery() {
+    let temp = Temp::new("refused-idempotent");
+    let mut origin = Origin::of(&Bundle::new(4, b"plan four"));
+    let mut store = open(&temp);
+    let Ok(Check::Staged { entry: good, .. }) = origin.check(&mut store) else {
+        panic!("the first head stages");
+    };
+    drop(store);
+
+    let mut launch = open(&temp);
+    launch.boot_started().unwrap();
+    launch.boot_succeeded(&launch.generation()).unwrap();
+    origin.serving(&Bundle::new(5, b"plan five"));
+    assert!(matches!(
+        origin.check(&mut launch),
+        Ok(Check::Staged { seq: 5, .. })
+    ));
+    drop(launch);
+
+    let mut launch = open(&temp);
+    launch.boot_started().unwrap();
+    launch.entry_refused();
+    launch.entry_refused();
+    assert!(
+        !launch.status().staged,
+        "repeated refusal keeps entry unstaged"
+    );
+    assert!(launch.prepare_activation().unwrap().is_none());
+
+    launch.boot_succeeded(&launch.generation()).unwrap();
+    let record: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(temp.path().join("record.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        record["failures"], 1,
+        "fallback first pixel keeps failure count"
+    );
+    assert_eq!(
+        record["lastGood"], good,
+        "fallback first pixel keeps the last-good entry"
+    );
+}

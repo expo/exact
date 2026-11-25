@@ -499,6 +499,7 @@ final class Recognition: ExactTrackConsumer {
     // MARK: the track (D8, D10)
 
     func live(_ source: ExactAudioSource?) {
+        guard state != "ended", !stopping else { return }
         audio = true; sound = true
         self.source = source
         if let source { engine?.live(source) }
@@ -582,13 +583,14 @@ final class AnalyzerEngine: RecognitionEngine {
 
     @MainActor private func hold(_ analyzer: SpeechAnalyzer) {
         self.analyzer = analyzer
+        if aborted { return abort() }
         if stopped { stop() }
     }
 
     @MainActor private func began(_ analyzer: SpeechAnalyzer, _ input: AsyncStream<AnalyzerInput>.Continuation, _ format: AVAudioFormat) {
         self.analyzer = analyzer; self.input = input
         ready = true
-        if aborted { input.finish(); return }
+        if aborted { return abort() }
         if stopped { return stop() }
         if let source { attach(source, format) } else { self.format = format }
     }
@@ -649,6 +651,7 @@ final class AnalyzerEngine: RecognitionEngine {
     }
 
     func live(_ source: ExactAudioSource) {
+        guard !stopped, !aborted else { return }
         self.source = source
         if ready, let format { attach(source, format) }
     }
@@ -795,7 +798,7 @@ final class RecognizerEngine: RecognitionEngine {
     /// The track's buffers, on the audio thread. A continuous recognition's request ends its audio after a segment's
     /// worth, as the file reader's does, and what is heard until the next request begins is held for it.
     func live(_ source: ExactAudioSource) {
-        guard tap == nil else { return }
+        guard tap == nil, !stopping, !aborted else { return }
         let continuous = r?.continuous == true
         var inSegment = 0.0
         tap = source.tap { [weak self] buffer, _ in

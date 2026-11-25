@@ -149,14 +149,8 @@ extension Agent {
         }
         /// The part of the screen `v` can show in: each scroller holding it cuts its content at its edges.
         func shown(_ v: UIView) -> CGRect {
-            var r = port, at = v.superview
-            while let cur = at {
-                if let sv = cur as? UIScrollView, sv.clipsToBounds {
-                    let port = sv.pageBounds.inset(by: sv.adjustedContentInset)
-                    r = r.intersection(sv.convert(port, to: nil))
-                }
-                at = cur.superview
-            }
+            var r = port
+            Self.scrollClips(of: v) { _, box in r = r.intersection(box) }
             return r
         }
         /// The part of box `b` (`v`'s, in the window) that is presented: each clipping view above it (a scroller, a list,
@@ -436,14 +430,18 @@ extension Agent {
 
         // Preorder over what is shown, so a view past the viewport's side (`held`) or its container's (`out`) is named
         // and not each of its children.
+        var targetEdges = [CGRect]()
         var visited = Set<ObjectIdentifier>()
-        func walk(_ v: UIView, alpha: CGFloat, held: Bool, out: Bool = false, parent: NodeView? = nil) {
+        func walk(_ v: UIView, alpha: CGFloat, held: Bool, out: Bool = false, parent: NodeView? = nil, presenting: Bool) {
             guard visited.insert(ObjectIdentifier(v)).inserted, !v.isHidden, v.alpha > 0.01, (v as? NodeView)?.drawnBySurface != true else { return }
+            let box = v.convert(v.bounds, to: win)
+            if !box.isEmpty, box.intersects(win.bounds) { targetEdges.append(box) }
+            let observing = presenting || roots.contains(v)
             let a = alpha * v.alpha
             var heldBelow = held, outBelow = out
-            if let n = v as? NodeView {
+            if observing, let n = v as? NodeView {
                 guard !n.inert, !n.cssVisibilityHidden, !presenter.navigation.isInactiveRoute(containing: n), !unjudged.contains(ObjectIdentifier(n)) else { return }
-                let b = n.convert(n.bounds, to: nil)
+                let b = box
                 observeScroll(n, b)
                 if b.width > 0, b.height > 0, b.intersects(port) || b.intersects(win.bounds) {
                     var item: [String: Any] = rect(b).merging(["id": Int(n.id)]) { x, _ in x }
@@ -482,11 +480,11 @@ extension Agent {
                 // trivia-quiz). The web's `holdsX` (host/web-js/check.js).
                 let sideways = n.scroll == nil || n.style["written"]?.array?.contains(.string("overflow_x")) == true
                 if sideways && (n.scroll?.scrollsX == true || n.overflowClips || n.clipBox != nil) { heldBelow = true }
-            } else if let label = v as? UILabel {
+            } else if observing, let label = v as? UILabel {
                 nativeLabel(label, alpha: a, into: &items)
                 return
-            } else if v is UITextField || v is UITextView { return }
-            for s in v.subviews { walk(s, alpha: a, held: heldBelow, out: outBelow, parent: (v as? NodeView) ?? parent) }
+            } else if observing, v is UITextField || v is UITextView { return }
+            for s in v.subviews { walk(s, alpha: a, held: heldBelow, out: outBelow, parent: observing ? (v as? NodeView) ?? parent : nil, presenting: observing) }
         }
 
         func paragraph(_ n: NodeView, _ b: CGRect, alpha: CGFloat, into item: inout [String: Any]) {
@@ -674,7 +672,10 @@ extension Agent {
             items.append(item)
         }
 
-        roots.forEach { walk($0, alpha: 1, held: false) }
+        // A sibling of the presentation can take a strip of its target. Keep its edges, but judge only the presented roots.
+        walk(win, alpha: 1, held: false, presenting: false)
+        NodeView.touchFallsToCellField = falls
+        observeTargetReach(in: win, keyboard: keyboard, edges: targetEdges, items: &items)
         let dark = vp.traitCollection.userInterfaceStyle == .dark
         let space = win.screen.coordinateSpace
         let origin = win.convert(win.bounds.origin, to: space)
@@ -716,6 +717,148 @@ extension Agent {
         guard !v.isHidden, v.alpha > 0.01 else { return [] }
         if String(describing: Swift.type(of: v)) == "UIPlatformGlassInteractionView" { return [v.convert(v.bounds, to: nil)] }
         return v.subviews.flatMap(glass(in:))
+    }
+
+    private static func scrollClips(of v: UIView, clipped: ((UIView) -> Void)? = nil, _ visit: (UIScrollView, CGRect) -> Void) {
+        var at = v.superview
+        while let cur = at {
+            if let sv = cur as? UIScrollView, sv.clipsToBounds {
+                let port = sv.pageBounds.inset(by: sv.adjustedContentInset)
+                visit(sv, sv.convert(port, to: nil))
+            } else { clipped?(cur) }
+            at = cur.superview
+        }
+    }
+
+    /// At each box edge the winner can change. Ask the window between those edges, including the front sibling's
+    /// slop and the clipping ancestor's bounds. A descendant's hit belongs to its nearest control.
+    private func observeTargetReach(in win: UIWindow, keyboard: CGFloat?, edges boxEdges: [CGRect], items: inout [[String: Any]]) {
+        var controls = [UInt32: Int]()
+        for (i, item) in items.enumerated() {
+            if item["control"] != nil, let id = item["id"] as? Int { controls[UInt32(id)] = i }
+        }
+        guard !controls.isEmpty else { return }
+        let controlViews = Dictionary(uniqueKeysWithValues: controls.keys.compactMap { presenter.views[$0] }.map { ($0 as UIView, $0) })
+        func owner(_ v: UIView) -> NodeView? {
+            sequence(first: v, next: presenter.pressParent).lazy.compactMap { controlViews[$0] }.first
+        }
+        var bounds = [UInt32: CGRect](), edges = boxEdges, curved = [CGRect](), clips = [UIView: CGRect]()
+        for n in presenter.views.values where n.window === win {
+            let local = n.hitBounds, b = n.convert(local, to: win)
+            if n.overflowClips {
+                var clip = n.convert(n.overflowPaddingBox, to: win)
+                if n.clipsOneAxis {
+                    if n.style["overflow_x"]?.string == "clip" { clip.origin.y = win.bounds.minY; clip.size.height = win.bounds.height }
+                    else { clip.origin.x = win.bounds.minX; clip.size.width = win.bounds.width }
+                }
+                clips[n] = clip; edges.append(clip)
+            }
+            guard !b.isEmpty, b.intersects(win.bounds) else { continue }
+            edges.append(b)
+            if let control = owner(n) {
+                bounds[control.id] = (bounds[control.id] ?? control.convert(control.bounds, to: win)).union(b)
+            }
+            let corner = n.convert(local.origin, to: win)
+            let across = n.convert(CGPoint(x: local.maxX, y: local.minY), to: win)
+            let down = n.convert(CGPoint(x: local.minX, y: local.maxY), to: win)
+            if abs(across.y - corner.y) > 0.01 || abs(down.x - corner.x) > 0.01 || n.columnRecord?.fragments.isEmpty == false ||
+                n.kind == "svg" || n.inlineText.contains(where: { !$0.handlers.isEmpty || $0.props["href"] != nil }) {
+                curved.append(b)
+            } else if let path = n.clipPath {
+                var rect = CGRect.zero
+                if path.isRect(&rect) { edges.append(n.convert(rect, to: win)) }
+                else { curved.append(b) }
+            }
+        }
+        let port = win.bounds.intersection(CGRect(x: win.bounds.minX, y: win.bounds.minY,
+            width: win.bounds.width, height: (keyboard ?? win.bounds.maxY) - win.bounds.minY))
+        for (id, index) in controls {
+            guard let n = presenter.views[id] else { continue }
+            let box = n.convert(n.bounds, to: win), candidate = bounds[id] ?? box
+            let r = candidate.intersection(port)
+            func takes(_ point: CGPoint) -> Bool {
+                guard let hit = win.hitTest(point, with: nil) else { return false }
+                return pressReach(from: hit, at: point).isOwn(n)
+            }
+            // Once a 44 pt square fits, iOS needs no more samples or spacing geometry.
+            var witness: CGRect?
+            if r.width >= 88, r.height >= 88, curved.contains(where: { $0.intersects(r) }) {
+                let fractions: [(CGFloat, CGFloat)] = [(0.5, 0.5), (0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)]
+                for (x, y) in fractions {
+                    let square = CGRect(x: r.minX + x * (r.width - 44), y: r.minY + y * (r.height - 44), width: 44, height: 44)
+                    if takes(CGPoint(x: square.midX, y: square.midY)), Self.hitStrips(in: square, edges: edges, curved: curved, takes: takes) == [square] {
+                        witness = square; break
+                    }
+                }
+            }
+            let reach = witness.map { [$0] } ?? Self.hitStrips(in: r, edges: edges, curved: curved, takes: takes)
+            var dx: CGFloat = 0, dy: CGFloat = 0, revealable = box
+            Self.scrollClips(of: n, clipped: { ancestor in
+                if let clip = clips[ancestor] { revealable = revealable.intersection(clip) }
+            }) { sv, clip in
+                guard sv.isScrollEnabled, !revealable.isEmpty, reach.count == 1 else { return }
+                let i = sv.adjustedContentInset, offset = sv.contentOffset, seen = reach[0]
+                let origin = sv.convert(CGPoint.zero, to: win)
+                let x = sv.convert(CGPoint(x: 1, y: 0), to: win), y = sv.convert(CGPoint(x: 0, y: 1), to: win)
+                guard abs(x.y - origin.y) < 0.001, abs(y.x - origin.x) < 0.001 else { return }
+                let sx = x.x - origin.x, sy = y.y - origin.y
+                func gain(_ l: CGFloat, _ r: CGFloat, _ lo: CGFloat, _ hi: CGFloat, _ back: CGFloat, _ end: CGFloat) -> CGFloat {
+                    max(0, min(r - l, hi - lo, r + back - lo, hi - (l - end)) - max(0, min(r, hi) - max(l, lo)))
+                }
+                if sx > 0, abs(seen.minX - clip.minX) < 0.01 || abs(seen.maxX - clip.maxX) < 0.01 {
+                    dx = max(dx, gain(revealable.minX, revealable.maxX, clip.minX, clip.maxX, sx * (offset.x + i.left),
+                                      sx * (sv.contentSize.width + i.right - sv.bounds.width - offset.x)))
+                }
+                if sy > 0, abs(seen.minY - clip.minY) < 0.01 || abs(seen.maxY - clip.maxY) < 0.01 {
+                    dy = max(dy, gain(revealable.minY, revealable.maxY, clip.minY, clip.maxY, sy * (offset.y + i.top),
+                                      sy * (sv.contentSize.height + i.bottom - sv.bounds.height - offset.y)))
+                }
+            }
+            if dx > 0 || dy > 0 { items[index]["scrollGain"] = [Agent.r2(dx), Agent.r2(dy)] }
+            if reach != [box] {
+                items[index]["reach"] = reach.map { [$0.minX, $0.minY, $0.maxX, $0.maxY].map(Agent.r2) }
+            }
+        }
+    }
+
+    private static func hitStrips(in r: CGRect, edges: [CGRect], curved: [CGRect], takes: (CGPoint) -> Bool) -> [CGRect] {
+        guard !r.isEmpty else { return [] }
+        let nearby = edges.filter { $0.intersects(r) }
+        let fine = curved.filter { $0.intersects(r) }
+        func cuts(_ lo: CGFloat, _ hi: CGFloat, _ values: [CGFloat], _ ranges: [Range<CGFloat>]) -> [CGFloat] {
+            var points = Set(values.filter { lo < $0 && $0 < hi })
+            for range in ranges {
+                let first = ceil(max(lo, range.lowerBound)), end = min(hi, range.upperBound)
+                if first < end { points.formUnion(stride(from: first, to: end, by: 1)) }
+            }
+            points.insert(lo); points.insert(hi)
+            return points.sorted()
+        }
+        let ys = cuts(r.minY, r.maxY, nearby.flatMap { [$0.minY, $0.maxY] }, fine.map { $0.minY..<$0.maxY })
+        var rects = [CGRect](), previous = [ClosedRange<CGFloat>: Int]()
+        for (top, bottom) in zip(ys, ys.dropFirst()) {
+            let y = (top + bottom) / 2
+            let atY = { (b: CGRect) in b.minY < y && y < b.maxY }
+            let xs = cuts(r.minX, r.maxX, nearby.filter(atY).flatMap { [$0.minX, $0.maxX] }, fine.filter(atY).map { $0.minX..<$0.maxX })
+            var row = [ClosedRange<CGFloat>: Int](), start: CGFloat?
+            for i in 1...xs.count {
+                if i < xs.count, takes(CGPoint(x: (xs[i - 1] + xs[i]) / 2, y: y)) {
+                    if start == nil { start = xs[i - 1] }
+                } else if let left = start {
+                    let end = xs[i - 1], span = left...end
+                    if let index = previous[span] {
+                        rects[index].size.height = bottom - rects[index].minY
+                        row[span] = index
+                    } else {
+                        row[span] = rects.count
+                        rects.append(CGRect(x: left, y: top, width: end - left, height: bottom - top))
+                    }
+                    start = nil
+                }
+            }
+            previous = row
+        }
+        return rects
     }
 
     /// The software keyboard's top in the window, or nil while it is down.

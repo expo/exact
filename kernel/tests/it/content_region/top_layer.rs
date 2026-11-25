@@ -271,3 +271,95 @@ fn an_inline_popover_run_stays_in_its_paragraph() {
     let paragraph = r.current_frame(key(&k, 8)).expect("its paragraph");
     assert!(paragraph.width > 0. && paragraph.height > 0.);
 }
+
+/// Only a region pass that finishes both its region and top-layer blocks
+/// counts its stand-in chrome.
+#[test]
+fn a_region_pass_counts_provisional_chrome_only_when_it_succeeds() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    struct Cold {
+        fail_popover: Rc<Cell<bool>>,
+        provisional: Rc<Cell<bool>>,
+    }
+    impl TextMeasurer for Cold {
+        fn measure(&mut self, r: &TextMeasureRequest<'_>) -> TextMetrics {
+            if self.fail_popover.get() && r.runs.iter().any(|r| r.text.starts_with("Popped")) {
+                TextMetrics {
+                    width: f32::NAN,
+                    ..Default::default()
+                }
+            } else {
+                MonospaceMeasurer::default().measure(r)
+            }
+        }
+        fn field_chrome(&mut self, _: &FieldChromeRequest) -> FieldChrome {
+            FieldChrome {
+                minimum_height: 34.0,
+                provisional: self.provisional.get(),
+                ..Default::default()
+            }
+        }
+    }
+    let fail_popover = Rc::new(Cell::new(true));
+    let provisional = Rc::new(Cell::new(true));
+    let mut k = fixture_with(Box::new(Cold {
+        fail_popover: fail_popover.clone(),
+        provisional: provisional.clone(),
+    }));
+    let view = |id, node_type| Op::CreateView { id, node_type };
+    k.apply(
+        0,
+        0,
+        &[
+            view(7, NodeType::TextInput),
+            view(8, NodeType::View),
+            view(9, NodeType::Text),
+            Op::SetProp {
+                id: 8,
+                prop: PropId::Popover,
+                value: "manual".into(),
+            },
+            Op::SetProp {
+                id: 9,
+                prop: PropId::Text,
+                value: "Popped".into(),
+            },
+            Op::SetChildren {
+                id: 8,
+                children: vec![9],
+            },
+            Op::SetChildren {
+                id: 3,
+                children: vec![4, 7],
+            },
+            Op::SetChildren {
+                id: 1,
+                children: vec![2, 6, 8],
+            },
+        ],
+    )
+    .unwrap();
+    register(&mut k);
+    let inputs = RegionInputs {
+        catalog: 1,
+        consumer_revision: 1,
+    };
+    let failed = k.compute_region_layout(1, Offer::definite(400., 300.), inputs);
+    assert!(
+        failed.is_err(),
+        "the popover's bad measurement fails the pass"
+    );
+    assert_eq!(k.provisional_layouts(), 0, "a failed pass counts nothing");
+
+    fail_popover.set(false);
+    pass(&mut k, 400., 2);
+    assert_eq!(
+        k.provisional_layouts(),
+        1,
+        "a succeeding pass with stand-in chrome counts once"
+    );
+    provisional.set(false);
+    pass(&mut k, 400., 3);
+    assert_eq!(k.provisional_layouts(), 1);
+}

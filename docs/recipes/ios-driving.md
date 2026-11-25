@@ -29,7 +29,7 @@ bun exact.mjs agent ios "clock data" "screenshot .exact/a.png compare ref/a.png"
 | Flag or op | What it does |
 | --- | --- |
 | `rotate` + `portrait`, `portraitUpsideDown`, `landscapeLeft` or `landscapeRight` | Wait for the simulator scene’s `screen.orientation` in `layout`. |
-| `check`, `check dark`, `check both` | Clipped text, squeezed scrollers, covered controls, small targets, low contrast. |
+| `check`, `check dark`, `check both` | Clipped text, squeezed scrollers, covers, tap areas under 44×44 pt, contrast. |
 | `--scale 3` | Screenshots at 3 px per point. |
 | `screenshot <file> window` | Bars included; also the default with an alert, sheet or menu up. Film samples the agent clock; [UIKit motion](../../experiments/ios-film-cadence/README.md) needs a display recording. |
 | `tap <id> down` `screenshot <png>` `tap up` | `<id>` shown pressed, then pressed once; `tap hold <ms>` moves the clock. |

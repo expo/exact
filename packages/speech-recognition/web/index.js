@@ -119,6 +119,7 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
     r.release?.(); r.release = null;
     say(`${r.id}: ended${r.error ? ` (${r.error})` : ''}, ${r.finalCount} final results`);
     r.done = r.writing.then(() => info(r));
+    r.stopped?.(); r.stopped = null;
     announce();
     return r.done;
   }
@@ -172,7 +173,7 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
     };
     s.onnomatch = () => { final(r, []); announce(); };
     s.onerror = e => { r.error = e.error ?? 'aborted'; r.message = e.message || null; announce(); };
-    s.onend = () => { finish(r); r.stopped?.(); };
+    s.onend = () => { finish(r); };
     return s;
   }
 
@@ -186,7 +187,7 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
       id: `recognition-${++next}`, input, state: 'starting', audio: false, sound: false, speech: false, results: [], finalCount: 0, interim: null,
       error: null, message: null, continuous: !!args.continuous, interimResults: !!args.interimResults,
       history: Math.max(1, Math.min(MAX_HISTORY, args.history ?? HISTORY)), leavesDevice: leaves(args, s),
-      transcript: args.transcript ?? null, files: 0, fileSize: 0, writing: Promise.resolve(), began: now(), cursor: now(), heard: 0, seen: 0, file: input === 'file',
+      transcript: args.transcript ?? null, files: 0, fileSize: 0, writing: Promise.resolve(), began: now(), cursor: now(), heard: 0, seen: 0, file: input === 'file', started: false,
     };
     if (input === 'track') {
       const entry = tracks.lookup(args.track);
@@ -215,9 +216,10 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
     const recognizer = r.recognizer = browser(r, args);
     r.state = 'listening';
     try {
-      if (input === 'track') r.live(source => recognizer.start(source));
-      else recognizer.start();
+      if (input === 'track') r.live(source => { r.started = true; recognizer.start(source); });
+      else { r.started = true; recognizer.start(); }
     } catch (e) {
+      r.started = false;
       finish(r, 'audio-capture', e.message);
     }
     announce();
@@ -230,13 +232,13 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
     r.live = f => { begin = f; if (source) f(source); };
     r.unsubscribe = tracks.subscribe(track, {
       live(s) {
-        if (source || r.state === 'ended') return;
+        if (source || r.state !== 'listening') return;
         source = s;
-        try { begin?.(s); } catch (e) { finish(r, 'audio-capture', e.message); }
+        try { begin?.(s); } catch (e) { r.started = false; finish(r, 'audio-capture', e.message); }
       },
       muted() {},
       unmuted() {},
-      ended() { ended = true; if (r.state === 'listening') { r.recognizer?.abort(); finish(r); } },
+      ended() { ended = true; if (r.state === 'listening' || r.state === 'stopping') { if (r.started) r.recognizer?.abort(); finish(r); } },
     }, { start: true, origin: 'app' });
     if (ended) r.unsubscribe?.();
     return !ended;
@@ -250,14 +252,18 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
       if (!r) return { error: 'NotFoundError' };
       advance(r);
       if (r.state === 'ended') return r.done;
+      if (r.state === 'stopping') { await r.stopping; return r.done; }
       if (agent) {
         // What was heard of a phrase so far is its final result.
         if (r.interim) final(r, r.interim.alternatives, r.interim.start, r.interim.end);
         return finish(r);
       }
+      if (!r.started) return finish(r);
       r.state = 'stopping';
+      r.stopping = new Promise(stopped => { r.stopped = stopped; });
       announce();
-      await new Promise(stopped => { r.stopped = stopped; r.recognizer.stop(); });
+      r.recognizer.stop();
+      await r.stopping;
       return r.done;
     },
     async abortSpeechRecognition({ recognition }) {
@@ -266,7 +272,7 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
       const r = recognitions.get(recognition);
       if (!r) return { error: 'NotFoundError' };
       advance(r);
-      if (r.state !== 'ended') { r.interim = null; r.recognizer?.abort(); await finish(r, 'aborted'); }
+      if (r.state !== 'ended') { r.interim = null; if (r.started) r.recognizer?.abort(); await finish(r, 'aborted'); }
       return info(r);
     },
     async speechRecognitionState({ recognition }) {
@@ -305,7 +311,7 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
     dispose(ids) {
       for (const id of ids) {
         const r = recognitions.get(id);
-        if (r && r.state !== 'ended') { say(`${id}: its reply was dropped; aborted`); r.interim = null; r.recognizer?.abort(); finish(r, 'aborted'); }
+        if (r && r.state !== 'ended') { say(`${id}: its reply was dropped; aborted`); r.interim = null; if (r.started) r.recognizer?.abort(); finish(r, 'aborted'); }
       }
     },
     /** Recognition is a foreground activity: leaving the foreground aborts every one (D10). */
@@ -313,7 +319,7 @@ export function implementation({ changed, agent, now, log, tracks, files, foregr
       if (visible || shown()) return;
       for (const r of recognitions.values()) {
         advance(r);
-        if (r.state !== 'ended') { say(`${r.id}: left the foreground; aborted`); r.interim = null; r.recognizer?.abort(); finish(r, 'aborted'); }
+        if (r.state !== 'ended') { say(`${r.id}: left the foreground; aborted`); r.interim = null; if (r.started) r.recognizer?.abort(); finish(r, 'aborted'); }
       }
     },
   };

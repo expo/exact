@@ -12,6 +12,44 @@ const CONTROL = 'button, a[href], input:not([type="hidden"]), select, textarea, 
 const AGENT_SIZED = 'input[type="checkbox"], input[type="radio"], input[type="range"], input[type="color"], input[type="date"], input[type="time"], input[type="datetime-local"], select, progress';
 const SIZE = ['width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'padding-top', 'padding-bottom', 'padding-left', 'padding-right', 'flex-basis'];
 
+// Partition a target at the edges where another box, a clip or a hit-slop pseudo-element can
+// change the hit. A strip belongs to the control elementFromPoint actually reaches. Joining
+// adjacent strips keeps the usual rectangular target one rectangle, however many labels it holds.
+function targetReach(el, bounds, edges, curved, owner) {
+  const left = Math.max(0, bounds.left), right = Math.min(innerWidth, bounds.right);
+  const top = Math.max(0, bounds.top), bottom = Math.min(innerHeight, globalThis.visualViewport?.height ?? innerHeight, bounds.bottom);
+  if (right <= left || bottom <= top) return [];
+  const nearby = edges.filter(b => b.left < right && left < b.right && b.top < bottom && top < b.bottom);
+  const fine = curved.filter(b => b.left < right && left < b.right && b.top < bottom && top < b.bottom);
+  const cuts = (lo, hi, low, high, boxes, shapes) => {
+    const points = new Set([lo, hi]);
+    for (const b of boxes) for (const v of [b[low], b[high]]) if (lo < v && v < hi) points.add(v);
+    // A curve or a tilted edge can cross between two box edges. Measure there in CSS pixels.
+    for (const b of shapes) for (let v = Math.ceil(Math.max(lo, b[low])); v < Math.min(hi, b[high]); v++) points.add(v);
+    return [...points].sort((a, b) => a - b);
+  };
+  const ys = cuts(top, bottom, 'top', 'bottom', nearby, fine), rects = [];
+  let previous = new Map();
+  for (let j = 1; j < ys.length; j++) {
+    const y = (ys[j - 1] + ys[j]) / 2, row = new Map();
+    const atY = b => b.top < y && y < b.bottom;
+    const xs = cuts(left, right, 'left', 'right', nearby.filter(atY), fine.filter(atY));
+    let start;
+    for (let i = 1; i <= xs.length; i++) {
+      if (i < xs.length && owner(document.elementFromPoint((xs[i - 1] + xs[i]) / 2, y)) === el) {
+        start ??= xs[i - 1];
+      } else if (start != null) {
+        const end = xs[i - 1], key = `${start}/${end}`;
+        const rect = previous.get(key) ?? [start, ys[j - 1], end, ys[j]];
+        if (!previous.has(key)) rects.push(rect);
+        rect[3] = ys[j]; row.set(key, rect); start = null;
+      }
+    }
+    previous = row;
+  }
+  return rects;
+}
+
 /** `views`: the runtime's id → element map; `inactive(el)`: under a route or tab its navigation root has not selected. */
 export function observe(views, inactive = () => false) {
   const ids = new Map();
@@ -452,6 +490,148 @@ export function observe(views, inactive = () => false) {
       if (Math.abs(v.x - item.x) > 0.5 || Math.abs(v.y - item.y) > 0.5 || Math.abs(v.w - item.w) > 0.5 || Math.abs(v.h - item.h) > 0.5) item.vis = v;
     }
     if (item.text || item.control || item.fill || item.outX || item.spill || item.padded) items.push(item);
+  }
+  // The browser lays the slop pseudo-element out from its containing block's padding edge.
+  // A box with its used insets gives its bounds through transforms and scroll offsets too.
+  const targets = new Map(items.filter(it => it.control).map(it => [views.get(it.id), it]));
+  const owner = hit => {
+    for (let e = hit; e; e = e.parentElement) {
+      if (targets.has(e)) return e;
+      if (e.matches(CONTROL)) return null;
+    }
+    return null;
+  };
+  if (targets.size) {
+    const edges = [], curved = [], bounds = new Map(), ports = new Map(), transformed = new Set(), tilted = new Set();
+    const include = (target, r) => {
+      if (!target) return;
+      const a = bounds.get(target);
+      bounds.set(target, !a ? r : { left: Math.min(a.left, r.left), right: Math.max(a.right, r.right),
+        top: Math.min(a.top, r.top), bottom: Math.max(a.bottom, r.bottom) });
+    };
+    // A pointer-transparent decoration contributes no boundaries unless a descendant takes input.
+    const participating = new Set();
+    for (let i = all.length - 1; i >= 0; i--) {
+      const e = all[i];
+      if (getComputedStyle(e).pointerEvents !== 'none' || participating.has(e)) {
+        participating.add(e); participating.add(e.parentElement);
+      }
+    }
+    for (const e of all) {
+      if (!participating.has(e)) continue;
+      const b = e.getBoundingClientRect(), cs = getComputedStyle(e);
+      if (transformed.has(e.parentElement) || cs.transform !== 'none' || cs.rotate !== 'none' ||
+          cs.scale !== 'none' || cs.perspective !== 'none' || Number(cs.zoom) !== 1) transformed.add(e);
+      if (tilted.has(e.parentElement) || cs.rotate !== 'none' || cs.perspective !== 'none' || /(?:^| )-/.test(cs.scale) ||
+          /^matrix\(-|^matrix\([^,]+, 0, 0, -/.test(cs.transform) ||
+          cs.transform !== 'none' && !/^matrix\([^,]+, 0, 0, [^,]+, [^,]+, [^)]+\)$/.test(cs.transform)) tilted.add(e);
+      const target = owner(e);
+      for (const line of e.getClientRects()) { edges.push(line); include(target, line); }
+      let squareCorners = false;
+      if (e.getAttribute('style')?.includes('--exact-hit-slop-')) for (const pseudo of ['::before', '::after']) {
+        const p = getComputedStyle(e, pseudo);
+        if (p.content === 'none' || p.position !== 'absolute') continue;
+        let slop;
+        if (!transformed.has(e) && cs.position !== 'static' && !e.scrollTop && !e.scrollLeft) {
+          slop = { left: b.left + parseFloat(cs.borderLeftWidth) + parseFloat(p.left),
+            right: b.right - parseFloat(cs.borderRightWidth) - parseFloat(p.right),
+            top: b.top + parseFloat(cs.borderTopWidth) + parseFloat(p.top),
+            bottom: b.bottom - parseFloat(cs.borderBottomWidth) - parseFloat(p.bottom) };
+          if (!Object.values(slop).every(Number.isFinite)) continue;
+        } else {
+          const probe = document.createElement('span');
+          probe.style.cssText = `all:initial!important;position:absolute!important;inset:${p.inset}!important;visibility:hidden!important;pointer-events:none!important`;
+          e.append(probe); slop = probe.getBoundingClientRect(); probe.remove();
+        }
+        edges.push(slop); include(target, slop);
+        if (tilted.has(e)) curved.push(slop);
+        // With visible overflow the rectangular pseudo-element itself takes the rounded corners.
+        squareCorners ||= p.pointerEvents !== 'none' && cs.overflowX === 'visible' && cs.overflowY === 'visible' &&
+          slop.left <= b.left && slop.right >= b.right && slop.top <= b.top && slop.bottom >= b.bottom;
+      }
+      const sx = transformed.has(e) && e.offsetWidth ? b.width / e.offsetWidth : 1;
+      const sy = transformed.has(e) && e.offsetHeight ? b.height / e.offsetHeight : 1;
+      const inset = /^inset\(([-+.%\dpx ]+)\)$/.exec(cs.clipPath);
+      if (tilted.has(e) || cs.clipPath !== 'none' && !inset) curved.push(b);
+      else if (inset) {
+        const [t, r = t, d = t, l = r] = inset[1].trim().split(/\s+/);
+        const offset = (v, extent, scale) => parseFloat(v) * (v.endsWith('%') ? extent / 100 : scale);
+        edges.push({ left: b.left + offset(l, b.width, sx), right: b.right - offset(r, b.width, sx),
+          top: b.top + offset(t, b.height, sy), bottom: b.bottom - offset(d, b.height, sy) });
+      }
+      if (!squareCorners && !tilted.has(e)) for (const [corner, left, top] of [['TopLeft', true, true], ['TopRight', false, true],
+        ['BottomLeft', true, false], ['BottomRight', false, false]]) {
+        const [x, y = x] = cs[`border${corner}Radius`].split(' ');
+        const length = (value, size) => Math.min(size, parseFloat(value) * (value.endsWith('%') ? size / 100 : 1));
+        const rx = length(x, b.width), ry = length(y, b.height);
+        if (rx && ry) curved.push({ left: left ? b.left : b.right - rx, right: left ? b.left + rx : b.right,
+          top: top ? b.top : b.bottom - ry, bottom: top ? b.top + ry : b.bottom });
+      }
+      if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') {
+        const port = { left: b.left + sx * e.clientLeft, right: b.left + sx * (e.clientLeft + e.clientWidth),
+          top: b.top + sy * e.clientTop, bottom: b.top + sy * (e.clientTop + e.clientHeight), sx, sy,
+        };
+        edges.push({ left: cs.overflowX === 'visible' ? 0 : port.left, right: cs.overflowX === 'visible' ? W : port.right,
+          top: cs.overflowY === 'visible' ? 0 : port.top, bottom: cs.overflowY === 'visible' ? H : port.bottom });
+        ports.set(e, port);
+      }
+    }
+    const min = matchMedia('(any-pointer: coarse)').matches ? 44 : 24;
+    const measured = new Map(), squares = new Set();
+    const intersects = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    for (const [el, it] of targets) {
+      const b = bounds.get(el) ?? el.getBoundingClientRect();
+      const left = Math.max(b.left, 0), right = Math.min(b.right, W), top = Math.max(b.top, 0), bottom = Math.min(b.bottom, H);
+      if (right - left >= 2 * min && bottom - top >= 2 * min && curved.some(c => intersects(b, c))) {
+        for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.25], [0.75, 0.25], [0.25, 0.75], [0.75, 0.75]]) {
+          const x = left + fx * (right - left - min), y = top + fy * (bottom - top - min);
+          if (owner(document.elementFromPoint(x + min / 2, y + min / 2)) !== el) continue;
+          const square = { left: x, top: y, right: x + min, bottom: y + min };
+          const witness = targetReach(el, square, edges, curved, owner);
+          if (witness.length === 1 && witness[0][0] === x && witness[0][1] === y && witness[0][2] === x + min && witness[0][3] === y + min) {
+            squares.add(el); measured.set(el, witness); break;
+          }
+        }
+      }
+      if (!measured.has(el)) measured.set(el, targetReach(el, b, edges, curved, owner));
+      // A scrollport can cut an otherwise reachable row. Only extend a single hit rectangle
+      // at the port edge, up to the drawn box. Slop and overflowing children need a measured hit.
+      const hits = measured.get(el);
+      if (hits.length !== 1) continue;
+      const seen = hits[0], box = el.getBoundingClientRect();
+      let dx = 0, dy = 0, reveal = { left: box.left, top: box.top, right: box.right, bottom: box.bottom };
+      for (let e = el; e; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        const port = e === page ? { left: 0, top: 0, right: W, bottom: H, sx: 1, sy: 1 } : ports.get(e);
+        if (!port) { if (cs.position === 'fixed') break; continue; }
+        if (/^(hidden|clip)$/.test(cs.overflowX)) { reveal.left = Math.max(reveal.left, port.left); reveal.right = Math.min(reveal.right, port.right); }
+        if (/^(hidden|clip)$/.test(cs.overflowY)) { reveal.top = Math.max(reveal.top, port.top); reveal.bottom = Math.min(reveal.bottom, port.bottom); }
+        const gain = (l, r, lo, hi, back, end) => Math.max(0,
+          Math.min(r - l, hi - lo, r + back - lo, hi - (l - end)) - Math.max(0, Math.min(r, hi) - Math.max(l, lo)));
+        if ((e === page || /^(auto|scroll)$/.test(cs.overflowX)) && (Math.abs(seen[0] - port.left) < 0.01 || Math.abs(seen[2] - port.right) < 0.01)) dx = Math.max(dx,
+          gain(reveal.left, reveal.right, port.left, port.right, port.sx * e.scrollLeft, port.sx * (e.scrollWidth - e.clientWidth - e.scrollLeft)));
+        if ((e === page || /^(auto|scroll)$/.test(cs.overflowY)) && (Math.abs(seen[1] - port.top) < 0.01 || Math.abs(seen[3] - port.bottom) < 0.01)) dy = Math.max(dy,
+          gain(reveal.top, reveal.bottom, port.top, port.bottom, port.sy * e.scrollTop, port.sy * (e.scrollHeight - e.clientHeight - e.scrollTop)));
+        if (cs.position === 'fixed') break;
+      }
+      if (dx || dy) it.scrollGain = [r2(dx), r2(dy)];
+    }
+    // A proven square settles size. Outside it, only the spacing circles of potentially
+    // undersized neighbors need the large control's hit region.
+    for (const [peer, rs] of measured) {
+      if (!squares.size || squares.has(peer) || !rs.length || rs.some(([l, t, r, b]) => Math.min(r - l, b - t) >= min)) continue;
+      const x = (Math.min(...rs.map(r => r[0])) + Math.max(...rs.map(r => r[2]))) / 2;
+      const y = (Math.min(...rs.map(r => r[1])) + Math.max(...rs.map(r => r[3]))) / 2;
+      const circleBox = { left: x - min / 2, right: x + min / 2, top: y - min / 2, bottom: y + min / 2 };
+      for (const el of squares) if (intersects(bounds.get(el), circleBox)) {
+        measured.get(el).push(...targetReach(el, circleBox, edges, curved, owner));
+      }
+    }
+    for (const [el, it] of targets) {
+      const reachRects = measured.get(el).map(rect => rect.map(r2));
+      const box = [it.x, it.y, it.x + it.w, it.y + it.h];
+      if (reachRects.length !== 1 || reachRects[0].some((v, i) => Math.abs(v - box[i]) > 0.01)) it.reach = reachRects;
+    }
   }
   // LLP 1116.004 D1.3: a phone's layout at a desktop width, as advice (never a finding): a root tab bar stretched along
   // the window's bottom, and a stack the projection did not split whose root route's list pushed the detail shown. A

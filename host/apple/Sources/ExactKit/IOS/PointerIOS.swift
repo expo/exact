@@ -667,7 +667,7 @@ extension NodeView {
             if let n = cur as? NodeView {
                 let box = presenter?.pressBox(of: n, from: self) ?? n
                 if n.takesPress(bubbled: box !== n) {
-                    guard box.bounds.contains((box as? NodeView)?.local(windowPoint) ?? box.convert(windowPoint, from: nil)) else { return nil }
+                    guard (box as? NodeView)?.pressInside(at: windowPoint) ?? box.bounds.contains(box.convert(windowPoint, from: nil)) else { return nil }
                     return n
                 }
             }

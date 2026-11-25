@@ -905,6 +905,10 @@ extension Agent {
     /// one on the way, which stops it.
     func pressReach(_ v: NodeView, at p: CGPoint, in win: UIWindow) -> PressReach? {
         guard let hit = win.hitTest(p, with: nil), obscured(v, at: p, hit: hit) == nil else { return nil }
+        return pressReach(from: hit, at: p)
+    }
+
+    func pressReach(from hit: UIView, at p: CGPoint) -> PressReach {
         // A grouped list's cell: every cell is in the list's node, so its row
         // (LLP 1084) is what a finger there selects, or its switch or detail
         // button is what it presses (`TouchLog.landing`'s projection).
@@ -947,7 +951,8 @@ extension Agent {
                 if n.disabled || !declared && n.authoredInert { return .blocked(n) }
                 let box = presenter.pressBox(of: n, from: node)
                 if n.takesPress(bubbled: box !== n) {
-                    return box.bounds.contains((box as? NodeView)?.local(p) ?? box.convert(p, from: nil)) ? .node(n) : .nothing
+                    let inside = (box as? NodeView)?.pressInside(at: p) ?? box.bounds.contains(box.convert(p, from: nil))
+                    return inside ? .node(n) : .nothing
                 }
             }
             declared = declared || presenter.declaredParent(of: cur) != nil

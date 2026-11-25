@@ -93,7 +93,8 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Enumerated activities, token rotation and state changes, in one commit.
-    /// A refused commit keeps the previous snapshot.
+    /// A refused commit keeps the previous snapshot, and a refused load is a
+    /// failed one: the next demand may retry it.
     pub fn set_activities(&mut self, json: &str) -> Result<Option<CommitReceipt>, RunnerError> {
         let mut snapshot: Json = serde_json::from_str(json).map_err(|e| RunnerError::Data {
             resource: "exactActivities".into(),
@@ -116,7 +117,11 @@ impl<D: DataSource> Runner<D> {
         next.snapshot = snapshot;
         next.started = true;
         next.loading = false;
-        self.replace_activities(next)
+        let result = self.replace_activities(next);
+        if result.is_err() {
+            self.activities.loading = false;
+        }
+        result
     }
 
     fn replace_activities(
@@ -457,6 +462,38 @@ component App
         r.activities_answer(0).unwrap();
         assert!(r.activities.started);
         assert!(!r.take_activities_demand());
+    }
+    #[test]
+    fn a_refused_first_load_is_demanded_again() {
+        let plan = contract::compile(
+            r#"shape Activities
+  frequentPushesEnabled: bool
+  linked: bool
+component App
+  resource activities = exactActivities() as shape Activities
+  derive spare = 1 / (activities.frequentPushesEnabled ? 0 : 1)
+  view
+    text `${spare}`
+"#,
+        )
+        .unwrap();
+        let mut r = Runner::boot(
+            plan,
+            NoData,
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        r.link_activities().unwrap();
+        assert!(r.take_activities_demand());
+        assert!(matches!(
+            r.set_activities(r#"{"activities":[],"frequentPushesEnabled":true}"#),
+            Err(RunnerError::NonFiniteValue { name }) if name == "spare"
+        ));
+        assert!(!r.activities.started);
+        r.activities_answer(0).unwrap();
+        assert!(r.take_activities_demand());
     }
     #[test]
     fn result_shapes_and_dismissal_policies_are_checked_before_a_send() {

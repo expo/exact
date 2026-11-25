@@ -1328,3 +1328,59 @@ fn a_host_activation_opens_the_activation_window_and_no_other_origin_does() {
         .filter(|line| line.ends_with(": heard by heard"));
     assert_eq!(ran.count(), 4, "the three events and the wake ran it");
 }
+
+#[test]
+fn a_repeated_action_id_is_one_wake_with_one_ending() {
+    use std::sync::Arc;
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let string = b.primitive(TypeKind::String);
+    let source = b.source("post", &[], string);
+    b.module(
+        source,
+        ("notifications", "@fixture/notifications"),
+        "post",
+        true,
+        false,
+        "never",
+        "",
+        r#"{"effect":true,"takes":[]}"#,
+    );
+    let name = b.str("post");
+    let mut body = Asm::new();
+    body.command(name, 0);
+    let body = b.code(body);
+    let clicked = b.action("clicked", &[], &[], body);
+    b.module_event(
+        ("notifications", "@fixture/notifications"),
+        "notificationclick",
+        clicked,
+        "activation",
+        16,
+        0,
+    );
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let mut r = boot(b.finish().unwrap());
+    r.native_slot()
+        .host(Some(Arc::new(|_: Vec<u8>, reply: crate::Reply| {
+            reply.send(super::response(&serde_json::json!(null)));
+        })));
+    r.bind_extensions(&["notifications"], &[]);
+    for _ in 0..2 {
+        r.raise_action(
+            "notifications",
+            "notificationclick",
+            "[]",
+            crate::WakeHow::default(),
+            "again",
+        )
+        .unwrap();
+    }
+    for _ in 0..4 {
+        assert!(r.step_invocations().1.is_none());
+        r.apply_announced();
+    }
+    assert_eq!(
+        r.take_ended_actions(),
+        serde_json::json!([{"id":"again","outcome":"completed"}])
+    );
+}

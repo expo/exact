@@ -664,17 +664,14 @@ impl Kernel {
             // the shell too. No failed derived cache is reused on recovery.
             self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
         }
-        let counted = result.is_ok() && region.provisional_chrome;
-        if counted {
-            self.provisional_layouts += 1;
-        }
+        let provisional = region.provisional_chrome;
         let mut result = result?;
         // Top-layer subtrees are independent of the region's publication.
         if let Err(e) = self.lay_out_blocks(slot, &mut result.shell) {
             self.layout = Some(Box::new(LayoutTree::rebuild(&mut self.arena)));
             return Err(e.into());
         }
-        if !counted && engine(&mut self.layout).provisional_chrome() {
+        if provisional || engine(&mut self.layout).provisional_chrome() {
             self.provisional_layouts += 1;
         }
         Ok(result)
@@ -1081,6 +1078,7 @@ impl Kernel {
             (!self.on_demand).then(|| Box::new(LayoutTree::new()) as Box<dyn LayoutMirror>);
         self.selectors.clear();
         self.receipts.clear();
+        self.awaiting.clear();
         self.incarnation += 1;
         self.epoch += 1;
         self.wide_changed();

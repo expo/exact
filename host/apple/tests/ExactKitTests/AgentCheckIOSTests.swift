@@ -43,6 +43,49 @@ final class AgentCheckIOSTests: XCTestCase {
         return Agent(session: session)
     }
 
+    func testTargetReachEndsWhereTheFrontSiblingTakesThePress() throws {
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view", "handlers": ["press"], "style": ["hit_slop_right": 8]],
+            ["op": "create", "id": 3, "kind": "view", "handlers": ["press"], "style": ["hit_slop_left": 8]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 2, "x": 40, "y": 100, "w": 36, "h": 44],
+            ["op": "frame", "id": 3, "x": 80, "y": 100, "w": 36, "h": 44],
+        ])
+        let items = try XCTUnwrap(agent.check([:])["items"] as? [[String: Any]])
+        func reach(_ id: Int) -> [[Double]]? { items.first { $0["id"] as? Int == id }?["reach"] as? [[Double]] }
+        XCTAssertEqual(reach(2), [[40, 100, 72, 144]])
+        XCTAssertEqual(reach(3), [[72, 100, 116, 144]])
+        let front = try XCTUnwrap(session?.presenter.views[3]), point = CGPoint(x: 75, y: 120)
+        XCTAssertTrue(window?.hitTest(point, with: nil) === front)
+        XCTAssertTrue(front.activationTarget(at: point) === front)
+        XCTAssertTrue(front.pressInside(at: point), "lifting within the slop completes the press")
+    }
+
+    func testVerticalTapBandStopsAtItsOwnOrItsParentsClip() throws {
+        var ops: [[String: Any]] = [
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 6, "kind": "view", "style": ["overflow_y": "hidden"]],
+        ]
+        for id in 2...5 {
+            var style: [String: Any] = ["hit_slop_top": id == 3 ? 3 : 4, "hit_slop_bottom": id == 3 ? 3 : 4]
+            if id == 4 { style["overflow_y"] = "hidden" }
+            ops.append(["op": "create", "id": id, "kind": "view", "handlers": ["press"], "style": style])
+        }
+        ops += [["op": "children", "id": 6, "ids": [5]], ["op": "children", "id": 1, "ids": [2, 3, 4, 6]],
+                ["op": "roots", "ids": [1]], ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 800]]
+        for (id, y) in [(2, 60), (3, 120), (4, 180), (5, 0), (6, 240)] {
+            ops.append(["op": "frame", "id": id, "x": id == 5 ? 0 : 24, "y": y, "w": 53, "h": 36])
+        }
+        let items = try XCTUnwrap(mounted(ops).check([:])["items"] as? [[String: Any]])
+        for (id, y, height) in [(2, 56, 44), (3, 117, 42), (4, 180, 36), (5, 240, 36)] {
+            let item = try XCTUnwrap(items.first { $0["id"] as? Int == id })
+            if height == 36 { XCTAssertNil(item["reach"]); XCTAssertEqual(item["h"] as? Double, 36) }
+            else { XCTAssertEqual(item["reach"] as? [[Double]], [[24, Double(y), 77, Double(y + height)]]) }
+        }
+    }
+
     func testASystemAlertNamesTheCoverOverThePage() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "a system alert presents in a scene's window") }
         let agent = mounted([

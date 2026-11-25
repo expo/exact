@@ -2241,7 +2241,9 @@ update: refused:` with the URL it could not reach.
 
 A stream is a channel and a compatibility id: the binaries that run the same
 updates. A release build for a platform with an update store bakes production
-trust and needs one of two variables, and refuses without either:
+trust by default, except that an Android APK needs `EXACT_UPDATE_TRUST=production`.
+A production-trust build with an update store refuses to build unless one of
+these variables is set.
 
 - `EXACT_UPDATE_GENESIS=1` starts a new stream. The binary embeds sequence
   zero.
@@ -2878,6 +2880,10 @@ driver refuses Android, Windows, Linux, tvOS, watchOS and a physical iPhone befo
 platform tool.
 
 ### Inspect work and native presentation
+
+On iOS and the JS web target, `check` and `verify` count the part of
+`-exact-hit-slop` that accepts a press. A clip cuts that region, and a front
+control takes the overlap. A `target` finding gives both the tap area and the drawn box.
 
 `perf <target> during "<operation>"`
 reports the work that operation caused in the named subtree. Development measurements
@@ -6764,6 +6770,11 @@ The package's Swift sources also have the `EXACT_DEVELOPMENT` compilation
 condition in a development build. SwiftPM products build in release
 configuration and the APK is non-debuggable in both trusts. A package can
 use the fact to select a vendor SDK's test mode.
+
+On Android, `--release` alone keeps `context.development` true and includes the
+Android overrides from `development.packages`, even in an upload-signed APK.
+Use `--bundle` for a production App Bundle or set `EXACT_UPDATE_TRUST=production`
+with `--release` for a production-trust APK.
 See [A package's configuration](contract-for-agents.md#a-packages-configuration).
 
 Both web targets load a placed package view from its bound web implementation

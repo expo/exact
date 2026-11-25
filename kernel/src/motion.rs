@@ -872,18 +872,6 @@ impl Kernel {
     /// waits for the row to show (`-exact-animation-trigger: view`, LLP 1055 D13).
     /// Until [`Kernel::reveal`] those are held at their start.
     pub fn await_view(&mut self, row: crate::ViewId) -> bool {
-        // Rows destroyed before they showed are forgotten here.
-        if self.awaiting.len() >= 256 {
-            let gone: Vec<crate::ViewId> = self
-                .awaiting
-                .iter()
-                .copied()
-                .filter(|v| self.node(*v).is_none())
-                .collect();
-            for v in gone {
-                self.awaiting.remove(&v);
-            }
-        }
         let mut stack = vec![row];
         while let Some(id) = stack.pop() {
             let Some(d) = self.node(id) else {

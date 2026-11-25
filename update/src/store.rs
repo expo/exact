@@ -660,9 +660,12 @@ impl Store {
 
     /// First pixel: the bundle that booted is good (LLP 1026 D11). Clears the
     /// counter and makes what is **running** — not what a check has since
-    /// staged — the fallback for the next bad update.
+    /// staged — the fallback for the next bad update. A no-op when this
+    /// process refused its selected entry and booted entry zero instead, so
+    /// crash recovery keeps the failure count and previous fallback.
     pub fn boot_succeeded(&mut self, generation: &Generation) -> Result<(), String> {
-        if self.read_only().is_some() || *generation != self.generation() {
+        if self.read_only().is_some() || self.refused.is_some() || *generation != self.generation()
+        {
             return Ok(());
         }
         let mut record = self.record.clone();
@@ -679,7 +682,9 @@ impl Store {
     /// to the embedded generation. The entry is not staged: the next launch
     /// retries it, and activating it here would clear its failure count.
     pub fn entry_refused(&mut self) {
-        self.refused = self.running.take();
+        if let Some(running) = self.running.take() {
+            self.refused = Some(running);
+        }
         self.running_seq = self.embedded.seq;
     }
 

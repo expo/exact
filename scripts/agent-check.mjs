@@ -94,6 +94,52 @@ const shown = (it, kb) => { const v = it.vis ? { ...it, ...it.vis } : it; return
 const covers = (it, kb) => { const v = shown(it, kb); return v.w <= 0 || v.h <= 0; };
 const holds = (a, b) => a.x <= b.x + 0.5 && a.y <= b.y + 0.5 && a.x + a.w >= b.x + b.w - 0.5 && a.y + a.h >= b.y + b.h - 0.5;
 
+// A front sibling can leave an L or two disjoint strips. Find the rectangle that fits the
+// largest square, breaking ties by area. The histogram heights are uninterrupted tap space
+// above this edge. Its columns follow the host's edges, independent of the screen's resolution.
+function tapTarget(it) {
+  const rects = it.reach ?? [[it.x, it.y, it.x + it.w, it.y + it.h]];
+  if (!rects.length) return { rects, w: 0, h: 0 };
+  const xs = [...new Set(rects.flatMap(r => [r[0], r[2]]))].sort((a, b) => a - b);
+  const ys = [...new Set(rects.flatMap(r => [r[1], r[3]]))].sort((a, b) => a - b);
+  const cx = (xs[0] + xs.at(-1)) / 2, cy = (ys[0] + ys.at(-1)) / 2;
+  if (rects.length === 1) return { rects, cx, cy, w: xs.at(-1) - xs[0], h: ys.at(-1) - ys[0] };
+  const heights = new Array(xs.length - 1).fill(0);
+  let w = 0, h = 0;
+  for (let j = 1; j < ys.length; j++) {
+    const row = rects.filter(r => r[1] < ys[j] && ys[j] <= r[3]).sort((a, b) => a[0] - b[0]);
+    const stack = [];
+    for (let i = 0, run = 0; i < xs.length; i++) {
+      while (run < row.length && row[run][2] <= xs[i]) run++;
+      const hit = run < row.length && row[run][0] <= xs[i];
+      const height = hit ? heights[i] + ys[j] - ys[j - 1] : 0;
+      heights[i] = height;
+      let left = xs[i];
+      while (stack.length && stack.at(-1).height > height) {
+        const bar = stack.pop(); left = bar.left;
+        const width = xs[i] - left, side = Math.min(width, bar.height), best = Math.min(w, h);
+        if (side > best || (side === best && width * bar.height > w * h)) { w = width; h = bar.height; }
+      }
+      if (height > (stack.at(-1)?.height ?? 0)) stack.push({ height, left });
+    }
+  }
+  return { rects, cx, cy, w, h };
+}
+
+// WCAG 2.5.8, https://www.w3.org/WAI/WCAG22/Understanding/target-size-minimum.html#spacing
+// The circle is centered on the target's bounding box. It must clear every other target
+// and the circle of each other undersized target. Two edges that just touch have clearance.
+function spacedTarget(target, targets, min) {
+  for (const [item, other] of targets) {
+    if (other === target || !other.rects.length) continue;
+    const [dx, dy] = item.scrollGain ?? [0, 0];
+    if (Math.min(other.w + dx, other.h + dy) < min - 0.5 && Math.hypot(target.cx - other.cx, target.cy - other.cy) < min) return false;
+    if (other.rects.some(([l, t, r, b]) => Math.hypot(Math.max(l - target.cx, 0, target.cx - r),
+      Math.max(t - target.cy, 0, target.cy - b)) < min / 2)) return false;
+  }
+  return true;
+}
+
 /** The findings for one observation (`obs`, the host's reply) and its capture (`png`, decoded; null skips what needs pixels),
  *  with node types from the tree shown in the same scheme (`nodes`, by id). */
 export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs.capture ?? obs.viewport } = {}) {
@@ -101,6 +147,7 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   const pixel = png && capture ? sampler(png, capture) : null;
   const add = (kind, it, detail, hint) => found.push({ kind, id: it.id ?? null, ...(it.of != null ? { of: it.of } : {}), name: it.name, text: it.text, box: [r0(it.x), r0(it.y), r0(it.w), r0(it.h)], detail, ...(hint ? { hint } : {}) });
   const unit = host === 'web' ? 'px' : 'pt';
+  const targets = new Map(items.filter(it => it.control && !it.disabled).map(it => [it, tapTarget(it)]));
   for (const it of items) {
     if (it.squeezed?.axis) {
       const { axis, port, content } = it.squeezed;
@@ -128,10 +175,14 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
       : 'let it wrap (`flex-wrap: wrap` with a `flex-basis` in rem, `min-width: 0`, `max-width: 100%`), or scroll it inside its own box');
     else if (it.spill) add('overflow', it, { past: r0(it.spill.dx), of: it.spill.by, unit }, 'a flex item\'s width stops at its content: let it shrink (`min-width: 0`, a smaller `padding`), or let the row wrap (`flex-wrap: wrap`) or scroll');
     // A target the author sized under the platform's minimum (on the web 44 px on a touch device, `any-pointer: coarse`, and otherwise WCAG 2.5.8's 24 px, with its spacing exception; 44 pt on iOS).
-    if (it.control && it.sized === 'author' && !it.inline && !it.disabled && !covers(it, obs.keyboard) && (it.w < obs.target - 0.5 || it.h < obs.target - 0.5)) {
-      const spaced = host === 'web' && items.every((o) => o === it || !o.control || o.inline || !o.w ||
-        Math.hypot((o.x + o.w / 2) - (it.x + it.w / 2), (o.y + o.h / 2) - (it.y + it.h / 2)) >= obs.target);
-      if (!spaced) add('target', it, { min: obs.target, unit }, `make its box at least ${obs.target}×${obs.target} (padding, or \`min-height\`/\`min-width\`)`);
+    const tap = targets.get(it);
+    const [dx, dy] = it.scrollGain ?? [0, 0];
+    if (tap && !it.inline && it.sized === 'author' && (it.reach?.length || !covers(it, obs.keyboard)) &&
+        Math.min(tap.w + dx, tap.h + dy) < obs.target - 0.5 &&
+        (host !== 'web' || !tap.rects.length || !spacedTarget(tap, targets, obs.target))) {
+      const keyboardCuts = obs.keyboard != null && it.y < obs.keyboard && it.y + it.h > obs.keyboard && it.w >= obs.target && it.h >= obs.target;
+      add('target', it, { min: obs.target, unit, tap: [r0(tap.w), r0(tap.h)] },
+        keyboardCuts ? 'scroll the control above the software keyboard so a finger can reach its full height' : `give it a ${obs.target}×${obs.target} tap area with padding, \`min-height\`/\`min-width\`, or \`-exact-hit-slop\` to keep the drawn size`);
     }
     // Contrast against what it stands on: the fill the host found painted under it (LLP 1116.006 D5), else what the
     // pixels show behind it, read where it is presented (a bar's glass over it is not what it stands on, LLP 1116.007 D3.8).
@@ -255,7 +306,7 @@ export function line(f, nodes) {
     fold: () => regionLine('fold', d, d.unit),
     clipped: () => d.need ? `its text is ${[d.need[0] ? `${d.need[0]} ${d.unit} wider` : '', d.need[1] ? `${d.need[1]} ${d.unit} taller` : ''].filter(Boolean).join(' and ')} than its box${d.clips ? ', which clips it' : ', and spills'}` : `${d.edge ? `the ${d.edge} of the screen` : named(d.by, nodes)} cuts ${[d.cut[0] ? `${d.cut[0]} ${d.unit} of its width` : '', d.cut[1] ? `${d.cut[1]} ${d.unit} of its height` : ''].filter(Boolean).join(' and ')}`,
     overflow: () => d.pad != null ? `runs ${d.past} ${d.unit} past ${named(d.of, nodes)}'s side: ${d.written != null ? `its width is ${d.written} of its parent's` : 'its content is as wide as its parent\'s'}, and its ${d.pad} ${d.unit} of padding${d.written != null ? ' and border' : ''} add to that (content-box sizing)` : d.of != null ? `runs ${d.past} ${d.unit} past ${named(d.of, nodes)}'s side, and nothing there scrolls or clips it` : `runs ${d.past} ${d.unit} past the ${d.width}-wide viewport's side, and nothing scrolls it`,
-    target: () => `${f.box[2]}×${f.box[3]} ${d.unit}, under the ${d.min}×${d.min} minimum`,
+    target: () => `${d.tap.join('×')} ${d.unit} tap area (box ${f.box[2]}×${f.box[3]}), under the ${d.min}×${d.min} minimum`,
     contrast: () => `${d.got}:1 (${d.fg} on ${d.bg}${d.on == null ? '' : d.on === 'own' ? ', its own fill' : d.on === 'page' ? ', the page' : `, ${named(d.on, nodes)}'s fill`}), needs ${d.need}:1`,
     card: () => `its fill ${d.fill} is what lies behind it (${d.behind}): it does not show`,
     overlap: () => `overlaps ${named(d.with, nodes)} by ${d.by[0]}×${d.by[1]}`,
