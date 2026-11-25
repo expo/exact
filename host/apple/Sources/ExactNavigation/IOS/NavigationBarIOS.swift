@@ -21,7 +21,7 @@ struct BarSource: Equatable {
 
 /// The inputs the route hatch last ran with. A change runs it again.
 struct HatchSource: Equatable {
-    let bar: BarSource, back: String, navigation: ObjectIdentifier, dataset: String, scroll: ObjectIdentifier?
+    let bar: BarSource, navigation: ObjectIdentifier, dataset: String, scroll: ObjectIdentifier?
 }
 
 /// The bar of each navigation controller Exact builds. UIKit's bar takes
@@ -418,7 +418,6 @@ extension NavigationHost {
             #if os(iOS)
             presenter.menus.focus.watch(nav.navigationBar) // a bar item's menu (MenuFocusIOS), every stack, rebuilt or not
             #endif
-            projectBack(routes, in: nav)
         }
         followTablist(routes, in: stack)
         let presented = isPresented(nav)
@@ -448,17 +447,20 @@ extension NavigationHost {
             projectBottomToolbar(c, in: nav)
             #endif
             let scroller = contentScroller(of: c), scroll = contentScrollView(of: c)
-            let dataset = c.node.props["dataset"]
             func barSource(_ key: (HeaderShape.Item) -> String) -> BarSource {
                 BarSource(bar: bar, authored: shape?.authored.map(\.id) ?? [], placed: shape?.placed.map(\.id) ?? [], header: shape?.header.id, heading: shape?.heading?.id, title: shape?.title ?? "", level: shape?.level ?? 0, leading: shape?.leading.map(key) ?? [],
                           trailing: shape?.trailing.map(key) ?? [], group: shape?.group?.source ?? "", canGoBack: canGoBack)
             }
             let source = barSource(\.source)
+            #if os(iOS)
+            if let nav {
+                let next = routes.indices.contains(index + 1) ? routes[index + 1] : nil
+                projectBack(c, before: next, heading: shows ? shape?.title : nil, in: nav)
+            }
+            #endif
             // The hatch runs again after anything Exact wrote to the item (the
             // Back control the route above gives it, too) and when the route
             // moves to another stack (a root whose tabs changed).
-            let signature = HatchSource(bar: source, back: c.backSource ?? "", navigation: ObjectIdentifier(stack), dataset: dataset ?? "",
-                                       scroll: scroll.map(ObjectIdentifier.init))
             if c.projectedSource != source {
                 c.projectedSource = source
                 // A button that only turned enabled or disabled (Refresh while it refreshes) changes on its kept
@@ -492,16 +494,7 @@ extension NavigationHost {
             let fonts: NavigationTitleInk.Fonts? = nil // tvOS's bar title font is not measured: its own stays.
             #endif
             c.titleInk.update(shows ? shape?.heading?.ownUIColor("text_color") : nil, fonts: fonts, item: c.navigationItem, bar: nav?.navigationBar, transparent: transparent)
-            guard c.projected != signature || !c.hatched else { continue }
-            c.projected = signature
-            guard presenter.session?.natives.hatchesConnected == true else { continue }
-            hatching(nav) { presenter.session?.natives.routeHatch(c.hatched ? .changed : .built, controller: c, navigation: nav, scroll: scroll,
-                                                                  key: c.key, dataset: dataset) }
-            c.hatched = true
-            c.ownedScroll = scroller
-            // Run the passes again for a selection this route's hatch made, before UIKit lays out its stack, unless a
-            // transition the hatch may have started holds them (More's own included, for a plain tab)
-            if !changing, !moreChanging, !presenter.modalHost.inTransition { runOwedScrollEdges(of: c) }
+            hatchRoute(c, in: stack, source: source, scroll: scroll)
         }
         coverLifted(routes)
         keepExit(routes, in: nav)
@@ -847,31 +840,20 @@ extension NavigationHost {
     }
     #endif
 
-    /// UIKit's back button stands for each route's authored Back control,
-    /// shaped as it is (LLP 1075.003, James's review): a symbol alone is the
-    /// chevron alone (`.minimal`); text is the button's title. UIKit reads
-    /// both from the item beneath, which is where they are written, on change.
-    private func projectBack(_ routes: [RouteController], in nav: UINavigationController) {
-        guard barShows(nav), routes.count > 1 else { return }
-        let name = container?.props["navigationBack"]
-        for index in 1..<routes.count {
-            let control = name.flatMap { element(named: $0, in: routes[index].node) }
-            control?.rejectNativeActiveProperties(on: "UIKit back button")
-            let shape = control.map { HeaderShape.Item($0) }
-            let source = shape.map { "\($0.symbol ?? "")|\($0.title)" } ?? "-"
-            let below = routes[index - 1]
-            guard below.backSource != source else { continue }
-            below.backSource = source
-            // tvOS has no back button.
-            #if !os(tvOS)
-            let item = below.navigationItem
-            switch shape {
-            case let s? where s.title.isEmpty: item.backButtonDisplayMode = .minimal; item.backButtonTitle = nil
-            case let s?: item.backButtonDisplayMode = .default; item.backButtonTitle = s.title
-            case nil: item.backButtonDisplayMode = .default; item.backButtonTitle = nil
-            }
-            #endif
-        }
+    func hatchRoute(_ c: RouteController, in stack: UIViewController, source: BarSource, scroll: UIScrollView?) {
+        let dataset = c.node.props["dataset"]
+        let nav = stack as? UINavigationController
+        let signature = HatchSource(bar: source, navigation: ObjectIdentifier(stack), dataset: dataset ?? "",
+                                    scroll: scroll.map(ObjectIdentifier.init))
+        guard c.projected != signature || !c.hatched else { return }
+        c.projected = signature
+        guard presenter.session?.natives.hatchesConnected == true else { return }
+        hatching(nav) { presenter.session?.natives.routeHatch(c.hatched ? .changed : .built, controller: c, navigation: nav, scroll: scroll,
+                                                              key: c.key, dataset: dataset) }
+        c.hatched = true
+        c.ownedScroll = contentScroller(of: c)
+        // A selection the hatch made can owe the edge passes before UIKit lays out the stack.
+        if !changing, !moreChanging, !presenter.modalHost.inTransition { runOwedScrollEdges(of: c) }
     }
 
     /// Stage 3 (LLP 1075.003 §3.7): a large title collapses with its route's

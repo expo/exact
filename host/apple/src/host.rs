@@ -769,6 +769,9 @@ impl<D: DataSource> Host<D> {
         host.present_first_tree(previous, &order, &mut batch);
         host.declared_told = host.runner.declared_parents();
         host.emit_title(&mut batch);
+        if has_heads || previous.is_some_and(|old| old.has_heads) {
+            host.emit_route_head_titles(&mut batch);
+        }
         host.emit_language(&mut batch);
         colors::emit_roles(&mut batch);
         for s in host.runner.take_surface_updates() {

@@ -215,6 +215,16 @@ final class ModalStackIOSTests: XCTestCase {
     private func checkHistoryMenu(_ session: ExactSession, in nav: UINavigationController, authoredNavigate: Bool) throws {
         let original = nav.viewControllers
         XCTAssertEqual(original.count, 5)
+        let routes = try original.map { try XCTUnwrap($0 as? RouteController) }
+        let chat = routes[2]
+        let heading = try XCTUnwrap(HeaderShape.bar(of: chat.node)?.heading)
+        session.presenter.apply(wireBatch([
+            ["op": "props", "id": heading.id, "set": ["text": ""]],
+            ["op": "props", "id": chat.node.id, "set": ["headTitle": "Conversation"]]
+        ]))
+        XCTAssertEqual(chat.navigationItem.title, "")
+        XCTAssertEqual(chat.navigationItem.backButtonTitle, "Conversation")
+        XCTAssertEqual(chat.navigationItem.backButtonDisplayMode, .minimal)
         let root = try node(session, "navigation")
         if !authoredNavigate { root.handlers.remove("navigate") }
         let journalBefore = session.agent(#"{"op":"logs","since":0}"#)
@@ -234,11 +244,31 @@ final class ModalStackIOSTests: XCTestCase {
             let frame = try XCTUnwrap(element["frame"] as? [Double])
             return try TouchRunner.aim(CGPoint(x: frame[0] + frame[2] / 2, y: frame[1] + frame[3] / 2), in: XCTUnwrap(window))
         }
+        let window = try XCTUnwrap(window)
+        func capture(_ name: String) {
+            let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
+            let image = renderer.image { _ in window.drawHierarchy(in: window.bounds, afterScreenUpdates: false) }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        capture("Back before the hold")
         var hold = try at(back)
-        hold.merge(["op": "drag", "to": hold["point"]!, "screenTo": hold["screen"]!, "press": 0.8, "hold": 0.0, "velocity": 0.0]) { _, new in new }
+        let away = try TouchRunner.aim(CGPoint(x: window.bounds.width * 0.7, y: window.bounds.height * 0.85), in: window)
+        hold.merge(["op": "drag", "to": away["point"]!, "screenTo": away["screen"]!, "press": 2.4, "hold": 0.3, "velocity": 600.0]) { _, new in new }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { capture("Back history during the hold") }
         XCTAssertEqual(try touch.ask(hold)["done"] as? Bool, true)
+        XCTAssertEqual(nav.viewControllers, original, "releasing away dismisses without a pop")
+        XCTAssertEqual(session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: "(back)").count,
+                       journalBefore.components(separatedBy: "(back)").count)
+        var select = try at(back)
+        select.merge(["op": "drag", "to": select["point"]!, "screenTo": select["screen"]!, "press": 0.8, "hold": 0.0, "velocity": 0.0]) { _, new in new }
+        XCTAssertEqual(try touch.ask(select)["done"] as? Bool, true)
         let after = try elements()
-        let evidence = XCTAttachment(data: try JSONSerialization.data(withJSONObject: after, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
+        let observations: [String: Any] = ["runtime": UIDevice.current.systemVersion, "screen": try touch.ask(["op": "screen"]),
+                                          "button": back, "dismiss": hold, "select": select, "elements": after]
+        let evidence = XCTAttachment(data: try JSONSerialization.data(withJSONObject: observations, options: [.prettyPrinted, .sortedKeys]), uniformTypeIdentifier: "public.json")
         evidence.name = "Back history after the XCTest long press"
         evidence.lifetime = .keepAlways
         add(evidence)
@@ -248,7 +278,9 @@ final class ModalStackIOSTests: XCTestCase {
         XCTAssertEqual(nav.viewControllers, original, "opening history must not perform an adjacent Back")
         let menuDepth = try XCTUnwrap(after[menu]["depth"] as? Int)
         let contents = after.dropFirst(menu + 1).prefix { ($0["depth"] as? Int ?? 0) > menuDepth }
-        let entries = contents.filter { ["MenuItem", "Button"].contains($0["type"] as? String ?? "") && $0["label"] as? String == "Detail" }
+        let rows = contents.filter { ["MenuItem", "Button"].contains($0["type"] as? String ?? "") }
+        XCTAssertEqual(Array(rows.prefix(3).compactMap { $0["label"] as? String }), ["Detail", "Conversation", "Detail"])
+        let entries = rows.filter { $0["label"] as? String == "Detail" }
         XCTAssertEqual(entries.count, 2, "the menu contains both visits to /detail")
         var tap = try at(XCTUnwrap(entries.last))
         tap["op"] = "tap"

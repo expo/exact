@@ -1459,4 +1459,22 @@ fn main() {
     let code = generate(&schema, digest);
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("schema.rs");
     fs::write(&out, code).expect("write generated schema.rs");
+    let label_data = "tables/back-history.h";
+    println!("cargo:rerun-if-changed={label_data}");
+    let labels = fs::read_to_string(label_data).expect("read Back history label data");
+    let ranges: Vec<_> = labels
+        .lines()
+        .filter_map(|line| {
+            let range = line.trim().strip_prefix("X(")?.split_once(')')?.0;
+            let (first, last) = range.split_once(", ").expect("a scalar range");
+            Some(format!("{first}..={last}"))
+        })
+        .collect();
+    assert!(!ranges.is_empty(), "Back history scalar ranges");
+    let predicate = format!(
+        "fn blank_history_scalar(scalar: u32) -> bool {{ matches!(scalar, {}) }}",
+        ranges.join(" | ")
+    );
+    fs::write(out.with_file_name("blank_history.rs"), predicate)
+        .expect("write Back history predicate");
 }

@@ -33,6 +33,7 @@ mod nested_header;
 mod owner_env;
 mod parts;
 mod roles;
+mod route_untitled;
 mod routeless_header;
 mod rows;
 mod screens;
@@ -143,6 +144,9 @@ pub(crate) fn with_text_styles(
     let checking = contract_checking::Checking::new(checked);
     let checked_view = checking.expanded();
     let controlled = roles::controlled(&checked_view);
+    let targets = crate::icons::shipped();
+    let may_ship_ios = targets.is_empty() || targets.iter().any(|t| t.name == "ios");
+    let mut untitled = BTreeSet::new();
     crate::menu_rows::notes(&checked_view, &mut out);
     crate::symbols::tints(&root.view, checked.file, lowered, &mut out);
     let start = (false, None, Vec::new());
@@ -200,6 +204,9 @@ pub(crate) fn with_text_styles(
                 drawn_back(attrs, visit.regions()[0], name, &mut out);
             }
             if route {
+                if may_ship_ios && route_untitled::check(visit, no_bar) && untitled.insert(span) {
+                    out.push(route_untitled::warning(span));
+                }
                 owner_env::env_in_owner(visit, &checked.file.styles, &mut owned, &mut out);
             }
             if literal(attrs, "role") == Some("tablist") {

@@ -477,3 +477,133 @@ fn scroll_document_binds_an_expression_too() {
         assert!(error.message.contains(says), "{src}: {}", error.message);
     }
 }
+
+#[test]
+fn back_history_warns_only_for_statically_unnamed_routes() {
+    let src = r#"routes nav
+  home "/"
+
+component App
+  state show = true
+  state label = ""
+  view
+    main navigationBack="back" navigationKey=`${top(nav).id}`
+      for entry in stack(nav) key=entry.id
+        if show
+          column navigationKey="loop"
+            header
+              text "" role="heading" aria-level=1
+        column navigationKey="headerless"
+          text "Page"
+        column navigationKey="unicode"
+          header
+            text "\u{00A0}\u{200D}" role="heading"
+          head title="\u{2800}\u{E0100}"
+        column navigationKey="heading"
+          header
+            text "Named" role="heading"
+        column navigationKey="head"
+          head title="Named"
+        column navigationKey="computed"
+          head title=label
+        column navigationKey="conditional"
+          if show
+            head title="Maybe"
+        column navigationKey="explicit"
+          head title=none description="Book details"
+"#;
+    let lines = |src: &str, warnings: Vec<contract::CompileError>| {
+        warnings
+            .into_iter()
+            .filter(|w| w.id == "lower-route-untitled")
+            .map(|w| {
+                assert!(w.message.contains("`head title`"));
+                assert!(w.message.contains("`head title=none`"));
+                src.lines()
+                    .nth(w.span.line as usize - 1)
+                    .unwrap()
+                    .trim()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    let (built, warnings) = contract::compile_warned(src);
+    built.unwrap();
+    assert_eq!(
+        lines(src, warnings),
+        [
+            "column navigationKey=\"loop\"",
+            "column navigationKey=\"headerless\"",
+            "column navigationKey=\"unicode\"",
+        ]
+    );
+    let (built, warnings) =
+        contract::compile_warned("component App\n  view\n    main\n      text \"\"\n");
+    built.unwrap();
+    assert!(warnings.iter().all(|w| w.id != "lower-route-untitled"));
+
+    let web = crate::scratch::Scratch::new(format!("web-only-back-title-{}", std::process::id()));
+    let path = web.join("app.contract");
+    std::fs::write(&path, src).unwrap();
+    std::fs::write(
+        web.join("app.json"),
+        r#"{"name":"Back History","app":{"id":"test.history","name":"Back History"},"host":{"web":{}}}"#,
+    )
+    .unwrap();
+    let (built, warnings) = contract::compile_path_all_with_warnings(&path, false);
+    built.unwrap();
+    assert!(warnings.iter().all(|w| w.id != "lower-route-untitled"));
+}
+
+#[test]
+fn head_none_omits_only_its_title_and_route_heads_keep_their_scope() {
+    let src = r#"routes nav
+  home "/"
+    book "/book"
+
+component App
+  view
+    main navigationBack="back" navigationKey=`${top(nav).id}`
+      for entry in stack(nav) key=entry.id
+        column navigationKey=`${entry.id}` testId=entry.name
+          if entry.name == "home"
+            head title="Home"
+          else
+            head title="Shallow"
+            column
+              head title="Earlier"
+              head title="Book"
+              head title=none description="Book details"
+"#;
+    let boot = |src| {
+        Runner::boot(
+            contract::compile(src).unwrap(),
+            boxed(Posts),
+            Kernel::with_monospace(),
+            Default::default(),
+            "/book",
+        )
+        .unwrap()
+    };
+    let mut runner = boot(src);
+    assert_eq!(runner.head().title.as_deref(), Some("Book"));
+    assert_eq!(runner.head().description.as_deref(), Some("Book details"));
+    let owns_description = runner.document_tree().unwrap();
+    assert_eq!(owns_description.head().title.as_deref(), Some("Book"));
+    let state: serde_json::Value = serde_json::from_str(&agent::state(&runner)).unwrap();
+    assert_eq!(state["head"]["title"], "Book");
+    assert_eq!(state["head"]["description"], "Book details");
+
+    let src = format!("{src}              dialog\n                column\n                  head title=\"Dialog\"\n");
+    let runner = boot(&src);
+    let route_id = |name| {
+        runner
+            .kernel()
+            .node_by_key(runner.kernel().find_by_test_id(name)[0])
+            .unwrap()
+            .id
+    };
+    let titles = runner.route_head_titles();
+    assert_eq!(titles.get(&route_id("home")), Some(&Some("Home")));
+    assert_eq!(titles.get(&route_id("book")), Some(&Some("Book")));
+}

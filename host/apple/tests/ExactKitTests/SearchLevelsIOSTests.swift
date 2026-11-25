@@ -143,6 +143,12 @@ final class SearchLevelsIOSTests: XCTestCase {
         let fixture = try boot()
         let detail = fixture.split.detail
         let controller = fixture.search.controller
+        let item = fixture.list.navigationItem
+        let heading = try XCTUnwrap(HeaderShape.bar(of: fixture.list.node)?.heading)
+        fixture.session.presenter.apply(wireBatch([
+            ["op": "props", "id": heading.id, "set": ["text": ""]],
+            ["op": "props", "id": fixture.list.node.id, "set": ["headTitle": "Library history"]]
+        ]))
         let results = try XCTUnwrap(fixture.search.results)
         try fixture.openQuery("Fuji")
         try fixture.scrollResults(to: 12)
@@ -152,6 +158,9 @@ final class SearchLevelsIOSTests: XCTestCase {
         fixture.settle("the selected detail covers search")
         let book = try XCTUnwrap(detail.topViewController as? RouteController)
         XCTAssertTrue(fixture.split.list.topViewController === detail)
+        XCTAssertTrue(fixture.split.list.viewControllers.first?.navigationItem === item)
+        XCTAssertEqual(item.backButtonTitle, "Library history")
+        XCTAssertEqual(item.backButtonDisplayMode, .generic)
         XCTAssertTrue(fixture.split.controller.viewController(for: .secondary) === detail)
         XCTAssertEqual(fixture.host.shownKeys, [fixture.list.key, book.key])
         XCTAssertFalse(results.visible)
@@ -161,6 +170,8 @@ final class SearchLevelsIOSTests: XCTestCase {
         waitFor("UIKit expands the split") { fixture.split.settledExpanded }
         fixture.settle("the expanded columns settle")
         XCTAssertTrue(fixture.split.detail.topViewController === book)
+        XCTAssertTrue(fixture.split.list.topViewController?.navigationItem === item)
+        XCTAssertEqual(item.backButtonTitle, "Library history")
         XCTAssertTrue(fixture.search.controller === controller)
         XCTAssertEqual(try fixture.value(), "Fuji")
         XCTAssertTrue(results.visible, fixture.searchFacts)

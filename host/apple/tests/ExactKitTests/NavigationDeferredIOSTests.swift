@@ -37,6 +37,37 @@ final class NavigationDeferredIOSTests: XCTestCase {
         XCTAssertEqual((nav.topViewController as? RouteController)?.key, "nested")
     }
 
+    func testAHeldTitleOnlyBatchUpdatesTheKeptItemAndResetStartsFresh() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "navigation needs window containment") }
+        let (session, navigation, nav) = try fixture("held-back-title", in: scene)
+        let p = session.presenter
+        let route = try XCTUnwrap(nav.topViewController as? RouteController)
+        let root = try XCTUnwrap(navigation.container)
+        let item = route.navigationItem
+        p.apply(wireBatch([["op": "props", "id": route.node.id, "set": ["headTitle": "Before"]]]))
+        let probe = NavigationLayoutProbe(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        nav.view.addSubview(probe)
+        defer { probe.removeFromSuperview() }
+        probe.run = {
+            XCTAssertTrue(navigation.syncing)
+            p.apply(wireBatch([["op": "props", "id": route.node.id, "set": ["headTitle": "After"]]]))
+            XCTAssertEqual(item.backButtonTitle, "Before")
+        }
+        probe.setNeedsLayout()
+        nav.view.setNeedsLayout()
+        navigation.resync()
+        XCTAssertNil(probe.run)
+        XCTAssertEqual(item.backButtonTitle, "After")
+        XCTAssertEqual(item.backButtonDisplayMode, .generic)
+
+        navigation.reset(clearFocus: false)
+        replaceRoute(in: p, root: root, id: 900_001, key: route.key, title: "After")
+        let replacement = try XCTUnwrap(navigation.primaryNavigation?.topViewController as? RouteController)
+        XCTAssertFalse(replacement.navigationItem === item)
+        XCTAssertEqual(replacement.navigationItem.backButtonTitle, "After")
+        XCTAssertEqual(item.backButtonTitle, "After")
+    }
+
     /// A chain of reentrant sync requests can yield twice. It journals once,
     /// and the agent waits for both continuations.
     func testReentrantNavigationYieldsAcrossTurnsAndJournalsOnce() throws {
@@ -274,9 +305,11 @@ final class NavigationDeferredIOSTests: XCTestCase {
         return (session, navigation, nav)
     }
 
-    private func replaceRoute(in presenter: Presenter, root: NodeView, id: UInt32, key: String) {
+    private func replaceRoute(in presenter: Presenter, root: NodeView, id: UInt32, key: String, title: String? = nil) {
+        var props = ["navigationKey": key]
+        props["headTitle"] = title
         presenter.apply(wireBatch([
-            ["op": "create", "id": id, "kind": "column", "props": ["navigationKey": key]],
+            ["op": "create", "id": id, "kind": "column", "props": props],
             ["op": "children", "id": root.id, "ids": [id]],
             ["op": "props", "id": root.id, "set": ["navigationKey": key]]
         ]))

@@ -672,6 +672,10 @@ impl Lowerer<'_> {
         let (custom, refused_custom) = custom_props::merged(expanded, scope, &self.types.shapes);
         self.errors.extend(refused_custom);
         for (index, a) in expanded.iter().enumerate() {
+            // LLP 1048.003 D1: literal none leaves the title field unwritten.
+            if tag == "head" && a.name == "title" && matches!(a.value, Expr::None(_)) {
+                continue;
+            }
             if panel.is_some() && matches!(a.name.as_str(), "href" | "target" | "windowKind") {
                 continue;
             }
