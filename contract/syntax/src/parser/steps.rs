@@ -1456,6 +1456,7 @@ fn prefer_key(name: &str) -> &str {
         "safe-area",
         "display-scale",
         "gpu-tier",
+        "ask-siri",
         "posture",
         "segments",
         "gap",

@@ -22,6 +22,7 @@ test('a near spelling of a fact is that fact', () => {
   }
   expect(preferGroups({ 'reduced-motion': 'reduce', contrast: 'more' }).media).toEqual({ 'prefers-reduced-motion': 'reduce', 'prefers-contrast': 'more' });
   expect(preferGroups({ canShare: 'false', rootFontSize: '20' }).page).toEqual({ 'can-share': false, 'root-font-size': 20 });
+  expect(preferGroups({ askSiri: 'available' }).page).toEqual({ 'ask-siri': 'available' });
   // As its help writes it, `<px>`: `53px` is 53 (LLP 1156.002 D5).
   expect(preferGroups({ 'root-font-size': '53px' }).page).toEqual({ 'root-font-size': 53 });
   expect(preferGroups({ frozen: 'true' }).page).toEqual({ frozen: true });
@@ -109,8 +110,11 @@ test('prefer mode is the app modes group (LLP 1121 D13): each pin, the scheme le
 
 test('page preference refusals omit the malformed property', () => {
   const { prefer } = pageReporter(true);
-  try { prefer({ 'keyboard-navigation': true }); throw new Error('expected a refusal'); }
-  catch (error) { expect(error.message).toContain('not a page fact'); expect(Object.hasOwn(error, 'malformed')).toBe(false); }
+  // Another host's real facts: Tab reaching every control on the Mac, Ask Siri in the iOS simulator's menus.
+  for (const facts of [{ 'keyboard-navigation': true }, { 'ask-siri': 'available' }]) {
+    try { prefer(facts); throw new Error('expected a refusal'); }
+    catch (error) { expect(error.message).toContain('not a page fact'); expect(Object.hasOwn(error, 'malformed')).toBe(false); }
+  }
   try { prefer({ banana: true }); throw new Error('expected malformed input'); }
   catch (error) { expect(error.malformed).toBe(true); }
 });

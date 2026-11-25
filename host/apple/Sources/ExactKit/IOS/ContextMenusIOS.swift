@@ -85,6 +85,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         var hiddenInk: CALayer?
         /// Whether the preview was tapped, and whether its press navigated.
         var committed = false, navigated = false
+        /// Whether UIKit has displayed the menu.
+        var shown = false
         init(source: NodeView, popover: NodeView?, name: String, point: CGPoint, inlineID: UInt32? = nil, linkURL: URL? = nil) {
             self.source = source; self.popover = popover; self.name = name; self.point = point; self.inlineID = inlineID; self.linkURL = linkURL
         }
@@ -1329,6 +1331,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         track(animator)
         focusOwner = (configuration, interaction)
         menus?.focus.setAside()
+        open?.shown = true
         if let owner = open, let pop = owner.popover { owner.toggled = true; presenter?.popoverEvents.changed(pop, open: true) }
     }
 
@@ -1397,5 +1400,16 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
                 "preview": owner.preview.map { Int($0.id) as Any } ?? NSNull(),
                 "phase": owner.committed ? "commit" : inTransition ? "transition" : "open"]
     }
+
+    /// Whether UIKit shows `node`'s own menu, the one on the node's view.
+    func shows(_ node: NodeView) -> Bool {
+        guard let owner = open, owner.shown, owner.source === node else { return false }
+        return owner.interaction?.view === node
+    }
+}
+
+extension MenuHost {
+    /// Whether UIKit shows `node`'s own context menu now (LLP 1094.000 D4).
+    package func showsContextMenu(of node: NodeView) -> Bool { context.shows(node) }
 }
 #endif

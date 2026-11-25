@@ -750,6 +750,9 @@ public final class Agent {
         }
         var facts = PageFacts.agent
         var boldText: Bool?, presented: Bool?
+        #if os(iOS) && targetEnvironment(simulator)
+        var askSiri: Bool?
+        #endif
         #if os(macOS)
         var keyboardNavigation: Bool?
         #endif
@@ -781,10 +784,16 @@ public final class Agent {
             case ("presented", "true"), ("presented", "false"): presented = value == "true"
             // The display's scale as the kernel is told it (LLP 1115.000 D10.3): layout follows; the display draws at its own.
             case ("display-scale", _) where (Double(value) ?? 0) > 0 && Float(Double(value)!).isFinite: PageFacts.agentDisplayScale = Double(value)!
+            #if os(iOS) && targetEnvironment(simulator)
+            // Whether UIKit offers Ask Siri in a context menu (LLP 1094.000 D10), which the simulator never does.
+            case ("ask-siri", "available"), ("ask-siri", "unavailable"): askSiri = value == "available"
+            #elseif os(iOS)
+            case ("ask-siri", "available"), ("ask-siri", "unavailable"): return ["error": "prefer: ask-siri: the device decides whether it offers Ask Siri"]
+            #endif
             default:
                 let message = "prefer: \(name): \(value) is not a page fact this host sets"
                 // A real page fact this host does not set stays a delivery refusal.
-                if name == "keyboard-navigation" { return ["error": message] }
+                if ["keyboard-navigation", "ask-siri"].contains(name) { return ["error": message] }
                 return ["malformed": true, "error": message]
             }
         }
@@ -804,6 +813,9 @@ public final class Agent {
         if page != nil { PageFacts.agent = facts }
         if let boldText { DisplayPreferences.agentBoldText = boldText }
         if let presented { session.apply(session.runtime.preferPresented(presented)); session.presentedHeld = presented }
+        #if os(iOS) && targetEnvironment(simulator)
+        if let askSiri { systemAskSiri(available: askSiri) }
+        #endif
         if let mode {
             // An empty group asks again: the other facts' commits may have run a `setMode`.
             let batch = session.runtime.setModes(mode, check: mode.isEmpty)
@@ -822,6 +834,9 @@ public final class Agent {
         #if os(macOS)
         if let keyboardNavigation { KeyboardNavigation.agent = keyboardNavigation }
         pageFacts["keyboard-navigation"] = KeyboardNavigation.on
+        #endif
+        #if os(iOS)
+        pageFacts["ask-siri"] = systemAskSiri ? "available" : "unavailable"
         #endif
         let keyword = { (on: Bool) in on ? "reduce" : "no-preference" }
         var reply: [String: Any] = ["media": ["prefers-reduced-motion": keyword(DisplayPreferences.reducedMotion),

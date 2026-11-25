@@ -166,8 +166,17 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     // MARK: UIDragInteractionDelegate
 
     func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: UIDragSession) -> [UIDragItem] {
-        guard let node = lifted(by: interaction, at: session) else { return [] }
+        guard let node = lifted(by: interaction, at: session) ?? asked(by: interaction) else { return [] }
         return DragItems.items(of: node, in: presenter?.session)
+    }
+
+    /// The node whose own context menu UIKit shows (D4). The menu covers the
+    /// node, so no touch lands on it, and UIKit asks for its items for the
+    /// menu, as Ask Siri does to give Siri the node's content (WWDC26 session 278).
+    private func asked(by interaction: UIDragInteraction) -> NodeView? {
+        guard let presenter, let id = interactions.first(where: { $0.value === interaction })?.key, let node = presenter.views[id],
+              interaction.view === node, Self.lifts(node), presenter.menus.showsContextMenu(of: node) else { return nil }
+        return node
     }
 
     /// The node `interaction` lifts at `session`'s touch: where the touch

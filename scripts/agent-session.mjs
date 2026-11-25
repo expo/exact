@@ -752,7 +752,8 @@ export async function open({
      * each substitutes a fact and its defined transitions, not process suspension (LLP 1012 §1). Also `online`,
      * `can-share`, `can-share-files`, `can-share-pictures`, `can-open-files` and `has-focus` `"true"|"false"`,
      * `"root-font-size"` in px (what `rem` follows), `"bold-text"` `"true"|"false"` (Apple's Bold Text, refused by
-     * name elsewhere). `fold` (LLP 1078 D7): `posture folded|continuous`, `segments <cols>x<rows>`, `gap <points>` —
+     * name elsewhere), `"ask-siri"` `"available"|"unavailable"` (UIKit's Ask Siri in context menus; the iOS
+     * simulator's alone, refused by name elsewhere). `fold` (LLP 1078 D7): `posture folded|continuous`, `segments <cols>x<rows>`, `gap <points>` —
      * a host without a fold splits its viewport evenly with the gap centred on each divider; a host with a real fold
      * refuses ("the device decides"). Unnamed facts stay. The reply is what the host now reports, by group. */
     async prefer(facts) {

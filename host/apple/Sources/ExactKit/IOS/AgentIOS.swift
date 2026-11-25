@@ -1404,5 +1404,29 @@ extension Agent {
         window.windowScene?.traitOverrides.accessibilityContrast = more ? .high : .normal
         window.updateTraitsIfNeeded()
     }
+    #if os(iOS)
+    /// `prefer ask-siri` (LLP 1094.000 D10): whether UIKit adds its Ask Siri
+    /// item to a context menu. UIKit reads that from a private scene trait,
+    /// which the simulator leaves unavailable, having no Siri to offer.
+    private static let askSiriTrait: AnyClass? = NSClassFromString("_UITraitIntelligentAssistantAvailability")
+    func systemAskSiri(available: Bool) {
+        guard let scene = session.presenter.viewport.window?.windowScene, let trait = Self.askSiriTrait else { return }
+        let overrides = (scene as NSObject).value(forKey: "traitOverrides") as AnyObject
+        if available {
+            let set = NSSelectorFromString("setNSIntegerValue:forTrait:")
+            typealias Set = @convention(c) (AnyObject, Selector, Int, AnyClass) -> Void
+            unsafeBitCast(overrides.method(for: set), to: Set.self)(overrides, set, 1, trait)
+        } else {
+            _ = overrides.perform(NSSelectorFromString("removeTrait:"), with: trait)
+        }
+        scene.windows.forEach { $0.updateTraitsIfNeeded() }
+    }
+    var systemAskSiri: Bool {
+        guard let traits = session.presenter.viewport.window?.windowScene?.traitCollection, let trait = Self.askSiriTrait else { return false }
+        let read = NSSelectorFromString("valueForNSIntegerTrait:")
+        typealias Read = @convention(c) (AnyObject, Selector, AnyClass) -> Int
+        return unsafeBitCast(traits.method(for: read), to: Read.self)(traits, read, trait) != 0
+    }
+    #endif
 }
 #endif

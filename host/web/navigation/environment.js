@@ -444,7 +444,7 @@ export function pageReporter(agent, platform = globalThis) {
           throw new Error(`prefer: display-scale: ${value}: the page's is ${displayScale()}, which the browser sets (its own emulation, or the device)`);
         }
       } else {
-        throw Object.assign(new Error(`prefer: ${name}: ${value} is not a page fact this host sets`), name === "keyboard-navigation" || name === "bold-text" ? {} : { malformed: true });
+        throw Object.assign(new Error(`prefer: ${name}: ${value} is not a page fact this host sets`), ["keyboard-navigation", "bold-text", "ask-siri"].includes(name) ? {} : { malformed: true });
       }
     }
     Object.assign(facts, next);
