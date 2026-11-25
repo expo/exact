@@ -2,10 +2,17 @@
 use super::*;
 
 pub(super) fn atomic(dir: &File, target: &str, data: &[u8]) -> io::Result<()> {
-    atomic_using(dir, target, data, rename)
+    atomic_using(dir, dir, target, data, rename)
+}
+
+/// [`atomic`], with the temporary file made in `staging`, a directory on
+/// the same filesystem as `dir`.
+pub(super) fn atomic_in(staging: &File, dir: &File, target: &str, data: &[u8]) -> io::Result<()> {
+    atomic_using(staging, dir, target, data, rename)
 }
 
 fn atomic_using(
+    staging: &File,
     dir: &File,
     target: &str,
     data: &[u8],
@@ -17,14 +24,18 @@ fn atomic_using(
         ".ibex-{}",
         bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
     );
-    let mut file = open_at(dir, &temp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
+    let mut file = open_at(
+        staging,
+        &temp,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+    )?;
     let result = (|| {
         file.write_all(data)?;
         file.sync_all()?;
-        publish(dir, &temp, dir, target)
+        publish(staging, &temp, dir, target)
     })();
     if result.is_err() {
-        let _ = unlink(dir, &temp, false);
+        let _ = unlink(staging, &temp, false);
     }
     result
 }
@@ -86,7 +97,7 @@ pub(crate) fn create_below(
     }
     let (parent, leaf) = path.parent()?;
     if op == FsOp::AtomicWriteFile {
-        atomic_using(&parent, &leaf, data, rename_new).map_err(error)?;
+        atomic_using(&parent, &parent, &leaf, data, rename_new).map_err(error)?;
     } else {
         if let Some(source) = &source {
             if !source.metadata().map_err(error)?.is_file() {
@@ -120,11 +131,17 @@ mod tests {
         std::fs::create_dir_all(base.join("root/sub")).unwrap();
         std::fs::create_dir_all(base.join("outside/sub")).unwrap();
         let parent = open_directory(&base.join("root/sub")).unwrap();
-        atomic_using(&parent, "shot", b"png", |from, source, to, target| {
-            std::fs::rename(base.join("root"), base.join("retained")).unwrap();
-            std::os::unix::fs::symlink(base.join("outside"), base.join("root")).unwrap();
-            rename_new(from, source, to, target)
-        })
+        atomic_using(
+            &parent,
+            &parent,
+            "shot",
+            b"png",
+            |from, source, to, target| {
+                std::fs::rename(base.join("root"), base.join("retained")).unwrap();
+                std::os::unix::fs::symlink(base.join("outside"), base.join("root")).unwrap();
+                rename_new(from, source, to, target)
+            },
+        )
         .unwrap();
         assert_eq!(
             std::fs::read(base.join("retained/sub/shot")).unwrap(),
@@ -132,7 +149,7 @@ mod tests {
         );
         assert!(!base.join("outside/sub/shot").exists());
         assert_eq!(
-            atomic_using(&parent, "shot", b"overwrite", rename_new)
+            atomic_using(&parent, &parent, "shot", b"overwrite", rename_new)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::AlreadyExists

@@ -69,11 +69,19 @@ impl Em<'_> {
     }
     /// Read the same body inputs that invalidate native row measurements, outside the row.
     pub(super) fn row_inputs(&mut self, region: u32, scope: &Scope) -> Result<String, String> {
+        let plan = self.plan;
         let reads = self.answers.row_dependencies(region);
+        let owned_resource = |i: usize| -> Option<String> {
+            let owner = plan.resources[i].owner?;
+            if !scope.owned_arms.contains(&owner.0) {
+                return None;
+            }
+            Some(scope.row_member(scope.rows.as_ref()?, format!("r{i}")))
+        };
         let mut values = Vec::new();
         for input in reads.inputs {
             let value = match input {
-                Input::Slot(i) if self.plan.slots[i].owner.is_none() => format!("s_{i}()"),
+                Input::Slot(i) if plan.slots[i].owner.is_none() => format!("s_{i}()"),
                 Input::Slot(i) if scope.row_slots.contains(&i) => {
                     format!(
                         "{}[{}]()",
@@ -83,17 +91,37 @@ impl Em<'_> {
                 }
                 Input::Slot(_) => continue,
                 Input::Derive(i) => format!("{}()", scope.derive(i)),
-                Input::Resource(i) => format!("r_{i}()"),
-                Input::PendingResource(i) => format!("r_{i}.p()"),
-                Input::PendingMutation(i) if self.plan.mutations[i].owner.is_none() => {
+                Input::Resource(i) if plan.resources[i].owner.is_none() => format!("r_{i}()"),
+                // A child's resource, on the enclosing instance in force (LLP 1035.005.004 D1).
+                Input::Resource(i) => match owned_resource(i) {
+                    Some(r) => format!("{r}()"),
+                    None => continue,
+                },
+                Input::PendingResource(i) if plan.resources[i].owner.is_none() => {
+                    format!("r_{i}.p()")
+                }
+                Input::PendingResource(i) => match owned_resource(i) {
+                    Some(r) => format!("{r}.p()"),
+                    None => continue,
+                },
+                Input::PendingMutation(i) if plan.mutations[i].owner.is_none() => {
                     format!("[m_{i}.p(),m_{i}.e()]")
                 }
                 // A child's, on the instance in force (LLP 1035.005.004 D6).
-                Input::PendingMutation(i) => match &scope.rows {
-                    Some(rows) => format!("[{rows}.m{i}.p(),{rows}.m{i}.e()]"),
+                Input::PendingMutation(i) => match (plan.mutations[i].owner, &scope.rows) {
+                    (Some(owner), Some(rows)) if scope.owned_arms.contains(&owner.0) => {
+                        let m = scope.row_member(rows, format!("m{i}"));
+                        format!("[{m}.p(),{m}.e()]")
+                    }
+                    _ => continue,
+                },
+                Input::FailedResource(i) if plan.resources[i].owner.is_none() => {
+                    format!("r_{i}.e()")
+                }
+                Input::FailedResource(i) => match owned_resource(i) {
+                    Some(r) => format!("{r}.e()"),
                     None => continue,
                 },
-                Input::FailedResource(i) => format!("r_{i}.e()"),
                 Input::Clock => format!("{}()", self.uses.rt("x_performanceNow")),
             };
             values.push(value);

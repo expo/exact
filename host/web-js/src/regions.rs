@@ -263,6 +263,7 @@ impl Em<'_> {
         } else {
             name.to_string()
         });
+        scope.owned_arms.insert(arm);
         scope
             .row_slots
             .extend(self.answers.slots(arm).iter().copied());

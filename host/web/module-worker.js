@@ -178,6 +178,13 @@ function finish(answer, request) {
   return result;
 }
 
+const dropParked = (list, staying) => list.filter(p => {
+  if ((p.request.target ?? null) === null || staying.has(key(p.request))) return true;
+  unindex(p.context.requests);
+  release(p.context.owner, p.answer.call);
+  p.done.reject(new Error('the runner let this answer go'));
+  return false;
+});
 // The runner let go of every targeted call not in flight (LLP 1016 D5):
 // drop it, its storage owner, and its call in the prelude.
 async function forget(inFlight) {
@@ -188,13 +195,8 @@ async function forget(inFlight) {
   }
   // An answer parked behind another's storage is let go too, its turn
   // refused, as the page realm does.
-  parked = parked.filter(p => {
-    if ((p.request.target ?? null) === null || staying.has(key(p.request))) return true;
-    unindex(p.context.requests);
-    release(p.context.owner, p.answer.call);
-    p.done.reject(new Error('the runner let this answer go'));
-    return false;
-  });
+  parked = dropParked(parked, staying);
+  resettling = dropParked(resettling, staying);
   if (owed.size) await finishLetGo(storage, owed, letGoHooks);
 }
 const letGoHooks = {
@@ -211,7 +213,7 @@ const letGoHooks = {
 // An answer whose storage operation is queued behind another answer's waits
 // with the module (prelude.js `settle`'s `waiting`): it parks and is asked
 // again after storage delivery (LLP 1097 D3, D7), as the page realm does.
-let parked = [], deliveries = 0;
+let parked = [], resettling = [], deliveries = 0;
 async function proceed(answer, request, done) {
   for (;;) {
     // A `scheduler.yield()`: its yields resolve in a task of their own.
@@ -243,14 +245,15 @@ async function resettle() {
     const before = deliveries;
     // A let-go chain a delivery made the head, finished first.
     if (owed.size) await finishLetGo(storage, owed, letGoHooks);
-    const waiting = parked; parked = [];
-    for (const p of waiting) {
+    resettling = parked; parked = [];
+    while (resettling.length) {
+      const p = resettling.shift();
       context = p.context;
       try {
         const answer = JSON.parse(self.__exact_settle(String(p.answer.call)));
         await proceed(answer, p.request, p.done);
       }
-      catch (error) { storage.retire(context?.owner); context = null; p.done.reject(error); }
+      catch (error) { unindex(context?.requests); storage.retire(context?.owner); context = null; p.done.reject(error); }
     }
     if (deliveries === before || !(parked.length || owed.size)) break;
   }
@@ -284,8 +287,12 @@ self.onmessage = ({ data }) => {
     catch (error) { postMessage({ token: 0, error: String(error?.message ?? error) }); }
     return;
   }
-  // After the turns before it, so a call they park is dropped too.
-  if (data.op === 'forget') { tail = tail.then(() => forget(data.inFlight)).then(() => { if (parked.length || owed.size) return resettle(); }).catch(() => {}); return; }
+  // Drop any entry already waiting in an active `resettle()` before it starts, then finish after queued turns.
+  if (data.op === 'forget') {
+    if (resettling.length) resettling = dropParked(resettling, new Set(data.inFlight.map(key)));
+    tail = tail.then(() => forget(data.inFlight)).then(() => { if (parked.length || owed.size) return resettle(); }).catch(() => {});
+    return;
+  }
   if (data.op !== 'turn') return;
   const done = deferred();
   const run = tail.then(async () => {

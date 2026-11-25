@@ -440,8 +440,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // title collapsed when the stack was laid out in the window before it
         // had that root.
         tabPanels = []; adoptedTablist = nil; tablistAppearanceNone = false
-        // A stack whose list rows push is the split's at every size (LLP 1127 D2); while the runner cannot
-        // say, the stack is installed pushed, and asked again on the main queue's next turn (`reshape`)
+        // A stack whose root route asks for the split, or on an iPad outside a tab whose list's rows push, is the split's
+        // at every size (LLP 1127 D1, D2, D19); while the runner cannot say, the stack is installed pushed, and asked
+        // again on the main queue's next turn (`reshape`)
         switch splitRule(first.first) {
         case .some(.some(let rule)): return installSplit(p, first: first, rule: rule, in: parent)
         case .none: askSplitNextTurn()

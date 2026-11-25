@@ -1350,7 +1350,7 @@ export const classifications = [
       "Presenter::answer_document Presenter::answer_save Presenter::ask_portal Presenter::borrowed_files_chosen Presenter::deliver_picker Presenter::documents_chosen Presenter::finish_files " +
       "Presenter::document_picker Presenter::finish_portal_picks Presenter::finish_save Presenter::is_file_input Presenter::picked_targets Presenter::start_folder"],
     ["painted:host/painted/src/presenter/file_dialog.rs",
-      "FileDialog::start_folder declared_types Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
+      "FileDialog::start_folder declared_types Presenter::answer_file_dialog Presenter::drain_file_exports Presenter::file_exports_done_by Presenter::finish_file_dialog Presenter::finish_file_exports Presenter::queue_file_dialog " +
       "Presenter::serve_file_dialogs Presenter::take_file_dialogs"],
   ]),
   group("shared tokens", ["one-shot"], "share token in the live router; copying may outlive the initiating view", "UI-owned",

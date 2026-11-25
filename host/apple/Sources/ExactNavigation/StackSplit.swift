@@ -9,7 +9,15 @@ import CExact
 /// runner finds it (`exact_stack_split`; `Runner::stack_split`), over the
 /// kernel's own tree.
 struct StackSplit: Equatable {
-    /// The list whose row pushes; nil where only `navigationSplit` asked.
+    /// Whether the root route asks for the split (`navigationSplit` is
+    /// "split" or a width there, or its own child box is the placeholder);
+    /// each host admits a split from it by its own rule (LLP 1127 D1, D22).
+    let asked: Bool
+    /// The root route's own placeholder box, which the split shows while
+    /// nothing is selected: the runner's choice, which asked (LLP 1127 D1).
+    let placeholder: UInt32?
+    /// The list whose row pushes; nil where only the root route's ask (its
+    /// `navigationSplit` or its placeholder box) splits the stack.
     let list: UInt32?
     /// The first visible row the app marks current.
     let current: UInt32?
@@ -24,8 +32,8 @@ struct StackSplit: Equatable {
     /// where none was asked about.
     let pressWrites: Bool?
 
-    init(list: UInt32?, width: Double?, rows: [UInt32: UInt32], locations: [UInt32: String] = [:], current: UInt32? = nil, pressWrites: Bool? = nil) {
-        self.current = current
+    init(asked: Bool = false, placeholder: UInt32? = nil, list: UInt32?, width: Double?, rows: [UInt32: UInt32], locations: [UInt32: String] = [:], current: UInt32? = nil, pressWrites: Bool? = nil) {
+        (self.asked, self.placeholder, self.current) = (asked, placeholder, current)
         (self.list, self.width, self.rows, self.locations, self.pressWrites) = (list, width, rows, locations, pressWrites)
     }
 
@@ -36,7 +44,7 @@ struct StackSplit: Equatable {
             guard pair.count == 2, let route = pair[0] as? Int, let url = pair[1] as? String else { return nil }
             return (UInt32(route), url)
         }
-        self.init(list: (o["list"] as? Int).map { UInt32($0) }, width: (o["width"] as? NSNumber)?.doubleValue,
+        self.init(asked: o["asked"] as? Bool ?? false, placeholder: (o["placeholder"] as? Int).map { UInt32($0) }, list: (o["list"] as? Int).map { UInt32($0) }, width: (o["width"] as? NSNumber)?.doubleValue,
                   rows: Dictionary(pairs, uniquingKeysWith: { first, _ in first }),
                   locations: Dictionary(located, uniquingKeysWith: { first, _ in first }), current: (o["current"] as? Int).map { UInt32($0) }, pressWrites: o["pressWrites"] as? Bool)
     }

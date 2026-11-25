@@ -1095,9 +1095,6 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
     fn user_event(&mut self, events: &ActiveEventLoop, event: crate::accessibility::Event) {
         let _span = crate::probe::Span::new("user event", 0);
         if self.ended {
-            if matches!(event, crate::accessibility::Event::Close) {
-                events.exit();
-            }
             return;
         }
         if matches!(event, crate::accessibility::Event::Close) {

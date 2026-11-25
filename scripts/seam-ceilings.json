@@ -19,7 +19,7 @@
   },
   "counts": {
     "nodeViewCasts": {
-      "ceiling": 598,
+      "ceiling": 597,
       "sites": [
         "host/apple/Sources/ExactAnimations/CssAnimationPlay.swift: (layer.delegate as? NodeView",
         "host/apple/Sources/ExactCollections/Collection.swift: current as? NodeView",
@@ -599,7 +599,6 @@
         "host/apple/Sources/ExactNavigation/IOS/ZoomPushIOS.swift: context.sourceView as? NodeView",
         "host/apple/Sources/ExactNavigation/Mac/BackMac.swift: ($0 as? NodeView",
         "host/apple/Sources/ExactNavigation/Mac/SidebarMac.swift: view as? NodeView",
-        "host/apple/Sources/ExactNavigation/Mac/SplitMac.swift: ($0 as? NodeView",
         "host/apple/Sources/ExactNavigation/Mac/SplitMac.swift: $0 is NodeView } as? NodeView",
         "host/apple/Sources/ExactNavigation/Mac/SplitMac.swift: view as? NodeView",
         "host/apple/Sources/ExactSurfaces/Canvas2DImage.swift: parent.delegate as? NodeView",

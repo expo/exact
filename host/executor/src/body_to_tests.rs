@@ -140,11 +140,22 @@ impl Files {
     pub(in super::super) fn roots(&self) -> [std::path::PathBuf; 3] {
         ["data", "cache", "tmp"].map(|dir| self.0.join(dir))
     }
-    /// The names in `app:/cache`: no staging file is left behind.
+    /// The names in `app:/cache`, and any file a launch's staging directory
+    /// still holds: no staging file is left behind.
     pub(in super::super) fn cache(&self) -> Vec<String> {
-        let mut names: Vec<_> = std::fs::read_dir(self.0.join("cache"))
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
+        let names = |dir: std::path::PathBuf| -> Vec<String> {
+            let entries = std::fs::read_dir(dir).into_iter().flatten();
+            let names = entries.map(|e| e.unwrap().file_name().into_string().unwrap());
+            names.filter(|name| name != ".lock").collect()
+        };
+        let staging = self.0.join("cache/.exact-staging");
+        let mut names: Vec<_> = (names(self.0.join("cache")).into_iter())
+            .filter(|name| name != ".exact-staging")
+            .chain(
+                names(staging.clone())
+                    .into_iter()
+                    .flat_map(|launch| names(staging.join(launch))),
+            )
             .collect();
         names.sort();
         names

@@ -17,9 +17,16 @@
 //!   `press` runs writes the router. An action that writes the router may
 //!   also go back or open a sheet: the rule cannot see which, and the author
 //!   says `navigationSplit="none"` for a list whose rows only do those.
-//! - *`navigationSplit` on the root route* still wins: `"none"` keeps the
-//!   stack pushed, and a positive number names the list column's width and
-//!   splits a stack whose list this rule does not find.
+//! - *`navigationSplit` on the root route* wins: `"none"` keeps the stack
+//!   pushed, and `"split"`, a width (the list column's, a whole number of
+//!   px from 1 to 999999, `split_width`) or a `"placeholder"` box that is the
+//!   route's own child asks for the split, also of a stack whose list this
+//!   rule does not find.
+//!
+//! **Asked or found.** The answer says whether the root route asked
+//! (`StackSplit::asked`), and each host admits a stack by its own platform
+//! (LLP 1127 D22): the Mac and the painted hosts split one that asks or that
+//! this rule finds.
 //!
 //! **Whose row a route is.** A route above the root whose location a row of
 //! the list links to is that row's detail: the row is the selected one while
@@ -73,8 +80,15 @@ pub struct RouteInspector {
 /// A stack that splits, read from its root route.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StackSplit {
-    /// The list whose row pushes; `None` where only `navigationSplit` asked
-    /// for the split.
+    /// Whether the root route asks for the split: `navigationSplit` is
+    /// `"split"` or a width there, or its own child box is the
+    /// `"placeholder"` (LLP 1127 D1).
+    pub asked: bool,
+    /// The root route's own placeholder box, which asks, and which the split
+    /// shows while nothing is selected: the first in tree order (LLP 1127 D1).
+    pub placeholder: Option<ViewId>,
+    /// The list whose row pushes; `None` where only the root route's ask (its
+    /// `navigationSplit` or its placeholder box) splits the stack.
     pub list: Option<ViewId>,
     /// The first visible row whose outer press owner has a non-false `aria-current`.
     pub current: Option<ViewId>,
@@ -180,12 +194,15 @@ impl<D: DataSource> Runner<D> {
         })
     }
 
-    /// Whether the stack whose root route is `route` shows that route as a
-    /// list beside the route above it (the module's rule), read from the
-    /// tree as it now stands. `None` for a stack that pushes, and for a node
-    /// that is no stack's root route. A host may retain a previously split
-    /// list while it has no actionable rows (static placeholders are allowed);
-    /// its current eligibility is still this rule's.
+    /// Whether the stack whose root route is `route` asks for a split (LLP
+    /// 1127 D1) and the list the shared rule finds beside the route above it,
+    /// read from the tree as it now stands. `None` for a node that is no
+    /// route, for a root route presented as a sheet or saying "none", and for
+    /// one that does not ask and has no list whose rows push, nor an eligible
+    /// `retained` list; each host admits
+    /// a split from the answer by its own rule (LLP 1127 D22). A host may
+    /// retain a previously split list while it has no actionable rows (static
+    /// placeholders are allowed); its current eligibility is still this rule's.
     pub fn stack_split(&self, route: ViewId, retained: Option<ViewId>) -> Option<StackSplit> {
         let node = self.kernel.node(route)?;
         node.props.str(PropId::NavigationKey)?;
@@ -199,11 +216,11 @@ impl<D: DataSource> Runner<D> {
         if said == Some("none") {
             return None;
         }
-        let width = said
-            .and_then(|s| s.trim().parse::<f32>().ok())
-            .filter(|w| w.is_finite() && *w > 0.0);
+        let width = said.and_then(exact_kernel::props::split_width);
+        let placeholder = self.split_placeholder(route);
+        let asked = said == Some("split") || width.is_some() || placeholder.is_some();
         let found = self.pushing_list(route, retained);
-        if found.is_none() && width.is_none() {
+        if found.is_none() && !asked {
             return None;
         }
         let (list, found_rows) = match found {
@@ -220,6 +237,8 @@ impl<D: DataSource> Runner<D> {
             })
             .collect();
         Some(StackSplit {
+            asked,
+            placeholder,
             list,
             current: found_rows.current,
             width,
@@ -303,6 +322,23 @@ impl<D: DataSource> Runner<D> {
             patch: Box::new(patch),
         };
         self.apply(vec![op]).map(Some)
+    }
+
+    /// The first of `route`'s own children written
+    /// `navigationSplit="placeholder"`: the compiler admits a placeholder
+    /// only there (LLP 1127 D1), so the search reads one level and no
+    /// subtree. It asks for the split, and the split shows it while nothing
+    /// is selected.
+    fn split_placeholder(&self, route: ViewId) -> Option<ViewId> {
+        self.kernel
+            .node(route)?
+            .child_nodes()
+            .find(|n| {
+                n.node_type == NodeType::View
+                    && n.props.str(PropId::NavigationKey).is_none()
+                    && n.props.str(PropId::NavigationSplit) == Some("placeholder")
+            })
+            .map(|n| n.id)
     }
 
     /// The first list under `route`, in tree order, with a row that pushes,

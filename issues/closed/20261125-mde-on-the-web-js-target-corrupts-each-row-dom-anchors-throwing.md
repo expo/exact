@@ -1,6 +1,7 @@
 # mde() on the web JS target corrupts each-row DOM anchors (throwing NotFoundError/orphaning editors) and leaks wasm instances and listeners on every unmount
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Update single-element each-row anchors when mde() swaps its textarea and register onEnd cleanup to destroy the editor and observers on unmount.
 **Systems:** host/web-js Markdown editor integration (pieces.js, mount.js)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

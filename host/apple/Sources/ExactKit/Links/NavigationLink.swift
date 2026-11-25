@@ -170,6 +170,7 @@ extension UITabBarController {
         return tabs.compactMap(\.viewController)
     }
 
+    #if EXACT_INSPECT
     /// The bar the controller projects, including iPadOS's floating list of tab items.
     package var projectedTabBar: UIView? {
         if #available(iOS 18.0, tvOS 18.0, *), isTabBarHidden { return nil }
@@ -182,6 +183,7 @@ extension UITabBarController {
 
     /// The projected bar, when it is visibly on screen.
     package var shownTabBar: UIView? { RouteGeometry.shownBar(projectedTabBar) }
+    #endif
 }
 
 #if os(iOS)
@@ -232,46 +234,98 @@ extension UITabBarController {
         return .zero
     }
 
-    /// iPadOS 18's floating tab bar, in a regular width: no `UITabBar` in the
-    /// window (`tabBar` is out of it), but a list of the tabs' items at the
-    /// top, a collection view whose first section has a cell per tab, in
-    /// their order, and whose others are empty (iPadOS 27 keeps a second,
-    /// for tabs a person adds), beside the selected tab's view. Its cells
-    /// carry their items' accessibility identifiers (the tabs' test ids,
-    /// `syncItems`), or their titles as labels, as the agent's aim reads
-    /// them: a list of the same shape whose cells name other things (a
-    /// hatch's) is not it. A sidebar's list of tabs (`mode = .tabSidebar`,
-    /// TabsIOS.swift) has the same shape, and while it shows the floating
-    /// bar does not. Nil where the bar is UIKit's classic one, where no such
-    /// list shows, or where two would.
-    package var floatingTabList: UICollectionView? {
-        guard tabBar.window == nil, let controllers = tabControllers, case let items = controllers.compactMap(\.tabBarItem), !items.isEmpty, items.count == controllers.count,
-              let selected = selectedViewController?.viewIfLoaded else { return nil }
-        func names(_ cell: UIView, _ item: UITabBarItem) -> Bool {
-            let id = item.accessibilityIdentifier ?? ""
-            if id.isEmpty, (item.title ?? "").isEmpty { return false }
-            var pending = [cell]
-            while !pending.isEmpty {
-                let v = pending.removeFirst()
-                if id.isEmpty ? v.accessibilityLabel == item.title : v.accessibilityIdentifier == id { return true }
-                pending += v.subviews
-            }
-            return false
+    #if EXACT_INSPECT
+    /// The one section containing every item of a bar built from viewControllers. UIKit fixes
+    /// these tabs in bar-item order. Customizable UITabs can move between sections.
+    private func itemSection(in list: UICollectionView, count: Int) -> Int? {
+        let sections = (0..<list.numberOfSections).filter { list.numberOfItems(inSection: $0) > 0 }
+        guard sections.count == 1, let section = sections.first, list.numberOfItems(inSection: section) == count else { return nil }
+        return section
+    }
+
+    private func matchesTabSource(_ frame: CGRect, of view: UIView, in space: UIView) -> Bool {
+        guard !frame.isEmpty else { return false }
+        let bounds = view.convert(view.bounds, to: space), pixel = 1 / space.traitCollection.displayScale
+        return abs(frame.minX - bounds.minX) <= pixel && abs(frame.maxX - bounds.maxX) <= pixel
+            && abs(frame.minY - bounds.minY) <= pixel && abs(frame.maxY - bounds.maxY) <= pixel
+    }
+
+    private func draws(_ cell: UICollectionViewCell, _ item: UITabBarItem) -> Bool {
+        var pending: [UIView] = [cell]
+        while let view = pending.popLast() {
+            guard !view.isHidden, view.alpha > 0.01, !(view is NodeView) else { continue }
+            if let title = item.title, !title.isEmpty {
+                if (view as? UILabel)?.text == title { return true }
+            } else if let image = (view as? UIImageView)?.image, image == item.image || image == item.selectedImage { return true }
+            pending += view.subviews
         }
-        var found: [UICollectionView] = [], pending: [UIView] = view.subviews
-        while !pending.isEmpty {
-            let v = pending.removeFirst()
-            guard v !== selected, !v.isHidden, !(v is NodeView) else { continue }
-            if let list = v as? UICollectionView, list.numberOfSections >= 1, list.numberOfItems(inSection: 0) == items.count,
-               (1..<list.numberOfSections).allSatisfy({ list.numberOfItems(inSection: $0) == 0 }) {
-                let shown = list.indexPathsForVisibleItems.filter { $0.section == 0 }
-                if !shown.isEmpty, shown.allSatisfy({ path in list.cellForItem(at: path).map { names($0, items[path.item]) } ?? false }) { found.append(list) }
+        return false
+    }
+
+    /// UIKit gives a UITab its popover source rect in the top bar or the sidebar, even before
+    /// accessibility loads. Without that rect the visible cells can still identify the bar by
+    /// their drawn titles or images. The selected page's own collections belong to its content.
+    package var floatingTabList: UICollectionView? {
+        guard #available(iOS 18.0, *), !isTabBarHidden, tabBar.window == nil,
+              let root = viewIfLoaded, root.window != nil, let selected = selectedViewController?.viewIfLoaded else { return nil }
+        let models = tabs.isEmpty ? [selectedTab].compactMap { $0 } : tabs
+        let frames = models.compactMap { $0.frame(in: root) }.filter { !$0.isEmpty }
+        let items = tabBar.items ?? []
+        var found: UICollectionView?, best = (-1, 0), pending = root.subviews
+        while let view = pending.popLast() {
+            guard view !== selected, !view.isHidden, view.alpha > 0.01, !(view is NodeView) else { continue }
+            if let list = view as? UICollectionView {
+                let cells = list.visibleCells
+                guard !cells.isEmpty else { continue }
+                let matches = cells.filter { cell in frames.contains { matchesTabSource($0, of: cell, in: root) } }.count
+                if tabs.isEmpty {
+                    // A legacy controller exposes only its selected UITab. When its cell is
+                    // scrolled away, the other items still identify the fixed section.
+                    guard let section = itemSection(in: list, count: items.count) else { continue }
+                    if matches == 0, !cells.allSatisfy({ cell in
+                        guard let path = list.indexPath(for: cell), path.section == section, items.indices.contains(path.item) else { return false }
+                        return draws(cell, items[path.item])
+                    }) { continue }
+                } else if matches == 0, !cells.allSatisfy({ cell in items.contains { draws(cell, $0) } }) { continue }
+                let score = (matches, matches == 0 ? cells.count : 0)
+                if score > best { best = score; found = list }
+                else if score == best { found = nil }
                 continue
             }
-            pending += v.subviews
+            pending += view.subviews
         }
-        return found.count == 1 ? found[0] : nil
+        return found
     }
+
+    func floatingTabView(for item: UITabBarItem, in list: UICollectionView) -> UIView? {
+        guard #available(iOS 18.0, *) else { return nil }
+        if !tabs.isEmpty {
+            guard let tab = tabs.first(where: { $0.viewController?.tabBarItem === item }) else { return nil }
+            if let frame = tab.frame(in: list), !frame.isEmpty {
+                if let cell = list.visibleCells.first(where: { matchesTabSource(frame, of: $0, in: list) }) { return cell }
+                // UIKit pins the search tab beside the collection. Its popover source also
+                // identifies the view beneath a sheet covering the controller.
+                if let root = viewIfLoaded, let selected = selectedViewController?.viewIfLoaded {
+                    let point = list.convert(CGPoint(x: frame.midX, y: frame.midY), to: root)
+                    if let hit = root.hitTest(point, with: nil), !hit.isDescendant(of: selected),
+                       let view = sequence(first: hit, next: \.superview).prefix(while: { $0 !== root }).first(where: { matchesTabSource(frame, of: $0, in: list) }) {
+                        return view
+                    }
+                }
+            }
+            // An item with no source rect can still have a drawn cell. Only a face that
+            // identifies one model and one visible cell can stand in for the missing rect.
+            let cells = list.visibleCells.filter { draws($0, item) }
+            guard cells.count == 1, let cell = cells.first,
+                  tabBar.items?.contains(where: { $0 !== item && draws(cell, $0) }) == false else { return nil }
+            return cell
+        }
+        guard let items = tabBar.items, let index = items.firstIndex(of: item),
+              let section = itemSection(in: list, count: items.count) else { return nil }
+        let path = IndexPath(item: index, section: section)
+        return list.indexPathsForVisibleItems.contains(path) ? list.cellForItem(at: path) : nil
+    }
+    #endif
 }
 #endif
 

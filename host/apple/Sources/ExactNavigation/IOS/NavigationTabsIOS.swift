@@ -331,8 +331,9 @@ extension NavigationHost {
     }
 
     /// Before installing: a root that gains, loses or changes its tabs, or a
-    /// stack that starts or stops splitting (its list's rows came later, or
-    /// its root says `navigationSplit="none"` now; LLP 1127 D2), gets its
+    /// stack that starts or stops splitting (its root route asks for the split
+    /// or says `navigationSplit="none"` now, or, on an iPad outside a tab, the
+    /// rule finds or loses a list whose rows push; LLP 1127 D1, D2, D19), gets its
     /// containers again (the router's stacks are untouched). While the
     /// runner cannot say whether the stack splits (a sync inside a callback
     /// it waits on), the containers stay, and the stack is asked again on

@@ -376,7 +376,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<Event> for Window<D> 
             return;
         };
         let hwnd = HWND(raw.hwnd.get() as _);
-        super::session_end::install(hwnd.0, Rc::downgrade(&self.app));
+        super::session_end::install(hwnd.0, Rc::downgrade(&self.app), app.proxy.clone());
         if self.registration.as_ref().is_some_and(|r| r.0 == hwnd) {
             return;
         }
@@ -387,6 +387,10 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<Event> for Window<D> 
         }
     }
     fn user_event(&mut self, events: &ActiveEventLoop, event: Event) {
+        // Before the App is borrowed: an ended App hears nothing.
+        if matches!(event, Event::Exit) {
+            return events.exit();
+        }
         self.app.borrow_mut().user_event(events, event);
     }
     fn window_event(&mut self, events: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
