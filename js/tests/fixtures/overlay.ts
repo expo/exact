@@ -1,7 +1,7 @@
 // An overlay runs synchronously with no effects. Its calls below are tried in
 // order; `refusals` answers how each went, one line per call. `capture` keeps
 // the store and storage an answer is given, so the overlay can try them.
-let captured: { store: any; storage: any } | null = null;
+let captured: { store: any; storage: any; doc: string } | null = null;
 let results: string[] = [];
 let pending: Promise<unknown>[] = [];
 
@@ -29,12 +29,18 @@ function overlay(source: string, _args: unknown[], answer: unknown): unknown {
   attempt(() => store.keepKey("x", null));
   attempt(() => store.key("x"));
   attempt(() => captured!.storage.fs.readFile("app:/x"));
+  attempt(() => captured!.storage.fs.atomicWriteFile(captured!.doc, new Uint8Array([1])));
+  attempt(() => captured!.storage.fs.recentDocuments());
+  attempt(() => captured!.storage.fs.forgetDocument(captured!.doc));
   return undefined;
 }
 
 function answer(source: string, args: unknown[], store: unknown, storage: unknown): unknown {
   if (source === "numeric") return { n: args[0], big: "x".repeat(Number(args[1])) };
-  if (source === "capture") { captured = { store, storage }; return "captured"; }
+  if (source === "capture") {
+    captured = { store, storage, doc: typeof args[0] === "string" ? args[0] : "doc:/1/note.md" };
+    return "captured";
+  }
   if (source === "refusals") {
     const done = Promise.all(pending);
     pending = [];
@@ -47,7 +53,7 @@ function answer(source: string, args: unknown[], store: unknown, storage: unknow
 (globalThis as any).exact = {
   abi: 1,
   appId: "test.overlay",
-  grants: "net.fetch https://fixture.exact.test\nfs.read app:/x\n",
+  grants: "net.fetch https://fixture.exact.test\nfs.read app:/x\nfs.write doc:/\ndoc.keep\n",
   answer,
   overlay,
 };

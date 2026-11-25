@@ -171,6 +171,42 @@ fn a_name_the_design_lacks_is_refused_where_an_argument_carries_it_to_a_row() {
 }
 
 #[test]
+fn an_imported_arguments_refusal_reads_the_current_design_text() {
+    let path = app("carried-edit", &[
+        ("app.forma", "forma t\n\ntheme\n  ink = #123456\n"),
+        ("badge.contract", "component Badge\n  props\n    tint: string\n  view\n    text \"c\" color=tint\n"),
+        ("app.contract", "use Badge from \"./badge.contract\"\ncomponent App\n  view\n    Badge(tint=\"var(--missing)\")\n"),
+    ]);
+    let check = |name| {
+        let e = contract::compile_path(&path).unwrap_err();
+        assert_eq!(e.id, "forma-unknown-token");
+        assert_eq!(e.message, format!("`color=\"var(--missing)\"`: `--missing` is no token of this app's design; its colour tokens are `{name}`"));
+    };
+    check("ink");
+    contract::with_design_text(
+        &path.with_file_name("app.forma"),
+        "forma t\n\ntheme\n  paper = #abcdef\n".into(),
+        || check("paper"),
+    );
+    check("ink");
+}
+
+#[test]
+fn a_malformed_var_names_the_required_spelling() {
+    for (width, words) in [
+        (r#""var(bad)""#, "as a custom property, `var(--name)`"),
+        ("`var(${name})`", "a `var()` names its token whole"),
+    ] {
+        let source = format!(
+            "component App\n  state name = \"--gap\"\n  view\n    text \"x\" width={width}\n"
+        );
+        let e = contract::compile(&source).unwrap_err();
+        assert_eq!(e.id, "lower-attr-value");
+        assert!(e.message.contains(words), "{e}");
+    }
+}
+
+#[test]
 fn a_fallback_is_ignored_and_warned_once() {
     let path = app(
         "fallback",

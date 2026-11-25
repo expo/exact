@@ -492,30 +492,62 @@ pub fn list(owner: u64) -> Option<Value> {
     ))
 }
 
+/// Why [`forget`] did not remove a kept document.
+#[derive(Debug)]
+pub enum ForgetError {
+    /// The path is not a document this app keeps.
+    NotKept,
+    /// Saving the updated kept set failed, so the document remains kept.
+    Save(std::io::Error),
+}
+
+impl ForgetError {
+    /// Storage error string for `path`: `document ENOENT` only when unkept,
+    /// preserving the underlying OS error when saving failed.
+    pub fn into_storage_error(self, path: &str) -> String {
+        match self {
+            Self::NotKept => format!("document ENOENT: {path} is not a document this app keeps"),
+            Self::Save(e) => format!("storage: could not save kept documents: {e}"),
+        }
+    }
+}
+
+impl std::fmt::Display for ForgetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotKept => f.write_str("not a document this app keeps"),
+            Self::Save(e) => write!(f, "could not save kept documents: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ForgetError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::NotKept => None,
+            Self::Save(e) => Some(e),
+        }
+    }
+}
+
 /// `storage.fs.forgetDocument(path)` (D5): the app's own removal of a kept
 /// document. The host hears it ([`on_forgotten`]) and takes it off the
 /// platform's list; a session reading it keeps it until the app quits.
-pub fn forget(owner: u64, path: &str) -> std::io::Result<()> {
-    let gone = || {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("{path} is not a document this app keeps"),
-        )
-    };
-    let n = super::number(path).ok_or_else(gone)?;
+pub fn forget(owner: u64, path: &str) -> Result<(), ForgetError> {
+    let n = super::number(path).ok_or(ForgetError::NotKept)?;
     let mut all = stores();
-    let (_, store) = store_of(&mut all, owner).ok_or_else(gone)?;
+    let (_, store) = store_of(&mut all, owner).ok_or(ForgetError::NotKept)?;
     let at = store
         .records
         .iter()
         .position(|r| {
             format!("{PREFIX}{}/{}", r.n, r.name) == path.trim_end_matches('/') && r.n == n
         })
-        .ok_or_else(gone)?;
+        .ok_or(ForgetError::NotKept)?;
     let r = store.records.remove(at);
     if let Err(e) = save(store) {
         store.records.insert(at, r);
-        return Err(e);
+        return Err(ForgetError::Save(e));
     }
     let listeners = announce(store);
     drop(all);

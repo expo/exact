@@ -257,6 +257,11 @@ impl Engine {
         self.clocks.pending.values().copied().reduce(f64::min)
     }
 
+    /// Every begin of a clock origin that waits.
+    pub(super) fn clock_held_begins(&self) -> impl Iterator<Item = f64> + '_ {
+        self.clocks.pending.values().copied()
+    }
+
     pub(super) fn forget_clock(&mut self, node: u64) {
         self.clocks.of.remove(&node);
         self.clocks.joining.remove(&node);

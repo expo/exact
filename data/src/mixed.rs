@@ -88,12 +88,20 @@ struct Set {
     running: Option<Running>,
 }
 
-/// A set's reserved turn: the token this composer handed out for it, its
-/// call's key, and the child's own token once the child hands one out.
-struct Running {
-    token: u64,
-    key: Key,
-    child: Option<u64>,
+/// A set's reserved turn or kept-reply delivery: the outer continuation
+/// token this composer handed out for it, and the child's own token once
+/// handed out.
+enum Running {
+    Turn {
+        token: u64,
+        key: Key,
+        child: Option<u64>,
+    },
+    Delivery {
+        kept: u64,
+        token: u64,
+        child: Option<u64>,
+    },
 }
 
 /// Two data executors with disjoint, declared source names and one app identity.
@@ -418,7 +426,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
             Recorded::Answer { rust, .. } | Recorded::Resume { rust, .. } => *rust,
         };
         self.sets[set].busy = true;
-        self.sets[set].running = Some(Running {
+        self.sets[set].running = Some(Running::Turn {
             token,
             key: recorded_key(&recorded),
             child: None,
@@ -479,8 +487,8 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                 }
                 Ok(Answer::Later(request)) if request.continuation.is_some() => {
                     let child = request.continuation.expect("checked");
-                    if let Some(running) = self.sets[set].running.as_mut() {
-                        running.child = Some(child);
+                    if let Some(Running::Turn { child: c, .. }) = self.sets[set].running.as_mut() {
+                        *c = Some(child);
                     }
                     let dispatch = if rust {
                         self.rust.dispatch(child, store)
@@ -534,42 +542,6 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         };
         let outcome = envelope::encode_optional(result, vec![], &mut local, Vec::new());
         Dispatch::Run(Work::Now(Box::new(move || outcome)))
-    }
-
-    fn start_delivery(&mut self, token: u64, store: &Store) -> Dispatch {
-        let set = self.set_of[0].expect("an ordered delivery");
-        if self.sets[set].busy {
-            self.delivery_waiters.insert(token);
-            return Dispatch::Held;
-        }
-        let Some((kept, outcome)) = self.deliveries.remove(&token) else {
-            return Dispatch::Missing;
-        };
-        self.delivery_waiters.remove(&token);
-        self.sets[set].busy = true;
-        let grants = self.javascript.grants();
-        let mut local = Store::new(grants, envelope::snapshot(store, grants));
-        local.set_clock_ms(store.clock_ms());
-        let result = self
-            .javascript
-            .module_delivery(&mut local, kept, outcome)
-            .map(|request| request.map_or(Answer::Now(Value::Unit), Answer::Later));
-        let outcome = envelope::encode(result, &mut local, vec![]);
-        Dispatch::Run(Work::Now(Box::new(move || outcome)))
-    }
-
-    fn route_delivery(&mut self, request: Option<Request>) -> Result<Option<Request>, DataError> {
-        let Some(mut request) = request else {
-            return Ok(None);
-        };
-        let child = request
-            .continuation
-            .ok_or_else(|| unavailable("a module delivery must yield a continuation"))?;
-        let token = self.token()?;
-        self.delivery_routes.insert(token, child);
-        request.continuation = Some(token);
-        request.grants = Some(self.javascript.grants().into());
-        Ok(Some(request))
     }
 
     /// Envelope lines plus each member's journal (LLP 1012, LLP 1097 D8).
@@ -831,6 +803,9 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
             if !matches!(dispatch, Dispatch::Held) {
                 self.delivery_routes.remove(&token);
             }
+            if matches!(dispatch, Dispatch::Missing) {
+                self.clear_missing_delivery(token);
+            }
             return dispatch;
         }
         // Background work is the JavaScript child's (LLP 1097 D5).
@@ -896,7 +871,12 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
                         .find(|(_, c)| **c == child)
                         .map(|(t, _)| *t)
                     {
-                        self.delivery_routes.remove(&outer);
+                        if !matches!(dispatch, Dispatch::Held) {
+                            self.delivery_routes.remove(&outer);
+                        }
+                        if matches!(dispatch, Dispatch::Missing) {
+                            self.clear_missing_delivery(outer);
+                        }
                         released.push((outer, dispatch));
                         continue;
                     }
@@ -960,13 +940,11 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         for set in &mut self.sets {
             set.held
                 .retain(|token| tokens.contains(token) || self.recorded.contains_key(token));
-            let let_go = set.running.as_ref().is_some_and(|running| {
-                running.key.1.is_some()
-                    && match live.get(&running.key) {
-                        None => true,
-                        Some(Some(t)) => *t != running.token && recorded.contains(t),
-                        Some(None) => false,
-                    }
+            let let_go = matches!(&set.running, Some(Running::Turn { token, key, .. }) if key.1.is_some()
+            && match live.get(key) {
+                None => true,
+                Some(Some(t)) => *t != *token && recorded.contains(t),
+                Some(None) => false,
             });
             if let_go {
                 set.busy = false;
@@ -976,8 +954,10 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         let running: HashMap<u64, Option<u64>> = self
             .sets
             .iter()
-            .filter_map(|set| set.running.as_ref())
-            .map(|running| (running.token, running.child))
+            .filter_map(|set| match &set.running {
+                Some(Running::Turn { token, child, .. }) => Some((*token, *child)),
+                _ => None,
+            })
             .collect();
         for rust in [false, true] {
             let view: Vec<InFlight<'_>> = in_flight
@@ -1016,20 +996,46 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     }
 
     fn discard(&mut self, token: u64) {
+        if let Some((kept, _)) = self.deliveries.remove(&token) {
+            self.delivery_waiters.remove(&token);
+            self.delivery_phases.remove(&kept);
+            return;
+        }
         for set in &mut self.sets {
             set.held.retain(|t| *t != token);
-            if set.running.as_ref().is_some_and(|r| r.token == token) {
-                let running = set.running.take().unwrap();
-                set.busy = false;
-                self.stages.retain(|(key, _), _| *key != running.key);
-                if let Some(child) = running.child {
-                    if running.key.0 {
-                        self.rust.discard(child);
-                    } else {
-                        self.javascript.discard(child);
+            match &set.running {
+                Some(Running::Turn { token: t, .. }) if *t == token => {
+                    let Some(Running::Turn { key, child, .. }) = set.running.take() else {
+                        unreachable!()
+                    };
+                    set.busy = false;
+                    self.stages.retain(|(k, _), _| *k != key);
+                    if let Some(child) = child {
+                        if key.0 {
+                            self.rust.discard(child);
+                        } else {
+                            self.javascript.discard(child);
+                        }
                     }
                 }
+                Some(Running::Delivery { token: t, .. }) if *t == token => {
+                    let Some(Running::Delivery { kept, child, .. }) = set.running.take() else {
+                        unreachable!()
+                    };
+                    set.busy = false;
+                    self.delivery_phases.remove(&kept);
+                    let routed = self.delivery_routes.remove(&token);
+                    if let Some(child) = child.or(routed) {
+                        self.javascript.discard(child);
+                    }
+                    return;
+                }
+                _ => {}
             }
+        }
+        if let Some(child) = self.delivery_routes.remove(&token) {
+            self.javascript.discard(child);
+            return;
         }
         match self.recorded.remove(&token) {
             Some((_, recorded)) => {
@@ -1290,12 +1296,29 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
             }),
         };
         match result {
-            Ok(Some(request)) => {
-                self.delivery_phases.insert(token, true);
-                self.route_delivery(Some(request))
-            }
+            Ok(Some(request)) => match self.route_delivery(Some(request)) {
+                Ok(Some(routed)) => {
+                    let outer = routed.continuation.expect("routed delivery continuation");
+                    let child = self.delivery_routes.get(&outer).copied();
+                    self.delivery_phases.insert(token, true);
+                    self.sets[set].running = Some(Running::Delivery {
+                        kept: token,
+                        token: outer,
+                        child,
+                    });
+                    Ok(Some(routed))
+                }
+                Ok(None) => {
+                    self.clear_delivery(set, token);
+                    Ok(None)
+                }
+                Err(error) => {
+                    self.clear_delivery(set, token);
+                    Err(error)
+                }
+            },
             other => {
-                self.sets[set].busy = false;
+                self.clear_delivery(set, token);
                 other
             }
         }

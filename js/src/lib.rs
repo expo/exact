@@ -307,6 +307,12 @@ struct HostState {
     /// (`compression.rs`).
     codecs: HashMap<u64, compression::Codec>,
     codec_out: Vec<u8>,
+    /// This module's heap ceiling, bounding native codec allocations.
+    max_heap: usize,
+    /// This module's interrupt watch, checked by long native codec loops.
+    watch: Option<Arc<Watch>>,
+    /// Kept files in-flight TypeScript `atomicWriteFile` calls are replacing.
+    replacing: storage::Replacing,
     /// `authCallback()`: this native build's, from the grants (LLP 1069.006).
     auth_callback: Option<String>,
     /// The engine has app storage: the host configured directories.
@@ -340,6 +346,15 @@ impl HostState {
     /// No device to answer storage: the bake's module, or a validation pass's.
     fn deferring(&self) -> bool {
         self.baking || self.validating
+    }
+
+    /// The heap ceiling in bytes, defaulting when constructed directly in unit tests.
+    fn heap_limit(&self) -> usize {
+        if self.max_heap == 0 {
+            DEFAULT_MAX_HEAP as usize
+        } else {
+            self.max_heap
+        }
     }
 }
 
@@ -468,6 +483,7 @@ impl Module {
             host: Box::new(HostState {
                 auth_callback,
                 launch,
+                max_heap: DEFAULT_MAX_HEAP as usize,
                 ..HostState::default()
             }),
             native_factory: None,
@@ -746,6 +762,8 @@ impl Module {
             self.compression_hold.clone(),
         )?);
         self.storage.as_mut().unwrap().worker_retired = self.worker_retired.clone();
+        self.host.max_heap = self.max_heap as usize;
+        self.host.watch = Some(self.watch.clone());
         let ctx = &mut *self.host as *mut HostState as *mut c_void;
         let host: HostFn = host_door;
         let bytes: engine::BytesFn = crypto::bytes_door;
@@ -855,10 +873,12 @@ impl Module {
         if let Some(mut engine) = self.engine.take() {
             self.logs.extend(engine.take_log());
         }
-        self.host.keys.clear();
-        self.host.codecs.clear();
-        self.host.codec_out.clear();
-        self.host.binary.clear();
+        self.host.keys = HashMap::new();
+        self.host.codecs = HashMap::new();
+        self.host.codec_out = Vec::new();
+        self.host.binary = Vec::new();
+        self.host.replacing.clear();
+        self.host.watch = None;
         self.host.socket_ops.clear();
         self.host.answer_ops.clear();
         self.host.socket_buffered.clear();
@@ -915,6 +935,7 @@ impl Module {
     /// The heap ceiling for the next [`Module::load`].
     pub fn set_max_heap(&mut self, bytes: u32) {
         self.max_heap = bytes;
+        self.host.max_heap = bytes as usize;
     }
 
     /// Calls that ran over the budget so far.

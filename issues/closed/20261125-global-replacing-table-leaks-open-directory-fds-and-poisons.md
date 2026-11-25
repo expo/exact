@@ -1,6 +1,7 @@
 # Global REPLACING table leaks open directory FDs and poisons subsequent writes with stale Replaced state after OOM reload or unload
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Move atomicWriteFile replacement tracking from a global static to per-Module HostState cleared in drop_runtime, register tokens only after storageCall admits the call, and reject native recentDocuments/forgetDocument in overlays.
 **Systems:** exact-js & exact-data (doc.keep atomicWriteFile replacement tracking)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

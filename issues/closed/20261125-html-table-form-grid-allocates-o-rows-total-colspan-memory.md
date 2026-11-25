@@ -1,6 +1,7 @@
 # HTML table `form_grid` allocates O(rows × total_colspan) memory without enforcing the `LINES` cap
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Track active downward-growing table spans sparsely in form_grid and cap formed.columns and grid_template_columns at LINES with bounds-checked width indexing.
 **Systems:** kernel HTML table grid formation & Taffy layout style generation
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

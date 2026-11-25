@@ -154,8 +154,14 @@ impl Colors for StyleProps {
 
 impl Colors for crate::wire::Op {
     fn colors(&self, m: &mut WideMark) {
-        if let crate::wire::Op::SetStyle { patch, .. } = self {
-            patch.colors(m);
+        match self {
+            crate::wire::Op::SetStyle { patch, .. } => patch.colors(m),
+            crate::wire::Op::SetLooks { looks, .. } => {
+                for (_, patch) in looks {
+                    patch.colors(m);
+                }
+            }
+            _ => {}
         }
     }
 }

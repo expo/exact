@@ -2,7 +2,7 @@
 // Contract signature small; the separate transfer corpus also uses Bun's JSON.
 // What an object says of itself never steers a copy (review r4a 5, 9, 10):
 // its own `constructor`, getters and tags, a key named `__proto__`, holes.
-import { streams, streamBody, streamBodyBrands, streamUpload } from './pure-streams.ts';
+import { codecLimits, streams, streamBody, streamBodyBrands, streamUpload } from './pure-streams.ts';
 function steered() {
   const proto=structuredClone(JSON.parse('{"__proto__":{"admin":true},"ok":1}'));
   const bytes=new Uint8Array([1,2]);
@@ -104,6 +104,7 @@ export function exercise(source: string): string {
   if (source === 'streamBody') return streamBody() as unknown as string;
   if (source === 'streamBodyBrands') return streamBodyBrands() as unknown as string;
   if (source === 'streamUpload') return streamUpload() as unknown as string;
+  if (source === 'codecLimits') return codecLimits() as unknown as string;
   if (source === 'consoleAbortListeners') {
     const controller = new AbortController();
     controller.signal.onabort = () => { throw new Error('boom'); };

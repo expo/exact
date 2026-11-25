@@ -1,6 +1,7 @@
 # Mixed::start_delivery sets set.busy without set.running, permanently deadlocking the ordered set on JS retirement, discard, or route error
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Track active kept-reply deliveries in Mixed Set::running as Running::Delivery and clear busy/running and delivery state on JS retirement, discard, route error, or missing child dispatch.
 **Systems:** exact-data (Mixed composer ordered sets and kept-reply module delivery)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

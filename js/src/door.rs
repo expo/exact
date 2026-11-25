@@ -142,7 +142,7 @@ pub(crate) unsafe extern "C" fn host_door(
                 if state.baking || (state.validating && !b.is_empty()) {
                     Err("bake".into())
                 } else {
-                    super::storage::kept(state.kept, &b)
+                    super::storage::kept(state.kept, &mut state.replacing, &b)
                 }
             } else if a == "later" {
                 Ok(state.later.then(|| "later".into()))

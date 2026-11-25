@@ -17,7 +17,7 @@ use crate::kernel::NodeRef;
 use crate::style::Dimension;
 use crate::svg::filter::{
     CompositeOp, Convolve, Filter, FilterFn, Input, Light, Lighting, Op, Primitive, Transfer,
-    BLEND_MODES,
+    BLEND_MODES, MAX_CONVOLVE_ORDER, MAX_OCTAVES, MAX_PRIMITIVES, MAX_TABLE_VALUES,
 };
 use crate::svg::Paint;
 
@@ -121,25 +121,49 @@ const IDENTITY: [f32; 20] = [
 struct Chain {
     primitives: Vec<Primitive>,
     region: Option<Rect>,
+    overflowed: bool,
 }
 
 impl Chain {
-    /// The input standing for this entry's `SourceGraphic`.
-    fn source(&self) -> Input {
-        match self.primitives.len() {
-            0 => Input::SourceGraphic,
-            n => Input::Result(n as u16 - 1),
+    fn new() -> Chain {
+        Chain {
+            primitives: Vec::new(),
+            region: None,
+            overflowed: false,
         }
     }
 
-    fn push(&mut self, op: Op, inputs: [Input; 2], sub: Rect) -> Input {
-        self.primitives.push(Primitive {
+    fn last_index(&self) -> Option<u16> {
+        self.primitives
+            .len()
+            .checked_sub(1)
+            .and_then(|i| u16::try_from(i).ok())
+    }
+
+    /// The input standing for this entry's `SourceGraphic`.
+    fn source(&self) -> Input {
+        self.last_index()
+            .map_or(Input::SourceGraphic, Input::Result)
+    }
+
+    fn push_primitive(&mut self, primitive: Primitive) -> Option<u16> {
+        if self.overflowed || self.primitives.len() >= MAX_PRIMITIVES {
+            self.overflowed = true;
+            return None;
+        }
+        let idx = u16::try_from(self.primitives.len()).ok()?;
+        self.primitives.push(primitive);
+        Some(idx)
+    }
+
+    fn push(&mut self, op: Op, inputs: [Input; 2], sub: Rect) -> Option<Input> {
+        self.push_primitive(Primitive {
             op,
             inputs,
             subregion: sub,
             linear: false,
-        });
-        Input::Result(self.primitives.len() as u16 - 1)
+        })
+        .map(Input::Result)
     }
 }
 
@@ -299,13 +323,13 @@ pub fn box_filter(
     text_color: crate::style::ColorValue,
     dark: bool,
 ) -> Option<Filter> {
-    if list.0.is_empty() || list.0.iter().any(|f| matches!(f, FilterFn::Url(_))) {
+    if list.0.is_empty()
+        || list.0.len() > MAX_PRIMITIVES
+        || list.0.iter().any(|f| matches!(f, FilterFn::Url(_)))
+    {
         return None;
     }
-    let mut chain = Chain {
-        primitives: Vec::new(),
-        region: None,
-    };
+    let mut chain = Chain::new();
     for f in &list.0 {
         function(
             &mut chain,
@@ -314,6 +338,9 @@ pub fn box_filter(
             text_color.resolve(dark),
             dark,
         );
+        if chain.overflowed {
+            return None;
+        }
     }
     Some(Filter {
         region: chain.region.unwrap_or((0.0, 0.0, 0.0, 0.0)),
@@ -349,10 +376,7 @@ impl Resolver<'_, '_> {
                 b.3 + 2.0 * stroke,
             )
         });
-        let mut chain = Chain {
-            primitives: Vec::new(),
-            region: None,
-        };
+        let mut chain = Chain::new();
         for f in &list.0 {
             if let FilterFn::Url(id) = f {
                 let Some(target) = self
@@ -367,7 +391,9 @@ impl Resolver<'_, '_> {
                 let region = self.filter_element(&target, bbox, vp, &mut chain);
                 // A list can name one filter many times: each a copy.
                 let made = &chain.primitives[before..];
-                let Some(region) = region.filter(|_| self.budget.primitives(made)) else {
+                let Some(region) =
+                    region.filter(|_| !chain.overflowed && self.budget.primitives(made))
+                else {
                     return Some(nothing);
                 };
                 chain.region = Some(chain.region.map_or(region, |c| union(c, region)));
@@ -380,7 +406,7 @@ impl Resolver<'_, '_> {
                     style.text_color.resolve(self.appearance(style)),
                     self.appearance(style),
                 );
-                if !self.budget.primitives(&chain.primitives[before..]) {
+                if chain.overflowed || !self.budget.primitives(&chain.primitives[before..]) {
                     return Some(nothing);
                 }
             }
@@ -455,7 +481,7 @@ impl Resolver<'_, '_> {
             _ => (1.0, 1.0),
         };
         let fstyle = f.arena.computed_rows(f.slot, StyleMask::INHERITED);
-        let base = chain.primitives.len() as u16;
+        let base = chain.primitives.len();
         let source = chain.source();
         let mut names: Vec<(&str, u16)> = Vec::new();
         let mut alpha: Option<Input> = None;
@@ -466,6 +492,10 @@ impl Resolver<'_, '_> {
             .filter(|c| c.node_type == NodeType::SvgFe)
             .collect();
         for p in &children {
+            if chain.overflowed || chain.primitives.len() >= MAX_PRIMITIVES {
+                chain.overflowed = true;
+                return None;
+            }
             let style = cascade(p, &fstyle);
             let kind = p.props.str(PropId::Fe).unwrap_or("");
             let prop = |id: PropId| p.props.str(id);
@@ -479,7 +509,9 @@ impl Resolver<'_, '_> {
                         *alpha.get_or_insert_with(|| {
                             let mut m = [0.0; 20];
                             m[18] = 1.0;
-                            chain.push(Op::ColorMatrix(m), [source, Input::None], region)
+                            chain
+                                .push(Op::ColorMatrix(m), [source, Input::None], region)
+                                .unwrap_or(Input::None)
                         })
                     }
                     Some(name) if !name.is_empty() => names
@@ -488,14 +520,20 @@ impl Resolver<'_, '_> {
                         .find(|(n, _)| *n == name)
                         .map_or(Input::None, |(_, i)| Input::Result(*i)),
                     // The previous result, or the source for the first.
-                    _ => match chain.primitives.len() as u16 {
-                        n if n > base => Input::Result(n - 1),
-                        _ => source,
-                    },
+                    _ => {
+                        if chain.primitives.len() > base {
+                            chain.last_index().map_or(source, Input::Result)
+                        } else {
+                            source
+                        }
+                    }
                 }
             };
             let i1 = resolve(prop(PropId::In), chain);
             let i2 = resolve(prop(PropId::In2), chain);
+            if chain.overflowed {
+                return None;
+            }
             let pair = |v: Option<&str>, d: f32| {
                 let n = numbers(v);
                 match n.as_slice() {
@@ -545,8 +583,12 @@ impl Resolver<'_, '_> {
                         .into_iter()
                         .filter_map(|c| self.kernel.node(c))
                         .filter(|c| c.props.str(PropId::Fe) == Some("feMergeNode"))
+                        .take(MAX_TABLE_VALUES)
                         .map(|c| resolve(c.props.str(PropId::In), chain))
                         .collect();
+                    if chain.overflowed {
+                        return None;
+                    }
                     Op::Merge(nodes)
                 }
                 "feColorMatrix" => {
@@ -587,9 +629,14 @@ impl Resolver<'_, '_> {
                             _ => continue,
                         };
                         let q = |id: PropId| c.props.str(id);
+                        let table = || {
+                            let mut v = numbers(q(PropId::TableValues));
+                            v.truncate(MAX_TABLE_VALUES);
+                            v
+                        };
                         funcs[slot] = match q(PropId::Type).unwrap_or("identity") {
-                            "table" => Transfer::Table(numbers(q(PropId::TableValues))),
-                            "discrete" => Transfer::Discrete(numbers(q(PropId::TableValues))),
+                            "table" => Transfer::Table(table()),
+                            "discrete" => Transfer::Discrete(table()),
                             "linear" => Transfer::Linear(
                                 number(q(PropId::Slope), 1.0),
                                 number(q(PropId::Intercept), 0.0),
@@ -607,10 +654,12 @@ impl Resolver<'_, '_> {
                 "feTile" => Op::Tile,
                 "feTurbulence" => {
                     let (bx, by) = pair(prop(PropId::BaseFrequency), 0.0);
+                    let octaves =
+                        number(prop(PropId::NumOctaves), 1.0).clamp(0.0, MAX_OCTAVES as f32) as u32;
                     Op::Turbulence(
                         bx,
                         by,
-                        number(prop(PropId::NumOctaves), 1.0).max(0.0) as u32,
+                        octaves,
                         number(prop(PropId::Seed), 0.0),
                         prop(PropId::Type) == Some("fractalNoise"),
                         prop(PropId::StitchTiles) == Some("stitch"),
@@ -633,31 +682,52 @@ impl Resolver<'_, '_> {
                     )
                 }
                 "feConvolveMatrix" => {
-                    let (ox, oy) = pair(prop(PropId::FeOrder), 3.0);
-                    let (ox, oy) = (ox.max(1.0) as u32, oy.max(1.0) as u32);
+                    let (ox_f, oy_f) = pair(prop(PropId::FeOrder), 3.0);
                     let kernel = numbers(prop(PropId::KernelMatrix));
+                    let valid_order = ox_f >= 1.0
+                        && ox_f <= MAX_CONVOLVE_ORDER as f32
+                        && oy_f >= 1.0
+                        && oy_f <= MAX_CONVOLVE_ORDER as f32;
+                    let (ox, oy) = if valid_order {
+                        (ox_f as u32, oy_f as u32)
+                    } else {
+                        (0, 0)
+                    };
+                    let tx_f = number(prop(PropId::TargetX), (ox / 2) as f32);
+                    let ty_f = number(prop(PropId::TargetY), (oy / 2) as f32);
                     let sum: f32 = kernel.iter().sum();
                     let divisor = match number(prop(PropId::Divisor), 0.0) {
-                        0.0 if sum != 0.0 => sum,
+                        0.0 if sum != 0.0 && sum.is_finite() => sum,
                         0.0 => 1.0,
                         d => d,
                     };
-                    Op::Convolve(Box::new(Convolve {
-                        order: (ox, oy),
-                        target: (
-                            number(prop(PropId::TargetX), (ox / 2) as f32) as u32,
-                            number(prop(PropId::TargetY), (oy / 2) as f32) as u32,
-                        ),
-                        kernel,
-                        divisor,
-                        bias: number(prop(PropId::Bias), 0.0),
-                        edge: match prop(PropId::EdgeMode) {
-                            Some("wrap") => 1,
-                            Some("none") => 2,
-                            _ => 0,
-                        },
-                        preserve_alpha: prop(PropId::PreserveAlpha) == Some("true"),
-                    }))
+                    if valid_order
+                        && kernel.len() == (ox * oy) as usize
+                        && tx_f >= 0.0
+                        && tx_f < ox as f32
+                        && ty_f >= 0.0
+                        && ty_f < oy as f32
+                        && divisor.is_finite()
+                        && divisor != 0.0
+                    {
+                        Op::Convolve(Box::new(Convolve {
+                            order: (ox, oy),
+                            target: (tx_f as u32, ty_f as u32),
+                            kernel,
+                            divisor,
+                            bias: number(prop(PropId::Bias), 0.0),
+                            edge: match prop(PropId::EdgeMode) {
+                                Some("wrap") => 1,
+                                Some("none") => 2,
+                                _ => 0,
+                            },
+                            preserve_alpha: prop(PropId::PreserveAlpha) == Some("true"),
+                        }))
+                    } else {
+                        // Filter Effects 1 §15.10: invalid order, kernel length
+                        // or target renders transparent black.
+                        Op::Flood([0.0; 4])
+                    }
                 }
                 "feDiffuseLighting" | "feSpecularLighting" => {
                     let specular = kind == "feSpecularLighting";
@@ -696,9 +766,16 @@ impl Resolver<'_, '_> {
                         });
                     let Some(light) = light else {
                         // No light: transparent black.
-                        chain.push(Op::Flood([0.0; 4]), [Input::None, Input::None], region);
-                        if let Some(name) = prop(PropId::Result) {
-                            names.push((name, chain.primitives.len() as u16 - 1));
+                        let Some(idx) = chain.push_primitive(Primitive {
+                            op: Op::Flood([0.0; 4]),
+                            inputs: [Input::None, Input::None],
+                            subregion: region,
+                            linear: false,
+                        }) else {
+                            return None;
+                        };
+                        if let Some(name) = prop(PropId::Result).filter(|n| !n.is_empty()) {
+                            names.push((name, idx));
                         }
                         continue;
                     };
@@ -750,17 +827,19 @@ impl Resolver<'_, '_> {
                 (x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
             };
             let linear = style.color_interpolation_filters == ColorInterpolationFilters::LinearRGB;
-            chain.primitives.push(Primitive {
+            let Some(idx) = chain.push_primitive(Primitive {
                 op,
                 inputs: [i1, i2],
                 subregion: sub,
                 linear,
-            });
+            }) else {
+                return None;
+            };
             if let Some(name) = prop(PropId::Result).filter(|n| !n.is_empty()) {
-                names.push((name, chain.primitives.len() as u16 - 1));
+                names.push((name, idx));
             }
         }
-        if chain.primitives.len() as u16 == base {
+        if chain.primitives.len() == base {
             // SVG 2: a filter with no primitives renders nothing.
             return None;
         }

@@ -1,6 +1,7 @@
 # Unbounded recursion (stack overflow) and O(N²) allocation in `roles::role` and `Paint::parse`
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Make roles::role and Paint::parse non-recursive and allocation-free on nested var(--exact-accent, ...) and repeated url(...) inputs.
 **Systems:** kernel CSS color role parser & SVG paint parser
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25
