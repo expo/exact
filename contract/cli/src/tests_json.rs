@@ -411,6 +411,10 @@ fn step_json(step: &Step, s: &mut String) {
             s.push_str(",\"text\":");
             q(text, s);
         }
+        Step::Rotate { orientation, .. } => {
+            s.push_str("{\"op\":\"rotate\",\"orientation\":");
+            q(orientation, s);
+        }
         Step::Fold { degrees, .. } => {
             s.push_str(&format!("{{\"op\":\"fold\",\"degrees\":{degrees}"));
         }
@@ -861,4 +865,29 @@ fn an_ios_background_interval_is_a_real_time_test_step() {
         assert!(crate::tests(&format!("test \"t\"\n  background {ms}\n")).is_err());
     }
     assert!(crate::tests("test \"t\"\n  perf\n    background 100\n").is_err());
+}
+
+#[cfg(test)]
+#[test]
+fn rotate_names_the_interface_orientation() {
+    for orientation in [
+        "portrait",
+        "portraitUpsideDown",
+        "landscapeLeft",
+        "landscapeRight",
+    ] {
+        let parsed =
+            crate::tests(&format!("test \"turn\" on ios\n  rotate {orientation}\n")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&crate::tests_json(&parsed)).unwrap();
+        assert_eq!(
+            json[0]["steps"][0],
+            serde_json::json!({"op":"rotate", "orientation":orientation, "line":2})
+        );
+    }
+    for invalid in ["", "faceUp", "landscape-left", "portrait extra"] {
+        assert!(
+            crate::tests(&format!("test \"turn\"\n  rotate {invalid}\n")).is_err(),
+            "{invalid}"
+        );
+    }
 }

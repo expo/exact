@@ -25,7 +25,8 @@
 // §9): the suite starts it upright, and the rotate, resize and web legs turn it.
 // `--only insets,keyboard-bar,lab,arrangement,reading,navigation,navigation-gestures,host-navigation,host,rotate,resize,web` runs the named legs; the keyboard checks
 // run only when a probe shows a software keyboard on this simulator.
-import { hasSimulatorHinge, hingeHelper } from './duo/hinge.mjs';
+import { runTests } from './agent-test.mjs';
+import { hasSimulatorHinge, hingeHelper, simulatorTurns } from './duo/hinge.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -74,7 +75,7 @@ const STACKED = [[0, 0, 669, 455.5], [0, 495.5, 669, 455.5]];
 // and what UIKit reports at each on either panel (the scene's interface orientation, its screen and
 // safe area, top right bottom left; measured against a plain UIKit app, 2026-10-15, and in duo-lab,
 // 2026-10-16). An iPhone app does not turn upside down: on the cover panel that turn keeps the last.
-const TURNS = [['landscape-right', 'landscapeRight'], ['pud', 'portraitUpsideDown'], ['landscape-left', 'landscapeLeft'], ['portrait', 'portrait']];
+const TURNS = simulatorTurns.map(({ helper, device }) => [helper, device]);
 const TURNED = {
   inner: {
     'landscape-right': ['portraitUpsideDown', 669, 951, [82, 0, 34, 0]], pud: ['landscapeRight', 951, 669, [0, 84, 34, 0]],
@@ -1288,6 +1289,8 @@ async function suite({ open: openSession, check: record }, reset) {
     await s.tap('tab-fold'); await settle(s);
   };
   if (leg('rotate')) {
+    const drive = await runTests({ host: 'ios', app: 'duo-lab', file: resolve(ROOT, 'scripts/fixtures/closed-duo.test.contract') });
+    check(drive.passed === 1, `closed Duo authored rotation: ${drive.results.flatMap(t => t.failures).join(', ')}`);
     // SpringBoard's lines about its orientation deferrals and the device's pose, which a turn after closing waits on
     const sb = [];
     const stream = logStream(udid, 'process == "SpringBoard" AND (category == "DeviceOrientationUpdateDeferral" OR category == "DevicePose")', (line) => {

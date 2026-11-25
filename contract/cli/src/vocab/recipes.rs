@@ -154,6 +154,7 @@ const ALIASES: &[(&str, &str)] = &[
     ("keyframes", "motion"),
     ("@keyframes", "motion"),
     ("tool", "tools"),
+    ("rotate", "ios-driving"),
     ("exactDelivery", "over-the-air-updates"),
 ];
 

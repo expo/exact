@@ -2380,6 +2380,7 @@ one reasonable "view" at a time; the count is the cost. (Charlie, 2026-08-29.)
 
 **Admitted (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** Pocket Lab's Fold lab can move an iOS simulator's hinge
 with `fold <degrees>` in a drive or authored test (LLP 1078 D7). The driver acts outside the app and waits for the device's angle. The wire still has ten operations.
+**Admitted (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).** A drive or authored test can turn an iOS simulator with `rotate` and wait for its scene's interface orientation (AJ1, LLP 1078 D7). This reaches the landscape tray on a closed Duo. The driver acts outside the app.
 **Admitted (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** Android reads posture and viewport segments from Jetpack WindowManager for Pocket Lab (LLP 1078 D11).
 
 Not shipping: causal trace, behavior diff and verify, mutation

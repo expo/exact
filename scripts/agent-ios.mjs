@@ -8,7 +8,7 @@ import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { openTouches, iosTouchInput, springboard, withAccessibilityRuntime } from '../host/apple/touches.mjs';
-import { hasSimulatorHinge, hingeHelper } from './duo/hinge.mjs';
+import { hasSimulatorHinge, hingeHelper, rotateSimulator, simulatorTurns } from './duo/hinge.mjs';
 import { nativeKey } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
 import { bundleId, install } from '../host/apple/build.mjs';
@@ -26,9 +26,11 @@ import {
   withSoftwareKeyboard,
   forwardedEnv,
   simulatorLaunch,
+  phoneOrientations,
   simulatorAppContainer,
 } from '../host/apple/devices.mjs';
 import { appleExecutableName, resolveApp } from './app.mjs';
+export const simulatorOrientation = name => simulatorTurns.some(turn => turn.scene === name);
 const appContainers = new Map();
 const containerKey = (udid, id) => JSON.stringify([udid, id]);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -276,7 +278,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
           throw new Error(why);
         },
       );
-    let helper;
+    let helper, lastFold;
     let canvasContact = false;
     return {
       host: hostFixture ? 'host-ios' : 'ios',
@@ -291,9 +293,21 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
       crashes,
       udid: dev.udid,
       installNote: kept?.note,
-      fold: !hostFixture && hasSimulatorHinge(dev) ? (degrees, land) => simulatorDisplay(dev.udid, () => {
+      fold: !hostFixture && hasSimulatorHinge(dev) ? (degrees, land) => simulatorDisplay(dev.udid, async () => {
         helper ??= hingeHelper(dev.udid, dir);
-        return land(Number(helper('fold', degrees)));
+        const angle = Number(helper('fold', degrees));
+        const result = await land(angle);
+        lastFold = { angle, at: performance.now() };
+        return result;
+      }) : undefined,
+      rotate: !hostFixture ? (orientation, land) => simulatorDisplay(dev.udid, async () => {
+        if (hasSimulatorHinge(dev)) helper ??= hingeHelper(dev.udid, dir);
+        const fold = lastFold && performance.now() - lastFold.at < 10000 ? lastFold.angle : undefined;
+        lastFold = undefined;
+        const mask = phoneOrientations(a.manifest.orientation);
+        return rotateSimulator({ udid: dev.udid, orient: helper?.orient, fold, ask, land,
+          allowed: o => !mask || mask.includes('UIInterfaceOrientation' + o[0].toUpperCase() + o.slice(1)),
+        }, orientation);
       }) : undefined,
       background: ms => backgroundIOS(lines, ms, id, bundle => activateIOS(['simctl', 'launch', dev.udid], bundle)),
       springboard: request =>

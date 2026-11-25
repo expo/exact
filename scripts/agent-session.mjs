@@ -41,7 +41,7 @@ import { developmentLaunchEnvironment } from '../host/apple/devices.mjs';
 import { bakeOutput, executableName, linuxBinary, resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { androidBinary } from './agent-android.mjs';
 import { VIEWPORT, openWeb } from './agent-web.mjs';
-import { openIOS } from './agent-ios.mjs';
+import { openIOS, simulatorOrientation } from './agent-ios.mjs';
 import { sessionInput } from './agent-input.mjs';
 const CLOCK_STEP_MS = 1000,
   CLOCK_BUDGET_MS = 3000,
@@ -899,6 +899,12 @@ export async function open({
       return r;
     },
     close: carrier.close,
+    async rotate(orientation) {
+      if (!simulatorOrientation(orientation)) throw new MalformedOperation('rotate takes portrait, portraitUpsideDown, landscapeLeft or landscapeRight');
+      if (!carrier.rotate) throw new Error('rotate needs agent ios on an iOS simulator');
+      if (s.held) throw new Error(`a drag's finger is down (${s.held}): only reads and the clock until it lifts`);
+      return carrier.rotate(orientation, result => s.landed({ ...result, carrier: host }));
+    },
     async fold(degrees) {
       if (!Number.isFinite(degrees) || degrees < 0 || degrees > 180) throw new MalformedOperation('fold takes a hinge angle from 0 through 180 degrees');
       if (!carrier.fold) throw new Error('fold needs agent ios on a simulator with a hinge (iPhone Duo)');

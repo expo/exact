@@ -1,0 +1,10 @@
+test "the closed Duo lays out the landscape viewport before the next step" on ios
+  fold 0
+  rotate portrait
+  expect layout "root" height >= layout "root" width
+  rotate landscapeLeft
+  expect layout "root" width >= layout "root" height
+  rotate landscapeRight
+  expect layout "root" width >= layout "root" height
+  rotate portrait
+  expect layout "root" height >= layout "root" width

@@ -1230,6 +1230,7 @@ fn a_perf_block_and_its_counts_parse_to_the_drivers_steps() {
 fn a_perf_block_refuses_the_wall_clock_and_counts_need_a_block() {
     for step in [
         "fold 130",
+        "rotate landscapeLeft",
         "clock +100 real",
         "clock held",
         "clock held board 5s",
