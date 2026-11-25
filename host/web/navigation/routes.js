@@ -1295,6 +1295,7 @@ export const navigation = {
       document.activeElement.blur();
       projections = readProjections(root, log);
     }
+    const marked = SPLITS ? new Map() : null; // each box a root route marked in this projection, and that root
     for (const { nav, key, at, list, panels, stacks, facts } of projections) {
       if (TABS) {
         const previous = managed.get(nav) ?? [];
@@ -1397,11 +1398,11 @@ export const navigation = {
           }
         }
         row?.toggleAttribute("data-exact-split-row", true);
-        // @ref LLP 1116.006 D2 — a split showing no detail fills the detail pane, as an iPad's split view does: the platform's placeholder (the shell draws `data-exact-split-empty`), or the author's, a box of the root route marked `navigationSplit="placeholder"` (which the lowerer hides everywhere else), at the pane's width. Only the route's own box is marked: one a page module moved anywhere else is shown no more.
+        // @ref LLP 1116.006 D2 — a split showing no detail fills the detail pane, as an iPad's split view does: the platform's placeholder (the shell draws `data-exact-split-empty`), or the author's, a box of the root route marked `navigationSplit="placeholder"` (which the lowerer hides everywhere else), at the pane's width. Only the route's own box is marked: one a page module moved anywhere else is shown no more. A stack does not clear a box it marked before when another root has marked it in this projection and still holds it as its own (`marked`), so a box moved from one root to another is marked by the root that holds it, whichever projects first.
         const empty = split > 0 && detail < 0, own = ownPlaceholder(routes[0]), box = viewParent(routes[0]);
         const was = routes[0] && shownPlaceholders.get(routes[0]);
-        if (routes[0]) { if (was && was !== own) { was.removeAttribute("data-exact-split-placeholder"); } shownPlaceholders.set(routes[0], own); }
-        own?.toggleAttribute("data-exact-split-placeholder", empty);
+        if (routes[0]) { if (was && was !== own && ownPlaceholder(marked.get(was)) !== was) { was.removeAttribute("data-exact-split-placeholder"); } shownPlaceholders.set(routes[0], own); }
+        if (own) { own.toggleAttribute("data-exact-split-placeholder", empty); marked.set(own, routes[0]); }
         box?.toggleAttribute("data-exact-split-empty", empty && !own);
         if (empty) {
           box.style.setProperty("--exact-split", `${split}px`);

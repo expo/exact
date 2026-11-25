@@ -323,6 +323,25 @@ check('the author\'s placeholder in the root route takes the detail pane while n
   });
 }, 60000);
 
+check('a placeholder a page module moves to another tab\'s root is shown by that root, whichever projects first', () => {
+  const own = '<div navigationSplit="placeholder" id="own" style="display:none"><span>Pick</span></div>';
+  const html = tabs(BAR).replace(list('t1', 10, false), list('t1', 10, false, 'navigationSplit="split"', own));
+  const shown = `[document.getElementById('own').hasAttribute('data-exact-split-placeholder'), getComputedStyle(document.getElementById('own')).display]`;
+  return inChrome(page(html), async (evaluate) => {
+    await evaluate(`select('10')`);
+    expect(await evaluate(shown)).toEqual([true, 'flex']);
+    // Into the first tab's root, which shows it while nothing is selected there: that stack projects before the one it left
+    await evaluate(`document.getElementById('r1').append(document.getElementById('own')); select('1')`);
+    expect(await evaluate(shown)).toEqual([true, 'flex']);
+    // And back, the root it leaves projecting first
+    await evaluate(`document.getElementById('t1').append(document.getElementById('own')); select('10')`);
+    expect(await evaluate(shown)).toEqual([true, 'flex']);
+    // Out of every root: the root it left clears its mark
+    await evaluate(`document.getElementById('t1').after(document.getElementById('own')); select('10')`);
+    expect(await evaluate(shown)).toEqual([false, 'none']);
+  });
+}, 60000);
+
 check('navigationSplit opts a stack out, or names the width of a list the rule does not find', async () => {
   const stack = (extra, rows) => `<main id="nav" navigationKey="2" navigationBack="back" style="width:100%;height:100%;position:relative">${list('r1', 1, rows, extra)}${detail('r2', 2)}</main>`;
   await inChrome(page(stack('navigationSplit="none"', true)), async (evaluate) => {
