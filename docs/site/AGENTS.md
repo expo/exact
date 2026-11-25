@@ -46,7 +46,9 @@ publishes that build to the Cloudflare Pages project `exact-docs`. For a pull re
 that holds the Cloudflare token uploads a build's files without running them.
 `bun run build:pages` makes what is uploaded: `dist.pages`, which is `dist` with each page at
 `<path>.html` (Pages redirects `/start` to `/start/` for a `start/index.html`), a `_headers` within
-Pages' 100 rules, and the worker. The worker (`worker/index.ts`) answers a request that prefers
+Pages' 100 rules, and the worker. It sets `SITE_PUBLISH=1`, so `tools/gen.ts` leaves out the pages
+`constants/navigation.ts` marks `hidden`: `/_components`, which only the tests open. `bun run build`
+keeps them: run it, not `build:pages`, before `bun exact.mjs test web`. The worker (`worker/index.ts`) answers a request that prefers
 `text/markdown` as `bun start` does, sends the Markdown to `ChatGPT-User`, `Claude-User` and
 `Perplexity-User` when they do not ask for it, and marks every host but the site's origin `noindex`. `bun
 run test:worker` tests the worker, and `bun run test:pages` the tree under `wrangler pages dev`.

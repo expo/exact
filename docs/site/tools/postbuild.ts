@@ -1,6 +1,5 @@
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { sections } from '../constants/navigation.ts';
 import { nonPageRules, redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
 import { bySection } from './page-lists.ts';
@@ -12,22 +11,6 @@ const ORIGIN = site.origin;
 type Page = { path: string; route: string; title: string; description: string; source: string; section: string; updated: string };
 const pages: Page[] = JSON.parse(readFileSync(join(SITE, 'content/pages.json'), 'utf8'));
 if (!existsSync(join(DIST, 'routes.json'))) throw new Error(`${DIST} has no routes.json: run web-build first`);
-
-const hidden = sections.flatMap(s => s.pages).filter(p => p.hidden);
-const isHidden = (pattern: string) => hidden.some(h => pattern === h.path || pattern.startsWith(`${h.path}/`));
-const table = JSON.parse(readFileSync(join(DIST, 'routes.json'), 'utf8'));
-table.routes = table.routes.filter((r: { pattern: string }) => !isHidden(r.pattern));
-writeFileSync(join(DIST, 'routes.json'), `${JSON.stringify(table, null, 2)}\n`);
-for (const h of hidden) {
-  rmSync(join(DIST, h.path.slice(1)), { recursive: true, force: true });
-  rmSync(join(DIST, 'assets/markdown', `${h.route}.md`), { force: true });
-  for (const chunk of readdirSync(DIST).filter(f => new RegExp(`^${h.route}-[\\w-]{8}\\.js$`).test(f))) {
-    rmSync(join(DIST, chunk));
-    // Its row in the table of files named by content goes too (LLP 1153.004).
-    delete table.files?.[chunk];
-  }
-}
-writeFileSync(join(DIST, 'routes.json'), `${JSON.stringify(table, null, 2)}\n`);
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const withSlash = (p: string) => (p === '/' ? p : `${p}/`);
