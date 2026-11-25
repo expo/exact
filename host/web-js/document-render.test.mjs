@@ -604,18 +604,18 @@ component SplitDocument
   view
     main navigationKey=\`\${top(nav).id}\` navigationBack="back" position="relative"
       for e in stack(nav) key=e.id
-        column navigationKey=\`\${e.id}\` navigationSplit="split" position="absolute" inset=0
-          if e.name == "home"
+        if e.name == "home"
+          column navigationKey=\`\${e.id}\` navigationSplit="split" position="absolute" inset=0
             list
               button "Open" press=open
-          if e.name == "detail"
+        if e.name == "detail"
+          column navigationKey=\`\${e.id}\` position="absolute" inset=0
             button "Back" id="back" press=back
 `, (_, html) => {
     for (const path of ['', 'detail']) { // the served page keeps the ask the projection reads, with none of its marks
       const page = html(path);
-      expect(page).toContain('data-exact-list');
-      expect(page).toContain('data-exact-router-press="true"');
-      expect(page).toMatch(/navigationSplit="split"/); expect(page).not.toMatch(/\sdata-exact-split="/);
+      expect(page).toContain('data-exact-list'); expect(page).toContain('data-exact-router-press="true"');
+      expect([...page.matchAll(/<[^>]*\snavigationKey="[^"]*"[^>]*>/g)].map((m) => m[0]).find((t) => !t.includes('navigationBack'))).toMatch(/\snavigationSplit="split"[\s>]/); expect(page).not.toMatch(/\sdata-exact-split[\w-]*[=\s>]|--exact-split/i);
     }
   });
 }, 30000);

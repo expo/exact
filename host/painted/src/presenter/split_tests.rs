@@ -619,7 +619,7 @@ component App
             for e in t.stack key=e.id
               column navigationKey=`${e.id}` position="absolute" inset=0 testId=`route-${e.name}`
                 if e.name == "home"
-                  list
+                  list testId="rows"
                     link href="/item" height=48 testId="linked"
                       text "Item"
                   box navigationSplit="placeholder" testId="empty"
@@ -665,12 +665,25 @@ component App
         assert_eq!(split(&p).detail, Some(item));
         assert_eq!(split(&p).row, Some(id(&p, "linked")));
         assert!(p.system_back(p.host.now() + 1.));
+        // The emptied list stays the split's, its identity retained across the tab switch, whatever the placeholder
+        // asks by itself
+        let rows = id(&p, "rows");
         regression::act(&mut p, "empty", vec![]);
+        assert!(
+            p.host.kernel().find_by_test_id("linked").is_empty(),
+            "the list's only row is gone"
+        );
         assert_eq!(split(&p).root, home);
+        assert_eq!(split(&p).list, Some(rows));
         tap(&mut p, "tab-other");
         assert!(state(&mut p).is_null());
         tap(&mut p, "tab-home");
+        assert!(
+            p.host.kernel().find_by_test_id("linked").is_empty(),
+            "the row stays gone"
+        );
         assert_eq!(split(&p).root, home);
+        assert_eq!(split(&p).list, Some(rows));
         assert_eq!(p.host.kernel().node(home).unwrap().frame.width, 1200.);
         assert_eq!(cover(&p, home), Some(HostCover::Edges([0., 880., 0., 0.])));
     }
