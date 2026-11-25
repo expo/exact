@@ -640,7 +640,7 @@ impl Wanted {
 /// The items a drop's URI list (RFC 2483), titled link and text give: each
 /// local `file:` URI a path, the first other URI the link, else the titled
 /// link's URL, and the text as it came.
-fn items(uris: &[u8], link: &[u8], text: &[u8]) -> Dropped {
+pub(super) fn items(uris: &[u8], link: &[u8], text: &[u8]) -> Dropped {
     let mut dropped = Dropped {
         text: String::from_utf8_lossy(text).into_owned(),
         ..Default::default()

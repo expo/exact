@@ -5,6 +5,7 @@ mod accessibility;
 mod caret;
 mod drop;
 mod input;
+mod lift;
 
 use crate::event_loop::LocalPlan;
 use exact_painted::app::{boot_presenter, Config};
