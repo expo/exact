@@ -24,7 +24,7 @@ import { besidePattern } from '../host/web/beside.mjs';
 import { chooseSimulator, phone, simulatorLaunch, simulatorTempDirectory } from '../host/apple/devices.mjs';
 import { androidDevice } from './agent-android.mjs';
 import { bakeOutput, gpuModules, linuxBinary, moduleDirectory, pendingBuildInputs, readBuilds, resolveApp, windowsFile, shaderWatchRoots, webDist } from './app.mjs';
-import { directoryInputSnapshot, outputRoots, packageTests, watchedTree, watchOutput } from './cargo-dep-info.mjs';
+import { directoryInputSnapshot, missingInputChanges, outputRoots, packageTests, sameWatchedDirectory, sameWatchedFile, watchedTree, watchLinkTrace, watchOutput } from './cargo-dep-info.mjs';
 import { HOST_CRATES } from './cargo-check.mjs';
 import { partitionWebRoots, webSourceRoots } from '../host/web/build.mjs';
 import { changedContractReads } from './web-build.mjs';
@@ -779,13 +779,7 @@ export function launchEnvironment(facts, host) {
   return {...(facts.substitutes && host !== 'web' ? {EXACT_AGENT_SUBSTITUTES: JSON.stringify({ values: facts.substitutes, restore: !!facts.restoreSubstitutes, target: host })} : {}), EXACT_AGENT_SEED: String(facts.seed), EXACT_AGENT_LOCALE: facts.locale, EXACT_AGENT_TIME_ZONE: facts.timeZone, EXACT_AGENT_EPOCH: String(facts.epoch), ...(facts.formatLocale ? {EXACT_AGENT_FORMAT_LOCALE: facts.formatLocale} : {}), ...(facts.failFetch ? {EXACT_AGENT_FAIL_FETCH: facts.failFetch} : {})};
 }
 
-// A build older than what it was made from is refused before launch
-// (LLP 1012.001.000 D1), so a drive never verifies yesterday's app. Each build
-// answers from its own record of its inputs: Cargo's dep-info, the Apple
-// receipt, and the web marker's source digests and dependency roots.
-// These detect staleness; passing them is not proof of freshness. A
-// binary the caller names (EXACT_LINUX_BIN, EXACT_MAC_BIN) is the caller's
-// own: the driver says it did not check. A served page (--url) is its server's.
+// Each carrier checks the inputs its build recorded (LLP 1012.001.000 D1).
 export const shown = path => within(ROOT, path) ? relative(ROOT, path) : path;
 const listed = changed => changed.slice(0, 3).join(', ') + (changed.length > 3 ? ` and ${changed.length - 3} more` : '');
 
@@ -853,13 +847,11 @@ export function watchedNewer(since, paths, directories = [], products = new Map(
   for (const root of paths) {
     const output = watchOutput(outputs, [root], roots);
     const ignored = skipFor(root), skip = (path, directory) => products.has(path) || ignored(path, directory);
-    const filtered = snapshot => ({...snapshot,
-      entries:snapshot.entries?.filter(({name, directory}) => !skip(resolve(snapshot.path, name), directory)) ?? null});
     // Captured entries already exclude outputs. Resolving them against today's
     // links would erase a source that has since been retargeted into an output.
     const previousRoot = inventory.get(root);
     let rootLink; try { rootLink = readlinkSync(root); } catch { /* not a link */ }
-    if (previousRoot && previousRoot.link !== rootLink) changed.push(shown(root));
+    if (previousRoot && (previousRoot.link !== rootLink || (previousRoot.via ?? undefined) !== watchLinkTrace(root))) changed.push(shown(root));
     for (const node of watchedTree([root], {outputs, skip, roots})) {
       const {path, info, link, snapshot, error, cycle} = node;
       if (error) {
@@ -868,11 +860,11 @@ export function watchedNewer(since, paths, directories = [], products = new Map(
       } else if (snapshot) {
         const previous = inventory.get(path);
         if (previous) {
-          if (JSON.stringify(filtered(snapshot)) !== JSON.stringify(filtered(previous))) changed.push(shown(path));
+          if (!sameWatchedDirectory(previous, snapshot, skip)) changed.push(shown(path));
         } else if (info.mtimeMs > since) {
           // Without an inventory, a skipped entry's birth can explain a directory's newer mtime.
           let created = -Infinity;
-          for (const entry of directoryInputSnapshot(path).entries ?? []) {
+          for (const entry of directoryInputSnapshot(path, undefined, false).entries ?? []) {
             const child = resolve(path, entry.name);
             if (skip(child, entry.directory) || output(child, entry.directory)) {
               try { created = Math.max(created, statSync(child).birthtimeMs || -Infinity); } catch { /* gone */ }
@@ -880,8 +872,11 @@ export function watchedNewer(since, paths, directories = [], products = new Map(
           }
           if (packageTests(path) || info.mtimeMs > created + 1) changed.push(shown(path));
         }
-      } else if (!cycle && ((inventory.has(path) && inventory.get(path).error !== 'ENOTDIR') || info.mtimeMs > since)) changed.push(shown(path));
-      if (link !== undefined && !inventory.has(path) && lstatSync(path).mtimeMs > since) changed.push(shown(path));
+      } else if (!cycle && (path === root || !inventory.has(dirname(path)))) {
+        const prior = inventory.get(path) ?? inventory.get(dirname(path))?.entries?.find(entry => entry.name === basename(path));
+        if (prior ? prior.link !== link || !sameWatchedFile(path, prior) : info.mtimeMs > since || (link !== undefined && lstatSync(path).mtimeMs > since)) changed.push(shown(path));
+      }
+      if (link !== undefined && !inventory.has(path) && !inventory.has(dirname(path)) && lstatSync(path).mtimeMs > since) changed.push(shown(path));
     }
   }
   return [...new Set(changed)];
@@ -1113,7 +1108,6 @@ export function receiptChanges(receipt, app, { hashed = false, launch, retained 
   // The Apple crates are read by digest below; every other host's are no input.
   const hosts = otherHosts(app);
   const own = newerThan(since, [app.dir], path => hosts(path) || skip(path));
-  own.push(...sourceInputChanges(build?.typescriptSources).map(shown));
   // Platform-local modules live under the host crate directory skipped above,
   // but their separate dylib's sources are absent from the binary receipt.
   const platform = target.includes('-ios') ? 'ios' : 'macos';
@@ -1144,13 +1138,16 @@ export function receiptChanges(receipt, app, { hashed = false, launch, retained 
     if (record) {
       ({paths:baked, missing} = record);
       directories = [...directories, ...record.watchedDirectories];
-      unread = missing.filter(existsSync).map(shown);
+      unread = missingInputChanges(missing, record.watchedDirectories).map(shown);
+      if (record.unstable) unread.push(shown(record.unstable));
     } else unread = [shown(resolve(build.linkedPlan, 'inputs.json'))];
   }
   // Absence recorded by Cargo or the linked bake is unchanged while absent; first creation counts even at an old mtime.
   const absent = new Set([...(build?.binary?.missing ?? []), ...missing]), stillAbsent = path => { const at = resolve(ROOT, path); return absent.has(at) && !existsSync(at); };
   const tools = info || retained ? [...(info ? depInfoNewer(since, null, info, app.workspace, directories, products, outputs) : []), ...watchedNewer(since, baked, directories, products, outputs)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path)) : [];
-  return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build, { launch }) : []), ...own.filter(path => !products.has(resolve(ROOT, path))), ...tools, ...unread, ...replaced])];
+  const recorded = new Map(directories.flatMap(row => row.entries?.map(entry => [resolve(row.path, entry.name), entry]) ?? [[row.path, row]]));
+  const newer = own.filter(name => { const path = resolve(ROOT, name), file = recorded.get(path); return !products.has(path) && !(file?.sha256 && sameWatchedFile(path, file)); });
+  return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build, { launch }) : []), ...newer, ...sourceInputChanges(build?.typescriptSources).filter(path => !products.has(resolve(path))).map(shown), ...tools, ...unread, ...replaced])];
 }
 
 /** What a web build of `app` reads, modified after `since` (every file by default):

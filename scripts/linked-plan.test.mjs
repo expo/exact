@@ -511,8 +511,13 @@ test.skipIf(process.platform === 'win32').each(['file', 'directory', 'file link'
     expect(statSync(source).mtimeMs).toBe(old.getTime());
     expect(runs()).toBe('baked\n');
     bake(); expect(runs()).toBe('baked\n');
-    utimesSync(source, new Date(), new Date());
+    const inventory = () => JSON.parse(readFileSync(resolve(baked, 'inputs.json'), 'utf8')).watchedDirectories;
+    const previousInventory = inventory();
+    writeFileSync(source + '.replacement', readFileSync(source)); renameSync(source + '.replacement', source);
     bake(); expect(runs()).toBe('baked\n');
+    expect(inventory()).not.toEqual(previousInventory);
+    const {packageDirectories} = await import('./cargo-dep-info.mjs');
+    expect(inventory()).toEqual(packageDirectories([watched], outputs));
     if (kind.includes('directory')) {
       for (const output of outputs) writeFileSync(resolve(output, 'product'), 'changed output');
       bake(); expect(runs()).toBe('baked\n');
@@ -603,6 +608,12 @@ test.skipIf(process.platform === 'win32').each(['known', 'discovered', 'bootstra
         try { bake(); } finally { setSystemTime(); }
         expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe('SECOND');
       }
+      const {linkedInputs} = await import('./linked-plan.mjs');
+      const {apkChanges} = await import('./agent-stdio.mjs');
+      const apk = resolve(baked, 'fixture.apk'), unstable = linkedInputs(baked);
+      writeFileSync(resolve(baked, 'exact-build.json'), JSON.stringify({started:new Date().toISOString(), workspace:dir,
+        libraries:[resolve(dir, 'library.so')], sources:[], bakes:[{...unstable, products:[]}]}));
+      expect(apkChanges({target:dir}, apk)).toContain(resolve(baked, 'inputs.json').replace(resolve(import.meta.dir, '..') + '/', ''));
       bake(); expect(readFileSync(resolve(baked, 'app.plan'), 'utf8')).toBe(kind === 'removed' ? 'ABSENT' : 'RESTORED');
       const record = readFileSync(resolve(baked, 'inputs.json'), 'utf8');
       bake(); expect(readFileSync(resolve(baked, 'inputs.json'), 'utf8')).toBe(record);
@@ -860,6 +871,8 @@ test.skipIf(process.platform === 'win32').each(['bootstrap', 'rebake'])('a %s li
     mkdirSync(resolve(pkg, 'shared')); writeFileSync(resolve(pkg, 'shared/input'), 'source');
     symlinkSync('shared', resolve(pkg, 'source-link'), 'dir');
     symlinkSync(env.EXACT_BAKE_OUTPUT, resolve(pkg, 'output-link'), 'dir');
+    const product = resolve(env.EXACT_BAKE_OUTPUT, 'generated.ts');
+    writeFileSync(product, 'generated'); symlinkSync(product, resolve(pkg, 'alias.kt'));
     const stdout = `cargo:rerun-if-changed=${pkg}\n`;
     writeFileSync(executable, `#!/bin/sh\nset -e\nprintf baked > "$OUT_DIR/app.plan"\nprintf '{}' > "$OUT_DIR/compat.json"\necho '${stdout.trim()}'\n`, {mode:0o755});
     writeFileSync(resolve(baked, 'app.plan'), 'initial'); writeFileSync(resolve(baked, 'compat.json'), '{}');
@@ -872,7 +885,8 @@ test.skipIf(process.platform === 'win32').each(['bootstrap', 'rebake'])('a %s li
     mkdirSync(dirname(info), {recursive:true}); writeFileSync(info, `archive: ${resolve(pkg, 'source')}\n`);
     const receipt = resolve(app, 'receipt.json');
     writeFileSync(receipt, JSON.stringify({target:'aarch64-apple-darwin', started:new Date(since).toISOString(),
-      build:{linkedPlan:baked, linkedInputs:record, binary:{inputs:[], missing:[], directories:[], watchOutputs:outputs}}}));
+      build:{linkedPlan:baked, linkedInputs:record, products:[{path:product, sha256:createHash('sha256').update('generated').digest('hex')}],
+        typescriptSources:{reads:[{path:product, kind:'absent'}]}, binary:{inputs:[], missing:[], directories:[], watchOutputs:outputs}}}));
     const fresh = () => {
       expect(watchedNewer(since, record.paths, record.watchedDirectories, new Map(), outputs)).toEqual([]);
       expect(receiptChanges(receipt, fixture)).toEqual([]);
@@ -1084,5 +1098,60 @@ test.skipIf(process.platform === 'win32')('a linked inventory excludes a Cargo b
     recordRustBake(env, outputs);
     const record = linkedInputs(baked);
     expect(watchedNewer(since, record.paths, record.watchedDirectories, new Map(), outputs)).toEqual([]);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
+test.skipIf(process.platform === 'win32')('APK watches compare a replaced source by content before and after a rebuild', async () => {
+  const {apkChanges} = await import('./agent-stdio.mjs');
+  const {packageDirectories, watchedDigest} = await import('./cargo-dep-info.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'apk-module-rewrite-'));
+  try {
+    const module = resolve(dir, 'modules/android'), source = resolve(module, 'Module.kt');
+    const apk = resolve(dir, 'app.apk'), library = resolve(dir, 'lib.so'), target = resolve(dir, 'target');
+    mkdirSync(module, {recursive:true}); writeFileSync(source, 'first'); writeFileSync(apk, 'apk');
+    const paths = [module, source], watchedDirectories = packageDirectories(paths), digest = watchedDigest(paths, []);
+    const record = started => writeFileSync(resolve(dir, 'exact-build.json'), JSON.stringify({
+      started, bakeStarted:started, workspace:dir, sources:[], libraries:[library],
+      bakes:[{paths, missing:[], products:[], watchedDirectories}],
+    }));
+    const changes = () => apkChanges({target}, apk);
+    record(new Date(Date.now() + 60000).toISOString()); expect(changes()).toEqual([]);
+    writeFileSync(source + '.new', 'first'); renameSync(source + '.new', source);
+    expect(watchedDigest(paths, [])).toBe(digest); expect(changes()).toEqual([]);
+    record(new Date(0).toISOString()); expect(changes()).toEqual([]);
+    writeFileSync(library.replace(/\.so$/, '.d'), `${library}: ${source}\n`);
+    expect(changes()).toContain(source); // Cargo's own read has no content receipt.
+    rmSync(library.replace(/\.so$/, '.d'));
+    writeFileSync(source, 'other'); expect(changes()).toContain(module);
+    writeFileSync(source, 'first'); expect(changes()).toEqual([]);
+    const nested = resolve(module, 'newpkg');
+    mkdirSync(nested); writeFileSync(resolve(nested, 'New.kt'), 'new'); expect(changes()).toContain(module);
+    rmSync(nested, {recursive:true}); expect(changes()).toEqual([]);
+    rmSync(source); expect(changes()).toContain(module);
+    writeFileSync(source, 'first'); chmodSync(source, 0o664); expect(changes()).toEqual([]);
+    expect(watchedDigest(paths, [])).toBe(digest);
+    chmodSync(source, 0o755); expect(changes()).toContain(module); expect(watchedDigest(paths, [])).not.toBe(digest);
+  } finally { rmSync(dir, {recursive:true, force:true}); }
+});
+
+test.skipIf(process.platform === 'win32')('a watch records indirect link targets even when both reach the same bytes', async () => {
+  const {packageDirectories, watchedDigest} = await import('./cargo-dep-info.mjs');
+  const {watchedNewer} = await import('./agent-launch.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'watch-indirect-'));
+  try {
+    const src = resolve(dir, 'src'), link = resolve(src, 'Module.kt'), current = resolve(dir, 'current');
+    mkdirSync(src); writeFileSync(resolve(dir, 'original'), 'one'); symlinkSync('original', resolve(dir, 'other'));
+    symlinkSync('original', current); symlinkSync('../current', link);
+    const paths = [src, link], before = packageDirectories(paths), digest = watchedDigest(paths, []);
+    expect(watchedNewer(Infinity, paths, before)).toEqual([]);
+    rmSync(current); symlinkSync('other', current);
+    expect(watchedDigest(paths, [])).not.toBe(digest);
+    expect(watchedNewer(Infinity, paths, before)).toContain(src);
+    const {missingInputChanges} = await import('./cargo-dep-info.mjs');
+    rmSync(current); symlinkSync('missing-a', current);
+    const absent = packageDirectories([link]);
+    expect(missingInputChanges([link], absent)).toEqual([]);
+    rmSync(current); symlinkSync('missing-b', current);
+    expect(missingInputChanges([link], absent)).toEqual([link]);
   } finally { rmSync(dir, {recursive:true, force:true}); }
 });
