@@ -185,26 +185,6 @@ fn punctuation(c: char) -> bool {
     c.is_ascii_punctuation() || (!c.is_alphanumeric() && !c.is_whitespace() && !c.is_ascii())
 }
 
-fn url_scheme(tail: &str) -> Option<usize> {
-    if tail.starts_with("https://") {
-        Some(8)
-    } else if tail.starts_with("http://") {
-        Some(7)
-    } else {
-        None
-    }
-}
-
-fn valid_domain(host: &str) -> bool {
-    let mut labels = host.rsplit('.');
-    let mut valid_label = || {
-        labels
-            .next()
-            .is_some_and(|label| !label.is_empty() && !label.contains('_'))
-    };
-    valid_label() && valid_label() && labels.all(|label| !label.is_empty())
-}
-
 pub(crate) fn angle_destination(
     cs: &[(usize, char)],
     start: usize,
@@ -466,68 +446,48 @@ impl Scanner<'_> {
     }
 
     fn bare_url(&mut self, i: usize, hi: usize) -> Option<usize> {
-        let start = i + url_scheme(&self.source[self.pos(i)..])?;
-        let mut host_end = start;
-        while host_end < hi {
-            let c = self.ch(host_end);
-            if !c.is_alphanumeric() && !matches!(c, '-' | '_' | '.') {
+        let tail = &self.source[self.pos(i)..];
+        let scheme = if tail.starts_with("https://") {
+            8
+        } else if tail.starts_with("http://") {
+            7
+        } else {
+            return None;
+        };
+        let mut j = i;
+        while j < hi && !self.ch(j).is_whitespace() && !matches!(self.ch(j), '<' | '>') {
+            j += 1;
+        }
+        let mut open = self.cs[i..j].iter().filter(|c| c.1 == '(').count();
+        let mut shut = self.cs[i..j].iter().filter(|c| c.1 == ')').count();
+        while j > i + scheme {
+            let last = self.ch(j - 1);
+            if matches!(
+                last,
+                '.' | ',' | ';' | ':' | '!' | '?' | '\'' | '"' | '*' | '_' | '~'
+            ) || (last == ')' && shut > open)
+            {
+                j -= 1;
+                match last {
+                    ')' => shut -= 1,
+                    '(' => open -= 1,
+                    _ => {}
+                }
+            } else {
                 break;
             }
-            host_end += 1;
         }
-        let host = &self.source[self.pos(start)..self.pos(host_end)];
-        let domain = host.trim_end_matches(['.', '_']);
-        if !valid_domain(domain) {
+        if j <= i + scheme {
             return None;
         }
-        let needs_trim = host.len() != domain.len();
-        let mut end = host_end;
-        let mut parens = 0;
-        while end < hi && !self.ch(end).is_whitespace() && self.ch(end) != '<' {
-            // Another scheme cannot be trimmed off. Stop here so rejected
-            // candidates cannot all rescan the same path.
-            if needs_trim
-                && self.ch(end) == 'h'
-                && url_scheme(&self.source[self.pos(end)..]).is_some()
-            {
-                return None;
-            }
-            parens += match self.ch(end) {
-                '(' => -1,
-                ')' => 1,
-                _ => 0,
-            };
-            end += 1;
-        }
-        while end > start {
-            match self.ch(end - 1) {
-                '?' | '!' | '.' | ',' | ':' | '*' | '_' | '~' => {}
-                ')' if parens > 0 => parens -= 1,
-                ';' => {
-                    let mut amp = end - 1;
-                    while amp > start && self.ch(amp - 1).is_ascii_alphanumeric() {
-                        amp -= 1;
-                    }
-                    if amp == end - 1 || amp == start || self.ch(amp - 1) != '&' {
-                        break;
-                    }
-                    end = amp;
-                }
-                _ => break,
-            }
-            end -= 1;
-        }
-        if needs_trim && end > host_end {
-            return None;
-        }
-        let range = self.pos(i)..self.pos(end);
+        let range = self.pos(i)..self.pos(j);
         let href = self.source[range.clone()].to_string();
         self.out.marks.push(Mark {
             range,
             flags: LINK,
             href: Some(href),
         });
-        Some(end)
+        Some(j)
     }
 
     /// `[label](target)`, `![alt](src)` or `[^label]`, from the `[` at `i`.

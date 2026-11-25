@@ -223,20 +223,28 @@ fn url_backslashes_are_literal() {
 }
 
 #[test]
-fn extended_urls_use_gfm_boundaries_and_trim() {
+fn extended_urls_keep_their_existing_extent() {
     for (source, url) in [
-        ("https://x.dev/a>?<rest", "https://x.dev/a>"),
+        ("https://x.dev/a>?<rest", "https://x.dev/a"),
         ("(http://x.dev/a_(b))).!?,:", "http://x.dev/a_(b)"),
         ("https://x.dev/a)(b)/c", "https://x.dev/a)(b)/c"),
-        ("https://x.dev/a&hl;?!", "https://x.dev/a"),
-        ("https://x.dev/a)&a1;", "https://x.dev/a"),
-        ("https://x.dev/a&;", "https://x.dev/a&;"),
-        ("https://x.dev/a;", "https://x.dev/a;"),
-        ("https://x.dev/a'", "https://x.dev/a'"),
-        ("https://x.dev/a\"", "https://x.dev/a\""),
+        ("https://x.dev/a&hl;?!", "https://x.dev/a&hl"),
+        ("https://x.dev/a)&a1;", "https://x.dev/a)&a1"),
+        ("https://x.dev/a&;", "https://x.dev/a&"),
+        ("https://x.dev/a;", "https://x.dev/a"),
+        ("https://x.dev/a'", "https://x.dev/a"),
+        ("\"see https://x.dev\"", "https://x.dev"),
+        ("http://localhost/a", "http://localhost/a"),
+        ("https://x..dev/a", "https://x..dev/a"),
+        ("https://x_.dev/a", "https://x_.dev/a"),
+        ("https://x.dev_/a", "https://x.dev_/a"),
+        ("https://x.dev_ab", "https://x.dev_ab"),
         ("https://a_b.x.dev/a", "https://a_b.x.dev/a"),
         ("https://x.dev_ next", "https://x.dev"),
-        ("https://x.dev_?*https://y.dev/a", "https://y.dev/a"),
+        (
+            "https://x.dev_?*https://y.dev/a",
+            "https://x.dev_?*https://y.dev/a",
+        ),
     ] {
         assert_spans(source, &[(url, LINK, url)]);
     }
@@ -245,9 +253,6 @@ fn extended_urls_use_gfm_boundaries_and_trim() {
         r"x\https://x.dev",
         "ahttps://x.dev",
         "https://",
-        "https://x_.dev/a",
-        "https://x.dev_/a",
-        "http://localhost/a",
     ] {
         assert_spans(source, &[]);
     }
