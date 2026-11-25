@@ -5593,7 +5593,8 @@ unless a `pointerup` handler calls `preventDefault()`. `wheel` hands a `WheelEve
 modifiers; a trackpad pinch is a Control-held wheel) and `preventDefault()` keeps
 the scroll from happening; `drop` hands a `DragEvent` whose `files` are `doc:`
 handles of any type, a folder's included, with the drag's `text` and `url`,
-and takes a file drag over a field inside its node; an app can show a drop
+and takes a file drag over a field inside its node (a dropped file is lent:
+copy an attachment the app keeps, [taking a drop](recipes/drag-in.md)); an app can show a drop
 overlay at `dragenter`, which the `drop` action clears when the drop lands
 and `dragleave` clears otherwise; a `paste`'s `ClipboardEvent` carries `files` too. See
 [Pointer](contract-grammar.md#pointer) and [Clipboard](contract-grammar.md#clipboard).

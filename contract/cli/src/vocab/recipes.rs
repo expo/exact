@@ -43,6 +43,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("declared-source"),
     recipe!("device"),
     recipe!("displays"),
+    recipe!("drag-in"),
     recipe!("drag-out"),
     recipe!("eas-android"),
     recipe!("eas-ios"),

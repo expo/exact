@@ -73,6 +73,7 @@ routes nav
   recipeDeclaredSource "/recipes/declared-source" render=build activate=idle
   recipeDevice "/recipes/device" render=build activate=idle
   recipeDisplays "/recipes/displays" render=build activate=idle
+  recipeDragIn "/recipes/drag-in" render=build activate=idle
   recipeDragOut "/recipes/drag-out" render=build activate=idle
   recipeEasAndroid "/recipes/eas-android" render=build activate=idle
   recipeEasIos "/recipes/eas-ios" render=build activate=idle

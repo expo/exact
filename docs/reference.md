@@ -6218,7 +6218,9 @@ Read the new file and let the person choose.
 **Documents kept across launches** (LLP 1069.010.000 stage 2; macOS, the
 web, and Linux in a desktop session). An
 app granted `doc.keep` keeps exactly what the person chose — a file or folder
-from a picker, Finder, ⌘O, Open Recent, the command line or a drop; never a
+from a picker, Finder, ⌘O, Open Recent or the command line, and on macOS and
+the web a dropped file of a type the manifest declares (not the copy of a
+Mac promise, nor a browser's read-only copy; Linux keeps no drop); never a
 typed path, a followed link, or a route's folder — and its `doc:/<n>/<name>`
 reads again after a relaunch, in any of the app's windows, with no panel.
 The kept set is File ▸ Open Recent's: Clear Menu, or an entry falling off
@@ -6279,9 +6281,9 @@ On Linux the list is the desktop's recent files (`recently-used.xbel`),
 each entry marked with the app's id, and the person clears it there. The
 path is the handle: a kept document moved, or replaced at its path, is
 forgotten rather than followed. Only a desktop session keeps anything; a
-headless run, a drive and the DRM kiosk keep and list nothing. The Linux
-host has no file chooser of its own yet, so today nothing there is chosen
-to keep. iOS keeps nothing.
+headless run, a drive and the DRM kiosk keep and list nothing. What the
+person chooses in the desktop portal's file chooser is kept; a file dropped
+on a Linux window never is. iOS keeps nothing.
 
 On the web a kept document is the `FileSystemHandle` the browser gave,
 kept in the page's IndexedDB, at most 20 of them; clearing the site's data
@@ -6321,7 +6323,9 @@ not as path text in the field; a drag of plain text over a field is the
 field's unless the field declares `drop`, and on Windows, where a field takes
 no drag, it lands on the `drop` above. An app can show an overlay at
 `dragenter`; the `drop` action clears it when the drop lands, and
-`dragleave` otherwise ([grammar](contract-grammar.md#pointer)):
+`dragleave` otherwise ([grammar](contract-grammar.md#pointer)). A dropped
+file is lent, not given: an app copies an attachment it keeps into
+`app:/data` ([taking a drop](recipes/drag-in.md)):
 
 ```text
 action took(e: DragEvent)

@@ -1334,8 +1334,8 @@ report unsupported. Scope these tests with `on web`.
 the driver's drop (the agent's `tap <t> drop`) at the node's middle: a drag
 from another app carrying the files, each `file` once and its path from the
 test file's folder, the plain text and the link, at least one of them
-([Pointer](#pointer), `drop`). It runs where drops do: the web, macOS, iOS
-and Windows.
+([Pointer](#pointer), `drop`). It runs where drops do
+([the reference's table](reference.md#files-dropped-or-pasted)).
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
@@ -2597,7 +2597,10 @@ it before following it. Each is `""` when the drag has none, so a link
 whose source gives no plain text has `text` `""`. Each file
 arrives as a `doc:` handle, whatever its type, on the hosts that take files (the reference's table), and a dropped folder, on a host that takes one, is a folder's handle (`fs.stat` says
 `isDirectory`, `fs.readdir` lists it); the app never learns an absolute
-path. A drag with files over an `input` or a `textarea` inside such a node
+path. A dropped file is lent, not given: its handle reads the source's file,
+which may change or be deleted, or the session's copy, and a handle not kept
+ends with its window, so an app copies an attachment it keeps into
+`app:/data` ([recipe](recipes/drag-in.md)). A drag with files over an `input` or a `textarea` inside such a node
 is the node's, as on the web, where its listener prevents the field's own
 drop: the field inserts no path text. A drag of text over a field is the
 field's, which inserts it, unless the field itself declares `drop`. On the

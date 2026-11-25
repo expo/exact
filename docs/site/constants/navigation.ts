@@ -111,6 +111,7 @@ export const sections: NavSection[] = [
       'content-design': 'Chrome is the platform\'s; the content is yours: rows, grouping, where actions sit.',
       convex: '@exact/convex keeps Convex queries live over one socket, with nothing polled.',
       displays: '@exact/window-management (LLP 1178): the displays by the web\'s Window Management API, and where the pointer is, which the web cannot ask.',
+      'drag-in': 'A node with drop takes files, text and links from other apps; a dropped file is lent, so the app copies attachments it keeps.',
       'drag-out': 'A node a person will lift and drop into another app says so with HTML\'s draggable attribute and declares what the drag carries.',
       'edit-sheet': 'A row that opens its item\'s sheet is a link: a tap, a deep link and Back all arrive at follow.',
       'editable-rows': 'Rows added and removed while editing: each row\'s remove is a red minus-circle and a swipe; Add is the section\'s last row.',
