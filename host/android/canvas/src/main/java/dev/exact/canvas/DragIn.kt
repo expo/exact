@@ -65,11 +65,11 @@ internal class DragIn(private val root: View) {
      * exact2 once, then, whether it is what is painted there and takes touches, and who takes a drop over it
      * ([Exact.fieldDrop]). It gives the root the drop when another node is painted there, when it takes no touch
      * (disabled, or covered), when its own node takes drops, or when a node above it does and an item is a file: a
-     * `content:` item its provider types as no text, so a text file stays the field's (D2). Meanwhile the frame's state
-     * ([FieldText.dropOwner], [FieldText.inert]) only keeps its `EditText` from marking a drop place that is not its.
+     * `content:` item its provider types as no text, so a text file stays the field's (D2). The frame's state
+     * ([FieldText.ownsDrops], [FieldText.inert]) decides only whether its `EditText` marks a drop place during the hover.
      */
     fun field(field: FieldText, event: DragEvent): Boolean? {
-        val own = field.inert || field.dropOwner == 1
+        val own = field.inert || field.ownsDrops
         return when (event.action) {
             DragEvent.ACTION_DRAG_STARTED -> if (own) true else null
             DragEvent.ACTION_DRAG_LOCATION -> {
@@ -82,20 +82,21 @@ internal class DragIn(private val root: View) {
                 val (x, y) = inRoot(field, event)
                 val owner = Exact.fieldDrop(field.node, x, y)
                 val file = owner == 2 && event.clipData?.let { holdsFile(it, field.context.contentResolver) } == true
-                if (owner == -1 || owner == 1 || file) drop(event, x, y) else null
+                if (owner == -1 || owner == 1 || file) drop(event, x, y) else { landed = x to y; null }
             }
             else -> null
         }
     }
 
-    /** Hosted field [field] took the drop [event] carried, or refused it: the nodes under the drag where it dropped
-     * hear the enters it waited for, then their leave (D2). A drag that carries nothing exact2 takes was never told. */
-    fun fieldDropped(field: FieldText, event: DragEvent) {
+    /** Where the drop a field keeps landed, in the root's pixels ([field]). */
+    private var landed = 0f to 0f
+
+    /** A hosted field took the drop, or refused it: the nodes under the drag where it dropped hear the enters it
+     * waited for, then their leave (D2). A drag that carries nothing exact2 takes was never told. */
+    fun fieldDropped() {
         main.removeCallbacks(exit)
         settled = true
-        if (!carries) return
-        val (x, y) = inRoot(field, event)
-        Exact.dragDropped(x, y)
+        if (carries) Exact.dragDropped(landed.first, landed.second)
     }
 
     /** [event]'s point, which Android gives in [field]'s own pixels, in the root's. */

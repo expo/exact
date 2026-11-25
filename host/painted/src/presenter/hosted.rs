@@ -111,11 +111,11 @@ pub mod action {
 
 /// A statement's flags for a field: it was painted, so its box is where
 /// its view goes; it takes no touch or focus (disabled, or under a route
-/// that covers it); and its own node, or a node above it, takes a drop.
+/// that covers it); and its own node takes a drop, so its editor marks no
+/// drop place under a drag (LLP 1094.001 D5).
 const PLACED: i32 = 1;
 const INERT: i32 = 2;
 const DROP_OWN: i32 = 4;
-const DROP_ABOVE: i32 = 8;
 
 /// A field's look: a `textarea`, a password, disabled, read-only, no
 /// autocorrect, no suggestions, italic, and whether Enter submits.
@@ -232,8 +232,8 @@ impl<D: DataSource> Presenter<D> {
     ///
     /// - its id, its generation, flags (bit 0 it was painted and the box
     ///   that follows is where it goes, bit 1 it takes no touch and no
-    ///   focus, bit 2 its own node takes a drop, bit 3 a node above it
-    ///   does), and the scroller whose rows it was painted among (0 none);
+    ///   focus, bit 2 its own node takes a drop), and the scroller whose
+    ///   rows it was painted among (0 none);
     /// - as float bits its content box (x, y, width, height) and the clip
     ///   it was painted under (x, y, width, height; a negative width for
     ///   none), where the last paint put them;
@@ -339,11 +339,9 @@ impl<D: DataSource> Presenter<D> {
         if inert {
             flags |= INERT;
         }
-        flags |= match self.drop_owner(id) {
-            1 => DROP_OWN,
-            2 => DROP_ABOVE,
-            _ => 0,
-        };
+        if self.drop_owner(id) == 1 {
+            flags |= DROP_OWN;
+        }
         let group = place.as_ref().map_or(0, |p| p.2);
         out.extend([id as i32, known.generation as i32, flags, group as i32]);
         let (rect, clip) = match place {

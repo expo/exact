@@ -47,12 +47,14 @@ struct Member {
     entered: bool,
 }
 
-/// An enter or a leave to send, with its record's point and modifiers.
+/// An enter or a leave to send, with its record's point and modifiers, for
+/// the drag under way (`drop` none) or for pending drop `drop`.
 struct Sent {
     key: NodeKey,
     kind: EventKind,
     point: (f32, f32),
     held: KeyModifiers,
+    drop: Option<u32>,
 }
 
 impl DragIn {
@@ -65,23 +67,40 @@ impl DragIn {
         };
     }
 
-    fn send(&mut self, key: NodeKey, kind: EventKind, point: (f32, f32), held: KeyModifiers) {
+    fn send(
+        &mut self,
+        key: NodeKey,
+        kind: EventKind,
+        at: ((f32, f32), KeyModifiers),
+        drop: Option<u32>,
+    ) {
+        let (point, held) = at;
         self.outbox.push_back(Sent {
             key,
             kind,
             point,
             held,
+            drop,
         });
     }
 
-    /// `key` heard no enter after all: it hears no leave either.
-    fn unentered(&mut self, key: NodeKey) {
-        let chains = self.pending.iter_mut().flat_map(|p| p.chain.iter_mut());
-        for m in self.chain.iter_mut().chain(chains).filter(|m| m.key == key) {
+    /// `key` heard no enter of the drag under way, or of pending drop
+    /// `drop`, after all, so it hears no leave of that one either; another's
+    /// is still owed.
+    fn unentered(&mut self, key: NodeKey, drop: Option<u32>) {
+        let chain = match drop {
+            None => Some(&mut self.chain),
+            Some(id) => self
+                .pending
+                .iter_mut()
+                .find(|p| p.id == id)
+                .map(|p| &mut p.chain),
+        };
+        for m in chain.into_iter().flatten().filter(|m| m.key == key) {
             m.entered = false;
         }
         self.outbox
-            .retain(|s| !(s.key == key && s.kind == EventKind::Dragleave));
+            .retain(|s| !(s.key == key && s.drop == drop && s.kind == EventKind::Dragleave));
     }
 }
 
@@ -98,12 +117,13 @@ struct Pending {
 }
 
 impl<D: DataSource> Presenter<D> {
-    /// The drag is at `point`: the innermost node that takes a drop there,
-    /// found before the nodes under it hear their enters and leaves.
+    /// The drag is at `point`: the nodes under it hear their enters and
+    /// leaves, then the innermost node that takes a drop there, if any, is
+    /// what a host shows its copy feedback for.
     pub fn drag_over(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<ViewId> {
-        let target = self.drag_at(point, held);
+        self.drag_at(point, held);
         self.drag_flush();
-        target
+        self.drop_target(point)
     }
 
     /// Cancel the drag, including when it leaves the window: the nodes under
@@ -154,12 +174,13 @@ impl<D: DataSource> Presenter<D> {
             return None;
         };
         let mut chain = std::mem::take(&mut self.drag_in.chain);
-        for m in chain.iter_mut().filter(|m| !m.entered) {
-            m.entered = true;
-            self.drag_in.send(m.key, EventKind::Dragenter, point, held);
-        }
         self.drag_in.last += 1;
         let id = self.drag_in.last;
+        for m in chain.iter_mut().filter(|m| !m.entered) {
+            m.entered = true;
+            self.drag_in
+                .send(m.key, EventKind::Dragenter, (point, held), Some(id));
+        }
         let target = Some(target);
         self.drag_in.pending.push(Pending {
             id,
@@ -210,11 +231,14 @@ impl<D: DataSource> Presenter<D> {
                 )
         });
         if delivered.is_none() {
+            let at = (pending.point, pending.held);
             for m in pending.chain.iter().filter(|m| m.entered) {
-                self.drag_in
-                    .send(m.key, EventKind::Dragleave, pending.point, pending.held);
+                self.drag_in.send(m.key, EventKind::Dragleave, at, Some(id));
             }
         }
+        // The failed drop's leaves go first: they can change what the drag
+        // still under way is over
+        self.drag_flush();
         if !self.drag_in.chain.is_empty() {
             let chain = self.drag_chain(self.drag_in.point);
             self.drag_crossings(chain);
@@ -372,12 +396,16 @@ impl<D: DataSource> Presenter<D> {
     fn drag_at(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<ViewId> {
         self.drag_in.point = point;
         self.drag_in.held = held;
-        let target = self
-            .drag_hit(point)
-            .and_then(|hit| self.pointer_node(hit, &[EventKind::Drop]));
+        let target = self.drop_target(point);
         let chain = self.drag_chain(point);
         self.drag_crossings(chain);
         target
+    }
+
+    /// The innermost node that takes a drop at `point`.
+    fn drop_target(&mut self, point: (f32, f32)) -> Option<ViewId> {
+        let hit = self.drag_hit(point)?;
+        self.pointer_node(hit, &[EventKind::Drop])
     }
 
     /// The drag is over `keys`, innermost first: a node it left will hear a
@@ -403,13 +431,15 @@ impl<D: DataSource> Presenter<D> {
             .iter()
             .filter(|m| m.entered && !chain.iter().any(|n| n.key == m.key))
         {
-            self.drag_in.send(m.key, EventKind::Dragleave, point, held);
+            self.drag_in
+                .send(m.key, EventKind::Dragleave, (point, held), None);
         }
         for m in chain
             .iter()
             .filter(|m| m.entered && !previous.iter().any(|p| p.key == m.key && p.entered))
         {
-            self.drag_in.send(m.key, EventKind::Dragenter, point, held);
+            self.drag_in
+                .send(m.key, EventKind::Dragenter, (point, held), None);
         }
         self.drag_in.chain = chain;
     }
@@ -420,10 +450,12 @@ impl<D: DataSource> Presenter<D> {
         let (point, held) = (self.drag_in.point, self.drag_in.held);
         let chain = std::mem::take(&mut self.drag_in.chain);
         for m in chain.iter().filter(|m| !m.entered) {
-            self.drag_in.send(m.key, EventKind::Dragenter, point, held);
+            self.drag_in
+                .send(m.key, EventKind::Dragenter, (point, held), None);
         }
         for m in &chain {
-            self.drag_in.send(m.key, EventKind::Dragleave, point, held);
+            self.drag_in
+                .send(m.key, EventKind::Dragleave, (point, held), None);
         }
     }
 
@@ -438,7 +470,7 @@ impl<D: DataSource> Presenter<D> {
             };
             let kinds = [EventKind::Dragenter, EventKind::Dragleave];
             if sent.kind == EventKind::Dragenter && self.pointer_node(id, &kinds) != Some(id) {
-                self.drag_in.unentered(sent.key);
+                self.drag_in.unentered(sent.key, sent.drop);
                 continue;
             }
             self.drag_event(id, sent.kind, sent.point, sent.held);
@@ -930,8 +962,9 @@ mod tests {
         assert!(p.drop_landed(new, &text("Fuji")).is_some());
     }
 
-    #[test]
-    fn an_enter_that_disables_the_target_at_the_release_does_not_move_the_drop() {
+    /// A zone, a button that disables itself in its own `dragenter`, in a
+    /// column that also takes drops; each counts its drops.
+    fn self_disabling_zone() -> (Presenter<()>, ViewId) {
         let source = r#"component App
   state off = false
   state outer = 0
@@ -943,7 +976,7 @@ mod tests {
   action entered(e: DragEvent)
     off = true
   view
-    column width=300 height=200 drop=toOuter
+    column width=300 height=200 testId="outer" drop=toOuter
       button "Zone" testId="inner" width=200 height=100 disabled=off drop=toInner dragenter=entered
 "#;
         let (mut p, error) = Presenter::boot_with_fixture_fonts(
@@ -957,6 +990,17 @@ mod tests {
         .unwrap();
         assert!(error.is_none(), "{error:?}");
         p.frame();
+        let kernel = p.host.kernel();
+        let outer = kernel
+            .node_by_key(kernel.find_by_test_id("outer")[0])
+            .unwrap()
+            .id;
+        (p, outer)
+    }
+
+    #[test]
+    fn an_enter_that_disables_the_target_at_the_release_does_not_move_the_drop() {
+        let (mut p, _) = self_disabling_zone();
         let id = p
             .drop_released((100., 50.), KeyModifiers::default())
             .unwrap();
@@ -974,6 +1018,16 @@ mod tests {
         assert_eq!(
             [r.slot("outer"), r.slot("inner")],
             [Some(&Value::Number(0.)), Some(&Value::Number(0.))]
+        );
+    }
+
+    #[test]
+    fn a_hover_answers_with_the_target_after_its_enters_ran() {
+        let (mut p, outer) = self_disabling_zone();
+        assert_eq!(
+            p.drag_over((100., 50.), KeyModifiers::default()),
+            Some(outer),
+            "the zone disabled itself as the drag came over it, so the column above takes the drop there"
         );
     }
 }

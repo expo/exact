@@ -151,10 +151,10 @@ class DragInTest {
     }
 
     /** Two fields, ids 1 and 2, 300 by 60 at (20, 40) and (20, 200), on a root as the reader lays them out, the second
-     * with [state] (1 placed, 4 its node takes drops, 8 a node above it does). The root, the fields and their texts. */
+     * with [state] (1 placed, 4 its node takes drops). The root, the fields and their texts. */
     private class Two(val root: Root, val fields: Fields, val first: FieldText, val second: FieldText) {
         fun tell(state: Int, clipSecond: Boolean = false) = fields.told(FieldsTest.Companion.statement(listOf(
-            FieldsTest.Companion.Told(1, 20f, 40f, 300f, 60f, 1 or 8),
+            FieldsTest.Companion.Told(1, 20f, 40f, 300f, 60f, 1),
             FieldsTest.Companion.Told(2, 20f, 200f, 300f, 60f, state, clip = if (clipSecond) floatArrayOf(0f, 0f, 400f, 100f) else null),
         )))
     }
@@ -184,7 +184,7 @@ class DragInTest {
     }
 
     @Test fun aTextDropReachesEitherOfTwoFieldsWhichInsertsIt() {
-        val two = twoFields(state = 1 or 8)
+        val two = twoFields(state = 1)
         drag(two.root, 170f, 230f)
         assertTrue(two.second.text.toString(), two.second.text.toString().contains("Fuji"))
         drag(two.root, 170f, 70f)
@@ -201,21 +201,22 @@ class DragInTest {
         assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
     }
 
-    @Test fun aFieldDecidesAtTheDropByWhoTakesItThen() {
-        val two = twoFields(state = 1 or 8)
+    @Test fun aFieldDecidesAtTheDropByWhatExact2AnswersThenNotByTheFramesState() {
+        val two = twoFields(state = 1)
         Journal.owner = 1
-        drag(two.root, 170f, 230f) { two.tell(1 or 4) }
-        assertEquals("its node took drops while the drag was over it", "2", two.second.text.toString())
+        drag(two.root, 170f, 230f)
+        assertEquals("its node takes drops as the drop lands", "2", two.second.text.toString())
         assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
         Journal.drags.clear()
+        val owned = twoFields(state = 1 or 4)
         Journal.owner = 2
-        drag(two.root, 170f, 230f) { two.tell(1 or 8) }
-        assertTrue("and no longer did when it dropped", two.second.text.toString().contains("Fuji"))
+        drag(owned.root, 170f, 230f)
+        assertTrue("its node took drops at the start and no longer does", owned.second.text.toString().contains("Fuji"))
         assertEquals(listOf("over 170 230", "dropped 170 230"), Journal.drags)
     }
 
     @Test fun aNodePaintedOverTheFieldTakesTheDropThere() {
-        val two = twoFields(state = 1 or 8)
+        val two = twoFields(state = 1)
         Journal.owner = -1
         drag(two.root, 170f, 230f)
         assertEquals("2", two.second.text.toString())
@@ -225,7 +226,7 @@ class DragInTest {
     @Test fun aRawContentUriThatIsAFileGoesAboveTheFieldAndARawWebLinkStays() {
         val resolver = RuntimeEnvironment.getApplication().contentResolver
         org.robolectric.shadows.ShadowContentResolver.registerProviderInternal("typed", Typed())
-        val two = twoFields(state = 1 or 8)
+        val two = twoFields(state = 1)
         drag(two.root, 170f, 230f, ClipData.newRawUri("photo", Uri.parse("content://typed/photo.png")))
         assertEquals("2", two.second.text.toString())
         drag(two.root, 170f, 230f, ClipData.newRawUri("link", Uri.parse("https://example.com/fuji")))
@@ -240,19 +241,24 @@ class DragInTest {
         val photo = Uri.parse("content://names/a")
         val writer = java.io.PipedOutputStream()
         shadowOf(resolver).registerInputStream(photo, java.io.PipedInputStream(writer))
-        val two = twoFields(state = 1 or 4)
-        Journal.release = 7
-        val clip = ClipData("photo", arrayOf("image/png"), ClipData.Item(photo)).apply { addItem(ClipData.Item("Glasshouse")) }
-        assertTrue(drag(two.root, 200f, 330f, clip, local = DragOut.OWN))
         val landed = { Journal.drags.filter { it.startsWith("landed") } }
-        fun settle(ms: Long) { val until = System.currentTimeMillis() + ms; while (System.currentTimeMillis() < until) { shadowOf(android.os.Looper.getMainLooper()).idle(); Thread.sleep(10) } }
-        settle(200)
-        assertEquals("the drag ended, and its copy is still reading", emptyList<String>(), landed())
-        writer.write("pixels".toByteArray()); writer.close()
-        val until = System.currentTimeMillis() + 5000
-        while (landed().isEmpty() && System.currentTimeMillis() < until) settle(20)
-        settle(200)
-        assertEquals(1, landed().size)
+        fun idle() = shadowOf(android.os.Looper.getMainLooper()).idle()
+        fun until(ms: Long, done: () -> Boolean) { val end = System.currentTimeMillis() + ms; while (!done() && System.currentTimeMillis() < end) { idle(); Thread.sleep(10) } }
+        val copiers = { Thread.getAllStackTraces().keys.filter { it.name == "exact-drop" && it.isAlive } }
+        try {
+            val two = twoFields(state = 1 or 4)
+            Journal.release = 7
+            val clip = ClipData("photo", arrayOf("image/png"), ClipData.Item(photo)).apply { addItem(ClipData.Item("Glasshouse")) }
+            assertTrue(drag(two.root, 200f, 330f, clip, local = DragOut.OWN))
+            until(200) { false }
+            assertEquals("the drag ended, and its copy is still reading", emptyList<String>(), landed())
+        } finally {
+            writer.write("pixels".toByteArray()); writer.close()
+        }
+        until(5000) { copiers().isEmpty() }
+        copiers().forEach { it.join(5000) }
+        idle()
+        assertEquals("one landing, once the copy ended", 1, landed().size)
         val items = JSONObject(landed().single().removePrefix("landed 7 "))
         assertEquals("Glasshouse", items.getString("text"))
         assertEquals("pixels", File(items.getJSONArray("paths").getString(0)).readText())
@@ -269,7 +275,7 @@ class DragInTest {
     }
 
     @Test fun aFieldClippedAwayWholeHasAPortNoDragFinds() {
-        val two = twoFields(state = 1 or 8, clipSecond = true)
+        val two = twoFields(state = 1, clipSecond = true)
         assertEquals(listOf(0, 0), (two.second.parent as View).let { listOf(it.width, it.height) })
         drag(two.root, 170f, 230f)
         assertEquals("2", two.second.text.toString())

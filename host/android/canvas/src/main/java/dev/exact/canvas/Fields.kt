@@ -44,8 +44,8 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
 
     /** The node the field is ([Fields.make]). */
     var node = 0
-    /** Who takes a drop over the field, as exact2 last told it: 0 none, 1 its own node, 2 one above it. */
-    var dropOwner = 0
+    /** Whether its own node takes drops, as exact2 last told it: its `EditText` then marks no drop place under a drag. */
+    var ownsDrops = false
     /** Whether it takes no touch and no focus (disabled, or covered), as exact2 last told it. */
     var inert = false
 
@@ -55,7 +55,7 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
         val drags = generateSequence(parent) { it.parent }.firstNotNullOfOrNull { (it as? Root)?.drags } ?: return super.onDragEvent(event)
         drags.field(this, event)?.let { return it }
         val took = super.onDragEvent(event)
-        if (event.action == android.view.DragEvent.ACTION_DROP) drags.fieldDropped(this, event)
+        if (event.action == android.view.DragEvent.ACTION_DROP) drags.fieldDropped()
         return took
     }
 
@@ -307,7 +307,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             val shown = placed && f.flags and PLACED == 0
             f.flags = w[i + 2]; f.group = w[i + 3]
             f.text.inert = f.flags and INERT != 0
-            f.text.dropOwner = if (f.flags and DROP_OWN != 0) 1 else if (f.flags and DROP_ABOVE != 0) 2 else 0
+            f.text.ownsDrops = f.flags and DROP_OWN != 0
             // A field with no place (its row was not painted) has no box to tell: it keeps the size it had.
             val nw = if (placed) max(0, fl(w[i + 6]).roundToInt()) else f.w
             val nh = if (placed) max(0, fl(w[i + 7]).roundToInt()) else f.h
@@ -828,7 +828,6 @@ internal class Fields(context: Context) : FrameLayout(context) {
         private const val PLACED = 1
         private const val INERT = 2
         private const val DROP_OWN = 4
-        private const val DROP_ABOVE = 8
         /** The look's first word ([Native.fields]). */
         private const val MULTILINE = 1
         private const val PASSWORD = 2
