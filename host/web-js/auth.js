@@ -6,15 +6,18 @@
 // reports; under the agent the request is held (D7) and `tap @t cancel` or
 // `type @t <callback URL>` answers it (agent.js). Bundled only for an app
 // whose grants name `auth.session`, `auth.apple` or `auth.google`.
-import { journal, clock, nextTicket } from "./rt.js";
+import { journal, clock, nextTicket, Origin, Invocation } from "./rt.js";
 import { trimGrant, grantWords } from "./admission.js";
 
 const say = line => journal.push(`t=${clock.now} ${line}`);
+const RANK = ["device", "wake", "tool", "action", "app"];
+const foldOrigin = (a, b) => (RANK.indexOf(b) >= 0 && (RANK.indexOf(a) < 0 || RANK.indexOf(b) < RANK.indexOf(a)) ? b : a);
 const CALLBACK = "/.exact/auth/callback";
 const authWindowName = () => 'exact-auth-' + Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
 const AUTH_RESERVATION_MS = 10 * 60 * 1000;
 const authReservations = () => ((globalThis.exact ??= {}).authReservations ??= new Map());
 const prepareAuthWindow = () => {
+  if ((Origin?.now?.() ?? "app") !== "app") return null;
   if (navigator.userActivation && !navigator.userActivation.isActive) return null;
   const id = authWindowName(), popup = window.open('about:blank', id, 'popup,width=520,height=680');
   if (!popup) return null;
@@ -138,7 +141,7 @@ function settle(ticket, status, body) {
  * `target()` names the resource or mutation whose answer is running. */
 const bent = s => /^\s*https?:/i.test(s) && /[\\\t\n\r]/.test(s);
 
-export function install(grants, target) {
+export function install(grants, target, callOf) {
   (globalThis.exact ??= {}).auth = { holds, answer };
   globalThis.authCallback = () => location.origin + CALLBACK;
   globalThis.prepareAuthSession = () => prepareAuthWindow();
@@ -159,6 +162,15 @@ export function install(grants, target) {
     const ticket = nextTicket();
     const done = (status, body) => { if (status === 200) resolve(body); else { const e = new Error(body || "the auth session failed"); Object.defineProperty(e, "status", { value: status, enumerable: true }); reject(e); } };
     const refuse = (status, why) => { say(`auth ${ticket}: answered ${status}: ${why}`); done(status, why); };
+    const active = callOf?.();
+    const originNow = foldOrigin(Origin?.now?.() ?? "app", active?.origin ?? "app");
+    if (originNow !== "app") {
+      const id = Invocation?.id || active?.invocation || 0;
+      if (id) Origin?.personRequired?.(id);
+      return refuse(403, originNow === "action"
+        ? "auth sessions are refused during a background action"
+        : `person-required (${originNow} origin)`);
+    }
     const s = { url: String(url), callback: o.callback, state: o.state, logout: !!o.logout, prepared: o.prepared, ephemeral: !!o.ephemeral };
     // A browser reads a backslash in an http(s) URL as a slash and drops tabs
     // and newlines, so such a URL can hide userinfo from parse(): refuse it unechoed.

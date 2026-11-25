@@ -1,6 +1,7 @@
 # Store::refresh_snapshot and presence::settle_entries leak mandatory user-presence secrets in plaintext and desynchronize has()/get()
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Enforced presence occupancy and value-byte invariants in presence::settle_entries, Store::occupancy, Store::adopt_occupancy, and Store::refresh_snapshot so mandatory secrets never retain plaintext bytes and optional occupancies reconcile with bytes.
 **Systems:** runner (store, user-presence secrets)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

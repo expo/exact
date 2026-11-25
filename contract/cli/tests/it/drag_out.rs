@@ -307,3 +307,62 @@ fn expect_drag_reads_each_form_and_names_them_when_it_cannot() {
     )
     .is_err());
 }
+
+#[test]
+fn scroll_into_view_commits_admit_drag_data_on_action_and_materialized_rows() {
+    let src = r#"component App
+  state badUrl = "https://example.com/ok"
+  state badFiles = ["assets/ok.jpg"]
+  state items = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
+  action poisonAndSeek
+    badUrl = "javascript:alert(1)"
+    badFiles = ["Info.plist", "app:/secret/key.txt"]
+    scrollIntoView("feed", 30, block="start")
+  view
+    column height=400 width=300
+      column draggable=true dataTransfer=DataTransfer(url=badUrl, files=badFiles) testId="outside"
+        text "outside"
+      list id="feed" virtualized=true height=200 width=300 estimated-item-height=50 testId="feed"
+        for i in items key=i
+          column height=50 draggable=true dataTransfer=DataTransfer(url=(i >= 30 ? "file:///etc/passwd" : "https://example.com/ok"), files=(i >= 30 ? ["Info.plist", "assets/ok.jpg"] : ["assets/ok.jpg"])) testId=`row-${i}`
+            text `${i}`
+"#;
+    let mut r = boot_source(src, Platform::Macos, "");
+    assert_eq!(
+        held(&r, "outside", PropId::DataTransferUrl).as_deref(),
+        Some("https://example.com/ok")
+    );
+    r.act("poisonAndSeek", vec![]).unwrap();
+    assert_eq!(held(&r, "outside", PropId::DataTransferUrl), None);
+    assert_eq!(held(&r, "outside", PropId::DataTransferFiles), None);
+    assert_eq!(held(&r, "row-30", PropId::DataTransferUrl), None);
+    assert_eq!(
+        held(&r, "row-30", PropId::DataTransferFiles).as_deref(),
+        Some("assets/ok.jpg")
+    );
+    let logged = refusals(&r);
+    assert!(
+        logged.iter().any(|l| l.contains("Info.plist")),
+        "{logged:?}"
+    );
+    assert!(
+        logged.iter().any(|l| l.contains("app:/secret/key.txt")),
+        "{logged:?}"
+    );
+    assert!(
+        logged
+            .iter()
+            .any(|l| l.contains("not an absolute http: or https: URL")),
+        "{logged:?}"
+    );
+
+    // Direct scroll_into_view_at materializing row 35 also admits drag props.
+    let feed = view(&r, "feed");
+    r.scroll_into_view_at(feed, "35", "start", "nearest")
+        .unwrap();
+    assert_eq!(held(&r, "row-35", PropId::DataTransferUrl), None);
+    assert_eq!(
+        held(&r, "row-35", PropId::DataTransferFiles).as_deref(),
+        Some("assets/ok.jpg")
+    );
+}

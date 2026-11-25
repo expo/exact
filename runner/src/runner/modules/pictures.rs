@@ -170,7 +170,7 @@ impl<D: DataSource> Runner<D> {
             return false;
         };
         let declares =
-            (self.data.grants().lines()).any(|g| g.split_whitespace().next() == Some(line));
+            (self.module_grants().lines()).any(|g| g.split_whitespace().next() == Some(line));
         let name = sub["permission"]["name"].as_str().unwrap_or_default();
         declares && self.permission_state(name) != "granted"
     }

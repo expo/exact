@@ -458,9 +458,9 @@ impl<D: DataSource> Runner<D> {
         Some(out)
     }
 
-    /// Whether the app declares grant line `line`.
+    /// Whether the active grant scope declares grant line `line`.
     pub(super) fn declares(&self, line: &str) -> bool {
-        (self.data.grants().lines()).any(|g| g.split_whitespace().next() == Some(line))
+        (self.module_grants().lines()).any(|g| g.split_whitespace().next() == Some(line))
     }
 
     /// The grant line a request of `row` asks (`asks`, LLP 1133.018 D13 item

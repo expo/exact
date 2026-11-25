@@ -823,15 +823,14 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.shareText { shared = $0 }
         waitFor("the reports are encoded") { shared != nil }
         let text = try XCTUnwrap(shared)
-        XCTAssertTrue(text.hasPrefix("Frame health, live\nA summary, then the full data for an AI agent as 2 JSON reports.\n"
-            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\n"
-            + "What was measured\nEvery UI update of this app on its screen, each one a frame."), "what it holds, then the summary: \(text)")
+        XCTAssertTrue(text.hasPrefix("# Frame health, live\n\nA summary of this app's frames, then the full data for an AI agent.\n\n"
+            + "## What was measured\n\n- Every UI update of this app on its screen, each one a frame."), "the status, then the summary: \(text)")
         let lines = text.components(separatedBy: "\n")
-        XCTAssertEqual(lines.filter { $0.hasPrefix("Agent report") }, ["Agent report 1 of 2, the screen's frames (ui-update):",
-            "Agent report 2 of 2, Exact's frame clock (\(health.source)):"])
+        XCTAssertEqual(lines.filter { $0.hasPrefix("### ") }, ["### The screen's frames (`ui-update`)", "### Exact's frames (`\(health.source)`)"])
         func report(_ source: String) throws -> [String: Any] {
-            let heading = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("Agent report") && $0.hasSuffix("(\(source)):") })
-            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(lines[heading + 1].utf8)) as? [String: Any])
+            let heading = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("### ") && $0.hasSuffix("(`\(source)`)") })
+            let fence = try XCTUnwrap(lines[heading...].firstIndex(of: "```json"))
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: Data(lines[fence + 1].utf8)) as? [String: Any])
         }
         let clock = try report(health.source)
         XCTAssertEqual(clock["source"] as? String, health.source)

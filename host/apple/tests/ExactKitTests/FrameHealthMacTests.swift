@@ -85,12 +85,15 @@ final class FrameHealthMacTests: XCTestCase {
         overlay.shareText { shared = $0 }
         waitFor("the report is encoded") { shared != nil }
         let text = try XCTUnwrap(shared)
-        let parts = text.components(separatedBy: "\n\nAgent report, Exact's frame clock (\(health.source)):\n")
+        XCTAssertTrue(text.hasPrefix("# Frame health, idle\n\nA summary of this app's frames, then the full data for an AI agent.\n\n"
+            + "## What was measured\n\n- Exact's frames\n"), "the card's status, then the summary: \(text)")
+        let parts = text.components(separatedBy: "\n\n### Exact's frames (`\(health.source)`)\n\n")
         XCTAssertEqual(parts.count, 2, text)
-        XCTAssertTrue(parts[0].hasPrefix("Frame health, idle\nA summary, then the full data for an AI agent as one JSON report.\n"
-            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\n"
-            + "What was measured\nExact's frames\n"), "what it holds, then the summary: \(text)")
-        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(parts[1].utf8)) as? [String: Any])
+        XCTAssertTrue(parts[0].hasSuffix("\n\n## Report for an agent\n\nWhere the card cannot measure the screen, on the Mac and on "
+            + "iOS before 18, there is one report. Exact's docs/contract-for-agents.md describes the JSON: search it for "
+            + "exact.frame-health/2."), text)
+        let json = try XCTUnwrap(parts[1].components(separatedBy: "```json\n").last?.components(separatedBy: "\n```").first)
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         XCTAssertEqual(report["format"] as? String, FrameHealthReport.format)
         XCTAssertEqual(report["source"] as? String, health.source)
         let pasteboard = NSPasteboard(name: .init("exact-test-\(UUID().uuidString)"))

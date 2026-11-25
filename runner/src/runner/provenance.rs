@@ -579,6 +579,13 @@ impl<D: DataSource> Runner<D> {
         (self.origins.tickets.get(&ticket).copied()).unwrap_or(Cause::none())
     }
 
+    /// Record that request `ticket` needed a person: if its owning invocation
+    /// is a live tool call, end that call `refused` (`person-required`).
+    pub(crate) fn ticket_person_required(&mut self, ticket: u64) {
+        let cause = self.ticket_cause(ticket);
+        self.as_cause(cause, |r| r.call_person_required());
+    }
+
     /// The invocation request `ticket` is owned by; 0 for none.
     pub(in crate::runner) fn ticket_id(&self, ticket: u64) -> u64 {
         self.ticket_cause(ticket).owner()

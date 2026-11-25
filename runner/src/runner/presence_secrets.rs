@@ -464,13 +464,26 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
     }
 
     /// A long native call that is a store's presence call: answered here.
-    fn presence_call(&self, r: &mut Runner<D>, body: &[u8]) -> Option<Dispatch> {
+    fn presence_call(
+        &self,
+        r: &mut Runner<D>,
+        body: &[u8],
+        grants: Option<&str>,
+    ) -> Option<Dispatch> {
         let (op, name, reason) = presence_body(body)?;
         let at = (r.presence.requests.iter()).position(|(_, b)| b == body);
         let ticket = at.map(|i| r.presence.requests.remove(i).0);
         let now = |a: Json| Some(Dispatch::Run(Work::Now(Box::new(move || response(&a)))));
         let fail = |code: &str, message: String| json!({ "error": code, "message": message });
-        let Some(presence) = r.store.presence_of(&name).cloned() else {
+        let presence = match grants {
+            Some(scope) => {
+                let effective = r.effective_grants(Some(scope));
+                r.store
+                    .with_grants(&effective, |store| store.presence_of(&name).cloned())
+            }
+            None => r.store.presence_of(&name).cloned(),
+        };
+        let Some(presence) = presence else {
             return now(fail(
                 "NotSupportedError",
                 format!("{name} is not a secret.keep name with a presence policy"),

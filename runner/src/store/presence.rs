@@ -43,10 +43,11 @@ fn entry_name(name: &str) -> String {
     format!("{}{name}", Store::PRESENCE)
 }
 
-/// Make `values` hold no bytes for a locked or pending name: a mandatory
-/// name's plain bytes with no occupancy said are pending (a host without a
-/// backend, or one that did not reconcile), and dropped. Whether any name
-/// is locked or pending.
+/// Enforce occupancy and value-byte invariants across `presence`: mandatory
+/// names never keep plain bytes (incoming bytes transition to `Pending` and
+/// are dropped); optional names keep bytes only while `Plain` and reconcile
+/// `Absent`/`Plain` against present bytes. Returns whether any name is locked
+/// or pending.
 pub(super) fn settle_entries(
     values: &mut exact_kernel::SortedMap<String, Vec<u8>>,
     presence: &[(String, Presence)],
@@ -55,15 +56,24 @@ pub(super) fn settle_entries(
     for (name, line) in presence {
         let key = entry_name(name);
         let said = values.get(&key).and_then(|w| Occupancy::from_word(w));
+        let has_bytes = values.contains_key(name);
         let occupancy = match said {
-            Some(o) => o,
-            None if values.contains_key(name) && !line.optional => Occupancy::Pending,
-            None if values.contains_key(name) => Occupancy::Plain,
-            None => Occupancy::Absent,
+            Some(o @ (Occupancy::Locked | Occupancy::Pending)) => o,
+            _ if !line.optional => {
+                if has_bytes {
+                    Occupancy::Pending
+                } else {
+                    Occupancy::Absent
+                }
+            }
+            _ if has_bytes => Occupancy::Plain,
+            _ => Occupancy::Absent,
         };
         values.insert(key, occupancy.word().as_bytes().to_vec());
-        if occupancy.locked() {
+        if occupancy != Occupancy::Plain {
             values.remove(name);
+        }
+        if occupancy.locked() {
             locked = true;
         }
     }
@@ -91,11 +101,15 @@ impl Store {
 
     /// `name`'s occupancy, uncounted; `None` for a name with no policy.
     pub fn occupancy(&self, name: &str) -> Option<Occupancy> {
-        self.presence_of(name)?;
+        let line = self.presence_of(name)?;
         let said = self.values.get(&entry_name(name));
         Some(said.and_then(|w| Occupancy::from_word(w)).unwrap_or(
             if self.values.contains_key(name) {
-                Occupancy::Plain
+                if line.optional {
+                    Occupancy::Plain
+                } else {
+                    Occupancy::Pending
+                }
             } else {
                 Occupancy::Absent
             },
@@ -213,7 +227,7 @@ impl Store {
         };
         let key = entry_name(name);
         let bytes = self.values.contains_key(name);
-        if before == occupancy && (occupancy != Occupancy::Plain || bytes) {
+        if before == occupancy && ((occupancy == Occupancy::Plain) == bytes) {
             return false;
         }
         self.remember(name);
@@ -419,5 +433,62 @@ mod tests {
             assert_eq!(store.occupancy("token"), Some(Occupancy::Plain));
             assert_eq!(store.get("token"), Some("open"));
         }
+    }
+
+    #[test]
+    fn refresh_snapshot_and_boot_enforce_presence_occupancy_invariants() {
+        // Mandatory name starting Absent receiving peer plain bytes transitions
+        // to Pending, strips the bytes, and marks a reader-visible change.
+        let mut store = Store::new(LINES, [(Store::PRESENCE.into(), b"1".to_vec())]);
+        assert_eq!(store.occupancy("key"), Some(Occupancy::Absent));
+        let rev = store.revision();
+        let change = store.refresh_snapshot(vec![("key".into(), b"peer-secret".to_vec())]);
+        assert!(change.any && change.read);
+        assert!(store.revision() > rev);
+        assert_eq!(store.occupancy("key"), Some(Occupancy::Pending));
+        assert!(store.locked("key") && store.has("key"));
+        assert_eq!(store.read("key"), Err(StoreError::Locked("key".into())));
+        assert_eq!(store.get("key"), None);
+        holds_no(&store, b"peer-secret");
+        let child = store.call_snapshot(&["key".into()]);
+        assert!(!child.iter().any(|(n, _)| n == "key"), "{child:?}");
+
+        // Spoofed "plain" or "absent" occupancy alongside bytes for a mandatory
+        // name on boot still strips bytes and transitions to Pending.
+        for said in [Occupancy::Plain, Occupancy::Absent] {
+            let booted = Store::new(
+                LINES,
+                [
+                    ("key".into(), b"boot-secret".to_vec()),
+                    occupancy("key", said),
+                ],
+            );
+            assert_eq!(booted.occupancy("key"), Some(Occupancy::Pending));
+            assert!(booted.opened_locked() && booted.locked("key") && booted.has("key"));
+            assert_eq!(booted.read("key"), Err(StoreError::Locked("key".into())));
+            holds_no(&booted, b"boot-secret");
+        }
+        // Spoofed "plain" without bytes for a mandatory name settles to Absent.
+        let empty = Store::new(LINES, [occupancy("key", Occupancy::Plain)]);
+        assert_eq!(empty.occupancy("key"), Some(Occupancy::Absent));
+        assert!(!empty.has("key") && !empty.locked("key"));
+
+        // Optional name starting Absent receiving peer plain bytes reconciles to Plain.
+        let mut opt = Store::new(LINES, [occupancy("token", Occupancy::Absent)]);
+        assert!(!opt.has("token"));
+        opt.refresh_snapshot(vec![("token".into(), b"peer-plain".to_vec())]);
+        assert_eq!(opt.occupancy("token"), Some(Occupancy::Plain));
+        assert!(opt.has("token") && !opt.locked("token"));
+        assert_eq!(opt.get("token"), Some("peer-plain"));
+        // Peer forgets optional plain value: reconciles to Absent.
+        opt.refresh_snapshot(vec![]);
+        assert_eq!(opt.occupancy("token"), Some(Occupancy::Absent));
+        assert!(!opt.has("token") && !opt.locked("token"));
+        assert_eq!(opt.get("token"), None);
+
+        // adopt_occupancy strips stray bytes even when occupancy stays Absent.
+        opt.values.insert("key".into(), b"stray-secret".to_vec());
+        opt.adopt_occupancy("key", Occupancy::Absent, || None);
+        holds_no(&opt, b"stray-secret");
     }
 }

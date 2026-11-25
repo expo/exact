@@ -197,6 +197,9 @@ export function tools(table) {
     return true;
   };
   Origin.refused = (name, from) => from === "tool" ? Origin.callRefuses(name) : !!outerRefused?.(name, from);
+  Origin.personRequired = (id = Invocation.id) => {
+    if (current && id && current.id === id) end("refused", "uncertain", "person-required");
+  };
 
   const call = (req, done) => {
     refreshTime();

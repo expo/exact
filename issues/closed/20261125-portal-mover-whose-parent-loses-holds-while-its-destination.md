@@ -1,6 +1,7 @@
 # Portal mover whose parent loses holds while its destination unmounts is destroyed before re-attachment, poisoning Runner
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Included previously moved surviving entries in Portals::apply's step 1 detachment pass so movers whose parent loses holds are detached and recorded in extracted before destination destruction.
 **Systems:** runner (instance tree portal placement, kernel batch commit)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

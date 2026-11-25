@@ -1,6 +1,7 @@
 # Mixed-app data-code module calls bypass the calling executor's narrowed request.grants scope
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Enforced the calling executor's intersected request.grants across module_call_linked, module_effect, downstream admission helpers, forwarded effect authority, and LinkedPresence::presence_call.
 **Systems:** runner (module admission, mixed-executor capability isolation)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

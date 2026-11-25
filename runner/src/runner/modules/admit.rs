@@ -321,7 +321,8 @@ impl<D: DataSource> Runner<D> {
                 (p["grants"].as_array().into_iter().flatten())
                     .filter_map(Json::as_str)
                     .any(|l| {
-                        (self.data.grants().lines()).any(|g| g.split_whitespace().next() == Some(l))
+                        (self.module_grants().lines())
+                            .any(|g| g.split_whitespace().next() == Some(l))
                     })
             };
             return any
@@ -474,24 +475,46 @@ impl<D: DataSource> Runner<D> {
         Some((name, held.cause))
     }
 
-    /// An input-gated read in a mixed app also requires the requesting source's grant.
-    pub(super) fn scoped_input_refusal(
-        &self,
-        row: &ModulesRow,
-        cause: Cause,
+    /// Effective grants for a call: the app's grants intersected with the
+    /// calling executor's `scope` in a mixed app, or the app's grants alone.
+    pub(in crate::runner) fn effective_grants(&self, scope: Option<&str>) -> String {
+        let app = self.data.grants();
+        let Some(scope) = scope else {
+            return app.to_owned();
+        };
+        let app_lines: Vec<&str> = app
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        scope
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && app_lines.contains(l))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Grants active for the module call currently being admitted.
+    pub(in crate::runner) fn module_grants(&self) -> &str {
+        self.extensions
+            .call_grants
+            .as_deref()
+            .unwrap_or_else(|| self.data.grants())
+    }
+
+    /// Run `f` with module admission narrowed to `scope` (intersected with
+    /// the app's grants).
+    pub(in crate::runner) fn with_module_grants<T>(
+        &mut self,
         scope: Option<&str>,
-    ) -> Option<Json> {
-        let scope = scope?;
-        let sub = self.substitute(row);
-        if sub["origin"] != "input" || !cause.input_started() || self.page.hidden {
-            return None;
-        }
-        let names = sub["nameGrants"].as_array()?;
-        let granted = names
-            .iter()
-            .filter_map(Json::as_str)
-            .any(|name| scope.lines().any(|line| line.trim() == name));
-        (!names.is_empty() && !granted).then(|| json!({ "error": "NotAllowedError" }))
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let next = scope.map(|_| self.effective_grants(scope));
+        let prev = std::mem::replace(&mut self.extensions.call_grants, next);
+        let out = f(self);
+        self.extensions.call_grants = prev;
+        out
     }
 
     /// The checks before any decision: why the call is refused, if it is.
@@ -501,7 +524,8 @@ impl<D: DataSource> Runner<D> {
         if sub["origin"] == "input" && (!cause.input_started() || self.page.hidden) {
             return Err(format!("person-required ({} origin)", origin.word()));
         }
-        let lines: Vec<&str> = (self.data.grants().lines())
+        let grants = self.module_grants();
+        let lines: Vec<&str> = (grants.lines())
             .filter_map(|l| l.split_whitespace().next())
             .collect();
         let granted = |v: &Json| match v {
@@ -577,7 +601,7 @@ impl<D: DataSource> Runner<D> {
                     ),
                     false => (crate::save_file::plain_app_path(given), *given),
                 };
-                !plain || !self.covers(&capability, at)
+                !plain || !self.covers_in(grants, &capability, at)
             }) {
                 return Err(format!(
                     "grant-missing ({option}={given} needs {capability})"
@@ -598,13 +622,11 @@ impl<D: DataSource> Runner<D> {
                     let at = format!("{option}[{i}]");
                     admit_field(record, field, &at, &|at, given| {
                         if capability == "net.fetch" {
-                            if let Some(why) =
-                                fetch_refusal(self.links.grants, self.data.grants(), at, given)
-                            {
+                            if let Some(why) = fetch_refusal(self.links.grants, grants, at, given) {
                                 return Err(why);
                             }
                         } else if !crate::save_file::plain_app_path(given)
-                            || !self.covers(capability, given)
+                            || !self.covers_in(grants, capability, given)
                         {
                             return Err(format!("grant-missing ({at}={given} needs {capability})"));
                         }

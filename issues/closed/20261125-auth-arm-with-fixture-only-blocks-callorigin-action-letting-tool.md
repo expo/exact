@@ -1,6 +1,7 @@
 # auth::arm_with_fixture only blocks CallOrigin::Action, letting Tool, Wake, and Device origins open openAuthSession UI
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Rejected all non-App origins in auth::arm_with_fixture and host/web-js/auth.js with 403 and wired person-required tool termination via Runner::ticket_person_required and Origin.personRequired.
 **Systems:** runner (auth sessions, call provenance)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25
