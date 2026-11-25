@@ -868,7 +868,7 @@ fn a_push_and_a_pop_fly_the_names_both_routes_hold_on_composes_spring() {
 }
 
 #[test]
-fn predictive_back_flies_a_pops_names_only_when_it_commits() {
+fn predictive_back_seeks_the_pops_flights_and_springs_on_or_back() {
     for commit in [false, true] {
         let mut p = paired();
         tap(&mut p, "open");
@@ -878,11 +878,8 @@ fn predictive_back_flies_a_pops_names_only_when_it_commits() {
         assert!(p.back_progress(0, 0.0, 0, now));
         assert!(p.back_progress(1, 0.4, 0, now + 50.));
         after(&mut p, 500.0);
-        // The route previews its pop; its names wait, as Compose holds its
-        // shared bounds while the gesture moves.
-        assert!(p.host().flight_frames().is_empty());
-        let route = rect(&mut p, "route-detail");
-        assert!(route.2 < 400.0, "{route:?}");
+        // Compose's NavHost seeks its shared transition by the gesture.
+        assert_eq!(flight(&p), (hero, thumb, 0.4), "held by the gesture");
         let now = p.host().now();
         if commit {
             assert!(p.system_back(now));
@@ -891,50 +888,14 @@ fn predictive_back_flies_a_pops_names_only_when_it_commits() {
             p.back_progress(2, 0.0, 0, now);
         }
         after(&mut p, 50.0);
+        let progress = flight(&p).2;
         match commit {
-            true => assert_eq!(flight(&p).1, thumb),
-            false => assert!(p.host().flight_frames().is_empty()),
+            true => assert!(progress > 0.4 && progress < 1.0, "{progress}"),
+            false => assert!(progress < 0.4 && progress > 0.0, "{progress}"),
         }
         after(&mut p, 1000.0);
         assert!(p.host().flight_frames().is_empty());
         assert_eq!(has(&p, "route-detail"), !commit);
-    }
-}
-
-#[test]
-fn a_route_flies_as_a_whole_on_back_but_not_after_predictive_backs_preview() {
-    let home = PAIRED.replace(
-        "box sharedElement=\"photo\" testId=\"thumb\"",
-        "box sharedElement=\"page\" width=80 height=80\n            box sharedElement=\"photo\" testId=\"thumb\"",
-    );
-    // The route named, or a child that fills it.
-    let named = home.replace(
-        "testId=\"route-detail\"",
-        "sharedElement=\"page\" testId=\"route-detail\"",
-    );
-    let filled = home.replace(
-        "            box sharedElement=\"photo\" testId=\"hero\"",
-        "            column sharedElement=\"page\" testId=\"page\" position=\"absolute\" inset=0\n            box sharedElement=\"photo\" testId=\"hero\"",
-    );
-    for (plan, page) in [(named, "route-detail"), (filled, "page")] {
-        for previewed in [false, true] {
-            let mut p = paired_with(&plan);
-            tap(&mut p, "open");
-            after(&mut p, 1000.0);
-            let (page, hero) = (key(&p, page), key(&p, "hero"));
-            let now = p.host().now();
-            if previewed {
-                assert!(p.back_progress(0, 0.0, 0, now));
-                assert!(p.back_progress(1, 0.4, 0, now + 50.));
-                after(&mut p, 50.0);
-            }
-            assert!(p.system_back(p.host().now()));
-            p.run_commands(|| ());
-            after(&mut p, 0.0);
-            let from: Vec<NodeKey> = p.host().flight_frames().iter().map(|f| f.from).collect();
-            assert!(from.contains(&hero), "{from:?}");
-            assert_eq!(from.contains(&page), !previewed, "{from:?}");
-        }
     }
 }
 
@@ -949,43 +910,6 @@ fn back_while_the_push_flight_lands_flies_the_name_once() {
     p.run_commands(|| ());
     after(&mut p, 0.0);
     assert_eq!(flight(&p), (hero, thumb, 0.0));
-}
-
-#[test]
-fn a_container_waits_with_its_names_for_the_first_frame_that_shows_them() {
-    let plan = PAIRED
-        .replace(
-            "box sharedElement=\"photo\" testId=\"thumb\"",
-            "box id=\"thumb\" sharedElement=\"photo\" testId=\"thumb\"",
-        )
-        .replace(
-            "testId=\"route-detail\"",
-            "navigationSource=\"thumb\" testId=\"route-detail\"",
-        );
-    let mut p = paired_with(&plan);
-    p.presents_pictures(true);
-    p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
-    let t = p.host().now();
-    tap(&mut p, "open");
-    p.reader_clock(t + 16.0, true, true);
-    p.frame();
-    let carried = p.picture_carried();
-    p.reader_clock(t + 66.0, true, true);
-    p.frame();
-    let shown = |p: &Presenter<()>| {
-        let s = p.stage.shift.as_ref().expect("a container crossing");
-        assert!(s.container.is_some());
-        s.progress.at(p.host().now())
-    };
-    assert!(shown(&p) < 1e-6 && flight(&p).2 < 1e-6, "both held");
-    p.picture_presented(carried, t + 66.0);
-    p.reader_clock(t + 166.0, true, true);
-    p.frame();
-    let (container, name) = (shown(&p), flight(&p).2);
-    assert!(
-        container > 0.0 && (container - name).abs() < 0.01,
-        "{container} {name}"
-    );
 }
 
 #[test]

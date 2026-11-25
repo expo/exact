@@ -79,28 +79,6 @@ pub(super) fn part(node: &exact_kernel::NodeRef<'_>, row: StyleId) -> Option<Aut
     })
 }
 
-/// The names among `pairs` that fill `route`: the route itself, or a child
-/// at its origin with its size.
-pub(super) fn filling(
-    kernel: &exact_kernel::Kernel,
-    route: Option<&NodeKey>,
-    pairs: &[(NodeKey, NodeKey)],
-) -> Vec<NodeKey> {
-    let route = route.and_then(|k| kernel.node_by_key(*k));
-    (pairs.iter())
-        .filter_map(|(from, _)| kernel.node_by_key(*from))
-        .filter(|n| {
-            route.as_ref().is_some_and(|r| {
-                n.id == r.id
-                    || n.parent == Some(r.id)
-                        && (n.frame.x, n.frame.y) == (0.0, 0.0)
-                        && (n.frame.width, n.frame.height) == (r.frame.width, r.frame.height)
-            })
-        })
-        .map(|n| n.key)
-        .collect()
-}
-
 impl<D: DataSource> Presenter<D> {
     /// The entrance the route at `top`, just pushed or presented, declares.
     pub(super) fn entrance(&self, stack: &[ViewId], top: usize) -> Option<Authored> {
@@ -150,7 +128,7 @@ impl<D: DataSource> Presenter<D> {
         // The names the routes pair fly beside the part on the platform's
         // spring, as Compose's fly beside NavHost's own (LLP 1013.004 D2).
         if !self.motion_off() {
-            self.fly_routes(forward, (old, new), &bounds_spring(), seek.is_some());
+            self.fly_routes(forward, (old, new), &bounds_spring());
         }
         if self.motion_off() || ms <= 0.0 {
             self.stage.shift = None;

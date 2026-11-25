@@ -329,10 +329,8 @@ pub(super) struct State {
     zooms: Vec<zoom::Source>,
     /// The pairs a pop of the top route would fly (LLP 1013.004 D1), with
     /// the kernel epoch and the top route they were found at: a pop has
-    /// removed the route by the time its crossing starts. Last, the names
-    /// among them that fill the route: the route itself, or a child at its
-    /// origin with its size.
-    pops: (u64, Option<NodeKey>, Vec<(NodeKey, NodeKey)>, Vec<NodeKey>),
+    /// removed the route by the time its crossing starts.
+    pops: (u64, Option<NodeKey>, Vec<(NodeKey, NodeKey)>),
 }
 
 /// What a sheet's heights are computed from: its `navigationDetent`, the
@@ -470,8 +468,7 @@ impl<D: DataSource> Presenter<D> {
                 }
                 _ => Vec::new(),
             };
-            let fills = authored::filling(self.host.kernel(), keys.last(), &pairs);
-            self.stage.pops = (epoch, keys.last().copied(), pairs, fills);
+            self.stage.pops = (epoch, keys.last().copied(), pairs);
         }
         self.sync_sources();
         self.stage.top = self.top_of(&stack, &kinds);
@@ -616,14 +613,6 @@ impl<D: DataSource> Presenter<D> {
         if self.motion_off() {
             self.stage.shift = None;
             self.stage.preview = None;
-        }
-        // A container moves with the names in it as one transform, and they
-        // start at the first frame that shows them (LLP 1003.001 D9): it
-        // waits with them, so its last frame is theirs (LLP 1013.004 D4).
-        if let Some(s) = (self.stage.shift.as_mut()).filter(|s| s.container.is_some()) {
-            if let Some(start) = self.host.route_flights_start() {
-                s.progress.start = start.unwrap_or(now);
-            }
         }
         // A route that flies in as a whole covers the route beneath only
         // when it lands, so that one is drawn until then.
@@ -851,33 +840,18 @@ impl<D: DataSource> Presenter<D> {
                 Some(_) => zoom::clock(forward),
                 None => bounds_spring(),
             };
-            let previewed = from.is_some() && container.is_none();
-            self.fly_routes(forward, (*old, *new), &curve, previewed);
+            self.fly_routes(forward, (*old, *new), &curve);
         }
     }
 
     /// Fly the names a push from `old` to `new`, or a pop of `old`, pairs.
-    /// After predictive Back's preview the route leaving does not fly as a
-    /// whole, nor a name that fills it: it goes on from where the gesture
-    /// left it, as Compose's `NavHost` crossfades at full size while the
-    /// names in it fly.
-    fn fly_routes(
-        &mut self,
-        forward: bool,
-        (old, new): (NodeKey, NodeKey),
-        curve: &Transition,
-        previewed: bool,
-    ) {
+    fn fly_routes(&mut self, forward: bool, (old, new): (NodeKey, NodeKey), curve: &Transition) {
         let pairs = match forward {
             true => pair_routes(self.host.kernel(), old, new),
             false if self.stage.pops.1 == Some(old) => self.stage.pops.2.clone(),
             false => Vec::new(),
         };
-        let fills = &self.stage.pops.3;
-        let flies: Vec<_> = (pairs.into_iter())
-            .filter(|p| !previewed || p.0 != old && !fills.contains(&p.0))
-            .collect();
-        for (from, to) in flies {
+        for (from, to) in pairs {
             self.host.fly(from, to, curve, true);
         }
     }

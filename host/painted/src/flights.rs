@@ -263,21 +263,6 @@ impl<D: DataSource> Host<D> {
             .collect()
     }
 
-    /// When a route change's flights began moving, ms: `Some(None)` while
-    /// one waits for the first frame that shows it, `None` with none flying.
-    pub(crate) fn route_flights_start(&self) -> Option<Option<f64>> {
-        let mut starts = (self.flights.running.iter())
-            .filter(|f| f.frame.dissolve)
-            .map(|f| {
-                (self
-                    .engine
-                    .curve_start(motion_node(f.frame.to) | FLIGHT, Property::Layout))
-                .map(|s| s * 1000.0)
-            });
-        let first = starts.next()?;
-        Some(starts.fold(first, |a, b| a.zip(b).map(|(a, b)| a.min(b))))
-    }
-
     /// Whether a flight to `to` runs.
     pub(crate) fn in_flight(&self, to: NodeKey) -> bool {
         self.flights.running.iter().any(|f| f.frame.to == to)
