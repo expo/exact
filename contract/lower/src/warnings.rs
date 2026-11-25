@@ -197,6 +197,7 @@ pub(crate) fn with_text_styles(
             let no_bar = literal(attrs, "navigationBar") == Some("none");
             if route && !no_bar {
                 header_bar::route_header(visit.regions()[0], &mut out);
+                route_untitled::head_before_header(visit.regions()[0], &mut out);
                 nested_header::nested_header(visit.regions()[0], &mut out);
                 fixed_beside::fixed_beside(visit, &mut out);
             }

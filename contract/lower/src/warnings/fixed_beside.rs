@@ -154,7 +154,9 @@ fn facts(route: Visit<'_>) -> BTreeMap<Site, Facts> {
             } else {
                 children.controls
             };
+            // A `head` takes no space (LLP 1048.003 D1), as a node shown nowhere takes none
             let out_of_flow = matches!(literal(attrs, "position"), Some("absolute" | "fixed"))
+                || tag == "head"
                 || literal(attrs, "display") == Some("none")
                 || has(attrs, "popover")
                 || tag == "dialog";
