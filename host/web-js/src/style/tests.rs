@@ -814,6 +814,7 @@ fn llp_1123_rows_write_nothing_on_the_js_target() {
         "ScrollHorizontalIndicatorInsets",
         "ScrollInsetAdjustment",
         "ScrollIndicatorAdjustment",
+        "SafeAreaTrack",
         "ScrollEdgeEffectSoft",
         "ScrollEdgeEffectHard",
         "ScrollEdgeEffectHidden",
@@ -824,7 +825,7 @@ fn llp_1123_rows_write_nothing_on_the_js_target() {
         .iter()
         .filter(|id| prefixes.iter().any(|p| format!("{id:?}").starts_with(p)))
         .collect();
-    assert_eq!(rows.len(), 44);
+    assert_eq!(rows.len(), 45);
     for id in rows {
         assert!(
             style_writes(*id as u16, false, true).unwrap().is_empty(),

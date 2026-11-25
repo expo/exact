@@ -654,7 +654,7 @@ uint32_t exact_share_land(ExactRuntime rt);
  *      then `0` (no relatedTarget) or `1<related id>`;
  * 64 = host look states (UTF-8 bits: 1 hover, 2 focus-visible); presentation only.
  * 66 = swipe (no payload; the platform's discrete swipe in the node's
- *      swipe-direction, LLP 1057.001 §8).
+ *      `swipe-flick` direction, LLP 1057.001 §8).
  * any other kind is refused with an error batch.
  * Format lists are space-separated command tokens. Link keeps the remaining bytes.
  * A change's text, key's name, or guest message is the payload in the input

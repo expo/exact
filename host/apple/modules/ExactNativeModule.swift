@@ -917,7 +917,8 @@ public final class ExactElement {
     /// The first child is primary and the second secondary. Exact manages their child controllers
     /// and containment; supply a detached controller with empty content slots. The app configures
     /// the native arrangement, including animated updates. Navigation stays in the enclosing
-    /// controller, with its native policies unchanged. Pass nil to restore authored layout.
+    /// controller, with its native policies unchanged. Pass nil to give the element back to its author's
+    /// layout, in CSS or by its `arrangement`.
     @available(iOS 27.1, *)
     @discardableResult
     public func arrange(using controller: UIArrangementViewController?) -> Bool {

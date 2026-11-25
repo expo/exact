@@ -504,6 +504,25 @@ extension Agent {
         return backReply(presenter.modals.agentDismiss().map { ("sheet", $0) })
     }
 
+    /// A named press can reach the front modal and presentations above it, including a lifted popover.
+    func inertDialogTap(_ req: [String: Any]) -> [String: Any]? {
+        let menus = presenter.menus
+        let confirmation = menus.nativeConfirmation.flatMap { menus.openModally($0) == true ? $0 : nil }
+        guard let modal = confirmation ?? presenter.dialogs.topDialog,
+              let id = req["id"] as? Int, let target = view(req) ?? flatBoxForRequest(req)?.host else { return nil }
+        if menus.confirmationShows(target) { return nil }
+        let layer = presenter.openTopLayer
+        if let boundary = layer.modal, layer.frames.contains(where: { $0.0 == modal.id }) {
+            for frame in layer.frames[boundary...] {
+                if let root = presenter.views[frame.0], presenter.logicallyWithin(target, root) { return nil }
+            }
+        } else if presenter.logicallyWithin(target, modal) {
+            // An opening sheet or one being swiped down can still be modal without a frame.
+            return nil
+        }
+        return ["error": "view \(id) is inert under the open modal dialog"]
+    }
+
     func tap(_ req: [String: Any]) -> [String: Any] {
         if req["holdState"] != nil { return holdTap(req) } // a held state (LLP 1122 D8, HeldState.swift)
         // A drag from another app, through the drop target the drag-in module keeps (LLP 1094.001 D6); tvOS has no drag
@@ -528,6 +547,8 @@ extension Agent {
             return ["error": "a contact is already down; use `tap up` or `tap cancel` first"]
         }
         settleForPress()
+        let plainPress = ["wheel", "hover", "contextmenu", "dblclick", "pinch", "x", "y", "phase", "scrollDrag"].allSatisfy { req[$0] == nil }
+        if plainPress, req["at"] == nil, let refusal = inertDialogTap(req) { return refusal }
         // Each synthetic contact ends a live press's handoff before it is
         // delivered, as a real one's touch-down does (PressHandoffIOS).
         presenter.supersedePress()
@@ -668,7 +689,7 @@ extension Agent {
         // A plain press: `at` is a point in the target, the press whatever a
         // finger there reaches; without one, the target's own press
         // (`AgentAddressedTap.swift`).
-        let plain = ["wheel", "hover", "contextmenu", "dblclick", "pinch", "x", "y"].allSatisfy { req[$0] == nil } && v.kind != "iframe"
+        let plain = plainPress && v.kind != "iframe"
         // The target's box as it is seen now, or the refusal.
         func aimed() -> (box: CGRect, refusal: [String: Any]?) {
             var b = flat.map { box($0.host.container, region: $0.rect) } ?? v.tapBox(box(v))

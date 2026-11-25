@@ -1,4 +1,6 @@
 //! LLP 1123 C11b: only UIKit projects a route's last toolbar row into a bar.
+mod collision;
+
 use super::*;
 use contract_checking::{Checking, Structure};
 use contract_syntax::TemplatePart;
@@ -46,7 +48,11 @@ pub(crate) fn check_row(
 
 pub(crate) fn check(checked: &Checked<'_>, warnings: &mut Vec<LowerError>) -> Vec<LowerError> {
     let checking = Checking::new(checked);
-    let ios = crate::icons::shipped().iter().any(|t| t.name == "ios");
+    let targets = crate::icons::shipped();
+    let ios = targets.iter().find(|t| t.name == "ios");
+    let iphone =
+        ios.is_some_and(|t| t.includes_iphone) && !checked.types.shapes.fns.contains_key("top");
+    let mut marked = std::collections::BTreeMap::new();
     let mut errors = Vec::new();
     let view = checking.expanded();
     for (node, parent) in view.walk_with(None, |v, parent| {
@@ -69,7 +75,10 @@ pub(crate) fn check(checked: &Checked<'_>, warnings: &mut Vec<LowerError>) -> Ve
                 message: "Put an empty `spacer` in a bottom toolbar row or an unplaced toolbar row. For other flexible gaps use `view flex=1`".into(),
             });
         }
-        if ios && parent.is_some_and(|(_, a)| bottom(a)) && !matches!(tag, "button" | "spacer") {
+        if ios.is_some()
+            && parent.is_some_and(|(_, a)| bottom(a))
+            && !matches!(tag, "button" | "spacer")
+        {
             errors.push(LowerError {
                 id: "lower-toolbar-item",
                 span: node.span(),
@@ -77,15 +86,29 @@ pub(crate) fn check(checked: &Checked<'_>, warnings: &mut Vec<LowerError>) -> Ve
             });
         }
         if tag == "column" && attrs.iter().any(|a| a.name == "navigationKey") {
-            if let Err(error) = sites(node.regions()[0], warnings) {
-                errors.push(error);
+            match sites(node.regions()[0], warnings) {
+                Ok(Some(span)) if iphone => {
+                    marked.insert(node.site(), span);
+                }
+                Err(error) => errors.push(error),
+                _ => {}
             }
+        }
+    }
+    if !marked.is_empty() {
+        if let Some(routes) = &checked.file.routes {
+            collision::check(view.structure(), routes, &marked, warnings);
         }
     }
     errors
 }
 
-fn sites(children: Structure<'_>, warnings: &mut Vec<LowerError>) -> Result<(), LowerError> {
+fn sites(
+    children: Structure<'_>,
+    warnings: &mut Vec<LowerError>,
+) -> Result<Option<Span>, LowerError> {
+    let mut toolbar = None;
+    let mut possible_bar = false;
     let mut unconditional_bar = false;
     let mut pending = Vec::new();
     for (node, unconditional) in children.walk_regions_with(true, |node, _| {
@@ -95,10 +118,26 @@ fn sites(children: Structure<'_>, warnings: &mut Vec<LowerError>) -> Result<(), 
             [Some(false), Some(false)]
         }
     }) {
-        let Some((_, _, attrs)) = node.element() else {
+        let Some((tag, _, attrs)) = node.element() else {
             continue;
         };
         let bar = bottom(attrs);
+        if !possible_bar
+            && bar
+            && unconditional
+            && tag == "row"
+            && literal(attrs, "role") == Some("toolbar")
+            && collision::visible(attrs)
+            && node.children().any(|item| {
+                item.element()
+                    .is_some_and(|(tag, _, a)| tag == "button" && collision::visible(a))
+            })
+        {
+            toolbar = Some(node.span());
+        }
+        possible_bar |= attrs
+            .iter()
+            .any(|a| a.name == "class" || a.name == "toolbarPlacement");
         if unconditional {
             if bar && unconditional_bar {
                 return err(
@@ -120,5 +159,5 @@ fn sites(children: Structure<'_>, warnings: &mut Vec<LowerError>) -> Result<(), 
             pending.push(node.span());
         }
     }
-    Ok(())
+    Ok(toolbar)
 }

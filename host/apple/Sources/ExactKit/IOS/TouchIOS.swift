@@ -297,6 +297,7 @@ extension Agent {
         }
         // A plain tap's aim: the target's own press (`AgentAddressedTap.swift`).
         let press = (req["aim"] as? [String: Any])?["press"] as? Bool == true
+        if press, at["at"] == nil, at["x"] == nil, at["y"] == nil, let refusal = inertDialogTap(req) { return refusal }
         // A row a grouped list draws, or its toggle's or detail button's
         // control (LLP 1084 D5): the finger aims at UIKit's cell or
         // accessory, never the hidden authored node beneath it.

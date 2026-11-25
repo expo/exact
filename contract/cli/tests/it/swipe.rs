@@ -1,5 +1,5 @@
-//! `swipe` (LLP 1057.001 §8): the platform's discrete swipe in the one
-//! direction `swipe-direction` names, host kind 66 with no payload.
+//! `swipe` (LLP 1057.001 §8): one handler and exactly one of `swipe-flick`,
+//! the platform's discrete swipe (host kind 66), or `swipe-follow`, a swipe the node follows.
 
 use crate::source::{boxed, Source};
 use exact_kernel::{Kernel, PropId};
@@ -14,9 +14,9 @@ const APP: &str = r#"component App
   view
     column
       text `${seen}` testId="seen"
-      column swipe=swiped swipe-direction="down" testId="bar"
+      column swipe=swiped swipe-flick="down" testId="bar"
         textarea testId="field"
-      box swipe=swiped swipe-direction=way testId="computed"
+      box swipe=swiped swipe-flick=way testId="computed"
         text "a"
       column testId="plain"
 "#;
@@ -64,20 +64,14 @@ fn a_swipe_runs_its_action_and_carries_its_direction_to_the_host() {
 #[test]
 fn a_swipe_needs_one_of_the_four_directions() {
     let refused = |source: &str| contract::compile(source).unwrap_err().to_string();
-    let missing = APP.replace(
-        r#" swipe-direction="down" testId="bar""#,
-        r#" testId="bar""#,
-    );
+    let missing = APP.replace(r#" swipe-flick="down" testId="bar""#, r#" testId="bar""#);
     assert!(
         refused(&missing).contains("lower-swipe-direction"),
         "{}",
         refused(&missing)
     );
     for word in ["sideways", "down up", "Down"] {
-        let wrong = APP.replace(
-            r#"swipe-direction="down""#,
-            &format!(r#"swipe-direction="{word}""#),
-        );
+        let wrong = APP.replace(r#"swipe-flick="down""#, &format!(r#"swipe-flick="{word}""#));
         assert!(
             refused(&wrong).contains("lower-swipe-direction"),
             "{word}: {}",
@@ -90,7 +84,7 @@ fn a_swipe_needs_one_of_the_four_directions() {
 fn a_run_inside_a_paragraph_takes_no_swipe() {
     let run = APP.replace(
         "      text `${seen}` testId=\"seen\"\n",
-        "      text `${seen}` testId=\"seen\"\n        text \"more\" swipe=swiped swipe-direction=\"down\"\n",
+        "      text `${seen}` testId=\"seen\"\n        text \"more\" swipe=swiped swipe-flick=\"down\"\n",
     );
     let error = contract::compile(&run).unwrap_err().to_string();
     assert!(error.contains("a run inside a paragraph"), "{error}");
@@ -131,7 +125,7 @@ fn a_swipe_a_grouped_section_or_footer_would_hide_is_named() {
     let list = |row: &str, footer: &str| {
         format!("component App\n  state n = 0\n  action swiped\n    n = n + 1\n  view\n    list appearance=\"auto\" listStyle=\"inset-grouped\"\n      section{row}\n        row\n          text \"Name\"\n        footer\n          text \"About the name\"{footer}\n")
     };
-    let swipe = " swipe=swiped swipe-direction=\"left\"";
+    let swipe = " swipe=swiped swipe-flick=\"left\"";
     let unseen = |src: &str| {
         super::warnings::warned(src)
             .into_iter()

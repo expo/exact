@@ -660,7 +660,7 @@ extension Agent {
             guard req["phase"] == nil, let activated = presenter.alerts.click(node) else { return ["error": "view \(id) is behind an alert"] }
             return activated ? ["tapped": id, "delivery": "host-activation", "native": "NSAlert"] : ["error": "alert button #\(id) is unavailable"]
         }
-        if let node = view(req), presenter.dialogs.blocks(node) { return ["error": "view \(node.id) is blocked by a modal dialog"] }
+        if let node = view(req), presenter.dialogs.blocks(node) { return ["error": "view \(node.id) is inert under the open modal dialog"] }
         // A status item and the menu its tap opened are AppKit's (LLP 1133.025 §11).
         if !attached, req["phase"] == nil, req["wheel"] == nil, let node = view(req),
            let clicked = presenter.statusItems.agentClick(node) ?? presenter.statusItems.agentChoose(node) { return clicked }

@@ -183,7 +183,7 @@ fn retained_release_revalidates_the_original_hit_path() {
             let source = actions::source()
                 .replace("  state revision = 0", "  state expired = false\n  state revision = 0")
                 .replace("  action body\n", "  action expire\n    expired = true\n  task expiry mount\n    after(150, expire)\n  action body\n")
-                .replace("swiperight=replyTo(m.id)", "press=replyTo(m.id) swiperight=replyTo(m.id)")
+                .replace("swipe=replyTo(m.id)", "press=replyTo(m.id) swipe=replyTo(m.id)")
                 .replace("                MessageBubble(message=m)", &format!(
                     "                box inert={}\n                  box testId=`leaf-${{m.id}}` inert={} width=320 height=32\n                  MessageBubble(message=m)",
                     if wrapper { "expired" } else { "false" },

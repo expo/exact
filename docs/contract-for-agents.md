@@ -3220,6 +3220,12 @@ as does a visible background supplied by a native hatch.
 To keep foreground controls below it, use `top="var(--exact-safe-area-inset-top)"`
 or that value as padding on the hero's content. This reads the route's safe area,
 including its bar; `env(safe-area-inset-top)` stays 0 under `viewport-fit="auto"`.
+A box in a scroller that pads by that inset under a large title follows the bar as the
+title collapses, so its content moves twice as far as the finger. Give it
+`-exact-safe-area-track="observed-max"` to hold the largest band the route has had in its
+current bars, title mode, size class, orientation and window size; `exactGeometry` still
+reads the band as it is. Until hosts report the route's configuration (LLP 1123's
+activation) it reads the band as it is too.
 A route that does not scroll (a game's canvas at `inset=0`, `width="100%" height="100%"`) is
 likewise drawn from the screen's top edge, its bar items floating over it. On a pushed iOS
 route under the platform bar, the declared Back control's text becomes the bar's back button title
@@ -4488,13 +4494,37 @@ test delivers one by posting `ExactHostEvents.deliver` with `{event, payload, se
 
 ### Arranged panes
 
-On iOS and iPadOS 27.1 or later, an element hatch can call
+`arrangement` on a box with two children, the primary and the secondary, makes them
+the panes of a `UIArrangementViewController` on iOS and iPadOS 27.1 or later, and is
+CSS's layout elsewhere, so write that too (LLP 1188 D3):
+
+```text
+row arrangement="split" flex=1 min-height=0
+  scroll height="100%"
+    …
+  column height="100%"
+    …
+```
+
+`"split"` puts the two side by side in a wide box, stacked in a tall one, and either side
+of a fold; `"overlay"` puts the primary over the secondary and, where a fold divides them,
+the primary at the trailing or the bottom. `"horizontal"` or `"vertical"` after either is
+the one axis it may use. A split that may not use the axis it needs, and one on an outer
+display, shows the primary alone, so what a person cannot do without goes in the primary.
+UIKit allocates the box's border box and stacks the panes, so padding goes on the panes,
+and their flex, `order` and `z-index` as the box's items are not read there. A new value updates the same controller, animated on screen;
+`"none"`, the default, is CSS.
+
+A box that scrolls, is in a `scroll`, a `list`, a split view's column or another
+arrangement, holds a stack, or has not two children (neither a dialog nor a popover) is
+CSS's: the build refuses what the source proves, and `logs` names the rest. Keep tabs and
+stacks around an arrangement. A list beside its detail is `navigationSplit`.
+
+For UIKit's dimensions and placement, an element hatch can call
 `element.arrange(using: controller)` with a `UIArrangementViewController` configured
-with `UISplitArrangement` or `UIOverlayArrangement`. Exact places the element's two
-authored children in the controller and lays each out in the space UIKit gives it.
-Give the element a definite size, such as `height="100%"` in a sized route;
-allocated children do not give an auto-height parent its height. Pass `nil` to
-restore CSS layout.
+with `UISplitArrangement` or `UIOverlayArrangement`, which the box keeps until the hatch
+passes `nil`. Give an arranged box a definite size, such as `height="100%"` in a sized route;
+allocated children do not give an auto-height parent its height.
 
 A `true` result accepts the request; UIKit lays it out when the owning container
 is available. `false` means the element is unavailable, it does not have exactly
@@ -4609,9 +4639,8 @@ containers ([Apple's containment guidance](https://developer.apple.com/documenta
 Keep the same children mounted when switching between native and CSS layouts, so
 folds and resizes preserve their controls, bindings and state. Older systems and
 other hosts use the authored CSS layout. Duo Lab's
-[Panes screen](../apps/duo-lab/arrangement.contract) and
-[hatch](../apps/duo-lab/modules/apple/ArrangedPanes.swift) use UIKit split and overlay
-arrangements and responsive CSS elsewhere. Duo Lab's
+[Panes screen](../apps/duo-lab/arrangement.contract) says `arrangement` and lays its panes
+out by the segments in CSS elsewhere. Duo Lab's
 [Arrangement screen](../apps/duo-lab/arrangement-view.contract) sets title display, bar
 minimization, safe-area adjustment and the bar's scroll view through the
 [route hatch](../apps/duo-lab/modules/apple/ArrangementOptions.swift). See Apple's
@@ -4789,6 +4818,21 @@ route's native toolbar items and each spacer becomes a flexible space. The
 toolbar follows the route through navigation. UIKit includes it in the safe
 area, so the scroller's last row can scroll clear. Every other host lays out
 each live row where the author put it.
+
+On an iPhone, UIKit draws a navigation toolbar's buttons under the app's bottom
+tab bar, which can cover them. Hide the tablist on the pushed route that owns the toolbar. For a
+route named `detail`, give the existing tablist this display.
+
+```text
+row role="tablist"
+  display=(top(nav).name == "detail" ? "none" : "flex")
+```
+
+For several toolbar routes, join their name checks with `or` in the same display.
+UIKit keeps the tabs hidden if you push another screen from Detail. Pop back
+past Detail to the tab root and the tabs return. At a tab root, put the actions
+in the header or push the screen. This display applies on every host. Only
+iPhone needs the adjustment for its bottom tab bar.
 
 A bottom toolbar must be a direct child of the route's column. An app that
 ships iOS can put only buttons and spacers in it. The compiler refuses two
@@ -5655,24 +5699,30 @@ on the same finger stroke.
 
 #### Swipe to reply
 
-`swiperight` moves its node with the finger: it follows up to 64 points, then a fifth of
-the finger's travel, and the action runs if the node is at or past 64 points when the
-finger lifts. A finger reaches it only with `touch-action="pan-y"`, which leaves vertical
-drags to the list. A `transition` on `translate` springs the node back after the lift;
-without one it jumps back. The node's first child with `swipeIndicator=true` goes from its
-own `opacity` and `scale` to 1 as the swipe reaches 64 points, and back by its own
-`transition` after the lift. Give the node `position="relative"`, so an absolute indicator
+An element takes one `swipe=action` and, beside it, exactly one of `swipe-follow`, a swipe
+the node follows, or `swipe-flick`, the platform's flick (below). `swipe-follow="right"`
+moves its node with the finger: it follows up to 64 points, then a fifth of the finger's
+travel, and the action runs if the node is at or past 64 points when the finger lifts.
+`swipe-follow` is the quoted `"right"` or `"left"` written on the element; for a direction
+that depends on data, write two `if` branches. A finger reaches it only with a
+`touch-action` that leaves it the sideways drag: write `touch-action="pan-y"`, which leaves
+vertical drags to the list (`none` keeps both from the page). A `transition` on
+`translate` springs the node back after the lift; without one it jumps back. The node's
+first child with `swipeIndicator=true` goes from its own `opacity` and `scale` to 1 as the
+swipe reaches 64 points, and back by its own `transition` after the lift (not in a painted
+content region's picture, which follows a row with no indicator); both are optional. Give the node `position="relative"`, so an absolute indicator
 is placed against the node and not against the row around it. `symbol:reply` is a speech
 bubble (SF Symbols' `bubble.left`); Messages' left-turning arrow, `arrowshape.turn.up.left`,
 has no named symbol, so an app declares it as an icon token. The iOS host plays a selection
 haptic as the swipe crosses 64 points, so the action plays none. `apps/messages`' bubble
 is a whole example.
 
-`swipeleft` is the mirror, for Discord's reply or a bubble of your own on the right: the
-node follows a leftward drag and the action runs at or past 64 points to the left. A node
-may have both, each direction running its own action. The directions are the screen's,
-in a right-to-left layout too. Neither reveals buttons: a row's Delete is `delete=`
-(`contract vocab swipe`).
+`swipe-follow="left"` is the mirror, for Discord's reply or a bubble of your own on the
+right: the node follows a leftward drag and the action runs at or past 64 points to the
+left. A node follows one direction. The directions are the screen's, in a right-to-left
+layout too. Neither reveals buttons: a row's Delete is `delete=` (`contract vocab swipe`).
+On a paragraph's run, put it on the paragraph or a box instead: only the web gives a run a
+view of its own. `tree` names the event `swiperight` or `swipeleft`.
 
 ```contract
 component Thread
@@ -5681,7 +5731,7 @@ component Thread
     replyTo = id
   view
     column align-items="flex-start" padding=12 gap=8
-      box position="relative" swiperight=reply("1") touch-action="pan-y"
+      box position="relative" swipe=reply("1") swipe-follow="right" touch-action="pan-y"
         transition="translate -exact-spring(300, 30, 1)" testId="bubble-1"
         image "symbol:reply" swipeIndicator=true position="absolute" left=-32 top=8 opacity=0 scale=0.5
           transition="opacity -exact-spring(300, 30, 1), scale -exact-spring(300, 30, 1)" aria-hidden=true
@@ -5692,17 +5742,20 @@ component Thread
 
 ```contract-test
 test "a swipe right answers the message"
-  tap "bubble-1" drag 100 0 from 10 10
+  tap "bubble-1" drag 100 0 from 40 10
   clock settle
   expect tree has "reply-bar"
 ```
 
 A test's drag is a real touch on an iOS simulator: start it where 100 points stay on the
-screen, and `clock settle` after it, so the spring back has ended when the screen is read.
+screen and at least 20 points from the window's left edge, which iOS keeps for its back
+gesture, and `clock settle` after it, so the spring back has ended when the screen is read.
+Drive a node that follows with `drag`, not `swipe`, whose flick also carries it past 64
+points on iOS.
 
 #### A flick that puts the keys away
 
-`swipe=action` with `swipe-direction="down"` is the platform's discrete swipe: nothing
+`swipe=action` with `swipe-flick="down"` is the platform's discrete swipe: nothing
 follows the finger, and the action runs once when iOS recognizes a quick flick down on the
 node or anything inside it, its field included. UIKit arbitrates it with the other gestures
 under the finger, as it does any swipe: a field whose text overflows scrolls instead. Only
@@ -5719,7 +5772,7 @@ component Composer
   action hideKeys
     blur("composer")
   view
-    column swipe=hideKeys swipe-direction="down" testId="composer-bar"
+    column swipe=hideKeys swipe-flick="down" testId="composer-bar"
       textarea id="composer" testId="composer" value=draft input=edit field-sizing="content" max-height=120
 ```
 
@@ -6155,8 +6208,8 @@ a production build never asks for it:
 `exactGeometry(id[, space[, node[, regions]]])` reads a node's geometry from the layout
 just committed (LLP 1123 D6). `space` is `"owner"` (the default, the document's outside
 every content owner), `"window"`, or `"node"` with the `id` of the node whose border box
-is the space; `regions` is UIKit's region query options, `"inactive"`, `"mirrored"` or
-both. Its declared shape chooses what it reads: `available`, `generation`, `size`,
+is the space; `regions` is `"inactive"` to read the inactive reserved regions too, as
+UIKit's `includeInactive` does, or empty. Its declared shape chooses what it reads: `available`, `generation`, `size`,
 `frame`, `observations` and `margins`. `generation` is the number of the layout the
 answer reads, 0 before the first. `observations` has an inset set (`top`, `right`,
 `bottom`, `left`) per family: `safeArea`, `keyboard`, `keyboardUndocked`,
@@ -6167,7 +6220,11 @@ rectangles (`x`, `y`, `width`, `height`). `chrome` is the owner's: `verticalBarE
 (`unspecified`, `leading` or `trailing`, UIKit's preferred edge for the iPhone Duo's
 vertical bar, shown or not), `sidebarAvailable` (whether the tab controller's sidebar is
 available, not whether it shows), `overscan` and the Mac's `auxiliaryTopLeftArea` and
-`auxiliaryTopRightArea`; it is `none` outside every owner. `keyboard` has the box's
+`auxiliaryTopRightArea`; it is `none` outside every owner. `regions` lists the reserved
+regions of the node's owner, or of the document: each has an `id`, a `kind` (`division`, as
+a fold's, or `occlusion`), a `frame` in the space read that includes its `margins`, the
+margins, and whether it is `active`; it is `[]` where the host reserves none and `none`
+where it has none to report, as before iOS 27.1. `keyboard` has the box's
 `guide` (the keyboard's rectangle while one shows, docked or undocked, and while it is
 dismissed a rectangle of no height along the box's bottom), the owner's `occupancy` (the
 docked keyboard's overlap with the owner, along its bottom), `docked`, and `near` and `away`,
@@ -6176,8 +6233,10 @@ keyboard. Declare every field but `available` and
 `generation` an `option`, and each family and rectangle in them too: each is `none`
 before the node is laid out and wherever the host does not have it, and the bake refuses
 a shape that does not say so. `frame` is the border box as laid out, before the scroll
-offsets and transforms above it; it is `none` in `"window"`, which only the host can
-place, and in a `"node"` space in another owner. Until hosts report an owner's band,
+offsets and transforms above it. In `"window"` it is placed by the map its host reports of
+the node's owner, or of the document, into the window, a rectangle under a scaled sheet
+scaled with it, and is `none` where the host reports none, as every host does until LLP
+1123's activation; it is `none` in a `"node"` space in another owner. Until hosts report an owner's band,
 keyboard and margins and the session view's band (LLP 1123 stage 3), a node inside an
 owner reads `none` for its safe area and margins and 0 for the keyboard, and one outside
 every owner reads 0 for each; on the web every quantity is `none`, and the terminal host
@@ -7742,8 +7801,9 @@ gaps, border widths, border spacing and shape margin accept these units too.
 Dimension rows also accept the container units `cqw`, `cqh`, `cqi`, `cqb`,
 `cqmin` and `cqmax`, alone or in a math function: a share of the nearest
 content owner's content root on each axis its host fixes,
-else of the small viewport (LLP 1123 D16). The scalar rows above, custom
-properties and inset overrides refuse them. The web writes them as CSS's, which resolve against the
+else of the small viewport (LLP 1123 D16). The text and spacing rows above take
+them too, against the same content root and again when it resizes; custom properties
+and inset overrides refuse them. The web writes them as CSS's, which resolve against the
 small viewport until a content root declares a container there, and leaves an
 SVG attribute in one unwritten.
 Inherited font sizes and lengths in `em` follow the resolved font on resize.

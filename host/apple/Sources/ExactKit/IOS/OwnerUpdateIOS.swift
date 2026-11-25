@@ -95,6 +95,19 @@ package struct OwnerUpdateIOS: Equatable {
     package var barRegions: [BarRegion?] = [nil, nil, nil, nil]
     /// The owner's chrome (D6), `nil` out of a window.
     package var chrome: Chrome?
+    /// The owner view's map into its window from its bounds' origin, where its block's space starts
+    /// (D6's `"window"` space): UIKit's conversion of that origin and the points a point right of
+    /// and below it, so a sheet UIKit scales back maps scaled; `nil` out of a window.
+    package var windowMap: CGAffineTransform?
+    /// The owner's configuration's identity (D9, "Moving edges"): whether its navigation bar, toolbar
+    /// and tab bar are hidden, whether its title can show large, its size classes, its scene's
+    /// orientation and its window's size, which the largest band an `observed-max` reader settles
+    /// against is kept for; not a large title's collapse, which moves the band within one. `nil` out
+    /// of a window.
+    package var configuration: UInt64?
+    /// The owner view's reserved regions (D16), from its bounds' origin; `nil` out of a window and
+    /// before iOS 27.1.
+    package var regions: [ReservedRegions.Region]?
 
     /// What the owner's chrome is: its view's vertical bar edge, as the kernel's
     /// `VerticalBarEdge` takes it, `nil` before iOS 27.1; and whether the sidebar of the tab
@@ -186,7 +199,32 @@ package struct OwnerUpdateIOS: Equatable {
         var sidebar: Bool?
         if #available(iOS 27.0, *), let tabs { sidebar = tabs.sidebar.isAvailable }
         update.chrome = Chrome(verticalBarEdge: view.traitCollection.verticalBarEdgeRaw, sidebarAvailable: sidebar)
+        let at = view.convert(origin, to: nil)
+        let right = view.convert(CGPoint(x: origin.x + 1, y: origin.y), to: nil)
+        let below = view.convert(CGPoint(x: origin.x, y: origin.y + 1), to: nil)
+        update.windowMap = CGAffineTransform(a: right.x - at.x, b: right.y - at.y, c: below.x - at.x, d: below.y - at.y, tx: at.x, ty: at.y)
+        update.configuration = configuration(of: controller, view: view, tabs: tabs)
+        update.regions = ReservedRegions.all(of: view)
         return update
+    }
+
+    /// The identity of `controller`'s configuration in `view`'s window, from the values UIKit gives it.
+    private static func configuration(of controller: UIViewController, view: UIView, tabs: UITabBarController?) -> UInt64? {
+        guard let window = view.window else { return nil }
+        var hasher = Hasher()
+        let navigation = controller.navigationController
+        hasher.combine(navigation?.isNavigationBarHidden)
+        hasher.combine(navigation?.isToolbarHidden)
+        hasher.combine(navigation?.navigationBar.prefersLargeTitles)
+        hasher.combine(controller.navigationItem.largeTitleDisplayMode.rawValue)
+        hasher.combine(tabs?.tabBar.isHidden)
+        let traits = view.traitCollection
+        hasher.combine(traits.horizontalSizeClass.rawValue)
+        hasher.combine(traits.verticalSizeClass.rawValue)
+        hasher.combine(window.windowScene?.effectiveGeometry.interfaceOrientation.rawValue)
+        hasher.combine(window.bounds.width)
+        hasher.combine(window.bounds.height)
+        return UInt64(bitPattern: Int64(hasher.finalize()))
     }
 
     /// `view`'s bar layout regions, read after the ledger's writes, so each lies past the owner's own
@@ -232,7 +270,9 @@ package struct OwnerUpdateIOS: Equatable {
     /// effect. The keyboard is a byte, 0 unreported, 1 dismissed or 2 shown, and a shown one's frame,
     /// x, y, width, height, and a docked byte. Each edge's bar
     /// region, top, right, bottom, left, follows the segments, and the chrome, its vertical bar
-    /// edge and its sidebar's availability each optional, follows them.
+    /// edge and its sidebar's availability each optional, follows them, and then the window map, its
+    /// six terms in `CGAffineTransform`'s order, the configuration's identity (`u64`) and the reserved
+    /// regions after their count, each its identity, kind, frame, margins and an active byte.
     package func encode() -> Data {
         var out = Data()
         func u8(_ v: UInt8) { out.append(v) }
@@ -287,6 +327,18 @@ package struct OwnerUpdateIOS: Equatable {
         optional(chrome) { c in
             optional(c.verticalBarEdge) { u8(UInt8($0)) }
             optional(c.sidebarAvailable) { u8($0 ? 1 : 0) }
+        }
+        optional(windowMap) { m in [m.a, m.b, m.c, m.d, m.tx, m.ty].forEach(f32) }
+        optional(configuration, u64)
+        optional(regions) { regions in
+            u32(UInt32(regions.count))
+            for r in regions {
+                u64(r.id)
+                u8(r.kind)
+                [r.frame.minX, r.frame.minY, r.frame.width, r.frame.height].forEach(f32)
+                edges(r.margins)
+                u8(r.active ? 1 : 0)
+            }
         }
         return out
     }

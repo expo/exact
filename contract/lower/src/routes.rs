@@ -2,6 +2,7 @@
 
 use super::*;
 
+pub(crate) mod arrangement;
 pub(crate) mod bottom_toolbar;
 pub(crate) mod tab_accessory;
 
@@ -203,6 +204,13 @@ pub(crate) enum NavPlace {
     RouteColumn,
     /// Inside a route.
     InRoute,
+}
+
+/// The refusals of what stands where it cannot, by its place in the checked view: a bottom toolbar and an arrangement.
+pub(crate) fn placed(checked: &Checked<'_>, warnings: &mut Vec<LowerError>) -> Vec<LowerError> {
+    let mut errors = bottom_toolbar::check(checked, warnings);
+    errors.extend(arrangement::check(checked));
+    errors
 }
 
 /// @ref LLP 1116.006 D2 — the attribute marking a box as the split's own placeholder, written as

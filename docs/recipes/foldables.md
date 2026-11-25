@@ -31,8 +31,8 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
 - Scrolling content can span the hinge; keep controls off it.
 - Centre a non-scrolling pane (full width if narrow) or use the trailing segment.
 - **A list and its detail** is a split view (`pattern list-detail`; UIKit's on iOS,
-  LLP 1127). **Peer panes** use [native containers](../contract-for-agents.md#arranged-panes)
-  on iOS 27.1 and responsive CSS elsewhere (Duo Lab's Panes tab).
+  LLP 1127). **Peer panes** say [`arrangement`](../contract-for-agents.md#arranged-panes):
+  UIKit's on iOS 27.1, your CSS elsewhere (Duo Lab's Panes tab).
 - A route on the trailing segment keeps its title with
   `navigationBar=(book ? "none" : "auto")`: its first-child `header` paints in
   that pane, with its own Back if pushed; otherwise UIKit makes the bar.

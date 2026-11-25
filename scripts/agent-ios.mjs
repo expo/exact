@@ -8,7 +8,7 @@ import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { openTouches, iosTouchInput, springboard, withAccessibilityLock, withAccessibilityRuntime } from '../host/apple/touches.mjs';
-import { coreDeviceAvailable, coreDeviceTurn, hasSimulatorHinge, hingeHelper, partialFoldDisplay, rotateSimulator, simulatorTurns } from './duo/hinge.mjs';
+import { coreDeviceAvailable, coreDeviceTurn, foldTaken, hasSimulatorHinge, hingeHelper, partialFoldDisplay, rotateSimulator, simulatorTurns } from './duo/hinge.mjs';
 import { nativeKey } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
 import { bundleId, install } from '../host/apple/build.mjs';
@@ -292,12 +292,14 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
       crashes,
       udid: dev.udid,
       installNote: kept?.note,
-      fold: !hostFixture && hasSimulatorHinge(dev) ? (degrees, land) => simulatorDisplay(dev.udid, () => {
+      fold: !hostFixture && hasSimulatorHinge(dev) ? (degrees, land) => simulatorDisplay(dev.udid, async () => {
         helper ??= hingeHelper(dev.udid, dir);
-        const since = Date.now();
-        const angle = Number(helper('fold', degrees));
+        const since = Date.now(), before = { ...await ask({ op: 'layout', simulatorRotation: true }), viewport: (await ask({ op: 'layout' })).viewport };
+        const angle = Number(helper('fold', degrees)), still = lastFold?.taken ? lastFold.angle === angle : undefined;
         lastFold = { angle, since };
-        return land(angle);
+        const taken = lastFold.taken = await foldTaken({ ask, degrees: angle, before, still, display: timeout => partialFoldDisplay(dev.udid, since, timeout) });
+        const landed = await land(angle);
+        return taken ? landed : { ...landed, settled: false, reason: 'hinge' };
       }) : undefined,
       rotate: !hostFixture ? (orientation, land) => withAccessibilityLock(dev.udid, async () => {
         const duo = hasSimulatorHinge(dev);

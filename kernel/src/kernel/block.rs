@@ -853,6 +853,18 @@ impl Kernel {
     fn resize_content_root(&mut self, slot: u32) {
         let sized = super::readers::container_readers(&self.arena, slot);
         self.restyle_readers(&sized);
+        // Resolve the relative rows in container units again, which are resolved apart from
+        // the others (`txn::relative`)
+        let mut queued = false;
+        for &s in &sized {
+            queued |= super::owner::queue_contained(&mut self.arena, s);
+        }
+        if queued {
+            let mut unmirrored = crate::layout::Unmirrored;
+            let layout = self.layout.as_deref_mut().unwrap_or(&mut unmirrored);
+            let mut receipt = crate::CommitReceipt::default();
+            crate::txn::relative::resolve(&mut self.arena, layout, &mut Vec::new(), &mut receipt);
+        }
     }
 
     /// Whether the host shows `view`, a block it gave, as a navigation bar's

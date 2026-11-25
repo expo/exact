@@ -32,8 +32,14 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let first = try XCTUnwrap(update.chain.first)
         XCTAssertEqual(first.target.insets, view.safeAreaInsets)
         XCTAssertEqual(first.target.id, TargetIds.id(of: view))
-        // Each target's coordinate space is its bounds in its window, the window's its own
+        // Each target's frame is its bounds in its window, the window's its own
         XCTAssertEqual(first.target.frame, view.convert(view.bounds, to: nil))
+        // And the window map takes a point of the owner's block, from its origin, where UIKit puts it
+        let map = try XCTUnwrap(update.windowMap)
+        let point = CGPoint(x: 30, y: 50), origin = view.bounds.origin
+        let mapped = point.applying(map), converted = view.convert(CGPoint(x: origin.x + 30, y: origin.y + 50), to: nil)
+        XCTAssertEqual(mapped.x, converted.x, accuracy: 0.01)
+        XCTAssertEqual(mapped.y, converted.y, accuracy: 0.01)
         let navigation = try XCTUnwrap(route.navigationController?.view)
         let named = update.chain.first { $0.kinds & OwnerUpdateIOS.Kind.navigation != 0 }
         XCTAssertEqual(named?.target.insets, navigation.safeAreaInsets)
@@ -41,6 +47,18 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let windowTarget = update.relations.first { $0.relation == OwnerUpdateIOS.Relation.window }
         XCTAssertEqual(windowTarget?.target.insets, window.safeAreaInsets)
         XCTAssertEqual(windowTarget?.target.frame, window.bounds)
+        // Its reserved regions from iOS 27.1, each keeping its identity from one sample to the next
+        if #available(iOS 27.1, *) {
+            let regions = try XCTUnwrap(update.regions)
+            let again = OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).regions
+            XCTAssertEqual(again?.map(\.id), regions.map(\.id))
+            // The divisions among them are the view's division regions, from its bounds' origin
+            let origin = view.bounds.origin
+            let divisions = (ReservedRegions.divisions(of: view) ?? []).map { $0.frame.offsetBy(dx: -origin.x, dy: -origin.y) }
+            XCTAssertEqual(regions.filter { $0.kind == 0 }.map(\.frame), divisions)
+        } else {
+            XCTAssertNil(update.regions)
+        }
         let margins = try XCTUnwrap(update.margins)
         XCTAssertEqual(margins.root, view.layoutMargins)
         XCTAssertEqual(margins.plain, UIView().layoutMargins)
@@ -145,6 +163,9 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(update.chain[0].target.insets)
         XCTAssertNil(update.chain[0].target.frame)
         XCTAssertNil(update.chrome)
+        XCTAssertNil(update.windowMap)
+        XCTAssertNil(update.configuration)
+        XCTAssertNil(update.regions)
         XCTAssertEqual(update.keyboard, .unreported)
     }
 
@@ -190,6 +211,40 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertGreaterThan(insets.bottom, tabs.view.safeAreaInsets.bottom, "guide \(frame), tab bar \(tabs.tabBar.frame)")
         // And the chrome says whether the tab controller's sidebar is available
         if #available(iOS 27.0, *) { XCTAssertEqual(update.chrome?.sidebarAvailable, tabs.sidebar.isAvailable) }
+    }
+
+    /// A scrolled owner's window map starts at its bounds' origin, where its block's space does, so the
+    /// block's top left maps to the view's top left in its window whatever it scrolled to.
+    func testAScrolledOwnersWindowMapStartsAtItsBoundsOrigin() throws {
+        let scene = hostedWindowScene()
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let controller = UIViewController(), scroll = UIScrollView(frame: CGRect(x: 10, y: 80, width: 300, height: 400))
+        scroll.contentInsetAdjustmentBehavior = .never
+        scroll.contentSize = CGSize(width: 300, height: 2000)
+        controller.view.addSubview(scroll)
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        self.window = window
+        scroll.contentOffset = CGPoint(x: 0, y: 100)
+        let map = try XCTUnwrap(OwnerUpdateIOS.sample(controller: controller, view: scroll, session: nil).windowMap)
+        let top = CGPoint.zero.applying(map), frame = scroll.convert(scroll.bounds, to: nil)
+        XCTAssertEqual(top.x, frame.minX, accuracy: 0.01)
+        XCTAssertEqual(top.y, frame.minY, accuracy: 0.01)
+    }
+
+    /// A route's configuration stays while nothing of it changes and moves when its navigation bar
+    /// hides, coming back when the bar does (D9, "Moving edges").
+    func testARoutesConfigurationMovesWithItsBars() throws {
+        let session = try fixture()
+        let (route, view) = try firstRoute(session)
+        let navigation = try XCTUnwrap(route.navigationController)
+        let sample = { OwnerUpdateIOS.sample(controller: route, view: view, session: self.sessionView).configuration }
+        let first = try XCTUnwrap(sample())
+        XCTAssertEqual(sample(), first)
+        navigation.setNavigationBarHidden(!navigation.isNavigationBarHidden, animated: false)
+        XCTAssertNotEqual(sample(), first)
+        navigation.setNavigationBarHidden(!navigation.isNavigationBarHidden, animated: false)
+        XCTAssertEqual(sample(), first)
     }
 
     func testATargetsIdentityIsItsViewsForLife() {
@@ -252,6 +307,9 @@ final class OwnerUpdateIOSTests: XCTestCase {
         update.keyboard = .shown(.init(frame: CGRect(x: 0, y: 538, width: 402, height: 336), docked: true))
         update.barRegions = [nil, nil, .init(distance: 24, sides: (16, 8.5)), nil]
         update.chrome = .init(verticalBarEdge: 2, sidebarAvailable: false)
+        update.windowMap = CGAffineTransform(a: 0.9, b: 0.1, c: 0.2, d: 0.8, tx: 5, ty: 62)
+        update.configuration = 7
+        update.regions = [.init(id: 11, kind: 0, frame: CGRect(x: 175, y: 0, width: 40, height: 844), margins: UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10), active: false)]
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
         func u32(_ v: UInt32) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
@@ -265,6 +323,9 @@ final class OwnerUpdateIOSTests: XCTestCase {
         w.append(0)
         w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
         w += [1, 1, 2, 1, 0]
+        w.append(1); f(0.9, 0.1, 0.2, 0.8, 5, 62)
+        w.append(1); u64(7)
+        w.append(1); u32(1); u64(11); w.append(0); f(175, 0, 40, 844); f(0, 10, 0, 10); w.append(0)
         XCTAssertEqual([UInt8](update.encode()), w)
         // The keyboard's state, after an empty update's band, lists and margins: 0 unreported, 1 dismissed
         XCTAssertEqual([UInt8](OwnerUpdateIOS().encode())[14], 0)

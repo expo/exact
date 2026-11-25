@@ -405,7 +405,7 @@ const SWIPE_ROW: &str = r#"component App
     count = count + 1
   view
     column width=400 height=500
-      box testId="row" width=400 height=100 swiperight=reply touch-action="pan-y" transition="translate -exact-spring(300, 30, 1)"
+      box testId="row" width=400 height=100 swipe=reply swipe-follow="right" touch-action="pan-y" transition="translate -exact-spring(300, 30, 1)"
         text "swipe me"
       text `${count}` testId="count"
 "#;

@@ -25,7 +25,7 @@ const SOURCE: &str = r##"component App
         text "retarget"
       text `${count}` testId="count"
       if shown
-        column testId="row" scale=target background-color=color transition="translate -exact-spring(180, 12, 1), scale -exact-spring(180, 12, 1)" swiperight=swipe
+        column testId="row" scale=target background-color=color transition="translate -exact-spring(180, 12, 1), scale -exact-spring(180, 12, 1)" swipe=swipe swipe-follow="right"
           text "row"
 "##;
 fn boot() -> Host<NoData> {
@@ -259,7 +259,7 @@ fn real_wasm_swipe_takeover_style_commits_and_deletion() {
       column navigationBack="back" navigationKey=(blocked ? "other" : "held")
         column navigationKey="held" testId="held-route"
           if shown
-            column testId="row" disabled=disabled swiperight=swipe touch-action="pan-y" width=300 height=90 background-color=tint transition=returning
+            column testId="row" disabled=disabled swipe=swipe swipe-follow="right" touch-action="pan-y" width=300 height=90 background-color=tint transition=returning
               text "Swipe" height=30
               text "Reply" testId="indicator" swipeIndicator=true opacity=0 scale=0.5 transition="opacity -exact-spring(180, 12, 1), scale -exact-spring(180, 12, 1)"
         column navigationKey="other"
@@ -340,15 +340,17 @@ fn hold_input_drains_other_advanced_properties_without_animating_the_hold() {
 #[test]
 fn a_completed_hold_runs_the_swipe_its_offset_points_to() {
     exact_web::link(exact_web_capabilities::ALL);
-    let source = "component App\n  state said = \"\"\n  action say(way: string)\n    said = said + way\n  view\n    column\n      text said\n      column testId=\"row\" swiperight=say(\"r\") swipeleft=say(\"l\") touch-action=\"pan-y\" transition=\"translate -exact-spring(180, 12, 1)\"\n        text \"row\"\n";
-    let mut host = Host::boot(
-        &contract::compile(source).unwrap().encode(),
-        NoData,
-        Default::default(),
-        "/",
-    )
-    .unwrap()
-    .0;
+    let source = "component App\n  state said = \"\"\n  action say(way: string)\n    said = said + way\n  view\n    column\n      text said\n      column testId=\"row\" swipe=say(\"r\") swipe-follow=\"right\" press=say(\"l\") touch-action=\"pan-y\" transition=\"translate -exact-spring(180, 12, 1)\"\n        text \"row\"\n";
+    // No source gives a node both ways (LLP 1057.001 §8), but a plan may hold
+    // them and the host still takes it: the row's `press` is made its left swipe
+    let mut plan = contract::compile(source).unwrap();
+    plan.handlers
+        .iter_mut()
+        .filter(|h| h.event == exact_plan::EventKind::Press)
+        .for_each(|h| h.event = exact_plan::EventKind::Swipeleft);
+    let mut host = Host::boot(&plan.encode(), NoData, Default::default(), "/")
+        .unwrap()
+        .0;
     let row = id(&host, "row");
     let mut now = 100.0;
     for (shown, said) in [(-70.0, "l"), (70.0, "lr"), (0.0, "lr")] {

@@ -8,7 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { appleArtifacts } from '../host/apple/build.mjs';
 import { buildFirst, nativeBuild } from './agent-build.mjs';
-import { rotateSimulator } from './duo/hinge.mjs';
+import { foldTaken, rotateSimulator } from './duo/hinge.mjs';
 import { resolveApp } from './app.mjs';
 
 const root = resolve(import.meta.dir, '..');
@@ -624,6 +624,42 @@ test('a partial fold can report the new hinge angle on the outgoing cover', asyn
     async land(result) { return result; },
   }, 'landscapeLeft');
   assert.equal(reads, samples.length);
+});
+
+test('a fold lands once UIKit has told the app of it, moved it to the display and divided its window', async () => {
+  const flat = { 'horizontal-viewport-segments': 1, 'vertical-viewport-segments': 1 }, book = { ...flat, 'horizontal-viewport-segments': 2 };
+  // `samples`: what the host says each time, its own facts and then the app's segments; the first is from before the fold
+  const fold = async (degrees, [before, ...samples], { display = () => assert.fail('SpringBoard was asked'), still, within } = {}) => {
+    let reads = 0;
+    const at = () => samples[Math.min(reads, samples.length) - 1];
+    const taken = await foldTaken({ degrees, display, before, still, within, quiet: 50, pause: 1, ask: async ({ simulatorRotation }) => {
+      if (simulatorRotation) reads++;
+      return simulatorRotation ? at() : { env: at().env, viewport: at().viewport };
+    } });
+    return [taken, reads];
+  };
+  const wide = { w: 951, h: 669 }, narrow = { w: 466, h: 678 };
+  const open = { angle: 180, inner: true, ready: true, env: flat, viewport: wide }, half = { ...open, angle: 127.78, env: book };
+  const closed = { angle: 0, inner: false, ready: true, env: flat, viewport: narrow };
+  assert.deepEqual(await fold(130, [open, open, { ...half, env: flat }, half]), [true, 3]); // the division comes after the hinge
+  assert.deepEqual(await fold(0, [open, open, { ...open, angle: 0 }, { ...closed, ready: false }, { ...closed, viewport: wide }, closed]), [true, 5]); // and the display, and its size
+  assert.deepEqual(await fold(180, [closed, closed, { ...closed, angle: 180 }, open]), [true, 3]);
+  // Between two partial angles, only the new one is taken, unless the driver folded to this one; a first fold can find it there
+  assert.deepEqual(await fold(90, [half, half, { ...half, angle: 88 }], { still: false }), [true, 2]);
+  assert.equal((await fold(90, [half, half], { still: false, within: 100 }))[0], false);
+  assert.deepEqual(await fold(130, [half, half], { still: true }), [true, 1]);
+  assert.equal((await fold(130, [half, half], { display: () => ({}) }))[0], true);
+  assert.equal((await fold(0, [open, { ...closed, angle: null }], { within: 100 }))[0], false);
+  // From the cover, or nearly closed, SpringBoard says which display has the app
+  assert.deepEqual(await fold(130, [closed, { ...closed, angle: 127.78 }, half], { display: () => ({ inner: true, fresh: true }) }), [true, 2]);
+  assert.deepEqual(await fold(20, [open, { ...half, angle: 18 }, { ...closed, angle: 18 }], { display: () => ({ inner: false, fresh: true }) }), [true, 2]);
+  // A first fold to another partial angle waits for SpringBoard's
+  assert.equal((await fold(90, [half, half], { display: () => ({ angle: 88 }), within: 100 }))[0], false);
+  // Its word from before this fold is not of it: the display the app is on is taken once it has been quiet
+  const [taken, reads] = await fold(130, [closed, { ...closed, angle: 127.78 }, half], { display: () => ({ inner: false, fresh: false }) });
+  assert.ok(taken && reads > 2);
+  assert.equal((await fold(20, [closed, { ...closed, angle: 18 }], { display: () => ({ inner: false, fresh: false }) }))[0], true);
+  assert.equal((await fold(130, [open, open], { within: 100 }))[0], false);
 });
 
 test('losing the verification read cannot undo a turn the scene reported', async () => {
