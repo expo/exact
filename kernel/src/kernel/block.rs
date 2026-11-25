@@ -273,6 +273,8 @@ pub(crate) struct Blocks(
     Vec<(u32, [f32; 4])>,
     /// The owners in `.1`, for a lookup that finds no owner at once.
     crate::sorted::SlotSet,
+    /// The window's aspect-fit guide a host fits the first root to (LLP 1123 D16, `root_fit.rs`).
+    super::root_fit::RootFits,
 );
 
 /// One node's block: the one in force, the host's or else the one the
@@ -313,6 +315,13 @@ pub(crate) struct Held {
 }
 
 impl Blocks {
+    pub(crate) fn root_fits(&self) -> &super::root_fit::RootFits {
+        &self.3
+    }
+    pub(crate) fn root_fits_mut(&mut self) -> &mut super::root_fit::RootFits {
+        &mut self.3
+    }
+
     /// The block `slot` has, its host's or the kernel's.
     pub(crate) fn get(&self, slot: u32) -> Option<HostBlock> {
         self.held(slot).map(|b| b.block)
@@ -526,7 +535,10 @@ pub(crate) fn publication_start(arena: &mut NodeArena, root: u32) -> (bool, bool
         hidden_above(arena, root) || arena.cover(root).is_some_and(super::HostCover::replaces);
     let whole = arena.flags(root).has(NodeFlags::ATTACHED);
     let Some(held) = arena.blocks.held_mut(root) else {
-        return (false, false, (0.0, 0.0));
+        // A root the window's aspect-fit guide places starts at the guide's origin (LLP 1123 D16)
+        let key = arena.key(root);
+        let (origin, moved) = arena.blocks.root_fits_mut().publish(key);
+        return (false, moved, origin);
     };
     let was = std::mem::replace(&mut held.hidden, hidden);
     let [top, _, _, left] = held.cleared;

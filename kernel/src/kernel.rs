@@ -45,6 +45,7 @@ mod provenance;
 pub(crate) mod readers;
 mod regions;
 mod replacement;
+mod root_fit;
 mod segments;
 mod session_update;
 pub(crate) mod targets;
@@ -750,6 +751,8 @@ impl Kernel {
         self.imply_blocks();
         engine(&mut self.layout).present_heights(&self.arena, presented);
         // The root, then each subtree a host gave a block (LLP 1115.002 D8.2).
+        // The root in the window's aspect-fit guide, where a host fits it to one (LLP 1123 D16)
+        let offer = self.root_offer(slot, offer);
         let first = self.lay_out_roots(slot, offer);
         // Measure every observation again after a pass that failed, whose frames no receipt names
         if first.is_err() {
@@ -1138,6 +1141,8 @@ mod cover_tests;
 mod measure_block_tests;
 #[cfg(test)]
 mod presented_height_tests;
+#[cfg(test)]
+mod root_fit_tests;
 #[cfg(test)]
 mod top_layer_tests;
 
