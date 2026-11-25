@@ -1313,3 +1313,39 @@ download or capture) asks for POSIX semantics with `FileRenameInformationEx`,
 so a reader that shares deletion keeps the old file and the name takes the new
 one. A filesystem that refuses the class or flag, such as FAT, gets the legacy
 replace, which fails while another handle holds the target open.
+## Local patch 54, staging in a directory per launch
+
+`stdlib/app_fs_staging.rs` gives each app root one `.exact-staging/` directory
+holding a directory per launch, which keeps an exclusive lock on its `.lock` for
+the life of its process (`flock` on Unix, `LockFileEx` on Windows). A staged
+file (local patch 19), `fs.atomicWriteFile` on an app path and the atomic write
+`prepare_atomic` hands out create their temporary file there and rename it into
+place, so a process that ends during a write leaves it only there.
+
+A launch's first use of a root, or `app_fs::claim_staging` (which Exact's
+painted and Apple hosts call for their roots as storage is configured, each
+root once), removes the launch directories whose lock no live process holds,
+considering only names of 24 hex digits. The sweep opens a lock without making
+one: a launch directory with no `.lock` is removed, since its launch ended
+between making the two, and one whose lock cannot be opened otherwise is left.
+Once made, a launch directory is made again only when it is gone or replaced;
+any other error reopening it keeps it and its lock, and that write stages
+beside its target.
+
+Making a launch directory and sweeping hold `.namespace.lock`, which also
+marks the staging directory as the host's: a path of that name the app made
+before (a file, a link, or a folder without the mark that is not empty) is
+left untouched, and that root stages beside the target as before, as does a
+root whose staging directory cannot be made. `.exact-staging` is refused as the
+first component of an app path, in any case, and a root's listing leaves it
+out as it reads, so it spends none of the listing's budget. On Windows an
+atomic write refuses a target that is not a regular file before the staging
+directory is made.
+
+Not covered: document, native and known-folder writes still stage beside their
+targets. On a case-insensitive APFS volume a name that folds to
+`.exact-staging` only under Unicode case folding (`ſ`, U+017F, for `s`) still
+reaches the directory, as an 8.3 short name can on Windows. A temporary file
+takes the root's permissions, not its destination folder's, which differs only
+where a folder below a root has its own inheritable ACL. Replay on a refresh
+(expo/exact#1692).

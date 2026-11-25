@@ -254,6 +254,35 @@ fn a_script_src_is_its_origin_and_an_inline_script_is_hashed_as_the_browser_read
 }
 
 #[test]
+fn inline_js_entry_is_hashed_from_the_shell_without_duplicating_matching_disk_hash() {
+    let dist = Dist::with(None);
+    let body = "const s=`\\x3c!-- <script>`;";
+    std::fs::write(dist.0.join("app-Ab12Cd34.js"), body).unwrap();
+    let table = r#"{"routes":[],"files":{"app.js":"app-Ab12Cd34.js"}}"#;
+    std::fs::write(dist.0.join("routes.json"), table).unwrap();
+    let shell_same = format!(
+        "<!doctype html>\n<title>T</title>\n<style>.a{{}}</style>\n\
+         <div id=\"exact-root\"></div>\n\
+         <script type=\"module\" data-entry=\"./app-Ab12Cd34.js\">{body}</script>\n"
+    );
+    let headers = csp::headers("", &dist.0, &shell_same, None).unwrap();
+    let scripts = directive(&headers, "Content-Security-Policy", "script-src").unwrap();
+    let hash = sha(body);
+    assert_eq!(scripts.matches(&hash).count(), 1, "{scripts}");
+
+    // When the inlined script differs from disk (or has CRLF), CSP still admits the exact inlined bytes.
+    let shell_other = "<!doctype html>\n<title>T</title>\n<style>.a{}</style>\n\
+        <div id=\"exact-root\"></div>\n\
+        <script type=\"module\" data-entry=\"./app-Ab12Cd34.js\">const a=1;\r\nconst b=2;</script>\n";
+    let headers = csp::headers("", &dist.0, shell_other, None).unwrap();
+    let scripts = directive(&headers, "Content-Security-Policy", "script-src").unwrap();
+    assert!(
+        scripts.contains(&sha("const a=1;\nconst b=2;")),
+        "{scripts}"
+    );
+}
+
+#[test]
 fn the_web_shells_head_entries_are_found_between_its_sheet_and_its_root() {
     // host/web/build.mjs writes `host.web.head` just before the root.
     let shell = include_str!("../../web/index.html").replace(

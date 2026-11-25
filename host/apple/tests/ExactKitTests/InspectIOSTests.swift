@@ -132,6 +132,14 @@ final class InspectIOSTests: XCTestCase {
         if let list = tabs.floatingTabList, let scroller = session.presenter.views.values.compactMap(\.scrollView).first(where: { $0.window === window }) {
             XCTAssertTrue(Agent(session: session).bars(over: scroller).contains(list))
         }
+        if let list = tabs.floatingTabList {
+            let cover = UIView(frame: window.convert(second.box, to: list))
+            list.addSubview(cover)
+            let point = CGPoint(x: second.box.midX, y: second.box.midY)
+            XCTAssertTrue(window.hitTest(point, with: nil) === cover)
+            XCTAssertNil(InspectHost.target(at: point, in: window, ExactApp.shared).id)
+            cover.removeFromSuperview()
+        }
         // Its box is the item's, for the press and the outline.
         let node = try XCTUnwrap(session.presenter.views[second.id])
         let place = try XCTUnwrap(InspectHost.place(of: node, in: session), "a tab has a place")

@@ -1001,3 +1001,97 @@ onAMac('chromium: on a Mac, Control chords in a Markdown editor are the text bin
     expect((await state())[0]).toBe(' **beta** gammasecond line here');
   });
 }, 60000);
+
+engineTest.chromium('chromium: JS runtime mde keeps each-row anchors intact and cleans up on unmount', async () => {
+  await editor('chromium', '', async page => {
+    const result = await page.evaluate(async () => {
+      const rt = await import('./rt.js');
+      let selectionAdds = 0, selectionRemoves = 0, pointerAdds = 0, pointerRemoves = 0;
+      const origDocAdd = document.addEventListener.bind(document), origDocRemove = document.removeEventListener.bind(document);
+      const origWinAdd = window.addEventListener.bind(window), origWinRemove = window.removeEventListener.bind(window);
+      document.addEventListener = (t, ...a) => { if (t === 'selectionchange') selectionAdds++; return origDocAdd(t, ...a); };
+      document.removeEventListener = (t, ...a) => { if (t === 'selectionchange') selectionRemoves++; return origDocRemove(t, ...a); };
+      window.addEventListener = (t, ...a) => { if (t === 'pointerup' || t === 'pointercancel') pointerAdds++; return origWinAdd(t, ...a); };
+      window.removeEventListener = (t, ...a) => { if (t === 'pointerup' || t === 'pointercancel') pointerRemoves++; return origWinRemove(t, ...a); };
+
+      const root = rt.h(document.body, 'div', 0, { id: 'exact-root' }, 0);
+      const items = rt.sig(['b', 'c']);
+      const show = rt.sig(true);
+      let listBox, whenBox;
+      rt.mount(() => {
+        listBox = rt.h(root, 'div', 0, { id: 'list' }, 0);
+        rt.each(listBox, items, item => item(), (p, item) => {
+          const ta = rt.h(p, 'textarea', 0, { id: 'row-' + item(), markup: 'markdown' }, 0);
+          ta.value = item();
+          rt.mde(ta);
+        });
+        whenBox = rt.h(root, 'div', 0, { id: 'when' }, 0);
+        rt.when(whenBox, show, p => {
+          const ta = rt.h(p, 'textarea', 0, { id: 'solo', markup: 'markdown' }, 0);
+          ta.value = 'solo';
+          rt.mde(ta);
+        });
+      });
+
+      const waitForEditors = async ids => {
+        for (let i = 0; i < 200; i++) {
+          if (ids.every(id => document.getElementById(id)?.exactMarkup)) return;
+          await new Promise(r => setTimeout(r, 10));
+        }
+        throw new Error('editors did not mount: ' + ids.join(','));
+      };
+      await waitForEditors(['row-b', 'row-c', 'solo']);
+
+      let destroyed = 0;
+      const trackDestroy = id => {
+        const em = document.getElementById(id).exactMarkup;
+        const orig = em.destroy;
+        em.destroy = () => { destroyed++; orig(); };
+      };
+      trackDestroy('row-b');
+      trackDestroy('row-c');
+      trackDestroy('solo');
+
+      // Insert before an editor row, reorder rows, then remove one (leaving siblings so the clear fast path cannot run).
+      rt.commit(() => rt.write(items.n, ['a', 'b', 'c']));
+      await waitForEditors(['row-a', 'row-b', 'row-c']);
+      const afterInsert = [...listBox.querySelectorAll('.exact-markdown-editor')].map(el => el.id);
+
+      rt.commit(() => rt.write(items.n, ['c', 'a', 'b']));
+      const afterReorder = [...listBox.querySelectorAll('.exact-markdown-editor')].map(el => el.id);
+
+      rt.commit(() => rt.write(items.n, ['c', 'a']));
+      const afterRemove = [...listBox.querySelectorAll('.exact-markdown-editor')].map(el => el.id);
+
+      // Unmount the `when` branch and the remaining rows, verifying all editors destroy and listeners balance.
+      rt.commit(() => { rt.write(show.n, false); rt.write(items.n, []); });
+      const afterClear = root.querySelectorAll('.exact-markdown-editor').length;
+
+      // Mount and immediately unmount before the async install settles: must not install a leaked editor.
+      rt.commit(() => rt.write(show.n, true));
+      rt.commit(() => rt.write(show.n, false));
+      await new Promise(r => setTimeout(r, 30));
+
+      return {
+        afterInsert,
+        afterReorder,
+        afterRemove,
+        afterClear,
+        destroyed,
+        selectionBalanced: selectionAdds > 0 && selectionAdds === selectionRemoves,
+        pointerBalanced: pointerAdds > 0 && pointerAdds === pointerRemoves,
+        finalEditors: root.querySelectorAll('.exact-markdown-editor').length,
+      };
+    });
+    expect(result).toEqual({
+      afterInsert: ['row-a', 'row-b', 'row-c'],
+      afterReorder: ['row-c', 'row-a', 'row-b'],
+      afterRemove: ['row-c', 'row-a'],
+      afterClear: 0,
+      destroyed: 3,
+      selectionBalanced: true,
+      pointerBalanced: true,
+      finalEditors: 0,
+    });
+  }, true);
+}, 60000);

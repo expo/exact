@@ -74,6 +74,30 @@ impl Drop for App {
 }
 
 #[test]
+fn a_package_views_own_navigation_split_prop_is_the_modules() {
+    // LLP 1024 D1, LLP 1127 D1: a prop the package declares is the module's, which no stack reads, so it earns no
+    // placement warning, whatever each use passes
+    let interface = INTERFACE.replace(
+        r#""caption": "option<string>" }"#,
+        r#""caption": "option<string>", "navigationSplit": "option<string>" }"#,
+    );
+    assert_ne!(interface, INTERFACE, "the fixture moved");
+    let source = "component App\n  view\n    column\n      Wrap(mode=\"placeholder\")\n      Wrap(mode=\"none\")\ncomponent Wrap\n  props\n    mode: string\n  view\n    swatch-box navigationSplit=mode testId=\"box\"\n";
+    let app = App::new("split-prop", source, &[]);
+    std::fs::write(
+        app.0.join("node_modules/@fixture/swatch/exact.json"),
+        interface,
+    )
+    .unwrap();
+    let (result, warnings) = contract::compile_path_all_warned(&app.0.join("app.contract"), false);
+    result.unwrap();
+    assert!(
+        warnings.iter().all(|w| w.id != "lower-navigation-split"),
+        "{warnings:?}"
+    );
+}
+
+#[test]
 fn a_package_gpu_surface_checks_its_positional_arity() {
     let declaration = r#"{"kind":"interface","name":"@fixture/sky","version":"1.0.0",
         "gpu":{"crate":"rust","exactGpu":"0.4","surfaces":{"sky":{"arity":1,"factory":"sky::surface"}}}}"#;

@@ -33,8 +33,10 @@ pub(crate) fn check_row(
     attrs: &[Attr],
     span: Span,
 ) -> Result<(), LowerError> {
-    if !matches!(place, NavPlace::RouteColumn)
-        || tag != "row"
+    if !matches!(
+        place,
+        NavPlace::RouteChild { column: true } | NavPlace::RouteRow { column: true }
+    ) || tag != "row"
         || literal(attrs, "role") != Some("toolbar")
     {
         return err(

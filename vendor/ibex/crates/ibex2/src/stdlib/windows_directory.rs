@@ -639,6 +639,27 @@ impl Directory {
         token: &str,
         before_commit: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<()> {
+        self.write_via(self, leaf, bytes, token, before_commit)
+    }
+    /// [`Self::write`], with the temporary file made in `staging`, a
+    /// directory on the same volume.
+    pub(crate) fn write_in(
+        &self,
+        staging: &Directory,
+        leaf: &str,
+        bytes: &[u8],
+        token: &str,
+    ) -> io::Result<()> {
+        self.write_via(staging, leaf, bytes, token, || Ok(()))
+    }
+    fn write_via(
+        &self,
+        staging: &Directory,
+        leaf: &str,
+        bytes: &[u8],
+        token: &str,
+        before_commit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
         let target = || match self.kind(leaf) {
             Ok(Kind { regular: true, .. }) => Ok(()),
             Ok(_) => Err(refuse("filesystem entries must be regular files")),
@@ -650,7 +671,7 @@ impl Directory {
             return Err(refuse("invalid temporary-file token"));
         }
         let temp = format!(".tmp-{}-{token}", std::process::id());
-        let mut file = self.file(&temp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
+        let mut file = staging.file(&temp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
         let result = (|| {
             file.write_all(bytes)?;
             file.sync_all()?;
@@ -659,7 +680,7 @@ impl Directory {
             self.rename(&file, leaf)
         })();
         drop(file);
-        let _ = self.unlink(&temp);
+        let _ = staging.unlink(&temp);
         result
     }
 }

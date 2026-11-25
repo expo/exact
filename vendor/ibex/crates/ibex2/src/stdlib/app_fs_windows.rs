@@ -164,6 +164,9 @@ impl AppDirectories {
         for part in &parts {
             windows_directory::validate_name(part).map_err(error)?;
         }
+        if parts.first().is_some_and(|part| staging::reserved(part)) {
+            return Err(error("app path names the host's staging directory"));
+        }
         Ok((index, parts))
     }
     fn parent(&self, path: &str) -> Result<(Directory, String), HostError> {
@@ -188,10 +191,15 @@ impl AppDirectories {
         grants: &GrantSet,
         path: &str,
     ) -> Result<AtomicTarget, HostError> {
-        self.parse(path)?;
+        let (index, _) = self.parse(path)?;
         crate::boundary::admit(grants, &Operation::FsWrite { path: path.into() })?;
         let (parent, leaf) = self.parent(path)?;
-        Ok(AtomicTarget { parent, leaf })
+        let staging = self.staging_or(index, &parent)?;
+        Ok(AtomicTarget {
+            parent,
+            leaf,
+            staging,
+        })
     }
     /// Trusted Rust callers own subsequent scheduling and byte bounds.
     pub fn open_file(&self, grants: &GrantSet, path: &str) -> Result<File, HostError> {
@@ -309,6 +317,24 @@ impl AppDirectories {
             }
             return Ok(FsResult::Done);
         }
+        if op == FsOp::AtomicWriteFile {
+            let (parent, leaf) = self.parent(path)?;
+            // Refused before the root's staging directory is made.
+            match parent.kind(&leaf) {
+                Ok(kind) if !kind.regular => return Err(error("write needs a regular file")),
+                Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(error(e)),
+                _ => {}
+            }
+            let staging = self.staging_or(index, &parent)?;
+            let token = token().map_err(error)?;
+            (parent.write_in(&staging, &leaf, data.unwrap_or(&[]), &token)).map_err(error)?;
+            return Ok(FsResult::Done);
+        }
+        if op == FsOp::ReadDir && parts.is_empty() {
+            return Ok(FsResult::Names(
+                staging::listed(&self.roots[index]).map_err(error)?,
+            ));
+        }
         let source = Target::pin(&self.roots[index], &parts).map_err(error)?;
         let target = destination
             .map(|path| {
@@ -374,25 +400,28 @@ pub(crate) fn atomic_native(path: &Path, data: &[u8]) -> Result<FsResult, HostEr
     Ok(FsResult::Done)
 }
 
+#[path = "app_fs_staging.rs"]
+pub(super) mod staging;
 #[cfg(test)]
 #[path = "app_fs_windows_tests.rs"]
 mod tests;
 
-/// An app file written in pieces beside its target and put in its place
-/// whole (Exact local patch 19): the staging file is removed unless
-/// [`Staged::publish`] renames it over the target.
+/// An app file written in pieces in this launch's staging directory and put
+/// in its place whole (Exact local patches 19 and 54): the staging file is
+/// removed unless [`Staged::publish`] renames it over the target.
 pub struct Staged {
     parent: Directory,
     leaf: String,
+    staging: Directory,
     temp: String,
     file: Option<File>,
 }
 impl AppDirectories {
-    /// Admit `fs.write` on `path` and create its staging file in the pinned
-    /// parent. A missing parent, or a target that is not a regular file, is
-    /// refused before anything is written.
+    /// Admit `fs.write` on `path` and create its staging file in this
+    /// launch's staging directory. A missing parent, or a target that is not
+    /// a regular file, is refused first.
     pub fn stage(&self, grants: &GrantSet, path: &str) -> Result<Staged, HostError> {
-        self.parse(path)?;
+        let (index, _) = self.parse(path)?;
         crate::boundary::admit(grants, &Operation::FsWrite { path: path.into() })?;
         let (parent, leaf) = self.parent(path)?;
         match parent.kind(&leaf) {
@@ -401,12 +430,14 @@ impl AppDirectories {
             _ => {}
         }
         let temp = format!(".exact-{}.partial", token().map_err(error)?);
-        let file = parent
+        let staging = self.staging_or(index, &parent)?;
+        let file = staging
             .file(&temp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)
             .map_err(error)?;
         Ok(Staged {
             parent,
             leaf,
+            staging,
             temp,
             file: Some(file),
         })
@@ -444,7 +475,7 @@ impl Drop for Staged {
     fn drop(&mut self) {
         drop(self.file.take());
         if !self.temp.is_empty() {
-            let _ = self.parent.unlink(&self.temp);
+            let _ = self.staging.unlink(&self.temp);
         }
     }
 }
@@ -452,11 +483,12 @@ impl Drop for Staged {
 pub(crate) struct AtomicTarget {
     parent: Directory,
     leaf: String,
+    staging: Directory,
 }
 impl AtomicTarget {
     pub(crate) fn write(self, data: &[u8]) -> Result<(), HostError> {
         self.parent
-            .write(&self.leaf, data, &token().map_err(error)?)
+            .write_in(&self.staging, &self.leaf, data, &token().map_err(error)?)
             .map_err(error)
     }
     /// The same file with `.extension` appended, in the directory already pinned.

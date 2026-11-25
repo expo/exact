@@ -329,7 +329,7 @@ extension Agent {
         if flat == nil, target === v, let title = presenter.navigation.titleSurface(for: v) { target = title; barred = true }
         #endif
         // A tab a tab bar shows, UIKit's or the one its tablist is drawn as: its item there.
-        if flat == nil, target === v, let item = tabItem(v) {
+        if flat == nil, target === v, let item = tabItem(v, forPress: true) {
             switch item {
             case .failure(let refusal): return ["error": "tap #\(v.id): \(refusal.why)"]
             case .success(let control): target = control; region = control.bounds; barred = true

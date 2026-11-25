@@ -17,8 +17,8 @@ struct HeardSplit {
 
 extension NavigationHost {
     /// The runner's rule for the stack whose first route is `root`
-    /// (`Runtime.stackSplit`): nil for one that pushes, under the agent's own
-    /// chrome too; `.none` while the runner is busy and cannot answer. It is
+    /// (`Runtime.stackSplit`), where the device admits its split (`admitted`): nil for a
+    /// stack that pushes, under the agent's own chrome too; `.none` while the runner is busy and cannot answer. It is
     /// the answer the last applied batch that could change it carried
     /// (`Batch.split`), so main does not wait on the owner for it, as at a
     /// transition's end while a reply's pump builds a page (LLP 1072 T2). A
@@ -33,13 +33,20 @@ extension NavigationHost {
         guard !ExactEnv.authoredChrome, let root, let session = presenter.session else { return .some(nil) }
         // The tab or window can have a custom primary. An explicit split
         // still uses the runner's row associations when it finds a list.
-        let requested = tabWantsSplit(root) ? StackSplit(list: nil, width: nil, rows: [:]) : nil
+        let requested = tabWantsSplit(root) ? StackSplit(asked: true, list: nil, width: nil, rows: [:]) : nil
         let retained = split?.list.stackRoutes.first === root ? split?.listNode ?? 0 : 0
-        if let heard = heardSplit, heard.read.view == root.node.id, heard.read.retained == retained { return .some(heard.rule ?? requested) }
+        if let heard = heardSplit, heard.read.view == root.node.id, heard.read.retained == retained { return .some(Self.admitted(heard.rule) ?? requested) }
         guard let read = session.runtime.on(busy: nil, { session.runtime.readSplit(root.node.id, retained: retained, sequence: session.runtime.sequence.newest) }) else { return nil }
         heardSplit = HeardSplit(read)
-        return .some(heardSplit?.rule ?? requested)
+        return .some(Self.admitted(heardSplit?.rule) ?? requested)
         #endif
+    }
+
+    /// The runner's rule where the device admits its split, for a stack outside a tab: an iPad's splits where the
+    /// root route asks or the rule finds a list whose rows push (LLP 1127 D19); any other device's only where the
+    /// route asks, since UIKit builds no split an app did not make (D1, D13).
+    static func admitted(_ rule: StackSplit?, idiom: UIUserInterfaceIdiom = UIDevice.current.userInterfaceIdiom) -> StackSplit? {
+        rule?.asked == true || idiom == .pad ? rule : nil
     }
 
     #if os(iOS)

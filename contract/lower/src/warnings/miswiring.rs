@@ -416,13 +416,30 @@ pub(super) fn navigation_split(
     attrs: &[Attr],
     keyed: bool,
     is_root: bool,
-    fresh: bool,
+    lowered: Option<&str>,
     out: &mut Vec<LowerError>,
 ) {
-    let Some(a) = attr(attrs, "navigationSplit").filter(|a| a.written && fresh) else {
+    // A package view's own `navigationSplit` prop is the module's, which lowering hands it unread (LLP 1024 D1)
+    let Some(a) =
+        attr(attrs, "navigationSplit").filter(|a| a.written && !crate::native::declared(tag, a))
+    else {
         return;
     };
-    if matches!(&a.value, Expr::Str(s, _) if s == "placeholder") || (keyed && !is_root) {
+    // The value as lowering folded it in the element's scope (LLP 1127 D1), else as written
+    let text = lowered
+        .map(str::to_owned)
+        .or_else(|| crate::routes::split_text(&a.value));
+    // Each instance of a shared source is judged by its own value, and one line said for the source
+    let said = out
+        .iter()
+        .any(|w| w.id == "lower-navigation-split" && w.span == a.span);
+    // Only a value a route reads warns: a placeholder is none, and a value the lowerer refuses has its refusal alone
+    // (a word it does not take, a computed one off a route, and any the build drops the warning beside)
+    let accepted = text.as_deref().is_some_and(|t| {
+        t == "split" || t == "none" || exact_kernel::props::split_width(t).is_some()
+    });
+    if (keyed && !is_root) || said || (text.is_some() && !accepted) || (text.is_none() && !is_root)
+    {
         return;
     }
     let on = if is_root {
@@ -432,7 +449,7 @@ pub(super) fn navigation_split(
     };
     out.push(LowerError {
         id: "lower-navigation-split",
-        message: format!("`navigationSplit` is on {on} (this `{tag}`), where no host reads it, so the split keeps its default list width: it belongs to the stack's root route, the first element with a `navigationKey` under the navigation root, which says how wide a wide window's list column is, or \"none\" (docs/recipes/navigation-stack.md)"),
+        message: format!("`navigationSplit` is on {on} (this `{tag}`), where no host reads it: it belongs to the stack's root route, the first element with a `navigationKey` under the navigation root, which asks for the split with \"split\" or the list column's width, or says \"none\"; a tab's first route takes only the literal \"split\" or \"none\" (`contract vocab navigationSplit`)"),
         span: a.span,
     });
 }
