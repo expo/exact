@@ -198,26 +198,39 @@ final class DragSources: NSObject, DragOutSources, UIDragInteractionDelegate {
     }
 
     func dragInteraction(_ interaction: UIDragInteraction, previewForLifting item: UIDragItem, session: UIDragSession) -> UITargetedDragPreview? {
-        interaction.view.flatMap(Self.preview(of:))
+        guard let node = carried(by: item), interaction.view === node else { return nil }
+        return Self.preview(of: node)
     }
 
     /// Back to where the node is now; nil, which fades the item in place,
     /// when its view has gone or is another node's.
     func dragInteraction(_ interaction: UIDragInteraction, previewForCancelling item: UIDragItem, withDefault defaultPreview: UITargetedDragPreview) -> UITargetedDragPreview? {
+        carried(by: item).flatMap(Self.preview(of:))
+    }
+
+    /// The node whose data `item` carries, while its view is still that node's: nil once the view has gone or been lent
+    /// to another node, whose preview would not be the item's.
+    private func carried(by item: UIDragItem) -> NodeView? {
         guard let lifted = item.localObject as? DragItems.Lifted, let view = lifted.view, presenter?.views[lifted.id] === view,
               view.incarnation == lifted.incarnation else { return nil }
-        return Self.preview(of: view)
+        return view
     }
 
     /// The node itself, over the controller's view, so a strip that clips does
     /// not cut the lift, on its own layer fill, which UIKit's lifted copy
-    /// leaves out: the context menu's preview of a node (`LiftTarget`), which
-    /// a node with both lifts once (D4).
-    static func preview(of view: UIView) -> UITargetedDragPreview? {
+    /// leaves out, or as its clip path shapes it (`LiftTarget.clipLift`): the
+    /// context menu's preview of a node, which a node with both lifts once
+    /// (D4).
+    static func preview(of view: NodeView) -> UITargetedDragPreview? {
         guard !view.isHidden, let target = LiftTarget.target(view) else { return nil }
         let parameters = UIDragPreviewParameters()
-        parameters.visiblePath = LiftTarget.rounded(view)
-        parameters.backgroundColor = view.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear
+        if let lift = LiftTarget.clipLift(view) {
+            parameters.visiblePath = lift.outline
+            parameters.backgroundColor = lift.ground
+        } else {
+            parameters.visiblePath = LiftTarget.rounded(view)
+            parameters.backgroundColor = view.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear
+        }
         return UITargetedDragPreview(view: view, parameters: parameters, target: target)
     }
 

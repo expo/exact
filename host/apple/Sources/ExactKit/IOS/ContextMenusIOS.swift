@@ -560,7 +560,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
     }
 
-    /// UIKit lifts the node itself, live, clipped to its outline (LLP 1021
+    /// UIKit lifts the node itself, live, clipped to its outline or its clip path (LLP 1021
     /// §5.1): it hides the node, lifts it and returns it. A run of text cannot
     /// lift its paragraph, which UIKit would hide whole: it lifts a picture of
     /// what lies under the run's lines (`runPreview`), and the paragraph stays
@@ -597,13 +597,18 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         }
         if source.placedAncestor?.placement != nil { return Self.placedPreview(of: shown, in: source) }
         let parameters = UIPreviewParameters()
-        parameters.visiblePath = LiftTarget.rounded(shown)
-        // UIKit's lifted copy leaves out the view's own layer fill (as a
-        // pull-down's stand-in does, `MenuFocus.lendFill`): the preview's ground
-        // is that fill, so a chat bubble keeps its colour, not UIKit's white. A
-        // fill drawn otherwise (`background-clip: text`) is in the copy already.
-        if let fill = shown.ownFill, fill.alpha > 0 {
-            parameters.backgroundColor = UIColor(cgColor: fill)
+        if shown === source, let lift = LiftTarget.clipLift(source) {
+            parameters.visiblePath = lift.outline
+            parameters.backgroundColor = lift.ground
+        } else {
+            parameters.visiblePath = LiftTarget.rounded(shown)
+            // UIKit's lifted copy leaves out the view's own layer fill (as a
+            // pull-down's stand-in does, `MenuFocus.lendFill`): the preview's ground
+            // is that fill, so a chat bubble keeps its colour, not UIKit's white. A
+            // fill drawn otherwise (`background-clip: text`) is in the copy already.
+            if let fill = shown.ownFill, fill.alpha > 0 {
+                parameters.backgroundColor = UIColor(cgColor: fill)
+            }
         }
         guard let target = LiftTarget.target(shown) else { return nil }
         return UITargetedPreview(view: shown, parameters: parameters, target: target)

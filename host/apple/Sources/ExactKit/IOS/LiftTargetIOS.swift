@@ -24,6 +24,22 @@ package enum LiftTarget {
         return corners.contains(where: { $0.width > 0 }) ? node.roundedPath(in: node.bounds) : nil
     }
 
+    /// How a node its clip path shapes lifts, for its context menu and its drag alike (LLP 1021 §5.1, LLP 1094.000
+    /// D4): in what the path leaves of its box, the box's shape in CSS (CSS Masking §5.1), cut to the box as it
+    /// shows (its surface while layout resizes it, LLP 1063) since UIKit's visible path is a portion of the view; on
+    /// its own fill, which UIKit's copy leaves out, or, where it has none, on the screen. Nil, a lift as without a
+    /// clip path, for a node with a `border-radius`, which keeps its rounded outline; for content the menu lifts as a
+    /// canvas's snapshot (`placedPreview`); for a node with a filter's picture of its own, which hides its layers and
+    /// so leaves UIKit's copy of it empty; and where the path leaves nothing of the box.
+    package static func clipLift(_ node: NodeView) -> (outline: UIBezierPath, ground: UIColor)? {
+        guard let clip = node.clipPath, rounded(node) == nil, node.placedAncestor?.placement == nil, node.filterPicture == nil else {
+            return nil
+        }
+        let cut = clip.normalized(using: node.clipRule).intersection(CGPath(rect: node.surface?.frame ?? node.bounds, transform: nil))
+        guard !cut.boundingBoxOfPath.isEmpty else { return nil }
+        return (UIBezierPath(cgPath: cut), node.ownFill.flatMap { $0.alpha > 0 ? UIColor(cgColor: $0) : nil } ?? .clear)
+    }
+
     /// The view UIKit highlights, lifts and returns a preview over: the view of
     /// the controller that holds `view` (its route's, a sheet's, or the root
     /// controller's in an app with no routes), which the bars stay above.
