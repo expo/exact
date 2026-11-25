@@ -489,59 +489,60 @@ component App
       dialog id="search" close=searchClosed closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
         top="calc(45vh + clamp(0px, (789px - 100vw) * 1000, 5vh))" height="calc(75vh + clamp(0px, (789px - 100vw) * 1000, 21vh))" width="calc(max(40vw, 680px) + clamp(0px, (789px - 100vw) * 1000, max(0px, 96vw - max(40vw, 680px))) - clamp(0px, (789px - 100vw) * 1000, max(0px, max(40vw, 680px) - 96vw)))" max-width="none" max-height="none" overflow="hidden"
         border="1px solid var(--color-border-default)" border-radius=40 background-color="var(--color-background-default)" color="var(--color-text-default)" font-family="var(--font-sans)"
-        column height="100%"
-          row padding="0 16px" border-bottom="1px solid var(--color-border-secondary)"
-            row position="relative" flex=1 align-items="center" margin="16px 0 12px"
-              input id="search-input" role="combobox" aria-expanded=(hits.length > 0) aria-controls="search-hits"
-                aria-activedescendant=(match hits.at(chosen) { case some(h) => `search-hit-${h.id}`, case none => "" }) type="text" value=query input=ask key=searchKey placeholder="Search…" aria-label="Search the docs" testId="search-input"
-                flex=1 min-width=0 min-height=46 box-sizing="border-box" padding="0 40px" font-size="var(--text-base)" border="1px solid var(--color-border-default)" border-radius=24 outline="none" background-color="transparent" color="var(--color-text-default)"
-              image "symbol:search" aria-hidden=true position="absolute" left=13 font-size="var(--text-base)" color="var(--color-icon-tertiary)"
-              button press=clearOrClose appearance="none" aria-label=(query != "" ? "Clear search" : "Close search") position="absolute" right=9 padding=4 border-radius="var(--radius-full)" testId="search-close"
-                image "symbol:close" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-tertiary)"
-          row height=2 flex-shrink=0
-            if searching
-              progress aria-label="Searching" flex=1 height=2 testId="search-loading"
-          scroll flex=1 min-height=0 padding="0 16px 12px" overscroll-behavior="contain"
-            if query.trim().length < 2
-              text "Type at least two letters to search every page." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-hint"
-            else if hits.length == 0 and not searching
-              text "No results found." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-empty"
-            else
-              column id="search-hits" role="listbox" aria-label="Search results" gap=2
-                for h, i in hits key=h.id
-                  link id=`search-hit-${h.id}` href=h.href role="option" aria-selected=(i == chosen) tabindex=-1 retainFocus=true display="block" padding=(h.nested ? "6px 10px 6px 42px" : "8px 10px") border-radius="var(--radius-lg)" background-color=(i == chosen ? "var(--color-background-element)" : "transparent") testId=`search-hit-${h.id}`
-                    if h.nested
-                      row align-items="center" gap=8
-                        text "#" aria-hidden=true font-size="var(--text-xs)" color="var(--color-text-quaternary)"
-                        text font-size="var(--text-xs)" color="var(--color-text-default)" min-width=0
-                          Marked(parts=h.title)
-                    else
-                      row align-items="flex-start" gap=12
-                        image "symbol:document" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)" margin-top=2
-                        column gap=2 flex=1 min-width=0
-                          text font-size="var(--text-sm)" font-weight=500 color="var(--color-text-default)"
+        if searchOpen
+          column height="100%"
+            row padding="0 16px" border-bottom="1px solid var(--color-border-secondary)"
+              row position="relative" flex=1 align-items="center" margin="16px 0 12px"
+                input id="search-input" role="combobox" aria-expanded=(hits.length > 0) aria-controls="search-hits"
+                  aria-activedescendant=(match hits.at(chosen) { case some(h) => `search-hit-${h.id}`, case none => "" }) type="text" value=query input=ask key=searchKey placeholder="Search…" aria-label="Search the docs" testId="search-input"
+                  flex=1 min-width=0 min-height=46 box-sizing="border-box" padding="0 40px" font-size="var(--text-base)" border="1px solid var(--color-border-default)" border-radius=24 outline="none" background-color="transparent" color="var(--color-text-default)"
+                image "symbol:search" aria-hidden=true position="absolute" left=13 font-size="var(--text-base)" color="var(--color-icon-tertiary)"
+                button press=clearOrClose appearance="none" aria-label=(query != "" ? "Clear search" : "Close search") position="absolute" right=9 padding=4 border-radius="var(--radius-full)" testId="search-close"
+                  image "symbol:close" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-tertiary)"
+            row height=2 flex-shrink=0
+              if searching
+                progress aria-label="Searching" flex=1 height=2 testId="search-loading"
+            scroll flex=1 min-height=0 padding="0 16px 12px" overscroll-behavior="contain"
+              if query.trim().length < 2
+                text "Type at least two letters to search every page." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-hint"
+              else if hits.length == 0 and not searching
+                text "No results found." padding="16px 8px" font-size="var(--text-sm)" color="var(--color-text-secondary)" testId="search-empty"
+              else
+                column id="search-hits" role="listbox" aria-label="Search results" gap=2
+                  for h, i in hits key=h.id
+                    link id=`search-hit-${h.id}` href=h.href role="option" aria-selected=(i == chosen) tabindex=-1 retainFocus=true display="block" padding=(h.nested ? "6px 10px 6px 42px" : "8px 10px") border-radius="var(--radius-lg)" background-color=(i == chosen ? "var(--color-background-element)" : "transparent") testId=`search-hit-${h.id}`
+                      if h.nested
+                        row align-items="center" gap=8
+                          text "#" aria-hidden=true font-size="var(--text-xs)" color="var(--color-text-quaternary)"
+                          text font-size="var(--text-xs)" color="var(--color-text-default)" min-width=0
                             Marked(parts=h.title)
-                          if h.path != ""
-                            text h.path font-size="var(--text-xs)" color="var(--color-text-quaternary)"
-                          if h.snippet.length > 0
-                            text font-size="var(--text-xs)" color="var(--color-text-secondary)" line-clamp=1
-                              Marked(parts=h.snippet)
-          row align-items="center" gap=16 height=44 flex-shrink=0 padding="0 24px" border-top="1px solid var(--color-border-secondary)"
-            row align-items="center" gap=16 max-width="clamp(0px, (100vw - 768px) * 1000, 600px)" overflow-x="clip" min-width=0 margin-left=-1 white-space="nowrap" testId="search-keys"
-              row align-items="center" gap=6 padding-left=1
-                text "↵" class=Key
-                text "to select" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
-              row align-items="center" gap=6
-                text "↑" class=Key
-                text "↓" class=Key
-                text "to navigate" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
-              row align-items="center" gap=6
-                text "esc" class=Key
-                text "to close" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
-            link href="https://www.algolia.com/developers/" aria-label="Search by Algolia" margin-left="auto" testId="search-attribution"
-              row align-items="center" gap=6
-                text "Search by" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
-                image "symbol:icon.algolia" aria-hidden=true width=62 height=14 color="var(--color-text-secondary)"
+                      else
+                        row align-items="flex-start" gap=12
+                          image "symbol:document" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)" margin-top=2
+                          column gap=2 flex=1 min-width=0
+                            text font-size="var(--text-sm)" font-weight=500 color="var(--color-text-default)"
+                              Marked(parts=h.title)
+                            if h.path != ""
+                              text h.path font-size="var(--text-xs)" color="var(--color-text-quaternary)"
+                            if h.snippet.length > 0
+                              text font-size="var(--text-xs)" color="var(--color-text-secondary)" line-clamp=1
+                                Marked(parts=h.snippet)
+            row align-items="center" gap=16 height=44 flex-shrink=0 padding="0 24px" border-top="1px solid var(--color-border-secondary)"
+              row align-items="center" gap=16 max-width="clamp(0px, (100vw - 768px) * 1000, 600px)" overflow-x="clip" min-width=0 margin-left=-1 white-space="nowrap" testId="search-keys"
+                row align-items="center" gap=6 padding-left=1
+                  text "↵" class=Key
+                  text "to select" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
+                row align-items="center" gap=6
+                  text "↑" class=Key
+                  text "↓" class=Key
+                  text "to navigate" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
+                row align-items="center" gap=6
+                  text "esc" class=Key
+                  text "to close" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
+              link href="https://www.algolia.com/developers/" aria-label="Search by Algolia" margin-left="auto" testId="search-attribution"
+                row align-items="center" gap=6
+                  text "Search by" font-size="var(--text-xs)" color="var(--color-text-tertiary)"
+                  image "symbol:icon.algolia" aria-hidden=true width=62 height=14 color="var(--color-text-secondary)"
 
 component Marked
   props
