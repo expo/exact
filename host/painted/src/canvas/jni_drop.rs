@@ -25,13 +25,15 @@ macro_rules! canvas_jni_drop {
             with(|h| h.drag_left());
         }
 
-        /// A field took the drop (`CanvasHost::drag_dropped`).
+        /// A field took the drop at (`x`, `y`) px (`CanvasHost::drag_dropped`).
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_dragDropped(
             _env: *mut $crate::canvas::jni_sys::JNIEnv,
             _class: $crate::canvas::jni_sys::jclass,
+            x: $crate::canvas::jni_sys::jfloat,
+            y: $crate::canvas::jni_sys::jfloat,
         ) {
-            with(|h| h.drag_dropped());
+            with(|h| h.drag_dropped(x, y));
         }
 
         /// The drag was released at (`x`, `y`) px: the drop's number, 0 when

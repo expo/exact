@@ -19,9 +19,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.drag_left();
     }
 
-    /// A field took the drop.
-    pub fn drag_dropped(&mut self) {
-        self.p.drag_dropped();
+    /// A field took the drop at pixels (`x`, `y`).
+    pub fn drag_dropped(&mut self, x: f32, y: f32) {
+        let held = self.p.modifiers();
+        self.p.drag_dropped((x / self.scale, y / self.scale), held);
     }
 
     /// The drag was released at pixels (`x`, `y`) before its items are

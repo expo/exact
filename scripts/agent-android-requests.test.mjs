@@ -40,16 +40,18 @@ test("a folder, a failed push and a failed chmod are each refused by name, and n
     const sh = () => ({ status: 0 });
     expect(pushDrops({ op: 'tap', id: 7, drop: [folder] }, '/base', sh).error).toBe(`${folder} is a folder: a drop on Android takes files alone`);
   } finally { rmSync(folder, { recursive: true }); }
+  expect(pushDrops({ op: 'tap', id: 7, drop: ['/no/such/file.pdf'] }, '/base', () => ({ status: 0 })).error)
+    .toStartWith("the drop's file /no/such/file.pdf could not be read: ENOENT");
   const chmodFails = (...args) => (args[1] === 'chmod' ? { status: null, stderr: null, stdout: null, error: new Error('adb went away') } : { status: 0 });
-  expect(pushDrops({ op: 'tap', id: 7, drop: ['/a/notes.pdf'] }, '/base', chmodFails).error)
+  expect(pushDrops({ op: 'tap', id: 7, drop: [import.meta.path] }, '/base', chmodFails).error)
     .toBe("the drop's files could not be made readable on the device: adb went away");
 });
 
 test("a file that cannot be put on the device is named, and no request goes on", () => {
   const calls = [];
   const sh = (...args) => { calls.push(args); return args[0] === 'push' ? { status: 1, stderr: 'no space left on device' } : { status: 0 }; };
-  expect(pushDrops({ op: 'tap', id: 7, drop: ['/a/notes.pdf'] }, '/base', sh))
-    .toEqual({ error: "the drop's file /a/notes.pdf could not be put on the device: no space left on device" });
+  expect(pushDrops({ op: 'tap', id: 7, drop: [import.meta.path] }, '/base', sh))
+    .toEqual({ error: `the drop's file ${import.meta.path} could not be put on the device: no space left on device` });
   expect(calls.some(([verb]) => verb === 'chmod')).toBe(false);
   expect(pushDrops({ op: 'tree' }, '/base', sh)).toEqual({});
 });

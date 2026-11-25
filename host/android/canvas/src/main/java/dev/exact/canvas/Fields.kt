@@ -55,7 +55,7 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
         val drags = generateSequence(parent) { it.parent }.firstNotNullOfOrNull { (it as? Root)?.drags } ?: return super.onDragEvent(event)
         drags.field(this, event)?.let { return it }
         val took = super.onDragEvent(event)
-        if (event.action == android.view.DragEvent.ACTION_DROP) drags.fieldDropped()
+        if (event.action == android.view.DragEvent.ACTION_DROP) drags.fieldDropped(this, event)
         return took
     }
 
@@ -147,8 +147,9 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
  * it. Not seen on a phone (`QUEUE.md`): the rule is held at exact2's side (`presenter/hosted_tests.rs`).
  */
 internal class Fields(context: Context) : FrameLayout(context) {
-    /** What a field shows through: its clip, in the reader's view. A drawing-less layout the size of the clip, so
-     * that the platform, which hides a selection handle outside the field's ancestors, hides one the clip cuts. */
+    /** What a field shows through: its box within its clip, in the reader's view. A drawing-less layout of that size,
+     * so that the platform, which hides a selection handle outside the field's ancestors, hides one the clip cuts, and
+     * gives a drag over another field to that field ([position]). */
     class Port(context: Context) : FrameLayout(context) {
         init { clipChildren = false; setWillNotDraw(true) }
         override fun dispatchDraw(canvas: Canvas) {}

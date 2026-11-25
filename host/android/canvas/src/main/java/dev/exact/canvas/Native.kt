@@ -177,8 +177,9 @@ object Native {
     @JvmStatic external fun dragOver(x: Float, y: Float)
     /** The drag left the window or was cancelled: the nodes under it hear their leave. */
     @JvmStatic external fun dragLeft()
-    /** A field took the drop: the nodes under the drag hear the enters it waited for, then their leave. */
-    @JvmStatic external fun dragDropped()
+    /** A field took the drop at ([x], [y]) px: the nodes under the drag there hear the enters it waited for, then
+     * their leave. */
+    @JvmStatic external fun dragDropped(x: Float, y: Float)
     /** The drag was released at ([x], [y]) px before its items arrive: the drop's number, 0 when nothing takes it. */
     @JvmStatic external fun dropReleased(x: Float, y: Float): Int
     /** Whether field [id] is what is painted at ([x], [y]) px. */

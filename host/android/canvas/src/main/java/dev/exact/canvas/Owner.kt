@@ -902,7 +902,7 @@ internal object Exact {
      * which sends the nodes under it their enters and leaves and publishes what they changed. */
     fun dragOver(x: Float, y: Float) = dragged { Native.dragOver(x, y) }
     fun dragLeft() = dragged { Native.dragLeft() }
-    fun dragDropped() = dragged { Native.dragDropped() }
+    fun dragDropped(x: Float, y: Float) = dragged { Native.dragDropped(x, y) }
 
     /** The drag was released at ([x], [y]) px: the drop's number, 0 when nothing there takes it. Waited for, since
      * Android is answered with whether the window took the drop, and published after the answer. */

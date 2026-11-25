@@ -617,7 +617,7 @@ internal class Access(private val host: View) {
         // window's last touch.
         if (!manager.isEnabled) return false
         val n = nodes.values.firstOrNull { it.view == view && drags(it) && real(it) == null } ?: return false
-        if (!host.startDragAndDrop(clip, DragOut.blank, null, flags)) return false
+        if (!host.startDragAndDrop(clip, DragOut.blank, DragOut.OWN, flags)) return false
         dragging = n.id
         cancellable = true
         changed(n.id, AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED)

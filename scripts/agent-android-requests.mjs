@@ -20,7 +20,9 @@ export function pushDrops(request, base, sh) {
   const { request: moved, pushes } = dropPushes(request, base);
   const failed = (r) => r.status !== 0 && (r.stderr || r.stdout || r.error?.message || `exit ${r.status}`).trim();
   for (const [local] of pushes) {
-    if (statSync(local, { throwIfNoEntry: false })?.isDirectory()) return { error: `${local} is a folder: a drop on Android takes files alone` };
+    let stat;
+    try { stat = statSync(local); } catch (e) { return { error: `the drop's file ${local} could not be read: ${e.message}` }; }
+    if (!stat.isFile()) return { error: `${local} is ${stat.isDirectory() ? 'a folder' : 'no file'}: a drop on Android takes files alone` };
   }
   for (const [local, remote] of pushes) {
     const why = failed(sh('shell', 'mkdir', '-p', `'${dirname(remote)}'`)) || failed(sh('push', local, remote));

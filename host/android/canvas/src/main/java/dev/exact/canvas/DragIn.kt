@@ -60,37 +60,43 @@ internal class DragIn(private val root: View) {
     }
 
     /**
-     * What hosted field [field] answers [event] with; null for the field to take it as its `EditText` does. A field
-     * that takes no touch (disabled, or covered) takes no drag. It gives the root a drag at its start when its own node
-     * takes drops, or when a node above it does and the drag carries a file's type. A URI list may be a link or a
-     * file, so the field keeps it, and gives the root at the drop a `content:` item that is no text, as a file, under
-     * a node that takes it. Exact2 tells each field who takes a drop over it with every frame, so only a drop asks
-     * exact2's thread, once, whether the field is what is painted where it lands.
+     * What hosted field [field] answers [event] with; null for the field to take it as its `EditText` does. The field
+     * takes every drag at its start, as an `EditText` does, but one its own node takes, which goes to the root; and it
+     * decides at the drop, from exact2's state then and the drop's items, since Android settles which views take a drag
+     * at its start. It gives the root the drop when the field takes no touch (disabled, or covered), when its own node
+     * takes drops, when another node is painted where the drop lands, or when a node above it takes drops and an item
+     * is a file: a `content:` item its provider types as no text, so a text file stays the field's (D2). Exact2 tells
+     * each field who takes a drop over it with every frame, so only a drop asks exact2's thread, once, what is painted
+     * where it lands.
      */
     fun field(field: FieldText, event: DragEvent): Boolean? {
-        val at = IntArray(2).also(field::getLocationInWindow)
-        val base = IntArray(2).also(root::getLocationInWindow)
-        val (x, y) = event.x + at[0] - base[0] to event.y + at[1] - base[1]
-        val gives = field.inert || field.dropOwner == 1
+        val (x, y) = inRoot(field, event)
         return when (event.action) {
-            DragEvent.ACTION_DRAG_STARTED -> if (field.inert || givenAway(field.dropOwner, event.clipDescription)) false else null
+            DragEvent.ACTION_DRAG_STARTED -> if (field.dropOwner == 1) false else null
             DragEvent.ACTION_DRAG_LOCATION -> { over(x, y); null }
             DragEvent.ACTION_DRAG_EXITED -> { exited(); null }
-            // A node painted over part of the field takes a drop there, as it takes a touch
             DragEvent.ACTION_DROP ->
-                if (gives || field.dropOwner == 2 && event.clipData?.let { holdsFile(it, field.context.contentResolver) } == true ||
-                    !Exact.fieldUnder(field.node, x, y)) drop(event, x, y)
+                if (field.inert || field.dropOwner == 1 || !Exact.fieldUnder(field.node, x, y) ||
+                    field.dropOwner == 2 && event.clipData?.let { holdsFile(it, field.context.contentResolver) } == true) drop(event, x, y)
                 else null
             else -> null
         }
     }
 
-    /** A field the drag was over took its drop, or refused it: the nodes under the drag hear their leave, after the
-     * enters it waited for (D2). */
-    fun fieldDropped() {
+    /** Hosted field [field] took the drop [event] carried, or refused it: the nodes under the drag where it dropped
+     * hear the enters it waited for, then their leave (D2). */
+    fun fieldDropped(field: FieldText, event: DragEvent) {
         main.removeCallbacks(exit)
         settled = true
-        Exact.dragDropped()
+        val (x, y) = inRoot(field, event)
+        Exact.dragDropped(x, y)
+    }
+
+    /** [event]'s point, which Android gives in [field]'s own pixels, in the root's. */
+    private fun inRoot(field: View, event: DragEvent): Pair<Float, Float> {
+        val at = IntArray(2).also(field::getLocationInWindow)
+        val base = IntArray(2).also(root::getLocationInWindow)
+        return event.x + at[0] - base[0] to event.y + at[1] - base[1]
     }
 
     /** The drag is at ([x], [y]) in the root's pixels. */
@@ -128,13 +134,20 @@ internal class DragIn(private val root: View) {
         // Every way it ends lands the drop once, on the main thread, and releases the grant: its copies, or none
         val land = { paths: List<String> ->
             main.post {
-                grant?.release()
+                try { grant?.release() } catch (e: RuntimeException) { said += "drop: its read permission could not be released: ${e.message}" }
                 said.forEach(Exact::journal)
                 Exact.dropLanded(id, items.json(paths))
             }
         }
         try {
             grant = (root.context as? Activity)?.requestDragAndDropPermissions(event)
+            // Another app's files are read under the drop's grant alone: one the app could read with its own rights is
+            // still not given to it by a drag. The app's own drags need none.
+            if (grant == null && event.localState !== DragOut.OWN) {
+                said += "drop: Android granted no read permission for its files, so it delivers its text and link alone"
+                land(emptyList())
+                return true
+            }
             Thread({
                 val paths = try { DropItems.copy(context.contentResolver, DropStaging.next(context), items.files, said::add) } catch (e: Exception) {
                     said += "drop: its files could not be copied: ${e.message ?: e.javaClass.simpleName}, so it delivers its text and link alone"
@@ -157,9 +170,9 @@ internal class DragIn(private val root: View) {
             "application/vnd.android.task",
         )
 
-        /** The top-level media types of files ([RFC 6838 §4.2](https://www.rfc-editor.org/rfc/rfc6838#section-4.2)), text
-         * aside: an app's own type, as Chrome's `chrome/link` beside a link's text, is none. */
-        private val FILES = setOf("application", "audio", "font", "image", "model", "video")
+        /** The registered top-level media types ([IANA](https://www.iana.org/assignments/top-level-media-types/)), but
+         * text's and `example`: a file's. An app's own type, as Chrome's `chrome/link` beside a link's text, is none. */
+        private val FILES = setOf("application", "audio", "font", "haptics", "image", "message", "model", "multipart", "video")
 
         private fun text(type: String) = type.startsWith("text/") && type !in ANDROID_OWN
         private fun file(type: String) = type.substringBefore('/') in FILES && type !in ANDROID_OWN
@@ -169,11 +182,6 @@ internal class DragIn(private val root: View) {
 
         /** Whether a drag with [description] carries a file, text or a link: one that carries none finds no target. */
         fun carries(description: ClipDescription?): Boolean = types(description).any { text(it) || file(it) }
-
-        /** Whether a field gives a drag with [description] to the root at its start, its node's [owner] being 0 (no
-         * node takes a drop over it), 1 (its own does) or 2 (one above it does). */
-        fun givenAway(owner: Int, description: ClipDescription?): Boolean =
-            owner == 1 || owner == 2 && types(description).any(::file)
 
         /** Whether [clip] holds a `content:` item that is no text by its provider's type: a file, which a field gives
          * to the node above it, where a text file is the field's (D2). */

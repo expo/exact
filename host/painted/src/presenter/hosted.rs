@@ -303,6 +303,14 @@ impl<D: DataSource> Presenter<D> {
         Some(out)
     }
 
+    /// Whether hosted field `id` takes no touch, no focus and no drag: it is
+    /// disabled, under a route that covers it, or in flight.
+    pub(crate) fn field_inert(&self, id: ViewId) -> bool {
+        let disabled = (self.host.kernel().node(id))
+            .is_some_and(|n| n.props.bool(PropId::Disabled) == Some(true));
+        self.host.route_visibility(id).1 || disabled || self.host.flying(id)
+    }
+
     fn field_words(
         &mut self,
         id: ViewId,
@@ -312,10 +320,9 @@ impl<D: DataSource> Presenter<D> {
         out: &mut Vec<i32>,
     ) {
         let known = *self.hosted.known.entry(id).or_default();
-        let (hidden, inert) = self.host.route_visibility(id);
+        let hidden = self.host.route_visibility(id).0;
+        let inert = self.field_inert(id);
         let kernel = self.host.kernel();
-        let disabled =
-            (kernel.node(id)).is_some_and(|n| n.props.bool(PropId::Disabled) == Some(true));
         let place = painted
             .filter(|_| !hidden && self.display.allows(kernel, id))
             .zip(self.brush.field_content.get(&id).copied())
@@ -329,7 +336,7 @@ impl<D: DataSource> Presenter<D> {
         if place.is_some() {
             flags |= PLACED;
         }
-        if inert || disabled || self.host.flying(id) {
+        if inert {
             flags |= INERT;
         }
         flags |= match self.drop_owner(id) {

@@ -10,6 +10,7 @@ import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
 import org.junit.Assert.*
+import org.json.JSONObject
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,7 +28,7 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29, 33], manifest = Config.NONE, shadows = [DragInTest.Journal::class])
 class DragInTest {
-    @Before fun begin() { Journal.lines.clear(); Journal.drags.clear() }
+    @Before fun begin() { Journal.lines.clear(); Journal.drags.clear(); Journal.release = 0; Journal.painted = true }
 
     /** exact2's journal, as the reader writes to it with no owner. */
     @Implements(Native::class, isInAndroidSdk = false)
@@ -40,11 +41,14 @@ class DragInTest {
             @JvmStatic @Implementation fun journal(line: String) { lines += line }
             @JvmStatic @Implementation fun dragOver(x: Float, y: Float) { drags += "over ${x.toInt()} ${y.toInt()}" }
             @JvmStatic @Implementation fun dragLeft() { drags += "left" }
-            @JvmStatic @Implementation fun dragDropped() { drags += "ended" }
-            @JvmStatic @Implementation fun dropReleased(x: Float, y: Float): Int { drags += "released ${x.toInt()} ${y.toInt()}"; return 0 }
+            @JvmStatic @Implementation fun dragDropped(x: Float, y: Float) { drags += "dropped ${x.toInt()} ${y.toInt()}" }
+            /** The drop number exact2 answers a release with (0: nothing takes it). */
+            var release = 0
+            /** Whether a field is what is painted where a drop lands. */
+            var painted = true
+            @JvmStatic @Implementation fun dropReleased(x: Float, y: Float): Int { drags += "released ${x.toInt()} ${y.toInt()}"; return release }
             @JvmStatic @Implementation fun dropLanded(id: Int, items: String) { drags += "landed $id $items" }
-            /** Whether a field is painted where a drop lands; the tests' fields always are. */
-            @JvmStatic @Implementation fun fieldUnder(id: Int, x: Float, y: Float): Boolean = true
+            @JvmStatic @Implementation fun fieldUnder(id: Int, x: Float, y: Float): Boolean = painted
         }
     }
 
@@ -81,18 +85,8 @@ class DragInTest {
         assertTrue(carries(ClipDescription.MIMETYPE_TEXT_URILIST))
         assertTrue(carries("application/vnd.android.shortcut", "image/png"))
         assertFalse("an app's own type", carries("chrome/tab"))
+        assertTrue("an email is a file", carries("message/rfc822"))
         assertFalse(DragIn.carries(null))
-    }
-
-    @Test fun aFieldGivesAwayADragItsNodeOrADropAboveItTakesAtItsStart() {
-        val image = ClipDescription("drag", arrayOf("image/png"))
-        val text = ClipDescription("drag", arrayOf(ClipDescription.MIMETYPE_TEXT_PLAIN, ClipDescription.MIMETYPE_TEXT_URILIST))
-        assertTrue("its own node takes every drag", DragIn.givenAway(1, text))
-        assertTrue("a file goes to the drop above", DragIn.givenAway(2, image))
-        assertFalse("text and a URI list stay the field's", DragIn.givenAway(2, text))
-        assertFalse("Chrome's link: its text, an intent and its own type", DragIn.givenAway(2,
-            ClipDescription("link", arrayOf(ClipDescription.MIMETYPE_TEXT_PLAIN, ClipDescription.MIMETYPE_TEXT_INTENT, "chrome/link"))))
-        assertFalse("with no drop, the field keeps whatever its text view takes", DragIn.givenAway(0, image))
     }
 
     @Test fun eachFileIsCopiedUnderItsOwnNameAndAFolderOrAnUnreadableItemIsLeftOut() {
@@ -136,7 +130,7 @@ class DragInTest {
 
     /** A drag event as Android's window sends one: the platform's own `DragEvent.obtain`, whose parameters differ by
      * API level, given each by its type (the action, the point and then zero offsets, the description and the clip). */
-    private fun event(action: Int, x: Float = 0f, y: Float = 0f, clip: ClipData? = null, description: ClipDescription? = clip?.description): DragEvent {
+    private fun event(action: Int, x: Float = 0f, y: Float = 0f, clip: ClipData? = null, description: ClipDescription? = clip?.description, local: Any? = null): DragEvent {
         val obtain = DragEvent::class.java.declaredMethods
             .filter { it.name == "obtain" && it.parameterTypes.firstOrNull() == Int::class.javaPrimitiveType }
             .maxBy { it.parameterCount }
@@ -148,57 +142,122 @@ class DragInTest {
                 Boolean::class.javaPrimitiveType -> false
                 ClipDescription::class.java -> description
                 ClipData::class.java -> clip
+                Any::class.java -> local
                 else -> null
             }
         }
         return obtain.invoke(null, *args.toTypedArray()) as DragEvent
     }
 
-    /** Two fields, ids 1 and 2, 300 by 60 at (20, 40) and (20, 200), on a root as the reader lays them out; with
-     * [flags] for the second. Its text view. */
-    private fun twoFields(flags: Int, clipSecond: Boolean = false): Pair<Root, EditText> {
+    /** Two fields, ids 1 and 2, 300 by 60 at (20, 40) and (20, 200), on a root as the reader lays them out, the second
+     * with [state] (1 placed, 4 its node takes drops, 8 a node above it does). The root, the fields and their texts. */
+    private class Two(val root: Root, val fields: Fields, val first: FieldText, val second: FieldText) {
+        fun tell(state: Int, clipSecond: Boolean = false) = fields.told(FieldsTest.Companion.statement(listOf(
+            FieldsTest.Companion.Told(1, 20f, 40f, 300f, 60f, 1 or 8),
+            FieldsTest.Companion.Told(2, 20f, 200f, 300f, 60f, state, clip = if (clipSecond) floatArrayOf(0f, 0f, 400f, 100f) else null),
+        )))
+    }
+
+    private fun twoFields(state: Int, clipSecond: Boolean = false): Two {
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         val root = Root(activity)
         val fields = Fields(activity)
         root.addView(fields, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         activity.setContentView(root)
-        fields.told(FieldsTest.Companion.statement(listOf(
-            FieldsTest.Companion.Told(1, 20f, 40f, 300f, 60f, 1),
-            FieldsTest.Companion.Told(2, 20f, 200f, 300f, 60f, flags, clip = if (clipSecond) floatArrayOf(0f, 0f, 400f, 100f) else null),
-        )))
+        val two = Two(root, fields, FieldText(activity), FieldText(activity))
+        two.tell(state, clipSecond)
         root.measure(View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(400, View.MeasureSpec.EXACTLY))
         root.layout(0, 0, 400, 400)
-        val second = (0 until fields.childCount).map { (fields.getChildAt(it) as FrameLayout).getChildAt(0) as FieldText }.first { it.text.toString() == "2" }
-        return root to second
+        val texts = (0 until fields.childCount).map { (fields.getChildAt(it) as FrameLayout).getChildAt(0) as FieldText }
+        return Two(root, fields, texts.first { it.text.toString() == "1" }, texts.first { it.text.toString() == "2" })
     }
 
-    private fun dragText(root: Root, x: Float, y: Float) {
-        val clip = ClipData.newPlainText("drag", "Fuji")
-        root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_STARTED, description = clip.description))
-        root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_LOCATION, x, y, description = clip.description))
-        root.dispatchDragEvent(event(DragEvent.ACTION_DROP, x, y, clip))
-        root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_ENDED, description = clip.description))
+    /** A drag of [clip] started, over ([x], [y]) once [hovered] ran, then dropped there. */
+    private fun drag(root: Root, x: Float, y: Float, clip: ClipData = ClipData.newPlainText("drag", "Fuji"), local: Any? = null, hovered: () -> Unit = {}): Boolean {
+        root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_STARTED, description = clip.description, local = local))
+        hovered()
+        root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_LOCATION, x, y, description = clip.description, local = local))
+        val took = root.dispatchDragEvent(event(DragEvent.ACTION_DROP, x, y, clip, local = local))
+        root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_ENDED, description = clip.description, local = local))
+        return took
     }
 
-    @Test fun aTextDropReachesTheLowerOfTwoFieldsWhichInsertsIt() {
-        val (root, second) = twoFields(flags = 1 or 8)
-        dragText(root, 170f, 230f)
-        assertTrue(second.text.toString(), second.text.toString().contains("Fuji"))
-        assertEquals("the field told where the drag was, then that it took the drop", listOf("over 170 230", "ended"), Journal.drags)
+    @Test fun aTextDropReachesEitherOfTwoFieldsWhichInsertsIt() {
+        val two = twoFields(state = 1 or 8)
+        drag(two.root, 170f, 230f)
+        assertTrue(two.second.text.toString(), two.second.text.toString().contains("Fuji"))
+        drag(two.root, 170f, 70f)
+        assertTrue(two.first.text.toString(), two.first.text.toString().contains("Fuji"))
+        assertEquals("each field told where the drag was, then where it took the drop",
+            listOf("over 170 230", "dropped 170 230", "over 170 70", "dropped 170 70"), Journal.drags)
     }
 
     @Test fun aFieldWhoseNodeTakesDropsGivesTheDragToTheRoot() {
-        val (root, second) = twoFields(flags = 1 or 4)
-        dragText(root, 170f, 230f)
-        assertEquals("2", second.text.toString())
+        val two = twoFields(state = 1 or 4)
+        drag(two.root, 170f, 230f)
+        assertEquals("2", two.second.text.toString())
         assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
     }
 
+    @Test fun aFieldDecidesAtTheDropByItsStateThen() {
+        val two = twoFields(state = 1 or 8)
+        drag(two.root, 170f, 230f) { two.tell(1 or 4) }
+        assertEquals("its node took drops while the drag was over it", "2", two.second.text.toString())
+        assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
+    }
+
+    @Test fun aNodePaintedOverTheFieldTakesTheDropThere() {
+        val two = twoFields(state = 1 or 8)
+        Journal.painted = false
+        drag(two.root, 170f, 230f)
+        assertEquals("2", two.second.text.toString())
+        assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
+    }
+
+    @Test fun aRawContentUriThatIsAFileGoesAboveTheFieldAndARawWebLinkStays() {
+        val resolver = RuntimeEnvironment.getApplication().contentResolver
+        org.robolectric.shadows.ShadowContentResolver.registerProviderInternal("typed", Typed())
+        val two = twoFields(state = 1 or 8)
+        drag(two.root, 170f, 230f, ClipData.newRawUri("photo", Uri.parse("content://typed/photo.png")))
+        assertEquals("2", two.second.text.toString())
+        drag(two.root, 170f, 230f, ClipData.newRawUri("link", Uri.parse("https://example.com/fuji")))
+        assertTrue(two.second.text.toString(), two.second.text.toString().contains("https://example.com/fuji"))
+        assertEquals(listOf("over 170 230", "released 170 230", "over 170 230", "dropped 170 230"), Journal.drags)
+        assertTrue(resolver.getType(Uri.parse("content://typed/photo.png")) == "image/png")
+    }
+
+    @Test fun aDropTheWindowTakesLandsWhenItsCopiesEnd() {
+        val resolver = RuntimeEnvironment.getApplication().contentResolver
+        org.robolectric.shadows.ShadowContentResolver.registerProviderInternal("names", FilePickerTest.PhotoProvider())
+        val photo = Uri.parse("content://names/a")
+        shadowOf(resolver).registerInputStream(photo, "pixels".byteInputStream())
+        val two = twoFields(state = 1 or 4)
+        Journal.release = 7
+        val clip = ClipData("photo", arrayOf("image/png"), ClipData.Item(photo)).apply { addItem(ClipData.Item("Glasshouse")) }
+        assertTrue(drag(two.root, 200f, 330f, clip, local = DragOut.OWN))
+        val landed = { Journal.drags.firstOrNull { it.startsWith("landed") } }
+        val until = System.currentTimeMillis() + 5000
+        while (landed() == null && System.currentTimeMillis() < until) { shadowOf(android.os.Looper.getMainLooper()).idle(); Thread.sleep(10) }
+        val items = JSONObject(landed()!!.removePrefix("landed 7 "))
+        assertEquals("Glasshouse", items.getString("text"))
+        assertEquals("pixels", File(items.getJSONArray("paths").getString(0)).readText())
+    }
+
+    @Test fun anotherAppsDropWithNoReadPermissionDeliversItsTextAlone() {
+        val two = twoFields(state = 1 or 4)
+        Journal.release = 7
+        val clip = ClipData("photo", arrayOf("image/png"), ClipData.Item(Uri.parse("content://names/a"))).apply { addItem(ClipData.Item("Glasshouse")) }
+        assertTrue(drag(two.root, 200f, 330f, clip))
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals("landed 7 " + DropItems(emptyList(), "Glasshouse", "").json(emptyList()), Journal.drags.last())
+        assertEquals(listOf("drop: Android granted no read permission for its files, so it delivers its text and link alone"), Journal.lines)
+    }
+
     @Test fun aFieldClippedAwayWholeHasAPortNoDragFinds() {
-        val (root, second) = twoFields(flags = 1 or 8, clipSecond = true)
-        assertEquals(listOf(0, 0), (second.parent as View).let { listOf(it.width, it.height) })
-        dragText(root, 170f, 230f)
-        assertEquals("2", second.text.toString())
+        val two = twoFields(state = 1 or 8, clipSecond = true)
+        assertEquals(listOf(0, 0), (two.second.parent as View).let { listOf(it.width, it.height) })
+        drag(two.root, 170f, 230f)
+        assertEquals("2", two.second.text.toString())
     }
 
     class Folders : android.content.ContentProvider() {
