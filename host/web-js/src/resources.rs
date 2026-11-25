@@ -60,11 +60,10 @@ fn arguments(plan: &Plan, i: usize, scope: &Scope, uses: &mut Uses) -> Result<Ve
         let f = code::expression(
             plan,
             plan.code(plan.arg(a).expr),
-            &code::evaluation(
-                scope,
-                format!("resource {:?} argument {}", plan.str(r.name), k + 1),
-                false,
-            ),
+            &scope.evaluating(code::Evaluation::declared(
+                code::Declaration::ResourceArgument(k + 1),
+                plan.str(r.name),
+            )),
             uses,
         )
         .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))?;
@@ -140,7 +139,7 @@ fn call(
     // D6), which identify no upload it asks (uploads.js, LLP 1016.000 D10).
     let args = each::arguments(plan, r, args, scope, uses)?;
     let (name, source) = (
-        serde_json::to_string(plan.str(r.name)).unwrap(),
+        uses.declaration_name(plan.str(r.name)),
         serde_json::to_string(plan.str(r.source)).unwrap(),
     );
     let ty = serde_json::to_string(&type_code(plan, r.ty)).unwrap();

@@ -347,6 +347,47 @@ test('nested slot arms share mount code and keep each row and arm instance', asy
   expect(reports[0]).toEqual(reports[1]);
 }, 60000);
 
+test('shared mounts report their own site and lifted action synchronously offline', async () => {
+  const source = `routes nav
+  home "/" render=client
+component App
+  view
+    column
+      Cell()
+      Cell()
+component Cell
+  state value = ""
+  action save(v: string)
+    value = v
+  action fail
+    value = encodeRouteSegment(value)
+  view
+    row
+      button "Argument" testId="arg" press=save(encodeRouteSegment(value))
+      button "Action" testId="act" press=fail
+`;
+  const builds = [];
+  for (const flags of [[], ['--sites']]) {
+    await pageFor(source, async page => {
+      await page.getByTestId('act').first().waitFor();
+      await page.evaluate(async () => { window.readGuardJournal = (await import('/rt.js')).journal; });
+      await page.context().setOffline(true);
+      const reasons = await page.evaluate(() => [...document.querySelectorAll('button')].map(button => {
+        const journal = window.readGuardJournal, at = journal.length;
+        button.click();
+        return journal.slice(at).find(line => line.includes('Trap('))?.split(' in ').at(-1);
+      }));
+      expect(reasons).toHaveLength(4);
+      expect(new Set(reasons).size).toBe(4);
+      for (const [i, reason] of reasons.entries()) {
+        expect(reason).toMatch(i % 2 ? /^action "fail#[0-9a-f]{64}"$/ : /^site [0-9]+ press argument 1$/);
+      }
+      builds.push(reasons);
+    }, flags);
+  }
+  expect(builds[0]).toEqual(builds[1]);
+}, 60000);
+
 test('a shared slot frame reads the getter declared for its card in each keyed row', async () => {
   const source = `component App
   state limit = 2

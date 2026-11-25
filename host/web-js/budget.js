@@ -8,14 +8,17 @@ const MAX = 67108864, NODES = 16777216;
 /** A trap: the runner's `Trap` at `pc`, journaled as its `Debug` text (D6). */
 export class Trap extends Refusal { constructor(kind, pc) { super(`Trap(${kind} { pc: ${pc} })`); this.kind = kind; this.pc = pc; } }
 const bound = x => ({ IterationLimit: ": past the 65,536 list steps one evaluation may take", CallLimit: ": past the 65,536 derive calls one evaluation may take", CallDepth: ": past 64 derive call levels", StringTooLong: ": past the 64 MiB a string may hold", ValueTooLarge: ": past the 16,777,216 nodes or 64 MiB a value may hold", ValueTooDeep: ": past 64 levels" }[x.kind] ?? "");
-/** A named evaluation refused. Labels are evaluated in the emitted catch only. */
-export function $E(x, label, instance) {
-  if (!(x instanceof Trap) || x.evaluation) throw x;
-  x.evaluation = label;
-  if (instance) throw new Refusal(`Instance(${x.message}) in ${label}${bound(x)}`);
-  x.message += ` in ${label}${bound(x)}`;
+/** Each formatter describes one kind of evaluation in this plan. Negative codes poison the tree update. */
+export const $E = kinds => (x, kind, a, b) => {
+  if (x instanceof Trap && !x.evaluation) {
+    const instance = kind < 0;
+    const label = x.evaluation = kinds[instance ? ~kind : kind](a, b);
+    const where = ` in ${label}${bound(x)}`;
+    if (instance) throw new Refusal(`Instance(${x.message})${where}`);
+    x.message += where;
+  }
   throw x;
-}
+};
 /** Throw a trap, where an expression stands. */
 export function $T(kind, pc) { throw new Trap(kind, pc); }
 /** Prop or style binding `f` of plan node `site` on element `e`, whose trap unsets its row `row` and the commit goes on

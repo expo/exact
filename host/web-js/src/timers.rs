@@ -55,7 +55,10 @@ pub(super) fn task(
             code::expression(
                 plan,
                 plan.code(t.gate),
-                &code::evaluation(scope, format!("task {name} gate"), false),
+                &scope.evaluating(code::Evaluation::declared(
+                    code::Declaration::TaskGate,
+                    plan.str(t.name),
+                )),
                 uses,
             )?
         } else {
@@ -67,13 +70,17 @@ pub(super) fn task(
                 code::expression(
                     plan,
                     plan.code(t.key),
-                    &code::evaluation(scope, format!("task {name} key"), false),
+                    &scope.evaluating(code::Evaluation::declared(
+                        code::Declaration::TaskKey,
+                        plan.str(t.name)
+                    )),
                     uses
                 )?
             )
         } else {
             "0".into()
         };
+        let name = uses.declaration_name(plan.str(t.name));
         let gated = uses.rt("gated");
         let path = if t.owner.is_some() {
             scope.path.as_deref().unwrap_or("\"\"")
@@ -203,26 +210,27 @@ pub(super) fn sequences(em: &mut Em<'_>, body: &mut String) -> Result<(), String
     let mut entries = Vec::new();
     for q in plan.sequences.iter() {
         let name = serde_json::to_string(plan.str(q.name)).unwrap();
-        let mut f = |c, role: &str| {
+        let mut f = |c, kind| {
             code::expression(
                 plan,
                 plan.code(c),
-                &code::evaluation(&top, format!("sequence {name} {role}"), false),
+                &top.evaluating(code::Evaluation::declared(kind, plan.str(q.name))),
                 &mut em.uses,
             )
             .map_err(|e| format!("sequence {name}: {e}"))
         };
-        let gate = f(q.gate, "gate")?;
+        let gate = f(q.gate, code::Declaration::SequenceGate)?;
         let key = if q.keyed {
-            format!("()=>{}", f(q.key, "key")?)
+            format!("()=>{}", f(q.key, code::Declaration::SequenceKey)?)
         } else {
             "0".into()
         };
         let args = [q.tracks, q.bpm, q.from, q.count_in, q.clock, q.clock_out]
             .into_iter()
             .enumerate()
-            .map(|(k, c)| f(c, &format!("argument {}", k + 1)))
+            .map(|(k, c)| f(c, code::Declaration::SequenceArgument(k + 1)))
             .collect::<Result<Vec<_>, _>>()?;
+        let name = em.uses.declaration_name(plan.str(q.name));
         let ended = q.ended.map_or("null".into(), |a| format!("a_{}", a.0));
         entries.push(format!(
             "[()=>{gate},{key},()=>[{}],{ended},{name}]",

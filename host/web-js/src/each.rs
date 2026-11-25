@@ -19,27 +19,26 @@ pub(super) fn resource(
     let Some((list, key)) = plan.resource_each(r) else {
         return Ok(None);
     };
-    let mut part = |c, role: &str| {
+    let mut part = |c, kind| {
         code::expression(
             plan,
             plan.code(c),
-            &code::evaluation(
-                top,
-                format!("resource {:?} each {role}", plan.str(r.name)),
-                false,
-            ),
+            &top.evaluating(code::Evaluation::declared(kind, plan.str(r.name))),
             uses,
         )
         .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))
     };
-    let (list, key) = (part(list, "subject")?, part(key, "key")?);
+    let (list, key) = (
+        part(list, code::Declaration::ResourceEachSubject)?,
+        part(key, code::Declaration::ResourceEachKey)?,
+    );
     let elem = plan.types[r.ty.0 as usize]
         .elem
         .ok_or("a list resource's type")?;
     Ok(Some(format!(
         "const r_{i}={}({},{},()=>{list},p0=>{key},p0=>[{}],{},{},{});",
         uses.rt("resEach"),
-        serde_json::to_string(plan.str(r.name)).unwrap(),
+        uses.declaration_name(plan.str(r.name)),
         serde_json::to_string(plan.str(r.source)).unwrap(),
         args.join(","),
         serde_json::to_string(&type_code(plan, r.ty)).unwrap(),
@@ -84,7 +83,10 @@ pub(super) fn arguments(
         let g = code::expression(
             plan,
             plan.code(plan.arg(gate).expr),
-            &code::evaluation(top, format!("resource {:?} gate", plan.str(r.name)), false),
+            &top.evaluating(code::Evaluation::declared(
+                code::Declaration::ResourceGate,
+                plan.str(r.name),
+            )),
             uses,
         )
         .map_err(|e| format!("resource {}: {e}", plan.str(r.name)))?;

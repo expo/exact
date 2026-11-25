@@ -1483,9 +1483,9 @@ test('focus handlers stop bubbling while a view transition holds their commit', 
     }
   } finally { delete globalThis.document; delete globalThis.requestAnimationFrame; }
 });
-
 test('a trap names its evaluation and bound, and preserves an upstream evaluation', async () => {
   const { Trap, $E } = await import(resolve(dir, 'budget.js'));
+  const guard = $E([name => `derive "${name}"`, name => `action "${name}"`, site => `site ${site} each subject`]);
   for (const [kind, words] of [
     ['IterationLimit', 'the 65,536 list steps one evaluation may take'],
     ['StringTooLong', 'the 64 MiB a string may hold'],
@@ -1493,8 +1493,8 @@ test('a trap names its evaluation and bound, and preserves an upstream evaluatio
     ['ValueTooDeep', '64 levels'],
   ]) {
     const trap = new Trap(kind, 17);
-    expect(() => $E(trap, 'derive "visible"', 0)).toThrow(`Trap(${kind} { pc: 17 }) in derive "visible": past ${words}`);
-    expect(() => $E(trap, 'action "grow"', 0)).toThrow(`Trap(${kind} { pc: 17 }) in derive "visible": past ${words}`);
-    expect(() => $E(new Trap(kind, 17), 'site 58 each subject', 1)).toThrow(`Instance(Trap(${kind} { pc: 17 })) in site 58 each subject: past ${words}`);
+    expect(() => guard(trap, 0, 'visible')).toThrow(`Trap(${kind} { pc: 17 }) in derive "visible": past ${words}`);
+    expect(() => guard(trap, 1, 'grow')).toThrow(`Trap(${kind} { pc: 17 }) in derive "visible": past ${words}`);
+    expect(() => guard(new Trap(kind, 17), ~2, 58)).toThrow(`Instance(Trap(${kind} { pc: 17 })) in site 58 each subject: past ${words}`);
   }
 });

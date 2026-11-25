@@ -27,8 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// What names a body may read, from where it is compiled.
 #[derive(Clone, Default)]
 pub struct Scope {
-    /// JavaScript label, evaluated only in the trap catch; whether it poisons a tree update.
-    pub evaluation: Option<(String, bool)>,
+    /// The runner evaluation named if this body traps.
+    pub evaluation: Option<Evaluation>,
     /// JavaScript getters for the enclosing region frames, innermost last:
     /// (item, index, bound).
     pub frames: Vec<Frame>,
@@ -59,6 +59,13 @@ impl Scope {
             format!("\0v:{js}\0")
         } else {
             js
+        }
+    }
+
+    pub fn evaluating(&self, evaluation: Evaluation) -> Self {
+        Self {
+            evaluation: Some(evaluation),
+            ..self.clone()
         }
     }
 
@@ -129,6 +136,8 @@ pub struct Uses {
     pub consts: BTreeMap<String, String>,
     /// The constants `share` made, by value.
     pub shared: BTreeMap<String, String>,
+    /// The formatters this module's trap paths actually use, in operand order.
+    pub guard_kinds: Vec<String>,
 }
 
 impl Uses {
@@ -310,35 +319,177 @@ pub fn called_expression(f: String) -> String {
     }
 }
 
+/// Guard names use the plan's full spelling, including a lifted member's use-path digest.
+#[derive(Clone)]
+pub enum Evaluation {
+    Declaration(Declaration, String),
+    Site(String, SiteEvaluation),
+}
+
+#[derive(Clone, Copy)]
+pub enum Declaration {
+    Action,
+    Derive,
+    State,
+    ResourceArgument(usize),
+    ResourceGate,
+    ResourceEachSubject,
+    ResourceEachKey,
+    TaskGate,
+    TaskKey,
+    SequenceGate,
+    SequenceKey,
+    SequenceArgument(usize),
+    MutationThen,
+}
+
+#[derive(Clone)]
+pub enum SiteEvaluation {
+    Argument(exact_plan::EventKind, usize),
+    Surface(usize),
+    Subject(exact_plan::RegionKind),
+    EachKey,
+    State(String),
+    ListOption(String),
+}
+
+impl Evaluation {
+    pub fn declared(kind: Declaration, name: &str) -> Self {
+        Self::Declaration(kind, name.to_string())
+    }
+
+    fn operands(&self, scope: &Scope, uses: &mut Uses) -> String {
+        let name = |uses: &mut Uses, raw: &str, json: bool| {
+            // Tasks and sequences historically quoted with JSON; other plan names used Rust Debug.
+            let quoted = if json {
+                serde_json::to_string(raw).unwrap()
+            } else {
+                format!("{raw:?}")
+            };
+            scope.operand(uses.share(
+                'n',
+                serde_json::to_string(&quoted[1..quoted.len() - 1]).unwrap(),
+            ))
+        };
+        let (format, first, second, instance) = match self {
+            Self::Declaration(kind, raw) => {
+                use Declaration::*;
+                let (format, argument) = match kind {
+                    Action => (r#"action "${a}""#, None),
+                    Derive => (r#"derive "${a}""#, None),
+                    State => (r#"state "${a}" initializer"#, None),
+                    ResourceArgument(k) => (r#"resource "${a}" argument ${b}"#, Some(*k)),
+                    ResourceGate => (r#"resource "${a}" gate"#, None),
+                    ResourceEachSubject => (r#"resource "${a}" each subject"#, None),
+                    ResourceEachKey => (r#"resource "${a}" each key"#, None),
+                    TaskGate => (r#"task "${a}" gate"#, None),
+                    TaskKey => (r#"task "${a}" key"#, None),
+                    SequenceGate => (r#"sequence "${a}" gate"#, None),
+                    SequenceKey => (r#"sequence "${a}" key"#, None),
+                    SequenceArgument(k) => (r#"sequence "${a}" argument ${b}"#, Some(*k)),
+                    MutationThen => (r#"mutation "${a}" then"#, None),
+                };
+                let json = matches!(
+                    kind,
+                    TaskGate | TaskKey | SequenceGate | SequenceKey | SequenceArgument(_)
+                );
+                (
+                    format.into(),
+                    name(uses, raw, json),
+                    argument.map(|k| k.to_string()),
+                    false,
+                )
+            }
+            Self::Site(site, what) => {
+                use SiteEvaluation::*;
+                let (suffix, argument) = match what {
+                    Argument(event, k) => (
+                        format!("{} argument ${{b}}", event.name()),
+                        Some(k.to_string()),
+                    ),
+                    Surface(k) => ("surface argument ${b}".into(), Some(k.to_string())),
+                    Subject(kind) => (
+                        format!(
+                            "{} subject",
+                            match kind {
+                                exact_plan::RegionKind::When => "when",
+                                exact_plan::RegionKind::Each => "each",
+                                exact_plan::RegionKind::Match => "match",
+                            }
+                        ),
+                        None,
+                    ),
+                    EachKey => ("each key".into(), None),
+                    State(raw) => (
+                        "state \"${b}\" initializer".into(),
+                        Some(name(uses, raw, false)),
+                    ),
+                    ListOption(row) => (format!("list option {row}"), None),
+                };
+                (
+                    format!("site ${{a}} {suffix}"),
+                    site.clone(),
+                    argument,
+                    !matches!(what, Argument(..)),
+                )
+            }
+        };
+        let kind = uses
+            .guard_kinds
+            .iter()
+            .position(|k| *k == format)
+            .unwrap_or_else(|| {
+                uses.guard_kinds.push(format);
+                uses.guard_kinds.len() - 1
+            });
+        // The sign carries whether the tree update is poisoned. Zero is a valid kind.
+        let kind = if instance {
+            !(kind as i64)
+        } else {
+            kind as i64
+        };
+        match second {
+            Some(arg) => format!("{kind},{first},{arg}"),
+            None => format!("{kind},{first}"),
+        }
+    }
+}
+
+impl Uses {
+    pub fn guards(&self) -> String {
+        if self.guard_kinds.is_empty() {
+            return String::new();
+        }
+        let kinds = self
+            .guard_kinds
+            .iter()
+            .map(|format| format!("(a,b)=>`{format}`"))
+            .collect::<Vec<_>>();
+        format!("const $guard=$E([{}]);\n", kinds.join(","))
+    }
+
+    pub fn declaration_name(&self, raw: &str) -> String {
+        let quoted = serde_json::to_string(raw).unwrap();
+        self.shared.get(&quoted).cloned().unwrap_or(quoted)
+    }
+}
+
 pub fn evaluated(f: String, scope: &Scope, before: usize, uses: &mut Uses) -> String {
-    let Some((label, instance)) = &scope.evaluation else {
+    let Some(evaluation) = &scope.evaluation else {
         return f;
     };
     if uses.metered == before {
         return f;
     }
-    let guard = uses.budget("$E");
+    uses.budget("$E");
+    let operands = evaluation.operands(scope, uses);
     let (head, body) = f.split_once("=>").expect("function");
     let body = if body.starts_with('{') {
         body[1..body.len() - 1].to_string()
     } else {
         format!("return {body};")
     };
-    format!(
-        "{head}=>{{try{{{body}}}catch($e){{{guard}($e,{label},{});}}}}",
-        *instance as u8
-    )
-}
-
-/// A scope whose label is only constructed if this evaluation traps.
-pub fn evaluation(scope: &Scope, label: String, instance: bool) -> Scope {
-    Scope {
-        evaluation: Some((
-            scope.operand(serde_json::to_string(&label).unwrap()),
-            instance,
-        )),
-        ..scope.clone()
-    }
+    format!("{head}=>{{try{{{body}}}catch($e){{$guard($e,{operands});}}}}")
 }
 
 fn wrap(head: &str, t: &Translator<'_>, body: Body) -> String {

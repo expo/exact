@@ -31,12 +31,7 @@ impl Em<'_> {
                         code::expression(
                             plan,
                             plan.code(a.expr),
-                            &self.site_evaluation(
-                                scope,
-                                i,
-                                format!("surface argument {}", k + 1),
-                                true,
-                            ),
+                            &self.site_evaluation(scope, i, code::SiteEvaluation::Surface(k + 1)),
                             &mut self.uses,
                         )
                     })
@@ -78,12 +73,7 @@ impl Em<'_> {
                     let v = code::expression(
                         plan,
                         plan.code(a.expr),
-                        &self.site_evaluation(
-                            scope,
-                            i,
-                            format!("surface argument {}", k + 1),
-                            true,
-                        ),
+                        &self.site_evaluation(scope, i, code::SiteEvaluation::Surface(k + 1)),
                         &mut self.uses,
                     )?;
                     values.push(if named {

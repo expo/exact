@@ -44,7 +44,7 @@ fn call(
 /// each instance making its own (`owned`).
 pub(super) fn declaration(plan: &Plan, i: usize, uses: &mut Uses) -> String {
     let m = &plan.mutations[i];
-    let name = serde_json::to_string(plan.str(m.name)).unwrap();
+    let name = uses.share('n', serde_json::to_string(plan.str(m.name)).unwrap());
     if m.owner.is_some() {
         let stub = uses.rt("ownedMut");
         return format!("const m_{i}={stub}({name});");
@@ -115,7 +115,10 @@ fn then(
         let e = code::expression(
             plan,
             plan.code(plan.arg(a).expr),
-            &code::evaluation(scope, format!("mutation {declared:?} then"), false),
+            &scope.evaluating(code::Evaluation::declared(
+                code::Declaration::MutationThen,
+                declared,
+            )),
             uses,
         )
         .map_err(|e| format!("mutation {declared} then: {e}"))?;

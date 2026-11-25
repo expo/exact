@@ -421,7 +421,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             let _ = write!(
                 body,
                 "const r_{i}={owned}({});",
-                serde_json::to_string(plan.str(r.name)).unwrap()
+                em.uses
+                    .share('n', serde_json::to_string(plan.str(r.name)).unwrap())
             );
             continue;
         }
@@ -708,6 +709,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         .collect();
     // What data can give its elements (`style::bound_tokens`), which
     // writers.mjs counts.
+    let consts = consts + &em.uses.guards();
     let bound = crate::style::bound_tokens(plan);
     let consts = if bound.is_empty() {
         consts
@@ -1312,12 +1314,7 @@ impl Em<'_> {
                 let f = code::expression(
                     plan,
                     plan.code(plan.arg(a).expr),
-                    &self.site_evaluation(
-                        scope,
-                        i,
-                        format!("{} argument {}", h.event.name(), k + 1),
-                        false,
-                    ),
+                    &self.site_evaluation(scope, i, code::SiteEvaluation::Argument(h.event, k + 1)),
                     &mut self.uses,
                 )?;
                 args.push(f);

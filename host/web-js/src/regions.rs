@@ -22,7 +22,10 @@ impl Em<'_> {
             let f = code::function(
                 plan,
                 plan.code(r.body),
-                &code::evaluation(top, format!("derive {:?}", plan.str(r.name)), false),
+                &top.evaluating(code::Evaluation::declared(
+                    code::Declaration::Derive,
+                    plan.str(r.name),
+                )),
                 0,
                 &mut self.uses,
             )
@@ -33,7 +36,7 @@ impl Em<'_> {
                 "const d_{i}={memo}({f},{}{});",
                 serde_json::to_string(&type_code(plan, r.ty)).unwrap(),
                 if site_attrs {
-                    format!(",{}", serde_json::to_string(plan.str(r.name)).unwrap())
+                    format!(",{}", self.uses.declaration_name(plan.str(r.name)))
                 } else {
                     String::new()
                 }
@@ -191,16 +194,10 @@ impl Em<'_> {
 
     fn region_subject(&mut self, r: u32, parent: &str, scope: &Scope) -> Result<String, String> {
         let row = &self.plan.regions[r as usize];
-        let kind = match row.kind {
-            RegionKind::Each => "each",
-            RegionKind::When => "when",
-            RegionKind::Match => "match",
-        };
         let scope = self.site_evaluation(
             scope,
             region_site(self.plan, r),
-            format!("{kind} subject"),
-            true,
+            code::SiteEvaluation::Subject(row.kind),
         );
         let subject = self
             .mount_function(row.subject, &scope)
@@ -276,8 +273,7 @@ impl Em<'_> {
                 &self.site_evaluation(
                     scope,
                     region_site(plan, plan.arms[arm as usize].region.0),
-                    format!("state {:?} initializer", plan.str(slot.name)),
-                    true,
+                    code::SiteEvaluation::State(plan.str(slot.name).into()),
                 ),
                 &mut self.uses,
             )
@@ -286,7 +282,7 @@ impl Em<'_> {
             // conform, or the runner refuses (SlotType).
             let ty = serde_json::to_string(&type_code(plan, slot.ty)).unwrap();
             if let Some(panel) = carry {
-                let quoted = serde_json::to_string(plan.str(slot.name)).unwrap();
+                let quoted = self.uses.declaration_name(plan.str(slot.name));
                 let declared = type_json(plan, slot.ty);
                 let _ = write!(
                     decl,
@@ -295,7 +291,7 @@ impl Em<'_> {
                 continue;
             }
             let sig = self.uses.rt("sig");
-            let slot_name = string_name(plan, slot, scope);
+            let slot_name = string_name(plan, slot, scope, &self.uses);
             let k = scope.operand(k.to_string());
             let _ = write!(decl, "{name}[{k}]={sig}({init},{ty}{slot_name});");
         }
@@ -373,7 +369,7 @@ impl Em<'_> {
         let pure = crate::reads::pure_key(&key, &item, &index);
         let key = code::called_expression(code::evaluated(
             key,
-            &self.site_evaluation(&inner, region_site(plan, r), "each key".into(), true),
+            &self.site_evaluation(&inner, region_site(plan, r), code::SiteEvaluation::EachKey),
             before,
             &mut self.uses,
         ));
@@ -446,18 +442,17 @@ pub(super) fn root_slot(
     let init = code::expression(
         plan,
         plan.code(r.init),
-        &code::evaluation(
-            top,
-            format!("state {:?} initializer", plan.str(r.name)),
-            false,
-        ),
+        &top.evaluating(code::Evaluation::declared(
+            code::Declaration::State,
+            plan.str(r.name),
+        )),
         uses,
     )
     .map_err(|e| format!("slot {}: {e}", plan.str(r.name)))?;
     let ty = serde_json::to_string(&type_code(plan, r.ty)).unwrap();
     // A persisted slot starts from the store's value where it fits, and is
     // kept after each commit (LLP 1116 D5, persist.js).
-    let quoted = serde_json::to_string(plan.str(r.name)).unwrap();
+    let quoted = uses.declaration_name(plan.str(r.name));
     let scope = if r.persist == exact_plan::PersistScope::Window {
         ",true"
     } else {
@@ -476,7 +471,7 @@ pub(super) fn root_slot(
         let _ = write!(body, "const s_{i}={make}({quoted},{init},{ty},{declared});");
     } else {
         let make = uses.rt(if r.late { "late" } else { "sig" });
-        let name = string_name(plan, r, top);
+        let name = string_name(plan, r, top, uses);
         let _ = write!(body, "const s_{i}={make}({init},{ty}{name});");
     }
     if r.is_persisted() {
@@ -491,11 +486,16 @@ pub(super) fn root_slot(
 
 /// A string slot's name, as `sig`'s third argument: a write past MAX_STRING
 /// is refused naming it (the runner's StringTooLong, LLP 1090 D6).
-fn string_name(plan: &Plan, slot: &exact_plan::SlotsRow, scope: &Scope) -> String {
+fn string_name(
+    plan: &Plan,
+    slot: &exact_plan::SlotsRow,
+    scope: &Scope,
+    uses: &code::Uses,
+) -> String {
     if type_code(plan, slot.ty) == "s" {
         format!(
             ",{}",
-            scope.operand(serde_json::to_string(slot.declared_name(plan)).unwrap())
+            scope.operand(uses.declaration_name(slot.declared_name(plan)))
         )
     } else {
         String::new()

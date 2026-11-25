@@ -20,7 +20,10 @@ impl Em<'_> {
             let mut f = code::function(
                 plan,
                 plan.code(r.body),
-                &code::evaluation(&scope, format!("action {:?}", plan.str(r.name)), false),
+                &scope.evaluating(code::Evaluation::declared(
+                    code::Declaration::Action,
+                    plan.str(r.name),
+                )),
                 r.params.len as usize,
                 &mut self.uses,
             )

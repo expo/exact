@@ -73,6 +73,18 @@ component Detail
     crate::emit::emit(&plan, false, false).expect("the grouped list builds");
 }
 
+/// Resolve a shared plan name when checking the registration that uses it.
+fn name_operand(js: &str, name: &str) -> String {
+    let literal = serde_json::to_string(name).unwrap();
+    js.lines()
+        .filter_map(|line| line.strip_prefix("const "))
+        .find_map(|decl| {
+            decl.strip_suffix(&format!("={literal};"))
+                .map(str::to_owned)
+        })
+        .unwrap_or(literal)
+}
+
 /// The row is an aggregate at the root; each instance makes its own request,
 /// which its action refreshes, and its path follows the runner's.
 #[test]
@@ -80,11 +92,10 @@ fn each_instance_makes_and_refreshes_its_own_request() {
     let plan = contract::compile(SCREENS).unwrap();
     let works = plan.str(plan.resources[0].name);
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
-    assert!(js.contains(&format!("const r_0=owned({works:?})")), "{js}");
+    let works = name_operand(&js, works);
+    assert!(js.contains(&format!("const r_0=owned({works})")), "{js}");
     assert!(
-        js.contains(&format!(
-            ".r0=own(r_0,$path=>res({works:?},\"subjectWorks\""
-        )),
+        js.contains(&format!(".r0=own(r_0,$path=>res({works},\"subjectWorks\"")),
         "{js}"
     );
     assert!(js.contains(r#"R($r["r0"])"#), "{js}");
@@ -211,14 +222,13 @@ fn each_instance_makes_its_own_mutations() {
     let detected = plan.str(plan.mutations[0].name);
     let saved = plan.str(plan.mutations[1].name);
     let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    let detected = name_operand(&js, detected);
+    let saved = name_operand(&js, saved);
     assert!(
-        js.contains(&format!("const m_0=ownedMut({detected:?})")),
+        js.contains(&format!("const m_0=ownedMut({detected})")),
         "{js}"
     );
-    assert!(
-        js.contains(&format!("const m_1=ownedMut({saved:?})")),
-        "{js}"
-    );
+    assert!(js.contains(&format!("const m_1=ownedMut({saved})")), "{js}");
     assert!(!js.contains("m_0.then"), "{js}");
     let (before, _) = js.split_once(".m0=ownMut(").unwrap();
     let owner = before.rsplit_once(';').unwrap().1;
@@ -259,7 +269,8 @@ fn a_use_outside_every_region_sends_as_the_root() {
     let slot = plan.mutations[0].slot.0;
     let declared = js.find(&format!("const s_{slot}=")).expect("the late slot");
     let detected = plan.str(plan.mutations[0].name);
-    let made = js.find(&format!("const m_0=mut({detected:?}")).expect(&js);
+    let detected = name_operand(&js, detected);
+    let made = js.find(&format!("const m_0=mut({detected}")).expect(&js);
     assert!(declared < made, "{js}");
     assert!(js.contains("m_0.then=()=>a_2(\"9\");"), "{js}");
 }

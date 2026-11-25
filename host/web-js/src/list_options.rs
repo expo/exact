@@ -147,22 +147,17 @@ impl Em<'_> {
                 None => code::expression(
                     plan,
                     plan.code(b.expr),
-                    &code::evaluation(
+                    &self.site_evaluation(
                         scope,
-                        format!(
-                            "site {i} list option {}",
-                            match b.kind {
-                                BindingKind::Prop => PropId::from_wire(b.id).map_or_else(
-                                    || format!("prop {}", b.id),
-                                    |p| p.name().to_string()
-                                ),
-                                BindingKind::Style => StyleId::from_bit(b.id as u32).map_or_else(
-                                    || format!("style {}", b.id),
-                                    |s| s.name().replace('_', "-")
-                                ),
-                            }
-                        ),
-                        true,
+                        i,
+                        code::SiteEvaluation::ListOption(match b.kind {
+                            BindingKind::Prop => PropId::from_wire(b.id)
+                                .map_or_else(|| format!("prop {}", b.id), |p| p.name().to_string()),
+                            BindingKind::Style => StyleId::from_bit(b.id as u32).map_or_else(
+                                || format!("style {}", b.id),
+                                |s| s.name().replace('_', "-"),
+                            ),
+                        }),
                     ),
                     &mut self.uses,
                 )

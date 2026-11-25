@@ -216,16 +216,133 @@ fn a_binding_that_can_trap_unsets_its_row() {
 }
 
 #[test]
-fn labels_are_only_built_on_the_trap_path() {
-    let (_, js) = js("component App\n  state n = 1\n  derive visible = range(n)\n  action grow(v: number)\n    n = range(n).length\n  view\n    column\n      button press=grow(range(n).length)\n        text \"grow\"\n");
-    for (name, label) in [("d_0", "derive \"visible\""), ("a_0", "action \"grow\"")] {
-        let body = decl(&js, name);
-        let quoted = serde_json::to_string(label).unwrap();
-        assert!(
-            body.contains(&format!("catch($e){{$E($e,{quoted},0)")),
-            "{body}"
+fn guard_calls_carry_the_site_and_argument_as_numbers() {
+    let (_, js) = js("component App\n  state n = 1\n  action show(v: number)\n    n = v\n  view\n    button \"Show\" press=show(range(n).length)\n");
+    assert!(!js.contains("site 0 press argument 1"), "{js}");
+    let numeric_press = js.split("catch($e){$guard($e,").skip(1).any(|call| {
+        call.split_once(",0,1);}")
+            .is_some_and(|(kind, _)| kind.parse::<usize>().is_ok())
+    });
+    assert!(numeric_press, "{js}");
+}
+
+#[test]
+fn every_guard_formats_the_previous_label_on_the_trapping_turn() {
+    use crate::code::{self, Declaration::*, Evaluation as E, SiteEvaluation as Site};
+    use std::fmt::Write as _;
+    let raw = format!("m\"\\\n\u{7f} 名#{}", "fedcba98".repeat(8));
+    let json = serde_json::to_string(&raw).unwrap();
+    let mut cases = Vec::new();
+    for (kind, expected) in [
+        (Action, format!("action {raw:?}")),
+        (Derive, format!("derive {raw:?}")),
+        (State, format!("state {raw:?} initializer")),
+        (
+            ResourceArgument(31),
+            format!("resource {raw:?} argument 31"),
+        ),
+        (ResourceGate, format!("resource {raw:?} gate")),
+        (
+            ResourceEachSubject,
+            format!("resource {raw:?} each subject"),
+        ),
+        (ResourceEachKey, format!("resource {raw:?} each key")),
+        (MutationThen, format!("mutation {raw:?} then")),
+        (TaskGate, format!("task {json} gate")),
+        (TaskKey, format!("task {json} key")),
+        (SequenceGate, format!("sequence {json} gate")),
+        (SequenceKey, format!("sequence {json} key")),
+        (SequenceArgument(6), format!("sequence {json} argument 6")),
+    ] {
+        cases.push((E::declared(kind, &raw), expected, false));
+    }
+    let mut site = |kind: Site, what: String, instance: bool| {
+        for operand in ["47", "base+3", "sites[1]"] {
+            cases.push((
+                E::Site(operand.into(), kind.clone()),
+                format!("site 47 {what}"),
+                instance,
+            ));
+        }
+    };
+    for event in exact_plan::EventKind::ALL {
+        site(
+            Site::Argument(event, 17),
+            format!("{} argument 17", event.name()),
+            false,
         );
     }
+    for region in exact_plan::RegionKind::ALL {
+        site(
+            Site::Subject(region),
+            format!("{} subject", region.name()),
+            true,
+        );
+    }
+    site(Site::EachKey, "each key".into(), true);
+    site(
+        Site::State(raw.clone()),
+        format!("state {raw:?} initializer"),
+        true,
+    );
+    site(Site::Surface(3), "surface argument 3".into(), true);
+    let rows = exact_kernel::PropId::ALL
+        .into_iter()
+        .map(|p| p.name().into())
+        .chain(
+            exact_kernel::StyleId::ALL
+                .iter()
+                .map(|s| s.name().replace('_', "-")),
+        )
+        .chain(["prop 65535".into(), "style 65535".into()]);
+    for row in rows {
+        site(
+            Site::ListOption(row.clone()),
+            format!("list option {row}"),
+            true,
+        );
+    }
+
+    let mut uses = code::Uses::default();
+    let mut script = String::new();
+    for (label, text, instance) in cases {
+        let before = uses.metered;
+        uses.budget("$T");
+        let f = code::evaluated(
+            "()=>{throw original;}".into(),
+            &code::Scope::default().evaluating(label),
+            before,
+            &mut uses,
+        );
+        let reason = if instance {
+            "Instance(Trap(TypeMismatch { pc: 7 }))"
+        } else {
+            "Trap(TypeMismatch { pc: 7 })"
+        };
+        let expected = serde_json::to_string(&format!("{reason} in {text}")).unwrap();
+        writeln!(script, "{{const original=new Trap('TypeMismatch',7);assert.throws({f},e=>e.message==={expected});}}").unwrap();
+    }
+    let temp = std::env::temp_dir().join(format!("exact-guard-text-{}", std::process::id()));
+    std::fs::create_dir_all(&temp).unwrap();
+    std::fs::write(temp.join("rt.js"), "export class Refusal extends Error{};export const text=String,segmentOf=String,say=String;").unwrap();
+    std::fs::write(temp.join("budget.js"), include_str!("../budget.js")).unwrap();
+    let names = uses
+        .consts
+        .iter()
+        .map(|(n, v)| format!("const {n}={v};"))
+        .collect::<String>();
+    std::fs::write(temp.join("run.mjs"), format!("import assert from 'node:assert/strict';import {{$E,Trap}} from './budget.js';const base=44,sites=[0,47];{names}{}{script}",uses.guards())).unwrap();
+    let out = std::process::Command::new(std::env::var_os("BUN").unwrap_or_else(|| "bun".into()))
+        .arg("run.mjs")
+        .current_dir(&temp)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(temp).unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

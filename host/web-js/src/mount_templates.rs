@@ -101,18 +101,9 @@ impl Em<'_> {
         &self,
         scope: &Scope,
         n: u32,
-        what: String,
-        instance: bool,
+        what: code::SiteEvaluation,
     ) -> Scope {
-        if self.next_local_element.is_none() {
-            return code::evaluation(scope, format!("site {n} {what}"), instance);
-        }
-        let suffix = serde_json::to_string(&format!(" {what}")).unwrap();
-        let label = format!(r#""site "+({})+{suffix}"#, self.site_number(scope, n));
-        Scope {
-            evaluation: Some((label, instance)),
-            ..scope.clone()
-        }
+        scope.evaluating(code::Evaluation::Site(self.site_number(scope, n), what))
     }
 
     /// Descendant arms may close over bindings introduced here, including a
