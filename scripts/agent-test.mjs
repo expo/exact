@@ -1179,7 +1179,13 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           // shows changes until it reads again.
           case 'request': await serverRequest(server, st); unpolled = st.line; break;
           case 'rotate': delivered(await s.rotate(st.orientation)); input = st.line; break;
-          case 'fold': delivered(await s.fold(st.degrees)); input = st.line; break;
+          case 'fold': {
+            const r = await s.fold(st.degrees);
+            delivered(r);
+            if (r.reason === 'hinge') throw new Error(`fold: the app did not take ${st.degrees}° within 5 s; \`state\` says whether its scene can`);
+            input = st.line;
+            break;
+          }
           case 'resize': delivered(await s.resize(st.width, st.height)); input = st.line; break;
           // The window's close button (studio diary R17): a window a `beforeunload` keeps stays and the test goes on;
           // one that closed takes the session, so a step after it fails naming it.

@@ -915,6 +915,39 @@ final class AgentCheckIOSTests: XCTestCase {
         XCTAssertEqual((try item(3)["cover"] as? [String: Any])?["by"] as? Int, 5, "one that takes touches covers the button under it")
     }
 
+    /// The view whose safe area a control is in, with its box and area, and how far a scroller can move it from each edge
+    /// (LLP 1188 D4): on the page, in a scroller scrolled partway, in one without range, and stuck in one with range.
+    func testAnItemSaysWhoseSafeAreaItIsInAndHowFarAScrollerMovesIt() throws {
+        let press: (Int, [String: Any]) -> [String: Any] = { ["op": "create", "id": $0, "kind": "view", "handlers": ["press"], "style": $1] }
+        let vertical: [String: Any] = ["overflow_y": "auto"]
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view"], press(2, [:]),
+            ["op": "create", "id": 10, "kind": "scroll", "style": vertical], press(11, [:]), press(12, ["position": "sticky"]),
+            ["op": "create", "id": 20, "kind": "scroll", "style": vertical], press(21, [:]),
+            ["op": "children", "id": 1, "ids": [10, 20, 2]], ["op": "children", "id": 10, "ids": [11, 12]], ["op": "children", "id": 20, "ids": [21]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0], ["op": "frame", "id": 2, "x": 300.0, "y": 740.0, "w": 60.0, "h": 44.0],
+            ["op": "frame", "id": 10, "x": 0.0, "y": 0.0, "w": 400.0, "h": 300.0], ["op": "content", "id": 10, "w": 400.0, "h": 900.0],
+            ["op": "frame", "id": 11, "x": 0.0, "y": 350.0, "w": 400.0, "h": 60.0], ["op": "frame", "id": 12, "x": 0.0, "y": 250.0, "w": 400.0, "h": 60.0],
+            ["op": "frame", "id": 20, "x": 0.0, "y": 300.0, "w": 400.0, "h": 300.0], ["op": "content", "id": 20, "w": 400.0, "h": 200.0],
+            ["op": "frame", "id": 21, "x": 0.0, "y": 100.0, "w": 400.0, "h": 60.0],
+        ])
+        let root = try XCTUnwrap(window?.rootViewController)
+        root.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 84)
+        window?.layoutIfNeeded()
+        try XCTUnwrap(session?.presenter.views[10]?.scroll).contentOffset.y = 250
+        let reply = agent.check([:])
+        let items = try XCTUnwrap(reply["items"] as? [[String: Any]]), owners = try XCTUnwrap(reply["owners"] as? [[String: Any]])
+        func item(_ id: Int) throws -> [String: Any] { try XCTUnwrap(items.first { $0["id"] as? Int == id && $0["control"] != nil }, "#\(id) in \(items)") }
+        XCTAssertEqual(try item(11)["room"] as? [String: Double], ["top": 250, "bottom": 350], "250 of its 600 points scrolled")
+        for id in [2, 12, 21] { XCTAssertNil(try item(id)["room"], "#\(id): nothing moves it") }
+        XCTAssertEqual(try [2, 11, 12, 21].map { try item($0)["owner"] as? Int }, [0, 0, 0, 0], "the session's own controller holds them")
+        let safe = try XCTUnwrap(owners[0]["safe"] as? [String: Any]), inset = root.view.safeAreaInsets
+        XCTAssertEqual(["x", "y", "w", "h"].map { safe[$0] as? Double ?? -1 },
+                       [inset.left, inset.top, 400 - inset.left - inset.right, 800 - inset.top - inset.bottom].map { Double(($0 * 100).rounded() / 100) }, "\(owners)")
+        XCTAssertEqual([owners[0]["w"] as? Double, owners[0]["h"] as? Double], [400, 800])
+    }
+
     func testACoverIsJudgedWholeAndARowPastItsScrollerIsNotCovered() throws {
         let gray: [Double] = [200, 200, 200, 255]
         let scrolls: [String: Any] = ["overflow_y": "scroll"]
@@ -1113,6 +1146,22 @@ final class AgentCheckIOSTests: XCTestCase {
         XCTAssertEqual(vis(3)?["y"] as? Double, 84, "the part below the bar's edge: \(items)")
         XCTAssertEqual(vis(3)?["h"] as? Double, 16)
         XCTAssertNil(vis(4), "below the bar it is whole: \(items)")
+    }
+
+    /// A bar down a side, as the iPhone Duo's tab bar is, cuts what lies past its inner edge and nothing beside it.
+    func testABarAlongASideCutsOnlyWhatLiesPastIt() throws {
+        let agent = mounted([
+            ["op": "create", "id": 1, "kind": "view"], ["op": "create", "id": 2, "kind": "text", "props": ["text": "Beside"]],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "Past"]],
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 400, "h": 800],
+            ["op": "frame", "id": 2, "x": 16, "y": 300, "w": 100, "h": 20], ["op": "frame", "id": 3, "x": 300, "y": 300, "w": 60, "h": 20],
+        ])
+        let bar = UINavigationBar(frame: CGRect(x: 330, y: 0, width: 70, height: 800)) // any bar: the box says which side
+        try XCTUnwrap(window?.rootViewController?.view).addSubview(bar)
+        let items = try XCTUnwrap(agent.check([:])["items"] as? [[String: Any]])
+        XCTAssertNil(try XCTUnwrap(items.first { $0["id"] as? Int == 2 })["vis"], "nothing is over it: \(items)")
+        XCTAssertEqual((items.first { $0["id"] as? Int == 3 }?["vis"] as? [String: Any])?["w"] as? Double, 30, "\(items)")
     }
 
     /// A text scrolled above a top bar's inner edge, where a touch meets UIKit's edge effect, is covered by the bar, which

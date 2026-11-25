@@ -1,6 +1,7 @@
 // `check` (LLP 1116.003 D8): what is wrong with the presented screen, in text, so a builder need not read a
 // screenshot back to find it — text clipped against its box or squeezed to no width, a scroller squeezed to less than
-// a row, controls overlapping or covered by a bar, the keyboard or a sheet, targets under the platform's minimum,
+// a row, controls overlapping or covered by a bar, the keyboard or a sheet, a control or text outside the safe area or across
+// a fold (check-regions.mjs), targets under the platform's minimum,
 // horizontal overflow, text below a contrast floor, and a card whose fill is what lies behind it. The host observes
 // (host/web-js/check.js, AgentCheckIOS.swift: its presented boxes, ink, fills, clips and hit tests, and the fill painted
 // under each text, LLP 1116.006 D5); where no fill is known, the background a text stands on is read from a capture's
@@ -11,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { encodePng, readSrgbPng, shrink } from './png.mjs';
+import { clears, meet, regionFindings, regionHint, regionLine } from './check-regions.mjs';
 
 const SHOWN = 12;
 const OFFSCREEN = 'a column taller than the screen runs past it: let it scroll (`overflow-y: auto`), or give it `flex: 1` and `min-height: 0` under a header instead of `height: 100%`';
@@ -86,7 +88,6 @@ function drawnRole(fg, scheme = 'light', palette = APPLE) {
   return null;
 }
 
-const inter = (a, b) => ({ w: Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), h: Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) });
 /** What is presented of an item's box: the host's `vis` (a clipping view, or a bar drawn over it, cuts it), less what the
  * keyboard (its top, `kb`) covers; and whether none is (LLP 1116.007 D3). */
 const shown = (it, kb) => { const v = it.vis ? { ...it, ...it.vis } : it; return kb != null && v.y + v.h > kb ? { ...v, h: Math.max(0, kb - v.y) } : v; };
@@ -171,18 +172,17 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   // Where a text's lines are drawn (`ink`, where the host says it is not the box, already cut to a box that clips it),
   // within what a scroller presents of its box (`vis`) and above the keyboard: a rectangle, or one a line for a run of a
   // paragraph that wraps (`lines`), whose box takes in the ends of lines it shares with its neighbours.
-  const cut = (r, v) => { const x = Math.max(v.x, r.x), y = Math.max(v.y, r.y); return { x, y, w: Math.min(v.x + v.w, r.x + r.w) - x, h: Math.min(v.y + v.h, r.y + r.h) - y }; };
   const drawn = (it) => {
-    if (it.lines) { const v = shown(it, obs.keyboard); return it.lines.map((l) => cut(l, v)).filter((r) => r.w > 0 && r.h > 0); }
+    if (it.lines) { const v = shown(it, obs.keyboard); return it.lines.map((l) => meet(l, v)).filter((r) => r.w > 0 && r.h > 0); }
     const k = it.ink ?? it;
-    return [cut(k, shown(it.vis ? it : { ...it, ...k }, obs.keyboard))];
+    return [meet(k, shown(it.vis ? it : { ...it, ...k }, obs.keyboard))];
   };
-  // Where two items' rectangles meet most, as `inter` and where.
+  // Where two items' rectangles meet most.
   const meeting = (as, bs) => {
     let best = { w: 0, h: 0, x: 0, y: 0 };
     for (const p of as) for (const q of bs) {
-      const i = inter(p, q);
-      if (i.w > 0 && i.h > 0 && i.w * i.h > best.w * best.h) best = { ...i, x: Math.max(p.x, q.x), y: Math.max(p.y, q.y) };
+      const i = meet(p, q);
+      if (i.w > 0 && i.h > 0 && i.w * i.h > best.w * best.h) best = i;
     }
     return best;
   };
@@ -192,11 +192,13 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   // others only where its lines are.
   const controls = items.filter((it) => it.control && !it.overlay);
   const where = (it) => (it.control && !it.lines ? [shown(it, obs.keyboard)] : drawn(it));
+  for (const { it, kind, detail } of regionFindings(obs)) add(kind, it, { ...detail, unit }, regionHint(kind));
   // A list's section header (`pinned`) lies over the rows passing under it, as UIKit pins it, and an announcement laid
   // over the page that lets taps through (`overlay`, a toast) over what it passes: no overlap.
   for (const a of controls) for (const b of items) {
     if (a === b || !(b.control || b.text) || b.pinned || b.overlay || (b.control && b.id < a.id)) continue;
     if (!b.control && (b.of === a.id || controls.some((c) => c !== a && holds(c, b)))) continue; // its own label, or another control's
+    if (clears(obs, b, a) || (b.control && clears(obs, a, b))) continue; // what scrolls passes under a control that stays (a composer, a floating button)
     const i = meeting(where(a), where(b));
     if (i.w >= 2 && i.h >= 2 && !holds(a, b) && !holds(b, a)) add('overlap', a, { with: b.id, by: [r0(i.w), r0(i.h)] }, 'give them room (a gap, or let the row wrap)');
   }
@@ -217,7 +219,7 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   // A control's own text covered with it is one finding: the control's.
   const coveredControls = found.filter((f) => f.kind === 'covered' && items.find((it) => it.id === f.id)?.control);
   const kept = found.filter((f) => !(f.kind === 'covered' && f.text != null && coveredControls.some((c) => c !== f && holds({ x: c.box[0], y: c.box[1], w: c.box[2], h: c.box[3] }, { x: f.box[0], y: f.box[1], w: f.box[2], h: f.box[3] }))));
-  const order = ['covered', 'squeezed', 'clipped', 'overflow', 'overlap', 'contrast', 'card', 'target'];
+  const order = ['covered', 'edge', 'fold', 'squeezed', 'clipped', 'overflow', 'overlap', 'contrast', 'card', 'target'];
   return kept.sort((p, q) => order.indexOf(p.kind) - order.indexOf(q.kind) || p.box[1] - q.box[1] || p.box[0] - q.box[0]);
 }
 function parseHex(h) { const n = parseInt(String(h).slice(1, 7), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
@@ -249,6 +251,8 @@ export function line(f, nodes) {
   const under = (u) => typeof u === 'object' && u ? named(u.ref, nodes) : u;
   const what = {
     covered: () => d.offscreen ? `its middle is past ${d.under}, and nothing scrolls to it` : `its middle is under ${under(d.under)} at rest${d.bar ? ` (${d.bar})` : ''}, and nothing scrolls it clear`,
+    edge: () => regionLine('edge', d, d.unit),
+    fold: () => regionLine('fold', d, d.unit),
     clipped: () => d.need ? `its text is ${[d.need[0] ? `${d.need[0]} ${d.unit} wider` : '', d.need[1] ? `${d.need[1]} ${d.unit} taller` : ''].filter(Boolean).join(' and ')} than its box${d.clips ? ', which clips it' : ', and spills'}` : `${d.edge ? `the ${d.edge} of the screen` : named(d.by, nodes)} cuts ${[d.cut[0] ? `${d.cut[0]} ${d.unit} of its width` : '', d.cut[1] ? `${d.cut[1]} ${d.unit} of its height` : ''].filter(Boolean).join(' and ')}`,
     overflow: () => d.pad != null ? `runs ${d.past} ${d.unit} past ${named(d.of, nodes)}'s side: ${d.written != null ? `its width is ${d.written} of its parent's` : 'its content is as wide as its parent\'s'}, and its ${d.pad} ${d.unit} of padding${d.written != null ? ' and border' : ''} add to that (content-box sizing)` : d.of != null ? `runs ${d.past} ${d.unit} past ${named(d.of, nodes)}'s side, and nothing there scrolls or clips it` : `runs ${d.past} ${d.unit} past the ${d.width}-wide viewport's side, and nothing scrolls it`,
     target: () => `${f.box[2]}×${f.box[3]} ${d.unit}, under the ${d.min}×${d.min} minimum`,
@@ -277,7 +281,7 @@ export function report(runs, trees, host) {
     const nodes = trees[i];
     const head = `check ${host} · ${run.scheme}${run.asked && run.asked !== run.scheme ? ` (asked ${run.asked}: the app keeps its own scheme)` : ''}${run.accepted?.length ? ` (${run.accepted.length} accepted)` : ''}`;
     if (run.incomplete) out.push(`${head}: incomplete (${run.incomplete})`);
-    else if (!run.findings.length) out.push(`${head}: no findings (text fits, nothing covered or overlapping, targets ≥ ${run.target}, no horizontal overflow, contrast ≥ 4.5:1 or 3:1 large, cards show)`);
+    else if (!run.findings.length) out.push(`${head}: no findings (text fits, nothing covered or overlapping, targets ≥ ${run.target}, no horizontal overflow${run.regions ? ', edges and folds clear' : ''}, contrast ≥ 4.5:1 or 3:1 large, cards show)`);
     else {
       out.push(`${head}: ${run.findings.length} finding${run.findings.length === 1 ? '' : 's'}`);
       for (const f of run.findings.slice(0, SHOWN)) out.push(line(f, nodes));
@@ -316,7 +320,7 @@ export async function checkOp(s, args = [], { shots, accept = [] } = {}) {
       }
       const { path, taken, display, capture, incomplete } = picture;
       obs = picture.obs;
-      const run = { scheme: obs.scheme, asked: scheme, target: obs.target, viewport: obs.viewport };
+      const run = { scheme: obs.scheme, asked: scheme, target: obs.target, viewport: obs.viewport, ...(obs.owners ? { regions: true } : {}) };
       if (incomplete) {
         trees.push(new Map());
         runs.push({ ...run, findings: [], incomplete });
