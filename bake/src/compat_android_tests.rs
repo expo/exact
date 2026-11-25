@@ -1,30 +1,37 @@
 use super::*;
 
+fn plan(source: &str) -> exact_plan::Plan {
+    contract::compile(source).unwrap()
+}
+
+fn uses(linked: &serde_json::Value) -> Vec<String> {
+    let names = linked["uses"].as_array().unwrap().iter();
+    names.map(|u| u.as_str().unwrap().to_owned()).collect()
+}
+
 #[test]
-fn an_apk_records_the_drag_adapters_it_ships_whatever_its_plan_uses() {
-    let plan = contract::compile("component A\n  view\n    text \"No drags here\"\n").unwrap();
-    let linked = android_linked(&plan, None, "");
-    let uses: Vec<&str> = linked["uses"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|u| u.as_str())
-        .collect();
-    assert!(
-        uses.contains(&"drag_in") && uses.contains(&"drag_out"),
-        "{uses:?}"
-    );
-    let dropping = contract::compile(
-        "component A\n  state drops = 0\n  action took(e: DragEvent)\n    drops = drops + 1\n  view\n    column drop=took\n",
-    )
-    .unwrap();
-    let linked = android_linked(&dropping, None, "");
-    let uses = linked["uses"].as_array().unwrap();
+fn an_apk_takes_a_generation_that_first_drops_or_drags_out() {
+    let installed = uses(&android_linked(
+        &plan("component A\n  view\n    text \"No drags here\"\n"),
+        None,
+        "",
+    ));
+    for later in [
+        "component A\n  state n = 0\n  action took(e: DragEvent)\n    n = n + 1\n  view\n    column drop=took\n",
+        "component A\n  view\n    column draggable=true dataTransfer=DataTransfer(text=\"Fuji\")\n      text \"Card\"\n",
+    ] {
+        for need in android_uses(&plan(later)) {
+            assert!(installed.iter().any(|have| have == need), "{need} is not in {installed:?}: {later}");
+        }
+    }
+}
+
+#[test]
+fn the_same_linked_capabilities_record_the_same_roster() {
+    let pasted = "component A\n  state n = 0\n  action pasted(e: ClipboardEvent)\n    n = n + 1\n  view\n    column paste=pasted\n";
+    let dropped = "component A\n  state n = 0\n  action took(e: DragEvent)\n    n = n + 1\n  view\n    column drop=took\n";
     assert_eq!(
-        uses.iter()
-            .filter(|u| u.as_str() == Some("drag_in"))
-            .count(),
-        1,
-        "a plan that takes drops names drag_in once: {uses:?}"
+        uses(&android_linked(&plan(pasted), None, "")),
+        uses(&android_linked(&plan(dropped), None, "")),
     );
 }

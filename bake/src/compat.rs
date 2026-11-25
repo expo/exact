@@ -24,6 +24,10 @@ use contract::Manifest;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+#[path = "compat_android.rs"]
+mod android;
+pub(crate) use android::{android_linked, android_uses, plan_extensions};
+
 /// The C ABI's header, whose `EXACT_ABI_VERSION` is one of the numbers.
 const ABI_HEADER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -514,46 +518,6 @@ pub fn compatibility_id_pinned(
         )?;
     }
     Ok(compat)
-}
-
-/// What an APK is composed from beyond the compatibility inputs' other
-/// fields (LLP 1030.006 D4a): the plan's capabilities (`uses.txt`, which
-/// decides what the reader links), the Android permissions its grant lines
-/// and the source's use of module names derive (`permissions.txt`), and the
-/// package extensions it binds a Kotlin implementation for. A generation
-/// that needs more than this is a new APK; the hatch words are `hatches`.
-pub(crate) fn android_linked(
-    plan: &exact_plan::Plan,
-    ceiling: Option<&str>,
-    source: &str,
-) -> serde_json::Value {
-    let mut uses = android_uses(plan);
-    let core = exact_runner::Uses::ANDROID_CORE.beyond(exact_runner::uses(plan));
-    uses.extend(core.iter().map(|c| c.name()));
-    serde_json::json!({
-        "uses": uses,
-        "permissions": contract::native::android_permissions(plan, ceiling, source),
-        "extensions": plan_extensions(plan),
-    })
-}
-
-/// What the APK links for the plan, by name, as its build reads it
-/// (`contract::native::android_reach`).
-pub(crate) fn android_uses(plan: &exact_plan::Plan) -> Vec<&'static str> {
-    contract::native::android_uses(plan)
-}
-
-/// The package extensions the plan's modules, views and events name, sorted.
-pub(crate) fn plan_extensions(plan: &exact_plan::Plan) -> Vec<String> {
-    let names = plan
-        .modules
-        .iter()
-        .map(|m| m.extension)
-        .chain(plan.views.iter().map(|v| v.extension))
-        .chain(plan.module_events.iter().map(|e| e.extension));
-    let names: std::collections::BTreeSet<String> =
-        names.map(|name| plan.str(name).to_string()).collect();
-    names.into_iter().collect()
 }
 
 /// The faced tools this platform's binary compiles a door for (LLP 1133.023
@@ -1479,10 +1443,6 @@ mod tests;
 #[cfg(test)]
 #[path = "compat_faces_tests.rs"]
 mod faces_tests;
-
-#[cfg(test)]
-#[path = "compat_android_tests.rs"]
-mod android_tests;
 
 #[cfg(test)]
 #[path = "compat_notification_service_tests.rs"]
