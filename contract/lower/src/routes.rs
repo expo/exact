@@ -610,7 +610,7 @@ impl NavPlace {
         if let Some(a) = split.filter(|a| !has("navigationKey") && split_text(&a.value).is_none()) {
             return err(
                 "lower-navigation-split",
-                format!("off a stack's root route, `navigationSplit` is only the literal \"placeholder\" on a box, which the split shows over the detail pane; a computed value here is no placeholder the compiler can place. Write the stack's setting on its root route (a tab's first route takes only the literal \"split\" or \"none\"), or render a separate box under an `if` with the literal `navigationSplit=\"placeholder\"`. {PLACEHOLDER}"),
+                format!("off a stack's root route, `navigationSplit` is only the literal \"placeholder\" on a box, which the split shows over the detail pane; a computed value here is no placeholder the compiler can place. Write the stack's setting on its root route, a computed width as text computed in that route's scope, a whole number of px from 1 to 999999 in ASCII digits with no leading zero (``navigationSplit=`${{width}}` ``; a tab's first route takes only the literal \"split\" or \"none\"), or render a separate box under an `if` with the literal `navigationSplit=\"placeholder\"`; where the view has no stack, leave the attribute out (`contract vocab navigationSplit` says where each host splits). {PLACEHOLDER}"),
                 a.span,
             );
         }

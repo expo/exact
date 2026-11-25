@@ -244,6 +244,27 @@ fn asked(route: &str, inner: &str) -> Option<bool> {
 }
 
 #[test]
+fn a_computed_width_off_a_route_is_told_to_ask_as_text_on_the_root_route() {
+    // The repair the refusal gives compiles: a number bound on the root route is no text, a template of it is
+    let off = stack("", "")
+        .replace(
+            "            text \"Pick one\"\n",
+            "            box navigationSplit=width\n              text \"Pick one\"\n",
+        )
+        .replace("  view\n", "  state width = 320\n  view\n");
+    let error = contract::compile(&off).unwrap_err();
+    assert_eq!(error.id, "lower-navigation-split", "{error}");
+    assert!(
+        error.message.contains("navigationSplit=`${width}`")
+            && error.message.contains("a whole number of px"),
+        "{error}"
+    );
+    let repaired = stack("navigationSplit=`${width}`", "")
+        .replace("  view\n", "  state width = 320\n  view\n");
+    contract::compile(&repaired).unwrap();
+}
+
+#[test]
 fn a_button_in_the_placeholder_is_no_zero_size_button_to_the_bake() {
     // Laid out as no box at the lint's phone width, as the platform intends:
     // not the hidden button the bake refuses (it is pressed in the pane).
