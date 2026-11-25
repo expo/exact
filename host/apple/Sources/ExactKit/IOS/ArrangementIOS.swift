@@ -595,6 +595,16 @@ package final class ArrangementHost {
         }
     }
 
+    /// Each shown pane's controller, by its node: an owner whose update is sampled with its block
+    /// (LLP 1123 D2, `OwnerBlocks.samplesOwners`).
+    package var shownPanes: [UInt32: UIViewController] {
+        var out: [UInt32: UIViewController] = [:]
+        for entry in entries.values {
+            for holder in entry.holders where !entry.isHidden(holder) && holder.view.window != nil { out[holder.node.id] = holder }
+        }
+        return out
+    }
+
     package var blocks: [UInt32: (block: HostBlock, placement: BlockPlacement?)] {
         var out: [UInt32: (block: HostBlock, placement: BlockPlacement?)] = [:]
         for entry in entries.values {
