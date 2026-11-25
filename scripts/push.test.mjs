@@ -131,27 +131,35 @@ test.each([
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("an Android permission moves the binary only when the APK permission set changes", () => {
+test('a receipt without merged Android permissions compares host metadata as before', () => {
   const { root, app, binaryInputChanges } = harness();
-  const grant = 'android.permission.FOREGROUND_SERVICE', capture = 'android.permission.DETECT_SCREEN_CAPTURE';
-  const network = 'android.permission.ACCESS_NETWORK_STATE';
-  const manifest = permissions => ({ app: { id: 'fixture', name: 'Fixture' }, host: { android: { permissions } } });
   try {
-    app.target = resolve(root, 'target');
-    const compat = { target: 'aarch64-linux-android', delivery: {}, reach: { android: [grant] },
-      inputs: { platform: 'android', store: { L: 'A' }, keys: {}, capabilities: { permissions: [capture, network] } } };
-    const metadata = { ...nativeManifestMetadata(manifest([network, capture]), 'android'), delivery: {}, store: compat.inputs.store, keys: {} };
-    const evidence = { metadata, androidPermissions: [grant, capture, network], files: [], directories: [], absent: [], links: [] };
-    const changes = permissions => {
-      app.manifest = manifest(permissions);
-      return binaryInputChanges(null, app, compat, [], evidence);
-    };
-    expect(changes([grant, capture, network, capture])).toEqual([]);
-    expect(changes([network])).toEqual(['host']);
-    const added = 'android.permission.RUN_USER_INITIATED_JOBS';
-    compat.inputs.androidLinked = { permissions: [added] };
-    expect(changes([network, capture, added])).toEqual(['host']);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    const compat = { inputs: { platform: 'android', keys: {}, store: {} }, delivery: {} };
+    const metadata = { ...nativeManifestMetadata(app.manifest, 'android'), keys: {}, store: {}, delivery: {} };
+    const evidence = {metadata, files: [], directories: [], absent: [], links: []};
+    app.manifest.host = { android: { permissions: ['android.permission.FOREGROUND_SERVICE'] } };
+    expect(binaryInputChanges(null, app, compat, [], evidence)).toEqual([]);
+    app.manifest.host.android.queries = [{ action: 'android.speech.RecognitionService' }];
+    expect(binaryInputChanges(null, app, compat, [], evidence)).toEqual(['host']);
+  } finally { fs.rmSync(root, {recursive:true, force:true}); }
+});
+
+test('the installed manifest admits the same module with or without a repeated app declaration', () => {
+  const {root, build, cohort} = harness();
+  try {
+    const network = 'android.permission.ACCESS_NETWORK_STATE';
+    build.version = 1;
+    build.binary = {sha256:'binary'};
+    build.graph.artifacts[0].requires = {androidPermissions:[network]};
+    for (const names of [[], [network]]) {
+      cohort.compat.reach = {androidAppPermissions:names};
+      cohort.compat.inputs.androidLinked = {permissions:[], manifestPermissions:[network]};
+      const frozen = cohortReceipt(build);
+      expect(classifyArtifacts(build, frozen).bundle).toBe(true);
+      frozen.compat.inputs.androidLinked.manifestPermissions = [];
+      expect(classifyArtifacts(build, frozen).bundle).toBe(false);
+    }
+  } finally { fs.rmSync(root, {recursive:true, force:true}); }
 });
 
 test("a package's native configuration is a binary input, recorded by digest (LLP 1133.021 §9 item 7)", () => {
