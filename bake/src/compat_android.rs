@@ -31,21 +31,14 @@ pub(crate) fn android_linked(
 
 /// What the APK links for the plan, by name, as its build reads it
 /// (`contract::native::android_reach`).
-pub(crate) fn android_uses(plan: &exact_plan::Plan) -> Vec<&'static str> {
-    contract::native::android_uses(plan)
-}
+pub(crate) use contract::native::android_uses;
 
 /// The package extensions the plan's modules, views and events name, sorted.
 pub(crate) fn plan_extensions(plan: &exact_plan::Plan) -> Vec<String> {
-    let names = plan
-        .modules
-        .iter()
-        .map(|m| m.extension)
-        .chain(plan.views.iter().map(|v| v.extension))
-        .chain(plan.module_events.iter().map(|e| e.extension));
-    let names: std::collections::BTreeSet<String> =
-        names.map(|name| plan.str(name).to_string()).collect();
-    names.into_iter().collect()
+    plan.package_extensions()
+        .into_keys()
+        .map(str::to_owned)
+        .collect()
 }
 
 #[cfg(test)]

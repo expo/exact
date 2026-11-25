@@ -458,9 +458,10 @@ impl Uses {
         .with(Capability::DragIn);
 
     /// What every Android APK ships whatever its plan uses, so a later
-    /// generation may use it: the `doc:` table a drop's and a paste's files
-    /// arrive in, and the root's drag adapters, `DragIn.kt` and `DragOut.kt`
-    /// (LLP 1069.010, LLP 1094.001 D5, LLP 1094.000 D7).
+    /// generation may use it: the root's drag adapters, `DragIn.kt` and
+    /// `DragOut.kt`, and the `doc:` table the drop path mints a dropped or
+    /// pasted file's handle in (LLP 1069.010, LLP 1094.001 D5, LLP 1094.000
+    /// D7).
     pub const ANDROID_CORE: Uses = Uses::NONE
         .with(Capability::Documents)
         .with(Capability::DragIn)
