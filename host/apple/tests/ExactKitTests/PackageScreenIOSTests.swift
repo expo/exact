@@ -151,6 +151,60 @@ final class PackageScreenIOSTests: XCTestCase {
         XCTAssertEqual(clearing.additionalSafeAreaInsets, UIEdgeInsets(top: 0, left: 0, bottom: 10, right: 0), "given back, the app's kept")
     }
 
+    /// LLP 1123 D15: a native view with no controller that lets the host clear its safe area is
+    /// held by a real child controller the host makes and contains, in the controller's own view, so
+    /// it stays a plain view in the node's box whose safe area takes the clearance and gives it back as
+    /// the view goes, and a reused instance keeps the controller made for its view.
+    func testAViewWithNoControllerThatConsentsIsContainedInOneTheHostMakes() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "native screens are contained in a window") }
+        try boot(scene)
+        let natives = try XCTUnwrap(session.nativeViews)
+        let home = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation?.topViewController)
+        func mount(_ tag: String, _ id: UInt32) throws -> UIViewController {
+            let owner = NodeView(id: id, kind: "native", presenter: session.presenter)
+            owner.frame = home.view.bounds
+            home.view.addSubview(owner)
+            natives.create(owner: owner)
+            owner.props = ["nativeViewModuleName": tag]
+            natives.update(owner)
+            natives.loadIfNeeded()
+            waitForMainQueue()
+            let made = try XCTUnwrap(natives.entries[id]?.screen, "\(tag)'s controller")
+            XCTAssertTrue(made.parent === home, "contained in the route's controller")
+            XCTAssertTrue(made.view.superview === owner, "its own view in the node's box")
+            XCTAssertTrue(natives.entries[id]?.view?.superview === made.view, "holding the native view")
+            return made
+        }
+        let made = try mount("probe-cleared", 100030)
+        let view = try XCTUnwrap(natives.entries[100030]?.view), owner = try XCTUnwrap(made.view.superview)
+        home.view.layoutIfNeeded()
+        XCTAssertEqual(view.convert(view.bounds, to: owner), owner.bounds, "in the node's box as outside a controller")
+        XCTAssertEqual(view.layoutMargins.left, UIView().layoutMargins.left, "a plain view's margins, not a root view's")
+        XCTAssertNil(view.next as? UIViewController, "the node's, not a controller's")
+        // A touch on the view is the view's; beside it, where the controller's view lies, the node's
+        XCTAssertTrue(owner.hitTest(CGPoint(x: 10, y: 10), with: nil) === view)
+        view.isUserInteractionEnabled = false
+        XCTAssertTrue(owner.hitTest(CGPoint(x: 10, y: 10), with: nil) === owner)
+        let before = view.safeAreaInsets
+        XCTAssertTrue(natives.clear(100030, owed: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
+        home.view.layoutIfNeeded()
+        XCTAssertEqual(view.safeAreaInsets.top, before.top + 30, "the view's safe area takes the clearance")
+        natives.destroy(id: 100030)
+        XCTAssertNil(made.parent)
+        XCTAssertNil(made.view.superview, "taken out of the node's box")
+        XCTAssertEqual(made.additionalSafeAreaInsets, .zero, "given back as the view goes")
+
+        let first = try mount("reusable-cleared", 100031), held = natives.entries[100031]?.view
+        let parks = natives.parks
+        natives.destroy(id: 100031)
+        XCTAssertEqual(natives.parks, parks + 1, "parked for reuse")
+        XCTAssertNil(first.parent)
+        let second = try mount("reusable-cleared", 100032)
+        defer { natives.destroy(id: 100032) }
+        XCTAssertTrue(second === first, "the controller made for its view")
+        XCTAssertTrue(natives.entries[100032]?.view === held)
+    }
+
     func testPushPopTabsRotationAndSheet() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "push/pop, tabs, rotation, and a sheet") }
         try pushPopTabsRotationAndSheet(scene, appScreen: false)
