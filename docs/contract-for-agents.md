@@ -6176,8 +6176,10 @@ keyboard. Declare every field but `available` and
 `generation` an `option`, and each family and rectangle in them too: each is `none`
 before the node is laid out and wherever the host does not have it, and the bake refuses
 a shape that does not say so. `frame` is the border box as laid out, before the scroll
-offsets and transforms above it; it is `none` in `"window"`, which only the host can
-place, and in a `"node"` space in another owner. Until hosts report an owner's band,
+offsets and transforms above it. In `"window"` it is placed by the map its host reports of
+the node's owner, or of the document, into the window, a rectangle under a scaled sheet
+scaled with it, and is `none` where the host reports none, as every host does until LLP
+1123's activation; it is `none` in a `"node"` space in another owner. Until hosts report an owner's band,
 keyboard and margins and the session view's band (LLP 1123 stage 3), a node inside an
 owner reads `none` for its safe area and margins and 0 for the keyboard, and one outside
 every owner reads 0 for each; on the web every quantity is `none`, and the terminal host

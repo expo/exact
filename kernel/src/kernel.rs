@@ -46,6 +46,7 @@ mod replacement;
 mod segments;
 mod session_update;
 pub(crate) mod targets;
+mod window_map;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
 mod scroll_terms;
@@ -73,6 +74,7 @@ pub use scroll_terms::ScrollTerms;
 pub use session_update::SessionUpdate;
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;
+pub use window_map::WindowMap;
 
 /// How many receipts the kernel retains for late readers.
 pub const RECEIPT_RING: usize = 64;

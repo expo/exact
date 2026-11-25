@@ -5,7 +5,7 @@
 //! carry.
 
 use super::provenance::{Contribution, Operation};
-use super::{Kernel, Keyboard, KeyboardReport, OwnerMargins};
+use super::{Kernel, Keyboard, KeyboardReport, OwnerMargins, WindowMap};
 use crate::error::{KernelError, LayoutError};
 use crate::id::IdMap;
 use crate::style::env::{Rect, SegmentGrid};
@@ -36,6 +36,9 @@ pub struct OwnerUpdate {
     pub bar_regions: [Option<BarRegion>; 4],
     /// Its chrome (D6's `chrome`), `None` where its host reports none.
     pub chrome: Option<OwnerChrome>,
+    /// Its view's map into its window (D6's `"window"` space), from the origin its block's space
+    /// starts at; `None` out of a window or where its host reports none.
+    pub window_map: Option<WindowMap>,
 }
 
 /// What an owner's host reports of its chrome (D6's `chrome`, D4, D15), which no layout reads:
@@ -100,6 +103,8 @@ impl Kernel {
         owed |= self.set_owner_keyboard_report(view, update.keyboard)?;
         owed |= self.set_owner_bar_regions(view, update.bar_regions)?;
         self.set_owner_chrome(view, update.chrome)?;
+        let slot = self.arena.slot_of(view);
+        self.set_window_map(slot, update.window_map);
         Ok(owed)
     }
 
@@ -132,6 +137,9 @@ impl Kernel {
         }
         if let Some(why) = update.segments.as_ref().and_then(SegmentGrid::refusal) {
             return Err(LayoutError::OwnerSegments(why).into());
+        }
+        if let Some(why) = WindowMap::refusal(update.window_map.as_ref()) {
+            return Err(LayoutError::NativeTarget(why).into());
         }
         super::bar::check_regions(&update.bar_regions)
     }
@@ -200,7 +208,7 @@ impl OwnerUpdate {
     /// and rows (`u8` each) and the `cols × rows` rects, row-major; then each edge's bar region,
     /// top right bottom left, its distance and its two sides (`f32` each); then the chrome, its
     /// vertical bar edge's raw value (`u8`) and its sidebar's availability (a byte, 0 or 1), each
-    /// optional.
+    /// optional; then the window map after a presence byte, its six terms `f32` each.
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         optional(&mut w, self.band.as_ref(), |w, b| floats(w, b));
@@ -236,6 +244,7 @@ impl OwnerUpdate {
             optional(w, c.vertical_bar_edge.as_ref(), |w, e| w.u8(*e as u8));
             optional(w, c.sidebar_available.as_ref(), |w, a| w.u8(u8::from(*a)));
         });
+        window_map_out(&mut w, self.window_map.as_ref());
         w.into_vec()
     }
 }
@@ -335,6 +344,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         }),
         false => None,
     };
+    let window_map = window_map_in(r)?;
     Some(OwnerUpdate {
         band,
         contributions,
@@ -344,6 +354,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         segments,
         bar_regions,
         chrome,
+        window_map,
     })
 }
 
@@ -399,6 +410,21 @@ pub(super) fn keyboard_in(r: &mut Reader<'_>) -> Option<KeyboardReport> {
             docked: present(r)?,
         }),
         _ => return None,
+    })
+}
+
+/// A window map after a presence byte, its six terms `f32` each.
+pub(super) fn window_map_out(w: &mut Writer, map: Option<&WindowMap>) {
+    optional(w, map, |w, m| floats(w, &m.0));
+}
+
+pub(super) fn window_map_in(r: &mut Reader<'_>) -> Option<Option<WindowMap>> {
+    Some(match present(r)? {
+        true => {
+            let terms: Option<Vec<f32>> = (0..6).map(|_| r.f32().ok()).collect();
+            Some(WindowMap(terms?.try_into().ok()?))
+        }
+        false => None,
     })
 }
 

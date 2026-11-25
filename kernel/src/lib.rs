@@ -92,6 +92,7 @@ pub use kernel::{
     BlockMeasure, BlockShown, HostBlock, HostCover, Kernel, Keyboard, KeyboardFacts,
     KeyboardPolicy, KeyboardReport, NodeRef, OwnerChrome, OwnerMargins, OwnerUpdate,
     PresentedHeight, ScrollTerms, SessionUpdate, StickyConstraint, TablePlace, VerticalBarEdge,
+    WindowMap,
 };
 pub use layout::LayoutReceipt;
 pub use motion::{motion_node, MotionSync};

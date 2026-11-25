@@ -95,6 +95,10 @@ package struct OwnerUpdateIOS: Equatable {
     package var barRegions: [BarRegion?] = [nil, nil, nil, nil]
     /// The owner's chrome (D6), `nil` out of a window.
     package var chrome: Chrome?
+    /// The owner view's map into its window from its bounds' origin, where its block's space starts
+    /// (D6's `"window"` space): UIKit's conversion of that origin and the points a point right of
+    /// and below it, so a sheet UIKit scales back maps scaled; `nil` out of a window.
+    package var windowMap: CGAffineTransform?
 
     /// What the owner's chrome is: its view's vertical bar edge, as the kernel's
     /// `VerticalBarEdge` takes it, `nil` before iOS 27.1; and whether the sidebar of the tab
@@ -186,6 +190,10 @@ package struct OwnerUpdateIOS: Equatable {
         var sidebar: Bool?
         if #available(iOS 27.0, *), let tabs { sidebar = tabs.sidebar.isAvailable }
         update.chrome = Chrome(verticalBarEdge: view.traitCollection.verticalBarEdgeRaw, sidebarAvailable: sidebar)
+        let at = view.convert(origin, to: nil)
+        let right = view.convert(CGPoint(x: origin.x + 1, y: origin.y), to: nil)
+        let below = view.convert(CGPoint(x: origin.x, y: origin.y + 1), to: nil)
+        update.windowMap = CGAffineTransform(a: right.x - at.x, b: right.y - at.y, c: below.x - at.x, d: below.y - at.y, tx: at.x, ty: at.y)
         return update
     }
 
@@ -232,7 +240,8 @@ package struct OwnerUpdateIOS: Equatable {
     /// effect. The keyboard is a byte, 0 unreported, 1 dismissed or 2 shown, and a shown one's frame,
     /// x, y, width, height, and a docked byte. Each edge's bar
     /// region, top, right, bottom, left, follows the segments, and the chrome, its vertical bar
-    /// edge and its sidebar's availability each optional, follows them.
+    /// edge and its sidebar's availability each optional, follows them, and then the window map, its
+    /// six terms in `CGAffineTransform`'s order.
     package func encode() -> Data {
         var out = Data()
         func u8(_ v: UInt8) { out.append(v) }
@@ -288,6 +297,7 @@ package struct OwnerUpdateIOS: Equatable {
             optional(c.verticalBarEdge) { u8(UInt8($0)) }
             optional(c.sidebarAvailable) { u8($0 ? 1 : 0) }
         }
+        optional(windowMap) { m in [m.a, m.b, m.c, m.d, m.tx, m.ty].forEach(f32) }
         return out
     }
 }

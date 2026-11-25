@@ -116,6 +116,9 @@ pub(crate) struct Observations {
     pub(crate) keyboards: super::keyboard::Keyboards,
     /// The chrome each owner's host reports (D6).
     pub(crate) chrome: IdMap<u32, super::owner_update::OwnerChrome>,
+    /// Each owner's map into its window, and the document's (D6's `"window"` space).
+    pub(crate) window_maps: IdMap<u32, super::window_map::WindowMap>,
+    pub(crate) session_window_map: Option<super::window_map::WindowMap>,
 }
 
 impl Observations {
@@ -190,14 +193,15 @@ impl Observations {
     }
 
     /// What a reset keeps: what the host reported for the session, its band,
-    /// its view's targets, the registered targets, its keyboard and the
-    /// keyboard policy, as the arena keeps the environment. What the tree
+    /// its view's targets, the registered targets, its keyboard, the
+    /// keyboard policy and its window map, as the arena keeps the environment. What the tree
     /// held goes with it.
     pub(crate) fn after_reset(&mut self) -> Self {
         Observations {
             session: self.session,
             targets: self.targets.after_reset(),
             keyboards: self.keyboards.after_reset(),
+            session_window_map: self.session_window_map,
             ..Default::default()
         }
     }
@@ -244,6 +248,7 @@ impl Observations {
         self.side_bars.remove(&slot);
         self.segments.remove(&slot);
         self.chrome.remove(&slot);
+        self.window_maps.remove(&slot);
         self.stopped_reading(slot);
     }
 

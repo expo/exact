@@ -588,3 +588,48 @@ component App
     let node = some(&fields(&r, "n")[1]);
     assert_eq!(rect(&node[0]), [0.0, 416.0, 390.0, 328.0]);
 }
+
+#[test]
+fn a_window_frame_follows_its_owners_map_into_the_window() {
+    // `none` until the owner's host reports its map; then the card's border box through it, as
+    // a sheet UIKit scales to 90% behind another, 20 in and 40 down, places it
+    use exact_kernel::{BlockAxis, HostBlock, OwnerUpdate, WindowMap};
+    let mut r = boot(
+        "component App
+  resource g = exactGeometry(\"card\", \"window\") as shape Hero
+  view
+    column
+      column id=\"route\" width=390 height=844
+        column height=100
+        column id=\"card\" height=50
+",
+    )
+    .unwrap();
+    let slot = r.kernel().find_by_id("route")[0].index;
+    let route = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(390.0),
+        height: BlockAxis::Is(844.0),
+    };
+    r.kernel_mut().set_host_block(route, Some(block)).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    assert_eq!(fields(&r, "g")[2], Value::Option(None));
+    let update = OwnerUpdate {
+        window_map: Some(WindowMap([0.9, 0.0, 0.0, 0.9, 20.0, 40.0])),
+        ..OwnerUpdate::default()
+    };
+    r.kernel_mut().update_owner(route, update).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    let frame: Vec<f64> = some(&fields(&r, "g")[2]).iter().map(number).collect();
+    let expected = [20.0, 130.0, 351.0, 45.0];
+    assert!(
+        frame
+            .iter()
+            .zip(expected)
+            .all(|(a, b)| (a - b).abs() < 1e-3),
+        "{frame:?}"
+    );
+}

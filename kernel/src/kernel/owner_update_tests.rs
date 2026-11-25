@@ -3,7 +3,7 @@
 use super::*;
 use crate::kernel::{
     BarRegion, Contribution, Keyboard, KeyboardReport, Operation, OwnerChrome, OwnerMargins,
-    OwnerUpdate, VerticalBarEdge,
+    OwnerUpdate, VerticalBarEdge, WindowMap,
 };
 use crate::style::env::{Rect, SegmentGrid};
 
@@ -18,8 +18,8 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 
 /// An update with every field: a 47-point top band holding a 10-point contribution, a
 /// navigation controller (20) above the owner's own (10) and its window (44, with its frame), margins, a
-/// docked keyboard, two columns, a bottom bar region, and chrome with a trailing vertical bar and
-/// no sidebar.
+/// docked keyboard, two columns, a bottom bar region, chrome with a trailing vertical bar and no
+/// sidebar, and a window map scaled and sheared 62 points down its window, its terms each another.
 fn full() -> OwnerUpdate {
     let mut targets = controller(1, 10.0);
     targets.chain.push(entry(2, 20.0, Some(Kind::Navigation)));
@@ -64,6 +64,7 @@ fn full() -> OwnerUpdate {
             vertical_bar_edge: Some(VerticalBarEdge::Trailing),
             sidebar_available: Some(false),
         }),
+        window_map: Some(WindowMap([0.9, 0.1, 0.2, 0.8, 5.0, 62.0])),
     }
 }
 
@@ -89,8 +90,9 @@ fn an_owner_update_round_trips_and_a_malformed_one_is_refused() {
     presence[0] = 2;
     assert!(OwnerUpdate::decode(&presence).is_err());
     // An operation past the five, at the contribution's byte 25, a relation past the seven, at the
-    // first relation's byte 120, and a vertical bar edge past the three, at the third byte from the end
-    for (at, unknown) in [(25, 5), (120, 7), (bytes.len() - 3, 3)] {
+    // first relation's byte 120, and a vertical bar edge past the three, before the window map's
+    // 25 bytes and the sidebar's two
+    for (at, unknown) in [(25, 5), (120, 7), (bytes.len() - 28, 3)] {
         let mut bad = bytes.clone();
         bad[at] = unknown;
         assert!(OwnerUpdate::decode(&bad).is_err(), "byte {at}");
@@ -179,8 +181,11 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.extend([0, 0, 1]);
     f(&mut w, &[24.0, 16.0, 8.67]);
     w.push(0);
-    // The chrome: a trailing vertical bar, its raw value 2, and a sidebar that is not available
+    // The chrome: a trailing vertical bar, its raw value 2, and a sidebar that is not available;
+    // then the window map
     w.extend([1, 1, 2, 1, 0]);
+    w.push(1);
+    f(&mut w, &[0.9, 0.1, 0.2, 0.8, 5.0, 62.0]);
     assert_eq!(full().encode(), w);
 }
 
@@ -206,7 +211,11 @@ fn an_owner_update_applies_every_field() {
     assert!(held.margins.contains_key(&slot));
     assert_eq!(held.band(slot), Some([37.0, 0.0, 34.0, 0.0]));
     assert_eq!(crate::kernel::keyboard::occupancy(&k.arena, slot), 344.0);
-    // A box in the owner reads its chrome, and one outside every owner none
+    // A box in the owner reads its chrome and its window map, and one outside every owner none
+    assert_eq!(
+        (k.window_map(3), k.window_map(1)),
+        (full().window_map, None)
+    );
     assert_eq!(
         (k.owner_chrome(3), k.owner_chrome(1)),
         (full().chrome, None)
@@ -371,6 +380,7 @@ fn session() -> crate::kernel::SessionUpdate {
             docked: true,
         }),
         keyboard_policy: Some(crate::kernel::KeyboardPolicy::ResizesVisual),
+        window_map: Some(WindowMap([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
     }
 }
 
@@ -388,10 +398,11 @@ fn a_session_update_round_trips_and_a_malformed_one_is_refused() {
         assert!(SessionUpdate::decode(&bytes[..n]).is_err(), "{n} bytes");
     }
     assert!(SessionUpdate::decode(&[bytes.clone(), vec![0]].concat()).is_err());
-    // The policy, the last byte: 2 is `resizes-visual`, and none past the three
-    assert_eq!(bytes[bytes.len() - 1], 2);
+    // The policy, before the window map's 25 bytes: 2 is `resizes-visual`, and none past the three
+    let policy = bytes.len() - 26;
+    assert_eq!(bytes[policy], 2);
     let mut bad = bytes.clone();
-    *bad.last_mut().unwrap() = 4;
+    bad[policy] = 4;
     assert!(SessionUpdate::decode(&bad).is_err());
 }
 
@@ -425,4 +436,22 @@ fn a_session_update_reaches_the_boxes_outside_every_owner_whole_or_not_at_all() 
     };
     k.update_session(quiet).unwrap();
     assert_eq!(k.keyboard_facts(3), None);
+}
+
+#[test]
+fn a_window_map_places_a_rectangle_and_one_that_folds_the_plane_is_refused() {
+    // A sheet UIKit scales to 90% behind another, 20 in and 40 down: a box at 10, 10 of 100 × 50
+    // lies at 29, 49 of 90 × 45; a map that folds the plane refuses the whole update
+    let scaled = WindowMap([0.9, 0.0, 0.0, 0.9, 20.0, 40.0]);
+    let [x, y, w, h] = scaled.rect([10.0, 10.0, 100.0, 50.0]);
+    let near = |a: f64, b: f64| (a - b).abs() < 1e-4;
+    assert!(near(x, 29.0) && near(y, 49.0) && near(w, 90.0) && near(h, 45.0));
+    let mut k = owner(390.0, 844.0, create(3..=3));
+    lay_out(&mut k);
+    let folded = OwnerUpdate {
+        window_map: Some(WindowMap([1.0, 0.0, 1.0, 0.0, 0.0, 0.0])),
+        ..full()
+    };
+    assert!(k.update_owner(2, folded).is_err());
+    assert_eq!(k.window_map(2), None);
 }

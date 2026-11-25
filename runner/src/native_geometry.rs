@@ -586,8 +586,9 @@ fn laid_out(kernel: &Kernel, view: ViewId) -> Option<Laid> {
 
 /// `laid`'s border box in `space`, `x`, `y`, `width` and `height`. In its owner's space as the
 /// kernel lays it out, a top-layer box placed in the viewport; in a node's border box where both
-/// are in one space; never yet in the window's, since only the host knows where it shows the
-/// document and its owners there (LLP 1123 stage 3).
+/// are in one space; in the window's through the map its host reported for the box's owner, or
+/// for the document outside every owner, the bounds of its mapped corners, and `None` where the
+/// host reported none.
 fn frame_in(kernel: &Kernel, laid: &Laid, space: &Space) -> Option<[f64; 4]> {
     let (_, [x, y]) = laid.placed?;
     rect_in(kernel, laid, space, [x, y, laid.size.0, laid.size.1])
@@ -604,7 +605,7 @@ fn rect_in(
     let (owner, _) = laid.placed?;
     match space {
         Space::Owner => Some([x, y, w, h]),
-        Space::Window => None,
+        Space::Window => kernel.window_map(laid.view).map(|m| m.rect([x, y, w, h])),
         Space::Node(id) => {
             let other = view_of(kernel, id).and_then(|view| laid_out(kernel, view))?;
             let (other_owner, [ox, oy]) = other.placed?;
