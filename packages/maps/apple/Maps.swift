@@ -138,6 +138,11 @@ final class MapView: NSObject, ExactPackageView, MKMapViewDelegate {
     }
 
     var view: ExactPackagePlatformView { map }
+    #if os(iOS) || os(tvOS)
+    /// The host clears what is still owed in the map through a controller it contains the map in, so
+    /// the map's safe area is what it is to keep clear (LLP 1123 D15)
+    var safeArea: ExactPackageSafeArea? { ExactPackageSafeArea(adjustsAdditionalSafeAreaInsets: true) }
+    #endif
     private var markers: [Marker] { map.annotations.compactMap { $0 as? Marker } }
 
     func setProps(_ next: [String: String]) throws {

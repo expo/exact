@@ -96,7 +96,8 @@ public extension ExactPackageView {
 /// and what the view lends it, fixed while the view is attached.
 public final class ExactPackageSafeArea {
     /// Whether the host clears the unsafe area still owed in the view through `controller`'s
-    /// `additionalSafeAreaInsets`, as its own tagged contribution beside the package's.
+    /// `additionalSafeAreaInsets`, as its own tagged contribution beside the package's; a view with no
+    /// controller is the view of one the host makes and contains, kept with the view while it lives.
     public let adjustsAdditionalSafeAreaInsets: Bool
     /// The scroll views whose content inset, indicator insets and adjustment the view lends the host.
     public let scrollViews: [ScrollView]
