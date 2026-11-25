@@ -93,8 +93,13 @@ impl<D: DataSource> Host<D> {
         progress: f32,
         route: bool,
     ) {
+        // A flight running from `from` goes on though its source is gone
+        // from the paint: a route a pop removed, one a full-screen route
+        // covers. Only a new one needs its source's definition.
+        let running =
+            (self.flights.running.iter()).any(|f| (f.frame.from, f.frame.to) == (from, to));
         if !self.flights.enabled
-            || !self.flights.recorded.contains(&motion_node(from))
+            || !running && !self.flights.recorded.contains(&motion_node(from))
             || self.runner.kernel().node_by_key(to).is_none()
         {
             return;
@@ -158,14 +163,27 @@ impl<D: DataSource> Host<D> {
 
     /// A predictive Back ended: each flight it seeks goes on to its
     /// destination (`on`) or back to land at its source, on `transition`.
-    /// With no `transition`, each lands where it is aimed at once.
-    pub(crate) fn release_flights(&mut self, transition: Option<&Transition>, on: bool) {
+    pub(crate) fn release_flights(&mut self, transition: &Transition, on: bool) {
         let x = if on { END } else { 0.0 };
         for f in self.flights.running.iter_mut().filter(|f| f.seeking) {
             f.seeking = false;
             let node = motion_node(f.frame.to) | FLIGHT;
-            f.lands_after = aim(&mut self.engine, node, transition, x);
+            f.lands_after = aim(&mut self.engine, node, Some(transition), x);
         }
+    }
+
+    /// The flights held at a progress land where they are, now: a
+    /// container that carried them has landed.
+    pub(crate) fn land_seeking(&mut self) {
+        let (engine, row_dirty) = (&mut self.engine, &mut self.row_dirty);
+        self.flights.running.retain(|f| {
+            if f.seeking {
+                engine.remove(motion_node(f.frame.to) | FLIGHT);
+                row_dirty.node(f.frame.to);
+            }
+            !f.seeking
+        });
+        self.flights.landed = true;
     }
 
     pub(super) fn present_flight(&mut self, p: &exact_motion::Presentation) -> bool {
@@ -183,7 +201,7 @@ impl<D: DataSource> Host<D> {
         true
     }
 
-    pub(crate) fn land_flights(&mut self) -> bool {
+    pub(super) fn land_flights(&mut self) -> bool {
         let before = self.flights.running.len();
         let engine = &mut self.engine;
         let now = engine.sample_time();
@@ -615,6 +633,30 @@ component App
         assert_eq!(p.host().flight_frames().len(), 1);
         p.set_live_clock(None);
         p.tick(1301.0);
+        assert!(p.host().flight_frames().is_empty());
+    }
+
+    #[test]
+    fn a_seek_goes_on_after_its_source_leaves_the_paint_and_lands_at_once() {
+        let mut p = presenter(APP);
+        p.host_mut().flights.enabled = true;
+        p.frame();
+        let thumb = p.host().kernel().node(id(p.host(), "thumb")).unwrap().key;
+        let toggle = id(p.host(), "toggle");
+        p.host_mut().dispatch_at(toggle, Event::Press, 100.0);
+        p.after_commit();
+        p.frame();
+        let detail = p.host().kernel().node(id(p.host(), "detail")).unwrap().key;
+        p.host_mut().seek_flights(&[(thumb, detail)], 0.2);
+        // A container carries it on though its source is no longer painted.
+        p.host_mut().flights.recorded.clear();
+        p.host_mut().seek_flights(&[(thumb, detail)], 0.7);
+        let frames = p.host().flight_frames();
+        assert!(
+            frames.iter().any(|f| f.to == detail && f.progress == 0.7),
+            "{frames:?}"
+        );
+        p.host_mut().land_seeking();
         assert!(p.host().flight_frames().is_empty());
     }
 

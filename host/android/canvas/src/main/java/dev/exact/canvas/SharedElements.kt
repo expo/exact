@@ -244,15 +244,16 @@ internal class SharedElements(
                 canvas.clipPath(clip)
             }
             // A dissolve's box ends where its contents do, each scaled by width: the source's
-            // height at first, the destination's once it has dissolved, as Material's container
-            // transform masks its height, so neither shows past the other.
+            // height at first, the destination's by the time the source starts to fade (half
+            // the dissolve), as Material's container transform masks its height, so the source
+            // never shows past the destination's edge at strength.
             val t = fade(flight.progress)
             val shown = RectF(pose.box)
             if (flight.content != null && element.fit != LABEL) {
                 val w = pose.box.width()
                 val from = flight.box!!.height() * w / flight.box.width().coerceAtLeast(0.001f)
                 val to = element.box.height() * w / element.box.width().coerceAtLeast(0.001f)
-                shown.bottom = min(shown.bottom, shown.top + from + (to - from) * t)
+                shown.bottom = min(shown.bottom, shown.top + from + (to - from) * min(1f, 2f * t))
             }
             clip.reset()
             val radius = pose.radius.coerceIn(0f, min(shown.width(), shown.height()) / 2f)

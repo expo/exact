@@ -708,7 +708,7 @@ impl<D: DataSource> Presenter<D> {
             _ => {
                 let curve = (self.stage.preview.as_ref())
                     .map_or_else(bounds_spring, Preview::release_curve);
-                self.host.release_flights(Some(&curve), false)
+                self.host.release_flights(&curve, false)
             }
         }
         self.stage.preview.is_some()
@@ -722,7 +722,7 @@ impl<D: DataSource> Presenter<D> {
             p.go_back(now, still);
             self.dirty = true;
             let curve = p.release_curve();
-            self.host.release_flights(Some(&curve), false);
+            self.host.release_flights(&curve, false);
         }
     }
 

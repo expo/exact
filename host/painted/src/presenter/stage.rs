@@ -516,7 +516,7 @@ impl<D: DataSource> Presenter<D> {
         // when it lands.
         let carries = (self.stage.shift.as_ref()).is_some_and(|s| s.names.is_some());
         if self.stage.preview.is_none() && !carries {
-            self.host.release_flights(Some(&bounds_spring()), true);
+            self.host.release_flights(&bounds_spring(), true);
         }
         let tallest = (h - status).max(1.0);
         // What of the page the keyboard covers, where it did not end the
@@ -638,8 +638,7 @@ impl<D: DataSource> Presenter<D> {
         };
         if (self.stage.shift.as_ref()).is_some_and(|s| !s.progress.moving(now) && !flies_in(s)) {
             if self.stage.shift.take().is_some_and(|s| s.names.is_some()) {
-                self.host.release_flights(None, true);
-                self.host.land_flights();
+                self.host.land_seeking();
             }
         }
         self.hold_arriving();

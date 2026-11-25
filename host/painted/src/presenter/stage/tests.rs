@@ -954,7 +954,6 @@ fn a_containers_names_move_on_its_clock() {
         assert!((name - shown).abs() < 0.01, "{name} {shown}");
     }
     p.set_live_clock(None);
-    p.presents_pictures(false);
     after(&mut p, 1000.0);
     assert!(p.host().flight_frames().is_empty(), "landed with the box");
 }

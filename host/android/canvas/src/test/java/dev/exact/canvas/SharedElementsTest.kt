@@ -436,15 +436,28 @@ class SharedElementsTest {
         assertEquals(0f, SharedElements.fade(0f), 0.001f)
     }
 
+    @Test fun aFlightClipsAScrollersRowsToItsBox() {
+        // The source's rows fill it to 90; it flies into a box 30 high, a tenth of the way.
+        val t = Fixture()
+        t.player.group = { RenderNode("rows") }; t.player.width = 100; t.player.height = 100
+        val rows = intArrayOf(20, 1, 1, f(1f), 0, 0, f(1f), 0, 0, 2, Color.RED) + rect(RectF(0f, 0f, 100f, 90f)) + IntArray(8) + 21
+        t.shared.begin(state(listOf(1))); t.define(definition(1, RectF(0f, 0f, 100f, 90f), content = rows)); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.1f)), dissolve = true))
+        t.define(definition(2, RectF(0f, 0f, 100f, 30f))); t.shared.finish()
+        val pixels = t.pixels()
+        assertEquals(Color.WHITE, pixels.getPixel(50, 80))
+        pixels.recycle()
+    }
+
     @Test fun aDissolvesBoxEndsWhereItsContentsDo() {
         val t = Fixture()
         t.shared.begin(state(listOf(1))); t.define(definition(1, RectF(0f, 0f, 100f, 96f))); t.shared.finish()
         t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), dissolve = true))
         t.define(definition(2, RectF(0f, 0f, 100f, 24f))); t.shared.finish()
         val pixels = t.pixels()
-        // Halfway the box is 60 high; 85 % dissolved, its contents reach about 35.
-        assertNotEquals(Color.WHITE, pixels.getPixel(50, 30))
-        assertEquals(Color.WHITE, pixels.getPixel(50, 50))
+        // Halfway the box is 60 high; past half dissolved, its contents end at the destination's 24.
+        assertNotEquals(Color.WHITE, pixels.getPixel(50, 20))
+        assertEquals(Color.WHITE, pixels.getPixel(50, 30))
         pixels.recycle()
     }
 
