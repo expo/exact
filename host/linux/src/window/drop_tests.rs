@@ -169,7 +169,7 @@ fn an_offer_is_read_for_its_types_as_it_spells_them() {
 }
 
 /// A reading of three pipes, their write ends handed back.
-fn reading(deadline: Instant) -> (Reading, [PipeWriter; 3]) {
+fn reading() -> (Reading, [PipeWriter; 3]) {
     let ends = [(); 3].map(|_| std::io::pipe().unwrap());
     let writers = ends.each_ref().map(|(_, w)| w.try_clone().unwrap());
     let pipes = ends.map(|(r, _)| {
@@ -180,42 +180,38 @@ fn reading(deadline: Instant) -> (Reading, [PipeWriter; 3]) {
         id: 7,
         pipes,
         bytes: Default::default(),
-        deadline,
         largest: 32,
     };
     (reading, writers)
 }
 
+fn read_all(reading: &mut Reading, deadline: Instant) {
+    for k in 0..3 {
+        reading.read(k, deadline);
+    }
+}
+
 #[test]
-fn a_drop_lands_once_each_type_arrived_or_with_what_had_by_the_deadline() {
-    let soon = Instant::now() + Duration::from_secs(60);
-    let (mut whole, [mut uris, link, mut text]) = reading(soon);
+fn a_drop_lands_each_type_it_finished_sending_by_the_deadline() {
+    let later = Instant::now() + Duration::from_secs(60);
+    let (mut whole, [mut uris, link, mut text]) = reading();
     uris.write_all(b"file:///tmp/a\r\n").unwrap();
     text.write_all(b"Mount Fuji").unwrap();
     drop((uris, link, text));
-    for k in 0..3 {
-        whole.read(k);
-    }
-    assert!(whole.done(Instant::now()), "every type arrived");
+    read_all(&mut whole, later);
+    assert!(whole.complete(), "every type arrived");
     let (id, dropped) = whole.items();
     assert_eq!(
         (id, dropped.paths, dropped.text.as_str()),
         (7, vec![PathBuf::from("/tmp/a")], "Mount Fuji")
     );
 
-    let past = Instant::now();
-    let (mut stalled, [mut uris, link, mut text]) = reading(past + Duration::from_secs(60));
+    let (mut stalled, [mut uris, link, mut text]) = reading();
     uris.write_all(b"file:///tmp/a\r\n").unwrap();
     drop((uris, link));
     text.write_all(b"partial").unwrap();
-    for k in 0..3 {
-        stalled.read(k);
-    }
-    assert!(!stalled.done(past), "the text is still arriving");
-    assert!(
-        stalled.done(past + Duration::from_secs(60)),
-        "the deadline passed"
-    );
+    read_all(&mut stalled, later);
+    assert!(!stalled.complete(), "the text is still arriving");
     let (_, dropped) = stalled.items();
     assert_eq!(dropped.paths, [PathBuf::from("/tmp/a")]);
     assert_eq!(
@@ -223,19 +219,28 @@ fn a_drop_lands_once_each_type_arrived_or_with_what_had_by_the_deadline() {
         "a type its source never finished is not delivered"
     );
     drop(text);
+
+    let (mut late, [uris, link, mut text]) = reading();
+    drop((uris, link));
+    text.write_all(b"Mount Fuji").unwrap();
+    drop(text);
+    read_all(&mut late, Instant::now());
+    assert!(late.complete());
+    assert_eq!(
+        late.items().1.text,
+        "",
+        "a type whose end came at the deadline is not delivered"
+    );
 }
 
 #[test]
 fn a_type_larger_than_the_limit_is_not_delivered() {
-    let (mut reading, [mut uris, link, mut text]) =
-        reading(Instant::now() + Duration::from_secs(60));
+    let (mut reading, [mut uris, link, mut text]) = reading();
     uris.write_all(&[b'x'; 32]).unwrap();
     text.write_all(&[b'x'; 33]).unwrap();
     drop((uris, link, text));
-    for k in 0..3 {
-        reading.read(k);
-    }
-    assert!(reading.done(Instant::now()));
+    read_all(&mut reading, Instant::now() + Duration::from_secs(60));
+    assert!(reading.complete());
     assert_eq!(reading.bytes[0].len(), 32, "the limit itself is delivered");
     assert!(reading.bytes[2].is_empty(), "one byte past it is not");
 }

@@ -277,13 +277,12 @@ struct Released {
     reading: Option<Reading>,
 }
 
-/// Drop `id`'s items arriving through a pipe a type, until `deadline`, each
-/// type at most `largest` bytes.
+/// Drop `id`'s items arriving through a pipe a type, each type at most
+/// `largest` bytes.
 struct Reading {
     id: u32,
     pipes: [Option<PipeReader>; 3],
     bytes: [Vec<u8>; 3],
-    deadline: Instant,
     largest: usize,
 }
 
@@ -317,7 +316,16 @@ impl Listener {
         {
             drag.offer.destroy();
         }
-        let _ = connection.flush();
+        // A finish the window sent as it closed reaches the compositor even when the socket is full a while
+        let until = Instant::now() + Duration::from_secs(1);
+        while let Err(WaylandError::Io(e)) = connection.flush() {
+            let left = until.saturating_duration_since(Instant::now()).as_millis() as i32;
+            if e.kind() != ErrorKind::WouldBlock || left == 0 {
+                break;
+            }
+            let mut fd = poll_for(connection.backend().poll_fd().as_raw_fd(), libc::POLLOUT);
+            unsafe { libc::poll(&mut fd, 1, left) };
+        }
     }
 
     fn run(&mut self, connection: &Connection, queue: &mut EventQueue<Self>, woken: &PipeReader) {
@@ -345,7 +353,9 @@ impl Listener {
             fds.extend(pipes.iter().map(|&(.., fd)| poll_for(fd, libc::POLLIN)));
             let now = Instant::now();
             let wait = self
-                .readings()
+                .released
+                .iter()
+                .filter(|r| r.reading.is_some())
                 .map(|r| {
                     r.deadline
                         .saturating_duration_since(now)
@@ -382,10 +392,9 @@ impl Listener {
             // A drop past its deadline lands before its pipes are read, so nothing arrives after it
             self.land();
             for (fd, &(r, k, _)) in fds[2..].iter().zip(&pipes) {
-                if fd.revents != 0 {
-                    if let Some(reading) = self.released[r].reading.as_mut() {
-                        reading.read(k);
-                    }
+                let released = &mut self.released[r];
+                if let Some(reading) = released.reading.as_mut().filter(|_| fd.revents != 0) {
+                    reading.read(k, released.deadline);
                 }
             }
             self.land();
@@ -416,10 +425,6 @@ impl Listener {
         }
     }
 
-    fn readings(&self) -> impl Iterator<Item = &Reading> {
-        self.released.iter().filter_map(|r| r.reading.as_ref())
-    }
-
     /// Each open pipe, by its drop's place in `released` and its type's,
     /// with its descriptor.
     fn pipes(&self) -> impl Iterator<Item = (usize, usize, i32)> + '_ {
@@ -437,7 +442,8 @@ impl Listener {
     fn land(&mut self) {
         let now = Instant::now();
         for released in &mut self.released {
-            let Some(reading) = released.reading.take_if(|r| r.done(now)) else {
+            let due = now >= released.deadline;
+            let Some(reading) = released.reading.take_if(|r| due || r.complete()) else {
                 continue;
             };
             let (id, dropped) = reading.items();
@@ -472,8 +478,7 @@ impl Listener {
                     match id {
                         Some(id) => {
                             let released = &mut self.released[at];
-                            released.reading =
-                                Some(Reading::start(id, &released.drag, released.deadline));
+                            released.reading = Some(Reading::start(id, &released.drag));
                         }
                         None => self.released.remove(at).drag.offer.destroy(),
                     }
@@ -496,9 +501,9 @@ impl Listener {
 }
 
 impl Reading {
-    /// Ask the source for `drag`'s types for drop `id`, due by `deadline`.
-    /// A type whose pipe cannot be made arrives empty.
-    fn start(id: u32, drag: &Drag, deadline: Instant) -> Self {
+    /// Ask the source for `drag`'s types for drop `id`. A type whose pipe
+    /// cannot be made arrives empty.
+    fn start(id: u32, drag: &Drag) -> Self {
         let Wanted { uris, link, text } = &drag.wanted;
         let pipes = [uris, link, text].map(|mime| {
             let (reader, writer) = std::io::pipe().ok()?;
@@ -512,14 +517,13 @@ impl Reading {
             id,
             pipes,
             bytes: Default::default(),
-            deadline,
             largest: LARGEST,
         }
     }
 
-    /// Whether every type has arrived, or the deadline has passed.
-    fn done(&self, now: Instant) -> bool {
-        self.pipes.iter().all(Option::is_none) || now >= self.deadline
+    /// Whether every type has arrived or given up.
+    fn complete(&self) -> bool {
+        self.pipes.iter().all(Option::is_none)
     }
 
     /// The drop's number and items: a type still arriving gives nothing.
@@ -540,9 +544,10 @@ impl Reading {
     }
 
     /// Read some of what type `k`'s pipe holds, a bounded batch so other
-    /// pipes and the display are heard between: its end closes the pipe,
-    /// and an error or more than `largest` bytes closes it with nothing.
-    fn read(&mut self, k: usize) {
+    /// pipes and the display are heard between: its end closes the pipe, and
+    /// an end after `deadline`, an error or more than `largest` bytes closes
+    /// it with nothing.
+    fn read(&mut self, k: usize, deadline: Instant) {
         let Some(pipe) = self.pipes[k].as_mut() else {
             return;
         };
@@ -551,6 +556,9 @@ impl Reading {
             match pipe.read(&mut chunk) {
                 Ok(0) => {
                     self.pipes[k] = None;
+                    if Instant::now() >= deadline {
+                        self.bytes[k].clear();
+                    }
                     return;
                 }
                 Ok(n) if self.bytes[k].len() + n <= self.largest => {
@@ -653,11 +661,10 @@ fn items(uris: &[u8], link: &[u8], text: &[u8]) -> Dropped {
     dropped
 }
 
-/// `text` as a link that is not a file: a URI, as a URI list's line is
-/// one (RFC 2483), told from plain text by its scheme (RFC 3986: a letter,
-/// then letters, digits, `+`, `-` or `.`) and by holding no space or control
-/// character. Its parts are the app's to check before following it (D1), as
-/// they are where GTK's URI-list reader and Android's hand a link over.
+/// `text`, trimmed, as a link that is not a file: a line with a URI scheme
+/// (RFC 3986: a letter, then letters, digits, `+`, `-` or `.`) and no
+/// whitespace or control character. The app checks the URL before following
+/// it (D1), as GTK's URI-list reader and Android's leave its parts.
 fn web_link(text: &str) -> Option<&str> {
     let text = text.trim();
     let (scheme, _) = text.split_once(':')?;
