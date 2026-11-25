@@ -4508,6 +4508,7 @@ Exact supplies their child controllers and manages the arrangement's content
 slots and containment. Supply a detached controller with empty slots; reuse that
 controller for configuration changes. Call UIKit's `updateArrangement(_:animated:)`
 to change axes, split or overlay behavior, dimensions and placement properties.
+An animated change, from a UIKit action or the hatch's `changed`, moves the panes' content with the panes.
 Exact does not translate those settings. Navigation stays in the enclosing controller.
 UIKit may hide a pane when the allowed axes do not suit the current display.
 

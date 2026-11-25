@@ -176,7 +176,7 @@ package class ScrollView: UIScrollView, SafeIndicators {
     package override var bounds: CGRect {
         get { super.bounds }
         set {
-            guard UIView.inheritedAnimationDuration > 0, let node = scrollingNode, let presenter = node.presenter else { return super.bounds = newValue }
+            guard Presenter.animationMayBeOpen, let node = scrollingNode, let presenter = node.presenter else { return super.bounds = newValue }
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
     }
