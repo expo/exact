@@ -295,6 +295,45 @@ fn resize_given_an_action_is_the_element_resize_event_and_a_string_is_css() {
     );
 }
 
+/// A round gives the nodes of one depth in view order, which is mount order,
+/// as `intersect_due` breaks its ties.
+#[test]
+fn a_resize_round_gives_one_depths_nodes_in_mount_order() {
+    let plan = contract::compile(
+        r#"component App
+  state heard = 0
+  action note(w: number, h: number)
+    heard = heard + 1
+  view
+    column
+      column height=10 resize=note
+      column height=11 resize=note
+      column height=12 resize=note
+      column height=13 resize=note
+      column height=14 resize=note
+      column height=15 resize=note
+      column height=16 resize=note
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        crate::source::boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    lay_out(&mut r);
+    // Mount order is the order the siblings are written in, heights 10 to 16
+    let heights: Vec<f64> = r
+        .resize_due(0)
+        .into_iter()
+        .map(|(_, rect, _)| rect.height)
+        .collect();
+    assert_eq!(heights, [10., 11., 12., 13., 14., 15., 16.]);
+}
+
 /// `elementFromPoint(x, y)` (LLP 1094 D10): the `id` nearest the front-most
 /// box at a viewport point, over `frame`'s boxes, as DOM's
 /// `elementFromPoint(x, y)?.closest("[id]")?.id`.
