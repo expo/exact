@@ -9,6 +9,16 @@
 - `bun test ./host/web/tests/hold.test.mjs` fails before the held-state assertion because the fixture’s `drag-in.js` has no `receive` export.
 - A multi-file Bun run leaves a CDP browser profile behind. Run `bun test ./host/web/collection-wait.test.mjs ./host/web/documents-copy.test.mjs` with an empty `TMPDIR`. All 35 tests pass and an `exact-cdp-*/Default` directory remains.
 - The JS router sweep serves `/post/photos.zip/` with status 200 where the dotted-route case expects 404. Run `cargo test -p exact-web --test it navigation::browser_session_history_on_the_js_target -- --ignored --exact --nocapture`.
+- Route disable to the shared mask when an agent mixed recorder uses an injected process engine. Admit a silent 480-frame packet, disable at 20 ms, and deliver 480-frame packets of 0.5 in time order. The raw tap reports 0.5 and the decoded MP4 peaks above 0.50 while muted (#1606).
+- Close the substitute microphone’s mask before consulting the virtual clock on disable. Count session reads during the mixed recorder’s `disable-buffer` command. The command reads it three times, including once in `AgentMicrophone.setEnabled` before it closes the mask (#1606).
+- Check the two-second mixed admission bound against the audio timestamps. Send a picture at frame 100,800, then 480-frame PCM packets starting at frames 0 and 100,800. The 2.1-second lead admits the take (#1606).
+- Hold previously captured sound across a second pause until the corresponding picture arrives. Record frames 0–479, 960–1,439 and 1,920–2,399. Deliver the picture at 960 after the second resume. The finished file has 960 of the 1,440 frames (#1606).
+- Preserve an established enable when parking a camera leaves its microphone recording in the background. Disable, enable, deliver four advancing camera packets, background, and deliver an engine packet of 0.25. The WAV has 480 silent frames at the handoff (#1606).
+- Keep a take-wide limit on pictures waiting for audio across pauses. Run `retained` with each pause one sample past the retained picture. All 32 pictures stay live (#1606).
+- Reconcile the standalone substitute WAV’s mute behavior with single-track compatibility. Record 25 ms, disabling at 5 ms. The 10–20 ms window peaks at 0.09598 on the parent and zero on the candidate (#1606).
+- Keep the Apple substitute microphone’s capture-time mask until its upstream tap retires. Hold the 10–20 ms packet during mute, resume sound through 100 ms, stop the mixed take, then deliver the held packet to a surviving raw tap. Its 480 samples reach the tap at 0.5 full scale (#1606).
+- Deliver that same silenced packet immediately before stopping the Apple mixed writer. The older PTS moves the file end back from 4,320 decoded frames to 960 (#1606).
+
 - Consolidate the iOS mixed recorder’s audio reset observation with the process audio-session owner. Run recording’s `reset-sdk` case with a paused take and the last microphone claim released. The take must still finish with `media-reset` (#1606).
 - Measure the engine callback during camera handoff with two WAV taps. In the mock, holding the track’s enabled timestamp read for 120 ms stalls engine delivery for that interval. Check callback time and missed frames on hardware (#1606).
 - Move Apple camera-only recording to the mixed recorder’s sample writer (LLP 1133.009 D3, AH1).
