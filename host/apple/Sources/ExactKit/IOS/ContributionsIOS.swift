@@ -17,28 +17,10 @@ import UIKit
 /// insets"), and Exact's own reactions wait for the settled result (`SafeAreaSteps`); an app's own
 /// callbacks hear each step.
 package final class ContributionsIOS {
-    /// A contribution's identity on its controller: the declaring node and what it writes, by its
-    /// index in the kernel's `Operation::ALL`.
-    package struct Identity: Hashable {
-        package var node: UInt32
-        package var operation: Operation
-
-        package init(node: UInt32, operation: Operation) {
-            self.node = node
-            self.operation = operation
-        }
-    }
-
-    /// What a contribution writes, by its index in the kernel's `Operation::ALL`.
-    package enum Operation: UInt8 {
-        case additionalInsets = 0
-        case safeAreaPadding = 1
-        case barReservation = 2
-        case keyboardInsets = 3
-        case containerClearance = 4
-        /// The clearance still owed in a native view, through its own controller (D15).
-        case nativeViewInsets = 5
-    }
+    /// A contribution's identity on its controller, as on every host's ledger.
+    package typealias Identity = ContributionIdentity
+    /// What a contribution writes.
+    package typealias Operation = ContributionOperation
 
     /// What `identity` adds, as last recorded, and its effect, as last measured; zero where it adds
     /// nothing.

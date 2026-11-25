@@ -37,6 +37,31 @@ fn inline_formats_leave_block_prefixes_outside_the_markers() {
 }
 
 #[test]
+fn commands_take_the_whole_space_after_a_list_marker() {
+    for (before, command, after) in [
+        ("-   item|", Command::Newline, "-   item\n-   |"),
+        ("-\titem|", Command::Newline, "-\titem\n-\t|"),
+        ("1.  item|", Command::Newline, "1.  item\n2.  |"),
+        ("-  [x] done|", Command::Newline, "-  [x] done\n- [ ] |"),
+        ("-   |", Command::Newline, "|"),
+        ("-   it|em", Command::Bullet, "it|em"),
+        ("-\tit|em", Command::Bullet, "it|em"),
+        ("1.  it|em", Command::Ordered, "it|em"),
+        ("-  [ ] ta|sk", Command::Task, "ta|sk"),
+        ("-   it|em", Command::Task, "- [ ] it|em"),
+        ("-  [ ] ta|sk", Command::ToggleTask, "-  [x] ta|sk"),
+        ("-   it|em", Command::Indent, "  -   it|em"),
+        ("  -   it|em", Command::Outdent, "-   it|em"),
+    ] {
+        assert_eq!(
+            run(before, command.clone()),
+            after,
+            "{before:?} {command:?}"
+        );
+    }
+}
+
+#[test]
 fn return_preserves_inline_constructs_across_block_breaks() {
     for (before, after) in [
         ("- **|Note:** details", "- \n- |**Note:** details"),

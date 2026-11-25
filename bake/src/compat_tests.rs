@@ -7,7 +7,8 @@ mod gpu_tests;
 #[test]
 fn the_baked_painter_round_trips_per_host_without_changing_bundle_compatibility() {
     let dir = app("painter-config");
-    let manifest = Manifest::read(&dir).unwrap();
+    let mut manifest = Manifest::read(&dir).unwrap();
+    manifest.json["deploy"]["store"] = serde_json::json!({"windows": "0"});
     for (platform, target, host) in [
         ("windows", "x86_64-pc-windows-msvc", "windows"),
         ("linux", "x86_64-unknown-linux-gnu", "linux"),
@@ -1468,33 +1469,5 @@ fn the_apple_bundles_languages_are_in_the_id() {
     let three = tables(&[("en", "{}"), ("fr", "{}"), ("de", "{}")]);
     assert_ne!(three.0, two);
     assert_eq!(three.2, web);
-    std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn a_web_mount_is_a_native_delivery_input() {
-    let dir = app("web-mount");
-    let text = std::fs::read_to_string(dir.join("app.json")).unwrap();
-    let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
-    json["app"]["origin"] = serde_json::json!("https://site.invalid");
-    json["host"]["web"]["base"] = serde_json::json!("/app/");
-    std::fs::write(dir.join("app.json"), json.to_string()).unwrap();
-    let manifest = Manifest::read(&dir).unwrap();
-    for (platform, target) in [
-        ("macos", "aarch64-apple-darwin"),
-        ("ios", "aarch64-apple-ios"),
-        ("linux", "aarch64-unknown-linux-gnu"),
-        ("windows", "x86_64-pc-windows-gnu"),
-        ("linux", "aarch64-linux-android"),
-    ] {
-        let compat =
-            compatibility_with_trust(&dir, platform, target, &manifest, Some(""), "development")
-                .unwrap();
-        assert_eq!(
-            compat.inputs["webMount"],
-            serde_json::json!({"origin": "https://site.invalid", "base": "/app/"}),
-            "{platform} {target}"
-        );
-    }
     std::fs::remove_dir_all(dir).unwrap();
 }

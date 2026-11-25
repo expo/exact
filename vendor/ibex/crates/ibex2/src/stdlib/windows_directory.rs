@@ -587,23 +587,47 @@ impl Directory {
         // SAFETY: aligned allocation includes the complete variable name field.
         unsafe {
             let info = &mut *buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>();
-            info.Anonymous.ReplaceIfExists = replace;
             info.RootDirectory = self.0.as_raw_handle();
             info.FileNameLength = (leaf.len() * 2) as u32;
             std::ptr::copy_nonoverlapping(leaf.as_ptr(), info.FileName.as_mut_ptr(), leaf.len());
         }
-        let mut status = IO_STATUS_BLOCK::default();
-        // SAFETY: file, parent, status, and variable-length information live
-        // throughout the synchronous call; leaf is a validated single name.
-        checked(unsafe {
-            NtSetInformationFile(
-                file.as_raw_handle(),
-                &mut status,
-                buffer.as_ptr().cast(),
-                length as u32,
-                FileRenameInformation,
-            )
-        })
+        let mut rename = |flags: u32, class: FILE_INFORMATION_CLASS| {
+            let mut status = IO_STATUS_BLOCK::default();
+            // SAFETY: the flags share the union's offset in the aligned allocation;
+            // file, parent, status, and variable-length information live
+            // throughout the synchronous call; leaf is a validated single name.
+            unsafe {
+                (*buffer.as_mut_ptr().cast::<FILE_RENAME_INFORMATION>())
+                    .Anonymous
+                    .Flags = flags;
+                NtSetInformationFile(
+                    file.as_raw_handle(),
+                    &mut status,
+                    buffer.as_ptr().cast(),
+                    length as u32,
+                    class,
+                )
+            }
+        };
+        if replace {
+            // The legacy replace answers STATUS_ACCESS_DENIED while any other
+            // handle holds the target open, even a reader that shares deletion.
+            let result = rename(
+                FILE_RENAME_REPLACE_IF_EXISTS | FILE_RENAME_POSIX_SEMANTICS,
+                FileRenameInformationEx,
+            );
+            if !matches!(
+                result,
+                STATUS_INVALID_INFO_CLASS
+                    | STATUS_INVALID_PARAMETER
+                    | STATUS_NOT_SUPPORTED
+                    | STATUS_INVALID_DEVICE_REQUEST
+            ) {
+                return checked(result);
+            }
+        }
+        // Filesystems without POSIX rename replace only a target no other handle holds open.
+        checked(rename(u32::from(replace), FileRenameInformation))
     }
     pub fn write(&self, leaf: &str, bytes: &[u8], token: &str) -> io::Result<()> {
         self.write_checked(leaf, bytes, token, || Ok(()))

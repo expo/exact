@@ -699,6 +699,7 @@ pub(crate) fn run_carrier_tests(events: EventLoop<crate::accessibility::Event>) 
         document_title_reaches_the_window_without_drawing(events, app.proxy.clone());
         closing_lands_the_storage_an_answer_started(events, app.proxy.clone());
         an_ended_app_is_served_no_more(events, app.proxy.clone());
+        the_session_end_asks_beforeunload_then_ends_in_order(events, app.proxy.clone());
         checked = true;
         events.exit();
     }).unwrap();
@@ -854,6 +855,112 @@ fn an_ended_app_is_served_no_more(
         app.presenter.as_ref().unwrap().wake_due_ms(),
         Some(due),
         "the ended app's timer ran"
+    );
+}
+
+/// Windows session end asks `beforeunload` on non-critical `WM_QUERYENDSESSION`,
+/// honours cancelled `WM_ENDSESSION(FALSE)`, and drains background storage on
+/// confirmed `WM_ENDSESSION(TRUE)` without reentrantly borrowing `App` when
+/// hiding the window.
+#[allow(unsafe_code)]
+fn the_session_end_asks_beforeunload_then_ends_in_order(
+    events: &ActiveEventLoop,
+    proxy: EventLoopProxy<crate::accessibility::Event>,
+) {
+    use std::cell::RefCell;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SendMessageW, ENDSESSION_CLOSEAPP, ENDSESSION_CRITICAL, WM_ENDSESSION, WM_QUERYENDSESSION,
+    };
+    let plan = contract::compile(
+        "component App
+  resource item = save() as shape number else save()
+  state asked = false
+  action guard(e: Event)
+    if !asked
+      asked = true
+      e.preventDefault()
+  view
+    column beforeunload=guard
+      text item.toString() height=20
+",
+    )
+    .unwrap()
+    .encode();
+    let (p, _) = Presenter::boot_with(
+        &plan,
+        Saving::default(),
+        (160., 80.),
+        1.,
+        Default::default(),
+        exact_painted::presenter::PainterChoice::Cpu,
+    )
+    .unwrap();
+    let mut app = test_app(proxy, &plan, p);
+    assert!(
+        app.presenter
+            .as_ref()
+            .unwrap()
+            .host()
+            .runner()
+            .background_operations()
+            > 0
+    );
+    let window = Rc::new(
+        events
+            .create_window(
+                Window::default_attributes()
+                    .with_title("Session end regression")
+                    .with_visible(false)
+                    .with_inner_size(LogicalSize::new(160., 80.)),
+            )
+            .unwrap(),
+    );
+    let RawWindowHandle::Win32(raw) = window.window_handle().unwrap().as_raw() else {
+        panic!("expected a Win32 window handle");
+    };
+    let hwnd = raw.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+    app.window = Some(window);
+    let app = Rc::new(RefCell::new(app));
+    // Re-installing on the same HWND must be a safe no-op.
+    session_end::install(hwnd, Rc::downgrade(&app));
+    session_end::install(hwnd, Rc::downgrade(&app));
+    assert_eq!(
+        unsafe { SendMessageW(hwnd, WM_QUERYENDSESSION, 0, 0) },
+        0,
+        "beforeunload prevented the first query"
+    );
+    unsafe { SendMessageW(hwnd, WM_ENDSESSION, 0, 0) };
+    assert!(
+        !app.borrow().ended,
+        "cancelled WM_ENDSESSION must not end the app"
+    );
+    assert!(
+        !landed(&app.borrow()),
+        "cancelled WM_ENDSESSION must not tear down storage"
+    );
+    assert_eq!(
+        unsafe { SendMessageW(hwnd, WM_QUERYENDSESSION, 0, ENDSESSION_CRITICAL as isize) },
+        1,
+        "ENDSESSION_CRITICAL cannot wait"
+    );
+    assert_eq!(
+        unsafe { SendMessageW(hwnd, WM_QUERYENDSESSION, 0, 0) },
+        1,
+        "second query passes once beforeunload stops preventing"
+    );
+    unsafe { SendMessageW(hwnd, WM_ENDSESSION, 1, ENDSESSION_CLOSEAPP as isize) };
+    assert!(
+        app.borrow().ended,
+        "confirmed WM_ENDSESSION marks the app ended"
+    );
+    assert!(
+        landed(&app.borrow()),
+        "confirmed WM_ENDSESSION drains background storage"
+    );
+    assert_eq!(
+        unsafe { SendMessageW(hwnd, WM_QUERYENDSESSION, 0, 0) },
+        1,
+        "an ended app never blocks a later query"
     );
 }
 

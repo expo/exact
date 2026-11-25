@@ -214,12 +214,26 @@ impl<D: DataSource + Default + 'static> App<D> {
     /// most (a second for an agent's quit), and its hatches and packages end.
     /// It ends once, and the loop serves it no more (`ended`).
     pub(super) fn end(&mut self) {
-        if std::mem::replace(&mut self.ended, true) {
+        let Some(window) = self.begin_end() else {
             return;
-        }
-        if let Some(window) = &self.window {
+        };
+        if let Some(window) = window {
             window.set_visible(false);
         }
+        self.finish_end();
+    }
+
+    /// Marks the app ended once and returns its window so callers invoked from
+    /// a `WndProc` subclass can drop their `RefCell` borrow before hiding it.
+    pub(super) fn begin_end(&mut self) -> Option<Option<Rc<Window>>> {
+        if std::mem::replace(&mut self.ended, true) {
+            return None;
+        }
+        Some(self.window.clone())
+    }
+
+    /// Drains background storage and in-flight effects after `begin_end`.
+    pub(super) fn finish_end(&mut self) {
         if let Some(p) = &mut self.presenter {
             let bound = if self.config.agent {
                 exact_painted::teardown::AGENT_EXIT_BOUND
@@ -228,6 +242,27 @@ impl<D: DataSource + Default + 'static> App<D> {
             };
             exact_painted::teardown::finish(p, bound);
         }
+    }
+
+    /// Windows asks before ending the session (`WM_QUERYENDSESSION`).
+    /// `beforeunload` answers as it does for a window close; a handler that
+    /// keeps the window posts `Focus` so the loop brings it forward and draws
+    /// its question after the message returns without re-entering `WndProc`
+    /// while the app is borrowed.
+    pub(super) fn keeps_session(&mut self) -> bool {
+        if self.ended {
+            return false;
+        }
+        let Some(p) = self.presenter.as_mut() else {
+            return false;
+        };
+        p.advance(self.started.elapsed().as_secs_f64() * 1000.);
+        let now = p.host().now();
+        if p.before_unload(now) {
+            return false;
+        }
+        let _ = self.proxy.send_event(crate::accessibility::Event::Focus);
+        true
     }
 
     /// The window hidden by the person's close, the session running on.

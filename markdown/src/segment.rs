@@ -6,7 +6,7 @@
 use std::borrow::Cow;
 
 use crate::block::BlockKind;
-use crate::inline::{angle_destination, decode_destination};
+use crate::inline::{angle_destination, decode_destination, titled_destination};
 use crate::style::{analyze, Replacement};
 
 /// Who serves an embed.
@@ -114,15 +114,22 @@ pub(crate) fn figure(text: &str) -> Option<(&str, Cow<'_, str>, bool)> {
         return None;
     }
     let target = target.trim_start_matches([' ', '\t', '\n', '\r']);
+    if !target.ends_with(')') {
+        return None;
+    }
+    let cs: Vec<_> = target.char_indices().collect();
     let target = if target.starts_with('<') {
-        let cs: Vec<_> = target.char_indices().collect();
         let (close, range) = angle_destination(&cs, 0, cs.len())?;
         if close + 1 != cs.len() {
             return None;
         }
         decode_destination(&target[range])
     } else {
-        let target = target.strip_suffix(')')?;
+        let target = match titled_destination(&cs, 0, cs.len()) {
+            Some((close, _)) if close + 1 != cs.len() => return None,
+            Some((_, range)) => &target[range],
+            None => target.strip_suffix(')')?,
+        };
         if target.contains([')', '(']) {
             return None;
         }
