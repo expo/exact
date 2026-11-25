@@ -793,6 +793,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     private func end(_ c: RouteController) {
         #if os(iOS)
         barHosted.show([], in: c)
+        barHosted.ended(c)
         #endif
         if let header = c.lifted { header.isHidden = false; c.lifted = nil }
         c.scoped?.isHidden = false

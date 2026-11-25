@@ -142,10 +142,13 @@ extension NavigationBarIOSTests {
         let toggle = try node(session, "bare-toggle").id
         trailingSets = []
         session.presenter.onPress?(toggle)
-        until("the controls go, the readout stays") { !items().contains { $0.accessibilityIdentifier == "share-home" } }
+        until("the controls go, the readout comes") {
+            !items().contains { $0.accessibilityIdentifier == "share-home" } && items().contains { $0.accessibilityIdentifier == "status-home" }
+        }
         session.presenter.onPress?(toggle)
         until("the controls come back") { items().contains { $0.accessibilityIdentifier == "share-home" } }
-        XCTAssertEqual(trailingSets, [true, true], "the readout-only bar's changes animate too")
+        // The controls go, the readout comes in once it is laid out (LLP 1141.004 D3), the controls come back
+        XCTAssertEqual(trailingSets, [true, true, true], "the readout-only bar's changes animate too")
     }
 
     /// The bar leaves a touch on none of its own controls to an authored

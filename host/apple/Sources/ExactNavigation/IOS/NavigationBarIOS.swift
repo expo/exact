@@ -870,7 +870,7 @@ extension NavigationHost {
         item.leftItemsSupplementBackButton = true
         #endif
         c.barPresses = []
-        let leading = shape.map { barItems($0.leading, c) }, trailing = shape.map { barItems(Array($0.trailing.reversed()), c) }
+        let leading = shape.map { shown(barItems($0.leading, c), in: c) }, trailing = shape.map { shown(barItems(Array($0.trailing.reversed()), c), in: c) }
         let ids = Set(((shape?.leading ?? []) + (shape?.trailing ?? [])).map(\.id))
         c.barItemsMade = c.barItemsMade.filter { ids.contains($0.key) }
         c.barSpaces = c.barSpaces.filter { ids.contains($0.key) }
@@ -893,6 +893,29 @@ extension NavigationHost {
             for id in c.barPictures { presenter.views[id]?.drawnByBar = true }
             if !c.barPictures.isEmpty { presenter.session?.rasters?.visibilityChanged() }
         }
+    }
+
+    /// The bar items of `items` the bar shows: on iOS, a readout's only while
+    /// its element has a size, so UIKit brings it in and takes it out at that
+    /// size (`BarHosted`, LLP 1141.004 D3), and a group's space only between
+    /// two items.
+    func shown(_ items: [UIBarButtonItem], in c: RouteController) -> [UIBarButtonItem] {
+        #if os(iOS)
+        let shown = items.filter(HostedItemView.shows)
+        guard shown.count < items.count else { return items }
+        let spaces = Set(c.barSpaces.values.map(ObjectIdentifier.init))
+        let space = { (i: Int) in spaces.contains(ObjectIdentifier(shown[i])) }
+        return shown.indices.filter { !space($0) || ($0 > 0 && $0 < shown.count - 1 && !space($0 + 1)) }.map { shown[$0] }
+        #else
+        items
+        #endif
+    }
+
+    /// Project `c`'s bar again, its hatch after it: a hosted item came or went
+    /// with no change to the header (`BarHosted`).
+    func projectBar(of c: RouteController) {
+        guard c.host === self, let stack = c.stack else { return }
+        prepareRoutes(stack.stackRoutes.compactMap { $0 as? RouteController }, in: stack)
     }
 
     /// A picture a bar face draws (`BadgeFace`) arrived: its stack's bars

@@ -285,6 +285,66 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertEqual(p.views[2]?.container.subviews.compactMap { ($0 as? NodeView)?.id }, [3, 4, 5], "at its place")
     }
 
+    /// UIKit brings an item into the bar at the size its view has then, and
+    /// takes it out with an animation that shows its view (D3). A readout's
+    /// item is in the bar while its element has a size: a new element's comes
+    /// in once it is laid out, at that size, and an element that loses its
+    /// size, or goes, leaves its item a picture of it for that animation.
+    func testAReadoutsItemIsInTheBarWhileItsElementHasASize() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "UIKit lays out the bar in the app window")
+        }
+        let p = route([], kids: [])
+        let c = RouteController(try XCTUnwrap(p.views[1])), nav = UINavigationController(rootViewController: c)
+        c.host = p.navigationHost
+        window.isHidden = true
+        window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = nav
+        window.makeKeyAndVisible()
+        p.navigationHost.registerStack(nav)
+        p.navigationHost.prepareRoutes([c], in: nav)
+        func shown() -> [UIBarButtonItem] { c.navigationItem.rightBarButtonItems ?? [] }
+        func frame(_ w: Double, _ h: Double) -> [String: Any] { ["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": w, "h": h] }
+        p.apply(wireBatch([status(4), text(5, "Updating"), ["op": "children", "id": 4, "ids": [5]], ["op": "children", "id": 2, "ids": [3, 4]]]))
+        p.navigationHost.prepareRoutes([c], in: nav)
+        XCTAssertEqual(p.navigationHost.barHosted.blocks.keys.sorted(), [4], "the element is given its block")
+        XCTAssertTrue(shown().isEmpty, "and its item waits for its layout")
+        // Without it, a group's space stays only between two items
+        let waiting = try XCTUnwrap(p.navigationHost.barItems(try bar(p).trailing, c).first)
+        let (a, b) = (UIBarButtonItem(), UIBarButtonItem())
+        let (one, two) = (UIBarButtonItem(barButtonSystemItem: .fixedSpace, target: nil, action: nil), UIBarButtonItem(barButtonSystemItem: .fixedSpace, target: nil, action: nil))
+        let spaces = c.barSpaces
+        c.barSpaces = [90: one, 91: two]
+        XCTAssertEqual(p.navigationHost.shown([waiting, one, a], in: c), [a])
+        XCTAssertEqual(p.navigationHost.shown([a, one, waiting], in: c), [a])
+        XCTAssertEqual(p.navigationHost.shown([a, one, waiting, two, b], in: c), [a, two, b])
+        c.barSpaces = spaces
+        p.apply(wireBatch([frame(90, 22)]))
+        let item = try XCTUnwrap(shown().first, "laid out, it comes in")
+        let view = try XCTUnwrap(item.customView as? HostedItemView)
+        XCTAssertEqual(view.size, CGSize(width: 90, height: 22), "at its size")
+        waitFor("UIKit lays the item out") { view.window != nil && abs(view.bounds.width - 90) < 0.5 }
+        XCTAssertNil(view.picture)
+        p.apply(wireBatch([frame(0, 0)]))
+        XCTAssertTrue(shown().isEmpty, "emptied, it leaves")
+        XCTAssertNotNil(view.picture, "with a picture of what it showed")
+        XCTAssertEqual(view.bounds.width, 90, accuracy: 0.5, "at the size it had")
+        p.apply(wireBatch([frame(80, 22)]))
+        XCTAssertTrue(shown().first === item && view.picture == nil, "given a size again, it comes back as itself")
+        waitFor("UIKit lays the item out again") { view.window != nil && abs(view.bounds.width - 80) < 0.5 }
+        // Moved in the header, it reads the same to the bar, which hosts it again
+        p.apply(wireBatch([["op": "create", "id": 6, "kind": "view"], ["op": "children", "id": 6, "ids": [4]], ["op": "children", "id": 2, "ids": [3, 6]]]))
+        XCTAssertEqual(try bar(p).trailing.map(\.id), [4])
+        XCTAssertTrue(view.picture?.superview === view && view.stand.subviews.isEmpty, "the item it left keeps a picture of it")
+        let moved = try XCTUnwrap(shown().first?.customView as? HostedItemView, "the bar takes that item out and hosts it again")
+        XCTAssertTrue(moved !== view && moved.node === p.views[4] && moved.picture == nil && shown().count == 1)
+        waitFor("UIKit lays the new item out") { moved.window != nil }
+        p.apply(wireBatch([["op": "children", "id": 6, "ids": []], ["op": "destroy", "id": 5], ["op": "destroy", "id": 4]]))
+        XCTAssertNotNil(moved.picture, "the element leaves a picture of it in the item")
+        XCTAssertTrue(shown().isEmpty, "which UIKit takes out")
+    }
+
     func testAPressInAReadoutsPopoverUsesThePopoversMount() throws {
         let popover: [String: Any] = ["op": "create", "id": 5, "kind": "view",
                                       "props": ["id": "details", "popover": "manual"]]
@@ -413,6 +473,9 @@ final class BarHostedIOSTests: XCTestCase {
         view.frame = host.view.bounds
         view.layoutIfNeeded()
         until("the first route") { session.presenter.navigationHost.primaryNavigation?.topViewController is RouteController }
+        // A readout comes into the bar once its element is laid out.
+        let home = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation?.topViewController)
+        until("the first route's readouts are in its bar") { self.shown("sync-status", on: home) != nil && self.shown("syncing", on: home) != nil }
         return session
     }
 
@@ -421,8 +484,12 @@ final class BarHostedIOSTests: XCTestCase {
     }
 
     private func item(_ testId: String, on c: UIViewController) throws -> UIBarButtonItem {
-        let items = (c.navigationItem.leftBarButtonItems ?? []) + (c.navigationItem.rightBarButtonItems ?? [])
-        return try XCTUnwrap(items.first { $0.accessibilityIdentifier == testId }, testId)
+        try XCTUnwrap(shown(testId, on: c), testId)
+    }
+
+    /// The bar item of `testId` on `c`'s bar, if the bar shows it.
+    private func shown(_ testId: String, on c: UIViewController) -> UIBarButtonItem? {
+        ((c.navigationItem.leftBarButtonItems ?? []) + (c.navigationItem.rightBarButtonItems ?? [])).first { $0.accessibilityIdentifier == testId }
     }
 
     private func tap(_ point: CGPoint, with touch: TouchRunner) throws {
@@ -565,7 +632,7 @@ final class BarHostedIOSTests: XCTestCase {
         let ready = try XCTUnwrap(item("sync-status", on: home).customView)
         waitFor("the bar is laid out") { ready.isDescendant(of: nav.navigationBar) && !ready.bounds.isEmpty }
         p.press(try node("show-updating", in: p).id)
-        waitFor("the readout has its item") { (try? self.item("updating", on: home)) != nil }
+        waitFor("the readout has its item") { self.shown("updating", on: home) != nil }
         let view = try XCTUnwrap(item("updating", on: home).customView as? HostedItemView)
         waitFor("UIKit lays the readout out at its whole width") {
             view.isDescendant(of: nav.navigationBar) && view.size.width > 0 && abs(view.bounds.width - view.size.width) < 0.5
