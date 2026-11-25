@@ -212,7 +212,9 @@ object Native {
      * null). The producer's scale as float bits, then nine words each: id, flags, revision, and pairs of float bits
      * for its current offset in points, recorded offset in pixels, and logical maximum in points. The revision
      * moves on when the app scrolled it (a `scrollTop` write, a reveal): the reader then takes this offset and ends
-     * its fling. A scroller the reader knew that is not among them is gone. */
+     * its fling. A scroller the reader knew that is not among them is gone. An optional four-word trailer
+     * gives the driver's grouped feed id, current offset in points, recorded offset in pixels, and maximum in
+     * points, all along the vertical axis. */
     @JvmStatic external fun scrollers(): IntArray?
     /** A touch (0 down, 1 up, 2 move, 3 cancel) at the view's pixels, and what touched: the event's tool type
      * ([android.view.MotionEvent.getToolType]). A finger is reported to the app as a touch that hovers nothing and

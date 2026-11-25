@@ -93,7 +93,7 @@ pub(super) struct Reader {
     pub(super) pending_height_end: Option<exact_kernel::NodeKey>,
     pub(super) height_scroll_release: Option<(exact_kernel::NodeKey, f32)>,
     tracked: BTreeMap<ViewId, (u32, (f32, f32))>,
-    /// The last statement [`Presenter::reader_scrollers`] returned.
+    /// The last statement sent to the Android reader.
     #[cfg(any(target_os = "android", test))]
     last: Vec<i32>,
     #[cfg(any(target_os = "android", test))]
@@ -555,7 +555,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// A driver from outside moves `id` itself from now on (the benchmark's
-    /// `scroll`): the reader is told nothing more of it.
+    /// `scroll`), ending the reader's gesture tracking for it.
     pub fn reader_forgets(&mut self, id: ViewId) {
         self.reader.tracked.remove(&id);
     }
@@ -719,14 +719,28 @@ impl<D: DataSource> Presenter<D> {
         drawn: &[(ViewId, (f32, f32))],
         scale: f32,
     ) -> Option<Vec<i32>> {
+        self.reader_scrollers_with_feed(drawn, scale, None)
+    }
+
+    /// The scroller statement with an optional trailer for the bench driver's grouped feed.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_scrollers_with_feed(
+        &mut self,
+        drawn: &[(ViewId, (f32, f32))],
+        scale: f32,
+        feed: Option<ViewId>,
+    ) -> Option<Vec<i32>> {
         let missed = std::mem::take(&mut self.reader.missed);
-        if self.reader.tracked.is_empty() {
+        let feed = feed.and_then(|id| drawn.iter().find(|(owner, _)| *owner == id));
+        if self.reader.tracked.is_empty() && feed.is_none() {
             let removed = !std::mem::take(&mut self.reader.last).is_empty();
             return (removed || missed).then(Vec::new);
         }
         let limits = self.collection_scroll_limits();
+        let pixel = |v| crate::paint::grid::device_pixel(v, scale) as f32;
         let ids: Vec<ViewId> = self.reader.tracked.keys().copied().collect();
-        let mut out = Vec::with_capacity(ids.len() * STATEMENT_WORDS);
+        let mut out =
+            Vec::with_capacity(ids.len() * STATEMENT_WORDS + 4 * usize::from(feed.is_some()));
         for id in ids {
             let Some(mut s) = self.scroller(id, &limits) else {
                 self.reader.tracked.remove(&id);
@@ -736,11 +750,20 @@ impl<D: DataSource> Presenter<D> {
             let painted = drawn.iter().find(|(owner, _)| *owner == id);
             s.node = painted.is_some();
             let at = painted.map_or((s.offset.0 * scale, s.offset.1 * scale), |(_, at)| {
-                let pixel = |v| crate::paint::grid::device_pixel(v, scale) as f32;
                 (pixel(at.0), pixel(at.1))
             });
             out.extend([id as i32, self.reader_flags(&s), rev as i32]);
             out.extend([s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1].map(bits));
+        }
+        if let Some(&(id, (_, drawn_y))) = feed {
+            if let Some(s) = self.scroller(id, &limits) {
+                out.extend([
+                    id as i32,
+                    bits(s.offset.1),
+                    bits(pixel(drawn_y)),
+                    bits(s.max.1),
+                ]);
+            }
         }
         if !missed && out == self.reader.last && scale == self.reader.last_scale {
             return None;

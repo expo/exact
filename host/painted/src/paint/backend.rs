@@ -473,6 +473,10 @@ pub trait Backend {
     }
     /// Draw kept row `id` with its top-left at `origin`, covering `bounds`.
     fn row_draw(&mut self, _id: u32, _origin: (f32, f32), _bounds: Rect4) {}
+    /// Draw a kept row with its origin also available in device pixels.
+    fn row_draw_pixels(&mut self, id: u32, origin: (f32, f32), _pixels: (f64, f64), bounds: Rect4) {
+        self.row_draw(id, origin, bounds);
+    }
     /// Draw kept row `id` through `ts`, which maps the row's space (its
     /// top-left at the origin, in the units it was recorded in) into the
     /// page; `bounds` is what the row covers in its space. A kept drawing

@@ -44,6 +44,16 @@ fn pixel_box(frame: Frame, scale: f32) -> [f64; 4] {
     ]
 }
 
+pub(super) fn relative_pixel_box(frame: Frame, origin: (f32, f32), scale: f32) -> [f64; 4] {
+    let [x, y, width, height] = pixel_box(frame, scale);
+    [
+        x - device_pixel(origin.0, scale),
+        y - device_pixel(origin.1, scale),
+        width,
+        height,
+    ]
+}
+
 fn on_pixels(frame: Frame, scale: f32) -> Frame {
     let [x, y, width, height] = pixel_box(frame, scale).map(|v| (v / f64::from(scale)) as f32);
     Frame {
@@ -159,6 +169,11 @@ pub(super) fn rect_on_grid(frame: Frame, offset: PaintOffset, grid: Option<f32>)
     )
 }
 
+pub(super) struct RowOrigin {
+    pub(super) points: (f32, f32),
+    pub(super) pixels: Option<(f64, f64)>,
+}
+
 impl BoxPaint {
     /// The content box's width in a border box `w` wide.
     pub(super) fn content_width(&self, w: f32) -> f32 {
@@ -200,6 +215,27 @@ impl Painter {
 
     pub(super) fn drawn_rect(&self, node: &NodeRef<'_>, offset: PaintOffset) -> Rect4 {
         rect_on_grid(node.frame, offset, self.grid())
+    }
+
+    pub(super) fn row_origin(&self, frame: Frame, offset: PaintOffset, ts: Transform) -> RowOrigin {
+        let ((x, y), pixels) = if let Some(scale) = self.grid() {
+            let k = f64::from(scale);
+            let x = device_pixel(frame.x, scale) - offset.0 * k;
+            let y = device_pixel(frame.y, scale) - offset.1 * k;
+            (
+                ((x / k) as f32, (y / k) as f32),
+                Some((
+                    x * f64::from(ts.sx) + f64::from(ts.tx) * k,
+                    y * f64::from(ts.sy) + f64::from(ts.ty) * k,
+                )),
+            )
+        } else {
+            (paint_origin((frame.x, frame.y), offset), None)
+        };
+        RowOrigin {
+            points: (ts.sx * x + ts.tx, ts.sy * y + ts.ty),
+            pixels,
+        }
     }
 
     pub(super) fn node_rect(

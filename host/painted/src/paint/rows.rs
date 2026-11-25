@@ -77,6 +77,7 @@ impl Dirty {
 struct RowFrame {
     node: NodeKey,
     frame: exact_kernel::Frame,
+    grid: Option<f32>,
     padding: (f32, f32, f32, f32),
 }
 
@@ -98,8 +99,9 @@ struct Row {
     local: bool,
     scale: (f32, f32),
     size: (f32, f32),
-    /// A whole-pixel move preserves the snapping of the row's children.
+    /// A different phase can change snapping inside the row.
     phase: Option<(f64, f64)>,
+    layout_origin: (f32, f32),
     boxes: Vec<PaintedBox>,
     text: Vec<(NodeKey, Rc<Paragraph>)>,
     inline: Vec<(ViewId, Rc<inline_frame::PaintedInline>)>,
@@ -109,7 +111,7 @@ struct Row {
     images: Vec<(ViewId, Option<std::sync::Weak<Bitmap>>)>,
     /// Where each picture kept apart from the row is drawn.
     slots: Vec<Slot>,
-    /// Each node's frame relative to the row and its resolved padding.
+    /// Each node's layout frame and resolved padding.
     frames: Vec<RowFrame>,
     /// The scrollers inside it and their offsets when recorded: one moved
     /// (a swipe) records the row again.
@@ -761,12 +763,19 @@ impl Painter {
     }
 
     /// Note a node walked while a row records.
-    pub(super) fn row_node(&mut self, walk: &Walk<'_, '_>, node: &NodeRef<'_>, shown: &Presented) {
+    pub(super) fn row_node(
+        &mut self,
+        walk: &Walk<'_, '_>,
+        node: &NodeRef<'_>,
+        shown: &Presented,
+        transformed: bool,
+    ) {
         let (scene, grid) = (walk.scene, self.grid());
         if let Some(c) = &mut self.rows.recording {
             c.frames.push(RowFrame {
                 node: node.key,
                 frame: node.frame,
+                grid: grid.filter(|_| !transformed),
                 padding: scene.kernel.resolved_padding(node.key).unwrap_or_default(),
             });
             c.may_have_hit_slop |= c.split_sections && node.style.may_have_hit_slop();
@@ -969,6 +978,17 @@ impl Painter {
         self.row_reach((x - MARGIN, y - MARGIN, w + 2. * MARGIN, h + 2. * MARGIN));
     }
 
+    fn draw_row(&mut self, id: u32, origin: grid::RowOrigin, bounds: Rect4) {
+        if !self.backend.row_culled(bounds) {
+            match origin.pixels {
+                Some(pixels) => self
+                    .backend
+                    .row_draw_pixels(id, origin.points, pixels, bounds),
+                None => self.backend.row_draw(id, origin.points, bounds),
+            }
+        }
+    }
+
     /// Whether a kept row draws what it would record now; `pictures`: its
     /// pictures included.
     fn row_valid(
@@ -981,6 +1001,8 @@ impl Painter {
     ) -> bool {
         let kernel = walk.scene.kernel;
         let drawn = self.drawn(node);
+        let layout_origin = (node.frame.x, node.frame.y);
+        let old_origin = row.layout_origin;
         !row.stale
             && row.scale == scale
             && row.size == (drawn.width, drawn.height)
@@ -1013,10 +1035,15 @@ impl Painter {
                                 (a - b).abs() < 0.5
                             }
                         };
-                        same(g.x - node.frame.x, f.x)
-                            && same(g.y - node.frame.y, f.y)
+                        same(g.x - layout_origin.0, f.x - old_origin.0)
+                            && same(g.y - layout_origin.1, f.y - old_origin.1)
                             && g.width == f.width
                             && g.height == f.height
+                            // At distant coordinates, rounding the absolute edges can change their spacing.
+                            && saved.grid.is_none_or(|scale| {
+                                grid::relative_pixel_box(g, layout_origin, scale)
+                                    == grid::relative_pixel_box(f, old_origin, scale)
+                            })
                             && kernel.resolved_padding(saved.node).unwrap_or_default()
                                 == saved.padding
                     })
@@ -1060,8 +1087,8 @@ impl Painter {
             return;
         }
         let drawn = self.drawn(&node);
-        let r = self.drawn_rect(&node, offset);
-        let origin = (ts.sx * r.0 + ts.tx, ts.sy * r.1 + ts.ty);
+        let placement = self.row_origin(node.frame, offset, ts);
+        let origin = placement.points;
         let scale = (ts.sx, ts.sy);
         let frame = self.rows.frame;
         let port = (0., 0., self.viewport.0, self.viewport.1);
@@ -1126,14 +1153,14 @@ impl Painter {
                 let shifted = suspect
                     && row.frames.iter().any(|saved| {
                         walk.scene.kernel.node_by_key(saved.node).is_some_and(|n| {
-                            n.frame.x - node.frame.x != saved.frame.x
-                                || n.frame.y - node.frame.y != saved.frame.y
+                            n.frame.x - node.frame.x != saved.frame.x - row.layout_origin.0
+                                || n.frame.y - node.frame.y != saved.frame.y - row.layout_origin.1
                         })
                     });
                 row.can_translate_hits &= !shifted;
             }
-            if can_draw && !self.backend.row_culled(bounds) {
-                self.backend.row_draw(rid, origin, bounds);
+            if can_draw {
+                self.draw_row(rid, placement, bounds);
             }
             return;
         }
@@ -1282,15 +1309,12 @@ impl Painter {
             self.rows.freed.push(old);
         }
         let page = (bounds.0 + origin.0, bounds.1 + origin.1, bounds.2, bounds.3);
-        if !self.backend.row_culled(page) {
-            self.backend.row_draw(rid, origin, page);
-        }
+        self.draw_row(rid, placement, page);
         let keep = !capture.refused && boxes.iter().all(|b| b.projective.is_none());
         if !keep {
             self.rows.freed.push(rid);
             return;
         }
-        let (x0, y0) = (node.frame.x, node.frame.y);
         self.rows.kept.insert(
             node.key,
             Row {
@@ -1301,6 +1325,7 @@ impl Painter {
                 scale,
                 size: (drawn.width, drawn.height),
                 phase: self.pixel_phase(node.frame),
+                layout_origin: (node.frame.x, node.frame.y),
                 can_translate_hits: boxes.iter().all(|b| b.hit.is_none()),
                 may_have_hit_slop: capture.may_have_hit_slop,
                 paint_stale: false,
@@ -1310,15 +1335,7 @@ impl Painter {
                 field_texts: capture.field_texts,
                 images: capture.images,
                 slots: capture.slots,
-                frames: capture
-                    .frames
-                    .into_iter()
-                    .map(|mut saved| {
-                        saved.frame.x -= x0;
-                        saved.frame.y -= y0;
-                        saved
-                    })
-                    .collect(),
+                frames: capture.frames,
                 scrolls: capture.scrolls,
                 sticky: capture.sticky,
                 unsupported: row_unsupported,

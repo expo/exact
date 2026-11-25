@@ -282,11 +282,14 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.wheel_zoom(x / s, y / s, dy);
     }
 
-    /// The recording's scale followed by the scroller statement
-    /// ([`crate::presenter::Presenter::reader_scrollers`]).
+    /// The recording's scale followed by the scroller statement and its
+    /// driver feed trailer when present.
     pub fn scrollers(&mut self) -> Option<Vec<i32>> {
         let scale = self.scale;
-        let words = GROUPS.with(|g| self.p.reader_scrollers(&g.borrow(), scale));
+        let words = GROUPS.with(|g| {
+            self.p
+                .reader_scrollers_with_feed(&g.borrow(), scale, self.feed)
+        });
         self.told = Some(self.p.host().kernel().layout_stamp());
         let mut words = words?;
         words.insert(0, scale.to_bits() as i32);
@@ -698,6 +701,71 @@ component App
     }
 
     #[test]
+    fn a_distant_row_paints_the_same_pixel_shift_as_a_move_only_frame() {
+        use super::super::{stream, Recorder, FINISHED, ROW_DRAW, SHIFT};
+
+        let scale = 2.625;
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=4999997.5 testId="port"
+      column
+        box height=30
+        box height=5000100 background-color="red" testId="row"
+"#,
+            scale,
+        );
+        let key = p.host().kernel().find_by_test_id("row")[0];
+        let port = id(&p, "port");
+        let row_top = |p: &Presenter<()>| {
+            let row = p.brush.retained_row_id(key).unwrap();
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+            let mut at = 0;
+            while ops[at] != ROW_DRAW || ops[at + 1] != row {
+                at = stream::end(&ops, at).unwrap();
+            }
+            f32::from_bits(ops[at + 3])
+        };
+        let top = row_top(&p);
+        let painted = Painted::capture(&p).unwrap();
+        let target = (0., 4_999_998.5);
+        assert_eq!(p.scroll_to(port, target), Some(target));
+        let shift = painted.shift(&mut p, None, scale, false).unwrap();
+        assert_eq!(shift, [SHIFT, 1, port, 0, (-3_f32).to_bits()]);
+
+        p.reader_replaced(Box::new(Recorder::new()));
+        p.frame();
+        assert_eq!(row_top(&p) - top, -3.);
+    }
+
+    #[test]
+    fn the_driver_gets_the_grouped_feed_offsets_without_a_touch() {
+        let scale = 2.625;
+        let start = 0.568_452_36_f32;
+        let mut p = boot_at(
+            r#"component App
+  view
+    scroll width=200 height=100 scrollTop=0.56845236 testId="port"
+      box height=30 background-color="red"
+      box height=200 background-color="blue"
+"#,
+            scale,
+        );
+        let port = id(&p, "port");
+        let painted = Painted::capture(&p).unwrap();
+        assert_eq!(p.reader_scrollers(&painted.groups, scale), None);
+        assert_eq!(
+            p.reader_scrollers_with_feed(&painted.groups, scale, Some(port)),
+            Some(vec![
+                port as i32,
+                start.to_bits() as i32,
+                2_f32.to_bits() as i32,
+                130_f32.to_bits() as i32
+            ])
+        );
+    }
+
+    #[test]
     fn equal_layout_edge_and_scroll_offset_cancel() {
         let mut p = boot_at(
             r#"component App
@@ -876,6 +944,43 @@ component App
         let fresh = p.rect_of(child).unwrap();
         assert_eq!(fresh.1 * 2.625, 1.);
         assert_eq!(replay, fresh);
+    }
+
+    #[test]
+    fn moving_a_distant_row_with_the_same_pixel_phase_repositions_its_child() {
+        let mut p = boot_on_pixels(
+            r#"component App
+  state lead = 200000
+  action move
+    lead = 200000.375
+  view
+    column
+      scroll width=200 height=100 scrollTop=200000
+        column
+          box height=lead
+          column width=200 height=8 padding-top=0.5625 box-sizing="border-box" testId="row"
+            box width=200 height=4 background-color="red" testId="child"
+          box height=200
+      button width=20 height=20 press=move testId="move"
+"#,
+        );
+        let (row, child, button) = (id(&p, "row"), id(&p, "child"), id(&p, "move"));
+        let relative_top = |p: &mut Presenter<()>| {
+            (p.rect_of(child).unwrap().1 - p.rect_of(row).unwrap().1) * 2.625
+        };
+        assert_eq!(relative_top(&mut p), 2.);
+        assert_eq!(
+            p.host_mut()
+                .dispatch_at(button, exact_runner::Event::Press, 0.),
+            None
+        );
+        assert_eq!(p.after_commit(), None);
+        p.frame();
+        let replay = relative_top(&mut p);
+        p.reader_replaced(Box::new(super::super::Recorder::new()));
+        p.frame();
+        assert_eq!(relative_top(&mut p), 1.);
+        assert_eq!(replay, 1.);
     }
 
     #[test]

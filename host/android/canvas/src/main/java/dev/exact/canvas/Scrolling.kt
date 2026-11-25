@@ -679,6 +679,15 @@ internal class Scrolling(private val view: ExactView) {
     fun shift(id: Int): Float? = scrollers[id]?.takeIf { it.own && it.node && it.told }
         ?.let { it.drawnY - predictedPixel(it, false) }
 
+    private data class DriverFeed(val id: Int, val points: Float, val drawn: Float, val max: Float)
+    private var driverFeed: DriverFeed? = null
+
+    /** The owner's driver combines pending deltas in pixels before applying them in points. */
+    fun driverShift(id: Int, pending: Float): Float? = driverFeed?.takeIf { it.id == id }?.let {
+        val points = (it.points + pending / scale).coerceIn(0f, it.max)
+        it.drawn - paintedOffset(points * scale)
+    }
+
     /** A stream that includes the reader's moves up to number [seq] was taken. */
     fun acked(seq: Int) {
         while (sent.isNotEmpty() && sent.first().seq <= seq) { val m = sent.removeFirst(); m.s.pendX -= m.dx; m.s.pendY -= m.dy }
@@ -711,6 +720,7 @@ internal class Scrolling(private val view: ExactView) {
             s.pull?.takeIf { it.spinning && !it.leaving }?.let { if (s.refreshing) s.seen = true else if (s.seen) unpull(s) }
             i += STATEMENT_WORDS
         }
+        driverFeed = if (w.size - i == 4) DriverFeed(w[i], f(w[i + 1]), f(w[i + 2]), f(w[i + 3])) else null
         // A scroller the statement no longer has is gone (its node went, or a driver took it over): what the reader
         // kept for it goes with it.
         val count = (w.size - 1) / STATEMENT_WORDS

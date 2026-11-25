@@ -954,7 +954,8 @@ impl Painter {
         // The roles drawn in the accent read the nearest authored accent color.
         let _accent = accent_scope(&node);
         let p = (walk.scene.presented)(id);
-        self.row_node(walk, &node, &p);
+        let transformed = grid::leaves_grid(&node, &p);
+        self.row_node(walk, &node, &p, transformed);
         // @ref LLP 1077 D8 — turned or moved in space: painted apart, warped.
         if self.spatial(walk, &node, &p, ts, offset, clip_rect) {
             self.row_refuse();
@@ -962,7 +963,6 @@ impl Painter {
             return;
         }
         let flat = self.flatten == Some(id);
-        let transformed = grid::leaves_grid(&node, &p);
         let rect = self.node_rect(&node, offset, &p);
         let (x, y, w, h) = rect;
         let surface = p.surface(rect);

@@ -54,6 +54,7 @@ class ScrollTouchTest {
         /** What exact2 was told of the touch itself: down, then lifted. */
         val touching = ArrayList<Boolean>()
         @Implementation fun touching(on: Boolean) { touching.add(on) }
+        @Implementation fun scroll(dy: Float, seq: Int) {}
         @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {
             moved[id] = (moved[id] ?: 0f) + dx + dy
             logicalY = (logicalY + dy / scale).coerceIn(0f, 500f)
@@ -351,6 +352,30 @@ class ScrollTouchTest {
 
     @Test fun aDragAt275PredictsThePainterFromLogicalPoints() {
         checkPendingPlacement(2.75f, 0f, 0.4921875f, 0f, 0f)
+    }
+
+    @Test fun aDriverScrollPlacesPendingRowsOnTheRepaintPixel() {
+        val scale = 2.625f
+        val start = 0.56845236f
+        val shift = java.nio.IntBuffer.wrap(intArrayOf(22, 1, 1, 0, 2f.toBits()))
+        val queue = java.util.concurrent.ConcurrentLinkedQueue<Owner.Pub>()
+        ReflectionHelpers.setField(view.owner, "queue", queue)
+        val group = RenderNode("feed")
+        ReflectionHelpers.getField<HashMap<Int, RenderNode>>(view, "groups")[1] = group
+        ReflectionHelpers.setField(view, "feed", 1)
+        fun statement(now: Float) = intArrayOf(
+            scale.toBits(), 1, now.toBits(), 2f.toBits(), 500f.toBits(),
+        )
+        view.scrolling().told(statement(start))
+
+        view.scrollBy(-1f)
+        assertEquals("pending placement", 2f, group.translationY, 0f)
+        view.scrollBy(0.02f)
+        assertEquals("coalesced placement", 1f, group.translationY, 0f)
+
+        queue.add(Owner.Pub(1L, shift, true, 1, 1, statement(start - 1f / scale), null, null, null))
+        view.publish()
+        assertEquals("placement after the first acknowledgment", 1f, group.translationY, 0f)
     }
 
     @Test fun theUpsOwnSampleMovesNothing() {

@@ -177,8 +177,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) touchDown = false
         return try { contacts.dispatch(event) { super.dispatchTouchEvent(event) } } finally { timerReport() }
     }
-    /** Scrolls sent to the owner that no published stream includes yet, and the feed's group with its translation in
-     * the last stream: the group is drawn that far moved, less what the owner has yet to apply. */
+    /** Driver scrolls the owner has yet to acknowledge, and the feed's translation in the last stream. */
     private var mainSeq = 0
     private val sent = ArrayDeque<Pair<Int, Float>>()
     private var feed = 0
@@ -736,9 +735,10 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * finger moved it, the reader's own place for it ([Scrolling.shift]). */
     private fun feedY(): Float {
         scrolling.shift(feed)?.let { return it }
+        if (sent.isEmpty()) return feedBaseY
         var residual = 0f
         for ((_, d) in sent) residual += d
-        return feedBaseY - residual
+        return scrolling.driverShift(feed, residual) ?: feedBaseY
     }
 
 
