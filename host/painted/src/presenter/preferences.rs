@@ -232,8 +232,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// `devicePosture` and the viewport segments (LLP 1078 D7): what the
-    /// agent's `prefer posture` and `prefer segments` set on this host,
-    /// which has no fold of its own; kept for `layout.env`.
+    /// agent's `prefer posture` and `prefer segments` set on a host without a hinge.
     pub fn set_segments(
         &mut self,
         posture: exact_runner::Posture,
@@ -241,11 +240,13 @@ impl<D: DataSource> Presenter<D> {
         rows: u32,
         rects: Vec<exact_kernel::Rect>,
     ) -> Option<String> {
-        let error = self.host.set_segments(posture, cols, rows, rects.clone());
+        if self.window.has_hinge {
+            return Some("the device decides (it has a fold)".into());
+        }
+        let error = self.host.set_segments(posture, cols, rows, rects);
         if error.is_some() {
             return error;
         }
-        self.segments = rects;
         self.dirty = true;
         self.after_commit()
     }

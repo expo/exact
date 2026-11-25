@@ -109,6 +109,7 @@ class OwnerRepliesTest {
         Host.posted.clear()
         exact.app.ExactExtensions.process(mapOf("probe" to { ctx -> object : ExactExtension(ctx) {
             override fun later(name: String, args: org.json.JSONObject, reply: (org.json.JSONObject) -> Unit) {
+                if (name == "readText") return reply(org.json.JSONObject().put("exact:answer", "Paste \"this\"\n🍋"))
                 if (name == "broken") error("reader failed")
                 if (name == "status") {
                     android.os.Handler(Looper.getMainLooper()).post { reply(org.json.JSONObject().put("state", "granted")) }
@@ -151,6 +152,7 @@ class OwnerRepliesTest {
                             request(Requests.MODULE, 21, """{"extension":"probe","source":null,"send":"ping"}""") +
                             request(Requests.MODULE, 22, """{"extension":"probe","picture":"p","width":"1080","height":1920.0}""") +
                             request(Requests.MODULE, 23, """{"extension":"probe","send":"broken","admit":{"status":"status","field":"state"}}""") +
+                            request(Requests.MODULE, 24, """{"extension":"probe","send":"readText"}""") +
                             request(Requests.PRESENCE, 7, """{"call":1,"origin":"app"}""")))
                     requested.countDown()
                     assertTrue(handed.await(10, TimeUnit.SECONDS))
@@ -175,6 +177,7 @@ class OwnerRepliesTest {
                     .put(org.json.JSONArray().put(16).put("{}")).put(failed(17, "reader failed"))
                     .put(org.json.JSONArray().put(18).put("""{"error":"a value"}""")).put(unsupported(19)).put(unsupported(20))
                     .put(org.json.JSONArray().put(21).put("""{"error":"a value"}""")).put(failed(22, "failed to decode 1080x1920"))
+                    .put(org.json.JSONArray().put(24).put(org.json.JSONObject.quote("Paste \"this\"\n🍋")))
                     .put(failed(23, "reader failed"))
                     .toString(),
                 turn.get(10, TimeUnit.SECONDS),

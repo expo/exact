@@ -74,8 +74,24 @@ test('the web fixture writes every display, cancels before publication, and neve
           betweenWrites.push({ error:answer.error ?? null,
             fresh: answer.captures?.map(c => !before.has(c.path) && files.has(c.path)), preserved: paths.every((path, i) => files.get(path) === old[i]) });
         }
+        const selected = await capture.captureScreens({ directory:'app:/tmp/one', screen:screens[0],
+          rect:{x:0,y:0,width:16,height:8}, cursor:'always' });
+        const win = capture.getWindowAtPoint({x:-1,y:0});
+        const windowShot = await capture.captureScreens({directory:'app:/tmp/win',window:win.handle});
+        async function cursorPixel(cursor) {
+          const {captures:[shot]} = await capture.captureScreens({ directory:'app:/tmp/win', window:win.handle, cursor });
+          const bitmap = await createImageBitmap(files.get(shot.path));
+          const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+          const ctx = canvas.getContext('2d'); ctx.drawImage(bitmap, 0, 0);
+          const pixel = Array.from(ctx.getImageData(bitmap.width / 2, bitmap.height / 2, 1, 1).data);
+          bitmap.close();
+          return pixel;
+        }
+        const cursorPixels = [await cursorPixel('never'), await cursorPixel('always')];
+        const crossSession = await implementation(context).captureScreens({directory:'app:/tmp/win',window:win.handle});
+        const invalid = await capture.captureScreens({directory:'app:/tmp/one',rect:{x:0,y:0,width:1,height:1}});
         const real = implementation({...context,agent:false});
-        return { answer, pixel, cancelled, quota, writes, duringWrite, betweenWrites,
+        return { answer, pixel, cancelled, quota, writes, duringWrite, betweenWrites, selected, win, windowShot, crossSession, invalid, cursorPixels,
           native:await real.captureScreens({directory:'app:/tmp/x'}) };
       })()` }, sessionId);
     expect(exceptionDetails).toBeUndefined();
@@ -84,7 +100,12 @@ test('the web fixture writes every display, cancels before publication, and neve
     expect(result.value.cancelled.error).toBe('AbortError');
     expect(result.value.quota.error).toBe('QuotaExceededError');
     expect(result.value.native.error).toBe('NotSupportedError');
-    expect(result.value.writes).toBe(2);
+    expect(result.value.writes).toBe(6);
+    expect(result.value.cursorPixels).toEqual([[32,64,128,255], [255,255,255,255]]);
+    expect(result.value.selected.captures.map(c => [c.width,c.height])).toEqual([[20,10]]);
+    expect(result.value.windowShot.captures[0].frame).toEqual(result.value.win.frame);
+    expect(result.value.crossSession.error).toBe('NotFoundError');
+    expect(result.value.invalid.error).toBe('TypeError');
     expect(result.value.duringWrite.map(r => [r.answer.error, r.preserved])).toEqual([
       ['AbortError', true], ['AbortError', true],
     ]);

@@ -1,7 +1,8 @@
 # ureq 3.4.0, renamed `exact-ureq`
 
 The crates.io archive's source, licenses, README and `.cargo_vcs_info.json`.
-The source is unchanged. `Cargo.toml` names the package `exact-ureq`, lets
+The only source edit is a comment at the TLS write in `src/tls/rustls.rs`
+about retrying interrupted I/O (expo/exact#1578). `Cargo.toml` names the package `exact-ureq`, lets
 the library take that name, and drops the examples and dev-dependencies,
 which the archive's manifest names but this copy does not carry. Its
 optional `brotli-decompressor` is 6.0 rather than 5.0, the version the

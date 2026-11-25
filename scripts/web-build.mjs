@@ -29,7 +29,7 @@ export function privateNativeBuild(app, kind) {
     const { refuseBackendOrigin } = await import('./agent-launch.mjs');
     const { appleArtifacts } = await import('../host/apple/build.mjs');
     const identity = createHash('sha256').update(resolve(app.dir)).digest('hex').slice(0, 16);
-    const cache = resolve(app.target, 'native-reuse', identity, host, process.env.EXACT_UPDATE_TRUST ?? 'development');
+    const cache = resolve(app.target, 'native-reuse', identity, host, process.env.EXACT_UPDATE_TRUST ?? 'development', app.manifest?.variant ? app.id : '');
     mkdirSync(cache, { recursive: true });
     const current = resolve(cache, 'current');
     let seeded;

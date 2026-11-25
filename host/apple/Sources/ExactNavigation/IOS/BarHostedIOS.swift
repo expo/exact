@@ -22,6 +22,12 @@ import ExactKit
 final class HostedStand: UIView, HoldsBarReadout {
     /// The element's parent in the authored tree.
     weak var parent: NodeView?
+
+    /// Whatever takes the element out, its item first keeps a picture of it.
+    override func willRemoveSubview(_ subview: UIView) {
+        (superview as? HostedItemView)?.keepPicture()
+        super.willRemoveSubview(subview)
+    }
 }
 
 /// A readout's custom view: the element at its laid-out size.
@@ -32,6 +38,8 @@ final class HostedItemView: UIView {
     /// the block. The bridge sends no margins, so a trailing or bottom
     /// margin is not kept (LLP 1141.004 D3).
     private(set) var size = CGSize.zero
+    /// What the element showed as it left or lost its size (`keepPicture`).
+    private(set) var picture: UIView?
     private var relay: MountRelay?
     private var readout: UIAccessibilityElement?
     private lazy var width = widthAnchor.constraint(equalToConstant: 0)
@@ -61,8 +69,36 @@ final class HostedItemView: UIView {
         let laid = CGSize(width: max(0, node.frame.maxX), height: max(0, node.frame.maxY))
         guard laid != size else { return false }
         size = laid
-        resize()
+        // An element that loses its size leaves the bar at the size it had.
+        if laid != .zero { resize() }
         return true
+    }
+
+    /// Whether the element has a size: its item is in the bar only then. A new
+    /// element is laid out a batch after its item is made, in the block the
+    /// item gives it, and UIKit brings an item in at the size its view has.
+    /// One that already had a frame (laid out in the page) comes in at it, and
+    /// one emptied in place leaves only if its box collapses (no padding or
+    /// authored size).
+    var shows: Bool { size != .zero }
+    static func shows(_ item: UIBarButtonItem) -> Bool { (item.customView as? HostedItemView)?.shows ?? true }
+
+    /// The element leaves the item or loses its size, and the item keeps a
+    /// picture of it: UIKit takes an item out of the bar with an animation that
+    /// shows its view, which would otherwise show nothing.
+    fileprivate func keepPicture() {
+        guard picture == nil, window != nil, !stand.bounds.isEmpty, let still = stand.snapshotView(afterScreenUpdates: false) else { return }
+        still.frame = stand.frame
+        addSubview(still)
+        picture = still
+        readout = nil
+        largeContent(nil)
+    }
+
+    /// The element has a size again: the item shows it.
+    fileprivate func dropPicture() {
+        picture?.removeFromSuperview()
+        picture = nil
     }
 
     private func updateReadout(hidden: Bool) {
@@ -167,6 +203,8 @@ final class BarHosted: LiftedNodes {
         var menu = ""
     }
     private var hosted: [UInt32: Hosted] = [:]
+    /// The routes `projectAgain` projects once the batch is applied.
+    private var owed: Set<ObjectIdentifier> = []
     /// Each parent's children as the tree last gave them, flat leaves
     /// included, while a child of it is lifted.
     private var homes: [UInt32: [UInt32]] = [:]
@@ -238,10 +276,48 @@ final class BarHosted: LiftedNodes {
             guard let entry = hosted[id] else { continue }
             let room = room(in: c)
             if room != entry.room { hosted[id]?.room = room; moved = true }
-            if entry.view.refit() { c.navigationController?.navigationBar.setNeedsLayout() }
         }
+        refit(ids.compactMap { hosted[$0] })
         if moved { presenter.owners.publish() }
     }
+
+    /// Each item follows its element's laid-out size. One whose element gains
+    /// or loses a size comes into or leaves its bar, which is projected again;
+    /// leaving, it keeps a picture of the element. A bar whose item changed
+    /// size is laid out again.
+    private func refit(_ entries: [Hosted]) {
+        for entry in entries {
+            let showed = entry.view.shows
+            guard entry.view.refit() else { continue }
+            guard entry.view.shows != showed else {
+                entry.route?.navigationController?.navigationBar.setNeedsLayout()
+                continue
+            }
+            if showed { entry.view.keepPicture() } else { entry.view.dropPicture() }
+            if let route = entry.route { projectAgain(route) }
+        }
+    }
+
+    /// `route`'s bar, whose items changed with no change to its header, is
+    /// projected again once the batch is applied, and its hatch runs after it
+    /// as after any projection; a route that ends first is not.
+    private func projectAgain(_ route: RouteController) {
+        route.projectedSource = nil
+        route.projectedFaces = nil
+        route.projected = nil
+        let id = ObjectIdentifier(route)
+        guard owed.insert(id).inserted else { return }
+        let project = { [weak self, weak route] in
+            guard let self, owed.remove(id) != nil, let route, route.projectedSource == nil else { return }
+            route.projected = nil // so the hatch runs after this projection, though one ran since (a call from `show`)
+            navigation.projectBar(of: route)
+        }
+        // Outside a batch the caller is `show`, inside a projection: project once that one ends
+        if presenter.applying { presenter.afterBatch(project) } else { DispatchQueue.main.async(execute: project) }
+    }
+
+    /// `c` has ended: its bar is not projected again.
+    func ended(_ c: RouteController) { owed.remove(ObjectIdentifier(c)) }
 
     /// The blocks the hosted elements are laid out in: their content's size,
     /// at most the room the bar gives.
@@ -265,6 +341,7 @@ final class BarHosted: LiftedNodes {
     }
 
     func reset() {
+        owed.removeAll()
         for id in hosted.keys { release(id) }
         homes.removeAll()
     }
@@ -300,6 +377,10 @@ final class BarHosted: LiftedNodes {
             let node = entry.view.node
             if want.contains(where: { $0 === node }) || presenter.isLeaving(node) { continue }
             release(id)
+            // The bar takes its item out, though the header's items may read the same (the element moved in it)
+            if let route = entry.route, (route.navigationItem.rightBarButtonItems ?? []).contains(entry.item) || (route.navigationItem.leftBarButtonItems ?? []).contains(entry.item) {
+                projectAgain(route)
+            }
         }
     }
 
@@ -310,11 +391,7 @@ final class BarHosted: LiftedNodes {
     func recordedIDs(of parent: NodeView) -> [UInt32]? { homes[parent.id] }
 
     /// After a batch: each item follows its element's laid-out size.
-    func place() {
-        for entry in hosted.values {
-            if entry.view.refit() { entry.route?.navigationController?.navigationBar.setNeedsLayout() }
-        }
-    }
+    func place() { refit(Array(hosted.values)) }
 
     /// Name each readout's overflow entry again once the batch is applied.
     func refreshOverflow() {

@@ -35,12 +35,12 @@ import { guardFlags, reportBuilt } from './help.mjs';
 import { androidImplementations } from '../js/bake/src/typescript.mjs';
 import { packageConfigs, sourceString } from '../js/bake/src/package-config.mjs';
 import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
-import { androidProtocolHandlers, configMetaData, fragmentPermissions, manifestFragment, withAppLinks, withProtocolHandlers, withMetaData, withAuthCallbacks } from './android-manifest.mjs';
+import { configMetaData, fragmentPermissions, manifestFragment, withAppLinks, withProtocolHandlers, withMetaData, withAuthCallbacks } from './android-manifest.mjs';
 import { androidLinkFilters, androidLinkNotes } from './links.mjs';
 import { androidShareActivity } from './share-target.mjs';
 import { CHANNELS_RECEIVER, androidNotificationResources, googleServices } from './android-channels.mjs';
 import { pickIcon, placeRgba, readPng, resize } from './app-icons.mjs';
-import { encodePng } from './png.mjs';
+import { decodePng, encodePng } from './png.mjs';
 import { copyStaticTreeIfPresent } from '../host/web/serve.mjs';
 import { takeLock } from '../host/web/build-lock.mjs';
 
@@ -953,19 +953,9 @@ const lightColour = (css) => {
  * on an Android 16 emulator, an Android 14 phone (HyperOS, which does not cut it) and an Android 17 emulator. */
 const SPLASH_ICON_SCALE = 108 / 192;
 
-/** The launch window in the app's first-frame background (LLP 1115.001 D3.6): each scheme's launch colour the manifest
- * names (`schemeColours`, LLP 1163 D2), as the iOS launch screen and the web page's first paint take them, clipped to
- * sRGB, which a colour resource holds. Android follows the device's scheme whatever `userInterfaceStyle` says. Written
- * under `res` as `ExactAppLaunch`, the reader's `ExactLaunch` with that colour behind the window and on Android 12's
- * starting window, and the bars' icons dark over a light colour and light over a dark one, until the host says the
- * page's (`ExactActivity.chrome`). A scheme the manifest names none for keeps the reader's: `ExactAppLaunch` is
- * written for each scheme (`values`, `values-night`), with the colour only in the one that names it, since a colour
- * resource cannot name the theme's surface. Android 12's starting window shows the launcher icon unless
- * `host.android.launchImage` says otherwise: a picture (`{ src, width }`) is that icon, laid out at
- * [SPLASH_ICON_SCALE] of its `width`, and before Android 12 it is centred on the window's background, which has no
- * icon; `false` shows no icon. `dir` is the app's, which the picture's path is relative to. Returns the activity's
- * theme, null where the manifest says neither, which leaves the platform's own launch, and the picture's file and
- * digest for the APK's record of its sources. */
+/** Generate the system starting window's day and night resources (LLP 1115.001 D3.6).
+ * The starting window uses the device's night mode even when the app sets userInterfaceStyle.
+ * Before API 31 the picture is centred on the window. Android 12+ scales and masks its splash icon. */
 export function androidLaunch(manifest, res, dir = '.') {
   rmSync(res, { recursive: true, force: true });
   const named = schemeColours(manifest, 'background_color', null);
@@ -978,27 +968,31 @@ export function androidLaunch(manifest, res, dir = '.') {
   };
   const values = (body) => `<resources>\n${body}</resources>\n`;
   const scheme = (css) => `    <color name="exact_launch">${androidColour(css)}</color>\n    <bool name="exact_launch_light">${lightColour(css)}</bool>\n`;
-  const files = [], picture = image ? readPng(resolve(dir, image.src)) : null;
-  const qualifier = { light: '', dark: '-night' };
-  if (picture) {
-    const source = resolve(dir, image.src);
-    files.push({ file: source, sha256: createHash('sha256').update(readFileSync(source)).digest('hex') });
-    // At up to xxxhdpi's 4 px a dp, never enlarged, its height following its aspect.
-    const px = Math.min(picture.width, Math.round(image.width * 4));
-    write('drawable-nodpi/exact_launch_picture.png', encodePng(resize(picture, px, Math.max(1, Math.round(picture.height * px / picture.width)))));
-    const size = (scale) => `android:width="${+(image.width * scale).toFixed(2)}dp" android:height="${+(image.width * picture.height / picture.width * scale).toFixed(2)}dp"`;
+  const files = [], qualifier = { light: '', dark: '-night' };
+  if (image) {
     const layers = (items) => `<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n${items}</layer-list>\n`;
-    write('drawable/exact_launch_icon.xml', layers(`    <item ${size(SPLASH_ICON_SCALE)} android:gravity="center" android:drawable="@drawable/exact_launch_picture" />\n`));
+    let picture;
     for (const s of ['light', 'dark']) {
+      const asset = s === 'light' ? image : image.color_scheme_dark;
+      if (asset) {
+        const file = resolve(dir, asset.src), bytes = readFileSync(file);
+        picture = decodePng(bytes);
+        files.push({ file, sha256: createHash('sha256').update(bytes).digest('hex') });
+        // Up to xxxhdpi's four pixels per dp, without enlarging the PNG.
+        const px = Math.min(picture.width, Math.round(image.width * 4));
+        write(`drawable${qualifier[s]}-nodpi/exact_launch_picture.png`, encodePng(resize(picture, px, Math.max(1, Math.round(picture.height * px / picture.width)))));
+      }
+      const size = (scale) => `android:width="${+(image.width * scale).toFixed(2)}dp" android:height="${+(image.width * picture.height / picture.width * scale).toFixed(2)}dp"`;
+      if (asset) write(`drawable${qualifier[s]}/exact_launch_icon.xml`, layers(`    <item ${size(SPLASH_ICON_SCALE)} android:gravity="center" android:drawable="@drawable/exact_launch_picture" />\n`));
       write(`drawable${qualifier[s]}/exact_launch_window.xml`, layers(`    <item android:drawable="${colour(s) ? '@color/exact_launch' : '?android:attr/colorBackground'}" />\n` +
         `    <item ${size(1)} android:gravity="center" android:drawable="@drawable/exact_launch_picture" />\n`));
     }
   }
   const item = (name, value) => `        <item name="android:${name}">${value}</item>`;
   const theme = (splash, coloured) => ['    <style name="ExactAppLaunch" parent="ExactLaunch">',
-    ...(picture && !splash ? [item('windowBackground', '@drawable/exact_launch_window')] : coloured ? [item('windowBackground', '@color/exact_launch')] : []),
+    ...(image && !splash ? [item('windowBackground', '@drawable/exact_launch_window')] : coloured ? [item('windowBackground', '@color/exact_launch')] : []),
     ...(splash && coloured ? [item('windowSplashScreenBackground', '@color/exact_launch')] : []),
-    ...(splash && image !== undefined ? [item('windowSplashScreenAnimatedIcon', picture ? '@drawable/exact_launch_icon' : '@android:color/transparent')] : []),
+    ...(splash && image !== undefined ? [item('windowSplashScreenAnimatedIcon', image ? '@drawable/exact_launch_icon' : '@android:color/transparent')] : []),
     ...(coloured ? [item('windowLightStatusBar', '@bool/exact_launch_light'), item('windowLightNavigationBar', '@bool/exact_launch_light')] : []),
     '    </style>', ''].join('\n');
   // `values` declares the colour whichever scheme names it, since a resource only `values-night` has fails release lint
@@ -1319,7 +1313,7 @@ function extensionArgs(app, out, config, bound, firebase, development) {
       `    override val config: Map<String, String> = mapOf(${config.filter((c) => bound.some((b) => b.extension === c.extension) && Object.keys(c.values).length).map((c) => `${JSON.stringify(c.extension)} to ${sourceString(JSON.stringify(c.values), 'kotlin')}`).join(', ')})`,
       '}', ''].join('\n'));
   }
-  // The queries and components the packages' manifest fragments declare, under the allow-list (LLP 1133.030 D9), with
+  // The app’s and packages’ queries and the packages’ components, under the allow-list (LLP 1133.030 D9), with
   // the app's privacy policy for an activity that shows it (LLP 1133.026 D4), and the vendor meta-data the packages'
   // configuration fills (`configMetaData`).
   // The notification channels, strings, sounds and small icon (LLP 1133.004.000 D1, D3), and Firebase's options for
@@ -1329,11 +1323,10 @@ function extensionArgs(app, out, config, bound, firebase, development) {
   if (notify && !notify.icon) console.warn(`${app.name}: app.json's icons have no "monochrome" one, so its notifications show the platform's generic glyph in the status bar; add a white glyph on a transparent background with "purpose": "monochrome"`);
   // The share target's and the protocol handlers' filters on the app's activity (LLP 1133.024 D5, LLP 1038 D8), inside
   // the same `<application>`. A production build is Android's distribution: it registers `distribution_only` handlers.
-  const handlers = androidProtocolHandlers(app.manifest, !development);
   // The App Links `handle_links` claims (LLP 1038 D8), its https auth callbacks excluded.
   const links = androidLinkFilters(app.manifest, callbacks);
   for (const note of androidLinkNotes(app.manifest, links, { callbacks, signsIn: !!reach?.auth?.sessions || callbacks.some((c) => c.startsWith('https:')) })) console.warn(`${app.name}: ${note}`);
-  const fragment = withAuthCallbacks(withAppLinks(withProtocolHandlers(withMetaData(manifestFragment(bound, { privacyPolicy: app.manifest?.privacy_policy ?? null }), [...configMetaData(config), ...(androidShareActivity(app.manifest?.share_target) ?? []), ...(notify ? CHANNELS_RECEIVER : [])]), handlers), links), callbacks), fragmentFile = resolve(apkDirs(app).app, 'manifest-fragment.xml');
+  const fragment = withAuthCallbacks(withAppLinks(withProtocolHandlers(withMetaData(manifestFragment(bound, { appQueries: app.manifest?.host?.android?.queries, privacyPolicy: app.manifest?.privacy_policy ?? null }), [...configMetaData(config), ...(androidShareActivity(app.manifest?.share_target) ?? []), ...(notify ? CHANNELS_RECEIVER : [])]), app.manifest, !development), links), callbacks), fragmentFile = resolve(apkDirs(app).app, 'manifest-fragment.xml');
   rmSync(fragmentFile, { force: true });
   if (fragment) { mkdirSync(dirname(fragmentFile), { recursive: true }); writeFileSync(fragmentFile, fragment); }
   return [...(bound.length ? [`-PextensionDirs=${[...bound.flatMap((b) => b.dirs), generated].join(',')}`] : []), ...(permissions.length ? [`-Ppermissions=${permissions.join(',')}`] : []),

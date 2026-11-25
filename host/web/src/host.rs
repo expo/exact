@@ -619,7 +619,10 @@ impl<D: DataSource> Host<D> {
         let answers = [
             match checked {
                 Some((env, keyboard)) => self.put_view(env, size, keyboard),
-                None => self.runner.set_view(size, None).map_err(viewport_error),
+                None => self
+                    .runner
+                    .set_view(size, None, None)
+                    .map_err(viewport_error),
             },
             (self.runner.set_preferences(viewport.preferences)).map_err(viewport_error),
             // the fold rides the same report (LLP 1078 D6)

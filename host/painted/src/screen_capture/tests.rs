@@ -298,6 +298,7 @@ fn a_replaced_still_refreshes_image_and_canvas_handles() {
     let files = Files::new();
     let displays = |red| {
         vec![Display {
+            frame: None,
             screen: Json::Null,
             width: 32,
             height: 32,
@@ -404,6 +405,7 @@ fn a_canvas_whose_still_was_missing_draws_it_once_captured() {
     };
     assert_eq!(pixel(&mut presenter), [0; 4]);
     let red = vec![Display {
+        frame: None,
         screen: Json::Null,
         width: 32,
         height: 32,
@@ -452,6 +454,7 @@ fn a_still_reloads_only_for_mounted_canvases_and_a_remount_draws_it() {
     let toggle = |p: &mut Presenter<StillCanvas>| tap(p, "toggle");
     let capture = |p: &mut Presenter<StillCanvas>, red: u8| {
         let display = Display {
+            frame: None,
             screen: Json::Null,
             width: 32,
             height: 32,
@@ -501,6 +504,7 @@ fn a_retained_pattern_keeps_its_image_across_draws() {
     use crate::presenter::{PainterChoice, Presenter};
     let files = Files::new();
     let display = Display {
+        frame: None,
         screen: Json::Null,
         width: 32,
         height: 32,
@@ -559,6 +563,7 @@ impl Package for SyntheticScreen {
             .flat_map(|i| [i as u8, (i >> 4) as u8, (i * 7) as u8, 255])
             .collect();
         let display = Display {
+            frame: None,
             screen: json!({"allocation": pixels.as_ptr() as usize}),
             width: STILL,
             height: STILL,
@@ -893,4 +898,78 @@ fn a_still_no_view_shows_leaves_the_raster_cache() {
             );
         }
     }
+}
+
+#[test]
+fn targeted_fixture_selects_before_quota_and_keeps_local_units() {
+    let screens = fixture_screens(&json!([
+        {"left":-240,"top":0,"width":240,"height":100,"devicePixelRatio":1.25},
+        {"left":0,"top":0,"width":100000,"height":100000,"devicePixelRatio":2},
+    ]));
+    let args = json!({"screen":screens[0],"rect":{"x":100,"y":20,"width":80,"height":48}});
+    let image = fixture_targets(&screens, &args, None)
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!((image.width, image.height), (100, 60));
+    assert!(image.frame.is_none());
+    let shot = fixture_targets(&screens, &json!({"window":"held"}), Some("held"))
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(shot.frame.unwrap()["x"], -240);
+    assert_eq!(
+        fixture_targets(&screens, &json!({"window":"held"}), None)
+            .err()
+            .unwrap()
+            .0,
+        "NotFoundError"
+    );
+}
+
+#[test]
+fn the_painted_substitute_captures_the_looked_up_window_for_one_session() {
+    let context = Context::new(
+        "screen-capture",
+        true,
+        Default::default(),
+        Default::default(),
+        Default::default(),
+        Arc::new(|_| {}),
+    );
+    let folder = format!("exact-guide-test-{}", std::process::id());
+    let _files = Files(context.temporary().join(&folder));
+    let mut package = FixtureCapture::new(context);
+    let fixture =
+        json!({"screens":[{"left":-30,"top":0,"width":30,"height":20,"devicePixelRatio":2}]});
+    let call = |package: &mut FixtureCapture, name: &str, args| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        package.later(
+            name,
+            &args,
+            Some(&fixture),
+            Reply::new(exact_runner::Reply::new(move |v| tx.send(v).unwrap())),
+        );
+        let exact_runner::Outcome::Response(response) =
+            rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap()
+        else {
+            panic!("no fixture reply")
+        };
+        serde_json::from_slice::<Json>(&response.body).unwrap()
+    };
+    let window = call(&mut package, "getWindowAtPoint", json!({"x":-12,"y":8}));
+    assert_eq!(window, call(&mut package, "getFrontmostWindow", json!({})));
+    let args = json!({"directory":format!("app:/tmp/{folder}"), "window":window["handle"], "cursor":"always"});
+    let answer = call(&mut package, "captureScreens", args.clone());
+    let still = &answer["captures"][0];
+    assert_eq!(still["frame"], window["frame"]);
+    assert_eq!(
+        (still["width"].as_u64(), still["height"].as_u64()),
+        (Some(60), Some(40))
+    );
+    package.destroy();
+    assert_eq!(
+        call(&mut package, "captureScreens", args)["error"],
+        "NotFoundError"
+    );
 }

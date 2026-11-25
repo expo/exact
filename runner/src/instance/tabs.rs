@@ -63,18 +63,26 @@ pub fn panel_sites(plan: &Plan) -> Vec<NodesId> {
 /// its own (a node with a `navigationKey` and no route between it and the
 /// panel) stands inside a `for` below it, as `for e in t.stack` draws one
 /// per entry, or when its template holds more than one route. A route can
-/// show a header when a `header` is its child, shown or not. A panel with
-/// one route outside any `for` and no `header` shows one fixed route with
+/// show a bar when a `header` is its child or, on iOS, it has a bottom toolbar.
+/// A panel with one route outside any `for` and neither bar shows one fixed route with
 /// no bar, which a host shows without a navigation controller (LLP 1075.003
 /// §3.7). It is read from the plan, so it holds for a panel still waiting
 /// for its first selection. One template serves every tab a `for t in
 /// nav.tabs` draws, so a template that needs one for some tabs answers
 /// `true` for all of them: a navigation controller can show one route with
 /// no bar, and a plain one shows no bar and no pushed route.
-pub fn sites_need_navigation(plan: &Plan, sites: &[NodesId]) -> Vec<bool> {
+pub fn sites_need_navigation(
+    plan: &Plan,
+    sites: &[NodesId],
+    platform: crate::page::Platform,
+) -> Vec<bool> {
     let mut headed: Vec<NodesId> = (0..plan.nodes.len() as u32)
         .map(NodesId)
-        .filter(|&n| literal_str(plan, n, PropId::SemanticTag) == Some("header"))
+        .filter(|&n| {
+            literal_str(plan, n, PropId::SemanticTag) == Some("header")
+                || (platform == crate::page::Platform::Ios
+                    && literal_str(plan, n, PropId::ToolbarPlacement) == Some("bottom"))
+        })
         .filter_map(|n| enclosing(plan, n).map(|(parent, _)| parent))
         .filter(|&parent| binds(plan, parent, PropId::NavigationKey))
         .collect();

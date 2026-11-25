@@ -1030,6 +1030,61 @@ belongs to the root, which passes it down; name its declarations with the
 feature's prefix (`historyDays`), since the root and its members files share one
 set of names.
 
+#### Progressive tab traces
+
+In the [iOS simulator recipe](recipes/progressive-tabs.md), the warm snapshot showed
+Explore in `.state.slots.nav.tab`, rows ticket 4 in `.state.pending`, and both Stocks
+answers in `.state.instances`. Use those fields for component-owned resources.
+In this capture `.state.resourceStatus` reported a fallback while the rows were visible.
+
+The warm Explore press committed epoch 6. The journal tied the rows 503 to ticket 4,
+then recorded that rows kept its value and the failure update committed epoch 7.
+The display-link samples covering those epochs had `seq` ranges `[6,6]` and `[7,7]`.
+The first sample's `t` was 6,108.24 ms and the press was journaled at 6,126.14 ms.
+Use the epoch to identify the batch. Subtracting those times cannot give tap-to-frame
+latency. The frame's `apply` measures batch application and `commit` measures Core
+Animation commit duration. The trace has no physical presentation timestamp for the tab.
+
+In the ordered run the rows 200 journal entry reported `wall 623 ms; delivery wait 1020 ms`.
+Wall time includes the fixture holding the rows reply. Delivery wait measures the
+time from transport completion to delivery, including the wait behind history.
+History can opt into independent delivery because neither its GET nor its parser
+changes what rows will read. [Native HTTP scheduling](reference.md#what-a-data-module-can-use)
+
+To capture a slow return in your own development app on a connected iPhone, tap
+with four fingers and choose **Save Trace**. On the Mac run
+`bun scripts/agent.mjs trace --phone <phone-UDID> --app <app-directory>` from the Exact repo.
+The simulator can reach the Mac’s fixture at `127.0.0.1`. On a phone that address
+reaches the phone itself.
+
+**Linux and Chromium.**
+
+On the same Mac, leave the fixture running in terminal A. If the simulator app is
+still running, quit it from B with `xcrun simctl terminate "$sim" dev.exact.progressivetabs`.
+In B at the repo root, run the ordered comparison on the headless Linux host.
+
+```sh
+app=docs/recipes/progressive-tabs
+bun scripts/build-linux.mjs "$app"
+bun scripts/agent.mjs linux --app "$app" 'tap compare' 'tap tab-explore' 'clock until state pending == [] within 60000' logs
+```
+
+While B waits, release both replies in A within 60 seconds. After both `Held` lines,
+type `/rows/Stocks 200` and press Return, then `/history/Stocks 503` and Return.
+The rows `fulfil` line in B gives its HTTP wall time and delivery wait behind history.
+
+Browser fetch handles its own scheduling and ignores the native independence hint.
+After the Linux drive exits, run `bun host/web/dev.mjs --app "$app"` in B and open the
+printed URL in one Chromium tab. Click Explore and release the two Stocks 200s in A.
+Click Home, then Explore. With both replies held, run
+`await (await exact.attachReads())({op: 'state'})` in the browser console to read
+the route, pending tickets and epoch. Release `/rows/Stocks 503` in A. When the rows
+error appears, repeat the console read. Focus the page and press ⌥⇧T to save the
+trace, then release `/history/Stocks 503` in A. In B stop the dev server with
+Ctrl-C. Set `file` to the path the browser console printed and run
+`bun scripts/agent.mjs trace "$file"`. The Chromium trace omits the state snapshot.
+Match the epochs you read in the console to its frame callbacks’ `seq` ranges.
+
 ### Tabular numbers
 
 Use `font-variant-numeric="tabular-nums"` for **numeric columns** and **values that
@@ -4126,18 +4181,23 @@ An Apple implementation names Swift Package Manager products in its
 }
 ```
 
-For an app's own `modules/apple/*.swift`, put the same `swiftPackages` array
-under `host.ios` or `host.macos` in `app.json`. Swift imports the product's
-modules normally. All Apple destinations share one `Package.resolved` beside
-the app. Run `bun exact.mjs lock` after changing these declarations, bindings
-or used interfaces; review and commit the lock. Lock discovery follows the
-compiled plan, including views placed through Contract libraries. Builds
-refuse a missing or mismatched lock and disable automatic resolution.
-Conflicting direct versions name both requesters.
-SwiftPM verifies binary targets by checksum. One shared dynamic library links
-all declared products used by the app's Swift and its bound implementations,
-so SDK singletons and configuration are shared across consumers. It loads with
-the first consumer that needs it; an unused implementation stays unloaded.
+An implementation can ship a Swift package with `{"path":"LocalKit","products":["MapKitBridge"]}`.
+Write directory names separated by `/`, relative to `exact.json`, without spaces, `.` or `..` components.
+Links must stay inside the npm package. Its files count as native inputs because the Swift manifest can read them.
+SwiftPM evaluates `Package.swift` during locking and building. Exact uses the same SwiftPM manifest
+sandbox as a normal build. On macOS it permits file reads and restricts writes and network access.
+It covers manifest evaluation only. SwiftPM supplies no equivalent manifest sandbox on Linux.
+The package must declare the products. A target those products use on an Apple destination must have no
+`unsafeFlags` setting for that destination. For every remote dependency,
+require an exact version in `Package.swift` and list the same URL and version in this `swiftPackages` array.
+For an app's own `modules/apple/*.swift`, put URL entries under `host.ios` or `host.macos` in `app.json`.
+Swift imports the product's modules normally. After changing declarations, bindings or used interfaces,
+run `bun exact.mjs lock`. All Apple destinations share the app's `Package.resolved` for remote packages.
+Review and commit it. A build disables automatic resolution and checks every remote pin. A local-only
+graph needs no Swift lock. Conflicting paths, URLs or versions for one identity name both declarations.
+Lock discovery follows the compiled plan, including views placed through Contract libraries.
+SwiftPM verifies binary targets by checksum. One shared dynamic library links the products used by the
+app and its bound implementations. It loads with its first consumer and keeps one copy of SDK state.
 A dynamic framework a package brings, such as `Sparkle.framework`, goes into
 the Mac app's `Contents/Frameworks` whole, with its helpers and XPC services;
 `exact release` signs each inside out with the Developer ID and the hardened
@@ -4663,6 +4723,34 @@ different one with `navigationScroll`, by its `id`. The compiler refuses a liter
 name that no element of the route carries, or one whose element is a box that never
 scrolls on y (`lower-route-scroll`).
 
+For a route's bottom actions, put the scroller and then one toolbar row directly
+in the route's column. Give the scroller the remaining space.
+
+```text
+column navigationKey=`${e.id}` position="absolute" inset=0
+  scroll flex=1 min-height=0
+    …
+  row role="toolbar" toolbarPlacement="bottom"
+    button press=reshape
+      text "Reshape"
+    spacer
+    button press=openWidget
+      text "Widget"
+```
+
+On iOS and iPadOS the source row leaves the page. Its buttons become the
+route's native toolbar items and each spacer becomes a flexible space. The
+toolbar follows the route through navigation. UIKit includes it in the safe
+area, so the scroller's last row can scroll clear. Every other host lays out
+each live row where the author put it.
+
+A bottom toolbar must be a direct child of the route's column. An app that
+ships iOS can put only buttons and spacers in it. The compiler refuses two
+unconditional bottom toolbar rows and warns when an unconditional sibling
+follows a toolbar. If conditions or a loop emit several, UIKit uses the first
+in document order, leaves all source rows out of the page and writes one
+journal entry naming the route.
+
 ## Tabs and stacks
 
 On iOS, `overflow="auto"` or `"scroll"` on the navigation root keeps the native
@@ -5082,6 +5170,12 @@ JSON-LD. A page's own title and metas stay its `head` element's.
   (`'sha256-…'`), or the page stays as rendered.
 
 ## Time, motion, graphics, and platform facts
+
+Desktop stills use `@exact/screen-capture`. On macOS, pass the `ScreenDetailed` from
+window management as `screen` and optionally a display-local CSS `rect`, or
+pass the session handle from `getWindowAtPoint` or `getFrontmostWindow` as
+`window`. The window still carries the frame for mapping clicks. Use
+`cursor="always"` to draw the pointer. See the [guide-step recipe](recipes/screen-capture.md).
 
 `clip-path` clips a box and its contents. Use `polygon(0% 25%, 100% 0%, 50% 100%)`
 for an outline that follows the box's size, or `inset(4px round 8px)` for an
@@ -5665,10 +5759,16 @@ makes it the default button.) Only the alert's shape takes
 one field at a time: with it, a cancel and at most three buttons, no `for`
 (`lower-alertdialog` says which row breaks it).
 
-A menu row's second `text` is its item's grey subtitle on iOS when it is a line
-under the first (two texts in a block `button`, or a `flex-direction="column"`
-one), with or without an `if` around it; two texts side by side in a row, or one
-positioned `absolute` (a count at the corner), stay one title.
+On iOS and Android, a native menu button's second `text` is its subtitle.
+In a custom `button`, two block texts in a block button or two texts in a flex
+column supply the title and subtitle. The second may sit inside an `if`.
+Side-by-side texts or an absolutely positioned count form one title.
+On Android a checked item keeps its symbol leading and shows the check trailing.
+Without a symbol, the check is leading. An Android menu button’s `aria-label` names
+the action for accessibility. Otherwise the reader uses its exposed text, falling
+back to the painted title and subtitle when all the text is decorative.
+Windows window and status menu flyouts draw only the title line. When a checked
+item has a symbol, the flyout shows the symbol alone.
 
 A submenu is a row whose `popovertarget` names another menu popover (`Copy ▸
 path / link`): a submenu `NSMenuItem` on macOS, a nested `UIMenu` on iOS, and
@@ -6067,6 +6167,11 @@ toolbarPlacement="keyboard"` at the bottom of the page or of a sheet route sits 
 the keys under every `interactive-widget`: a sheet's layout ends at the keys while
 its field has the focus, whatever the root says; on the page, `overlays-content`
 lifts the toolbar onto them and `resizes-content` ends the page there.
+On iOS a scroller's `-exact-keyboard-dismiss-padding: <length>` starts the keyboard
+following a finger that drags the scroller in an interactive `keyboardDismissMode`
+that far above the keys: give a transcript its composer's height, and the keyboard
+and the composer go down together under the finger. Unsaid it is 0, as in UIKit and
+SwiftUI; Android and the web read no padding.
 
 `exactViewport().pointer` and `.hover` are CSS's `pointer` (`fine`, `coarse`,
 `none`) and `hover` (`hover`, `none`) for the primary input: the web's media
@@ -6498,11 +6603,15 @@ these bounds do not substitute for measuring whole-hook overhead on real devices
 ### Startup marks of any build: `EXACT_OBSERVE_LOG=1`
 
 An Apple app launched with `EXACT_OBSERVE_LOG=1` prints its startup measurement to stderr once launch
-has settled, in a release build too. The one `observe: startup` line has the launch type (`cold`,
+has settled, in a release build too. The `observe: startup` line has the launch type (`cold`,
 `warm`), how the first tree booted (`baked`), how time to interactive ended, Observe's metrics, and each
 mark in ms from process start (`main`, `didFinishLaunching`, `boot`, `commit`, `present`, `interactive`
 …). The metrics are `timeToFirstRender` (the first vsync after the first tree's commit) and
-`timeToInteractive`, both from `didFinishLaunching`, and `coldLaunchTime` or `warmLaunchTime`. On a
+`timeToInteractive`, both from `didFinishLaunching`, and `coldLaunchTime` or `warmLaunchTime`.
+Time to interactive covers the native tree only, so an app with a GPU canvas (a game, a painted
+surface) also prints `observe: world <ms>` once, when the canvas's first frame reaches the screen:
+the `world` mark, in ms from process start like the startup line's marks. It may come before or after
+the startup line. A tool that captures the screen should wait for it when the app draws a canvas. On a
 simulator, give the variable to the app through `simctl`'s prefix and read its console:
 
 ```sh
@@ -8391,7 +8500,7 @@ status bar: of what the bar sits over, the declaration painted on top wins.
 `auto` follows the winner's `color-scheme`, else the page's scheme; without a valid
 declaration iOS follows the page's scheme. Android resolves `navigation-bar-style` for navigation icons in the same scope, independently.
 Without an explicit icon style, each Android system bar follows its projected header’s or root tablist’s ink, then the page’s scheme (LLP 1105 D7).
-The element’s `background-color` fills the bar through the system band. Its `color` supplies the title, Up arrow, action icons and unselected destinations, defaulting to black or white on an authored background and to the device roles otherwise. With gesture navigation, Android can choose the
+The element’s `background-color` fills the bar through the system band. Its `color` supplies the title, Up arrow, action icons and unselected destinations, defaulting to black or white on an authored background and to the device roles otherwise. On Android, the root’s `accent-color` seeds Material’s tonal-spot colours for the indicator, selected symbol and label, and enabled, untinted text actions. With gesture navigation, Android can choose the
 handle colour from what the page actually paints. Android's modal routes are
 pages that cover the bar; native sheet detents and transition completion are not
 available there (see `host/android/README.md`, Edge to edge). On iOS a flip shows in

@@ -763,8 +763,7 @@
       "additionalProperties": false
     },
     "host": {
-      "description": "Per-platform host settings the build bakes into each native app; a platform's key may be empty.",
-      "type": "object",
+      "type": "object", "description": "Per-platform host settings the build bakes into each native app; a platform's key may be empty.",
       "properties": {
         "ios": {
           "description": "iOS: `minimumOS` (default 17.0), `deviceFamily` (iphone, ipad), and the keys below.",
@@ -813,11 +812,11 @@
             },
             "minimumOS": {"description": "The oldest iOS the app runs on, as \"17.0\"; never below 17.0.", "type": "string"},
             "launchImage": {
-              "description": "A picture the launch screen centres on `background_color` (UILaunchScreen's UIImageName), drawn `width` points wide: the app's first frame drawn ahead of it, so the launch shows what the first frame shows (Expo's splash `image` and `imageWidth`). A PNG in the app's directory; light and dark alike.",
+              "description": "A picture the launch screen centres on `background_color` (UILaunchScreen's UIImageName), drawn `width` points wide: the app's first frame drawn ahead of it, so the launch shows what the first frame shows (Expo's splash `image` and `imageWidth`). A PNG in the app's directory; the same picture in both appearances unless color_scheme_dark.src names another.",
               "type": "object",
               "required": ["src", "width"],
               "additionalProperties": false,
-              "properties": {"src": {"type": "string", "pattern": "\\.png$", "description": "The PNG, relative to the app's directory."}, "width": {"type": "number", "minimum": 1, "description": "Its width on the launch screen, in points; its height follows its aspect."}}
+              "properties": {"color_scheme_dark": {"$ref": "#/$defs/darkLaunchImage"}, "src": {"type": "string", "pattern": "\\.png$", "description": "The PNG, relative to the app's directory."}, "width": {"type": "number", "minimum": 1, "description": "Its width on the launch screen, in points; its height follows its aspect."}}
             },
             "optimize": {
               "enum": ["speed", "size", "balanced"],
@@ -990,18 +989,18 @@
               "type": "string",
               "pattern": "^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$"
             },
+            "urlSchemes": {"type": "array", "description": "Custom schemes whose URLs open as app locations. Use protocol_handlers for a template.", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9+.-]*$"}},
             "painter": {"enum": ["ink"], "description": "Opt into ink (LLP 1149 D12); absent: the current painter, with `EXACT_PAINTER` overriding the choice, and ink refused until its Vulkan presenter is implemented."},
-            "minimumOS": {
-              "description": "The oldest Android the app runs on, as \"12\"; never below 10. Below 12 the APK carries the reader's Android 10 and 11 code (host/android/README.md, \"Android 10 and 11\"); at 12 or later it carries none.",
-              "enum": ["10", "11", "12", "13", "14", "15", "16"]
-            },
+            "minimumOS": { "description": "The oldest Android the app runs on, as \"12\"; never below 10. Below 12 the APK carries the reader's Android 10 and 11 code (host/android/README.md, \"Android 10 and 11\"); at 12 or later it carries none.",
+              "enum": ["10", "11", "12", "13", "14", "15", "16"] },
             "launchImage": {
-              "description": "What Android 12's starting window shows on `background_color` (or the platform's surface without one) in place of the launcher icon, which it shows unsaid. A picture (iOS's `host.ios.launchImage`; Expo's splash `image` and `imageWidth`) is that icon, `width` dp wide, which the platform shows within a centred square 192 dp across and, on stock Android, cuts to the circle in it; before Android 12, whose launch window has no icon, it is centred on the window's background. `false` shows no icon. A PNG in the app's directory; light and dark alike. Changing it requires a new native build.",
+              "description": "What Android 12's starting window shows on `background_color` (or the platform's surface without one) in place of the launcher icon, which it shows unsaid. A picture (iOS's `host.ios.launchImage`; Expo's splash `image` and `imageWidth`) is that icon, `width` dp wide, which the platform shows within a centred square 192 dp across and, on stock Android, cuts to the circle in it; before Android 12, whose launch window has no icon, it is centred on the window's background. `false` shows no icon. A PNG in the app's directory; the same picture in both appearances unless color_scheme_dark.src names another. Changing it requires a new native build.",
               "type": ["object", "boolean"],
               "required": ["src", "width"],
               "additionalProperties": false,
               "properties": {
                 "src": { "type": "string", "pattern": "\\.png$", "description": "The PNG, relative to the app's directory." },
+                "color_scheme_dark": { "$ref": "#/$defs/darkLaunchImage" },
                 "width": { "type": "number", "minimum": 1, "maximum": 192, "description": "Its width in the launch window, in dp, up to the icon's 192; its height follows its aspect." }
               }
             },
@@ -1021,14 +1020,16 @@
                 "additionalProperties": false
               }
             },
+            "queries": {"description": "Android package visibility for modules/android, checked against the package manifest allow-list (LLP 1133.030 D9).", "type": "array", "items": {"oneOf": [
+              {"type": "object", "required": ["package"], "properties": {"package": {"type": "string"}}, "additionalProperties": false},
+              {"type": "object", "required": ["action"], "properties": {"action": {"type": "string"}, "scheme": {"type": "string"}}, "additionalProperties": false}
+            ]}},
             "maven": {
               "description": "Pinned group:artifact:version coordinates on Google's Maven or Maven Central for the app's Kotlin in modules/android. Like a package implementation's maven array, these join the APK's locked, checksum-verified Gradle graph (LLP 1133.008 D8 item 5; host/android/README.md).",
               "type": "array",
-              "items": {
-                "type": "string",
+              "items": { "type": "string",
                 "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:(?!(?:[Ll][Aa][Tt][Ee][Ss][Tt]|[Rr][Ee][Ll][Ee][Aa][Ss][Ee])(?:\\.|$))(?!.*-[Ss][Nn][Aa][Pp][Ss][Hh][Oo][Tt]$)[A-Za-z0-9_.-]+$(?![\\s\\S])",
-                "x-hint": "use group:artifact:version with a pinned version, without ranges, dynamic selectors, SNAPSHOTs, classifiers or repositories"
-              }
+                "x-hint": "use group:artifact:version with a pinned version, without ranges, dynamic selectors, SNAPSHOTs, classifiers or repositories" }
             },
             "certificates": {
               "description": "The SHA-256 fingerprints of every certificate that signs the app (the debug key, the upload key, Play App Signing's), as `AB:CD:…`: the origin's `/.well-known/assetlinks.json` lets each use the app's passkeys (LLP 1133.011 D6).",
@@ -1368,17 +1369,21 @@
   "additionalProperties": false,
   "$defs": {
     "plistValue": {"description": "A property-list value: a string, number, boolean, array or dictionary.", "type": ["string", "number", "boolean", "array", "object"], "items": {"$ref": "#/$defs/plistValue"}, "additionalProperties": {"$ref": "#/$defs/plistValue"}},
+    "darkLaunchImage": {"type": "object", "required": ["src"], "additionalProperties": false, "properties": {"src": {"type": "string", "description": "The dark PNG, relative to the app directory.", "pattern": "\\.png$"}}},
     "launchColour": {
       "type": "string",
       "pattern": "^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|color\\(\\s*display-p3(\\s+(0(\\.\\d+)?|\\.\\d+|1(\\.0+)?|(\\d{1,2}(\\.\\d+)?|100(\\.0+)?)%)){3}\\s*(/\\s*(0(\\.\\d+)?|\\.\\d+|1(\\.0+)?|(\\d{1,2}(\\.\\d+)?|100(\\.0+)?)%)\\s*)?\\))$",
       "x-hint": "write #RGB, #RRGGBB or #RRGGBBAA, or a Display P3 colour as color(display-p3 r g b) or color(display-p3 r g b / a), each component from 0 to 1 or 0% to 100%",
       "description": "A launch colour: hex, or Display P3 as CSS writes it, which iOS and the web's first paint show in Display P3 and Android and the browser's manifest take clipped to sRGB."
     },
+    "shippedSwiftPackage": {
+      "description": "A Swift package shipped by an Apple implementation, relative to its exact.json (LLP 1133.001 D9).",
+      "type": "object", "required": ["path", "products"], "additionalProperties": false, "properties": {
+        "path": { "type": "string", "pattern": "^(?!/|[A-Za-z]:/)(?!.*(?:^|/)\\.\\.?(/|$))[^\\\\\\s]+$", "x-hint": "use a relative package directory with no whitespace, backslashes, . or .. components" },
+        "products": { "$ref": "#/$defs/swiftPackages/items/properties/products" } } },
     "swiftPackages": {
       "description": "Swift Package Manager products for native Swift, with exact versions. The app keeps Package.resolved; exact lock refreshes it (LLP 1133.001 D9, expo/exact#751).",
-      "type": "array",
-      "items": {
-        "type": "object", "required": ["url", "exactVersion", "products"], "additionalProperties": false,
+      "type": "array", "items": { "type": "object", "required": ["url", "exactVersion", "products"], "additionalProperties": false,
         "properties": {
           "url": { "type": "string", "pattern": "^https://[^/?#@\\s]+/[^?#\\s]+$" },
           "exactVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$" },
@@ -1388,18 +1393,15 @@
     },
     "alternativeNames": {
       "description": "Other names Siri and App Shortcuts answer to for the app, such as its name before a rename (Info.plist's INAlternativeAppNames): each a `name` and an optional `pronunciationHint`, written as it sounds. At most three. A watch app gets the iPhone app's. Apple admits names based on the app's own or ones its users commonly call it, never another app's.",
-      "type": "array",
-      "maxItems": 3,
+      "type": "array", "maxItems": 3,
       "items": {"type": "object", "additionalProperties": false, "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "pronunciationHint": {"type": "string", "minLength": 1}}}
     },
     "webCsp": {
       "description": "Directives by name in lower case, each a list of sources to add to Exact's, or a string that replaces Exact's value (the word `exact` standing for Exact's sources).",
-      "type": "object",
-      "additionalProperties": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] }
+      "type": "object", "additionalProperties": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] }
     },
     "icon": {
-      "type": "object",
-      "required": ["src"],
+      "type": "object", "required": ["src"],
       "properties": {
         "src": { "type": "string", "description": "The file, relative to app.json: a PNG, SVG or ICO under assets/." },
         "sizes": { "type": "string", "description": "As the file is, \"1024x1024\" or \"any\" for an SVG; absent, read from the file." },

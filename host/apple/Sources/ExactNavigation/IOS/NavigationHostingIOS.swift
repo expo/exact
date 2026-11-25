@@ -247,11 +247,37 @@ extension NavigationHost: NavigationHosting {
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
     #endif
 
+    /// Whether the page hides `view` only because a bar shows it: a lifted
+    /// header, or a node the bar placed, that its author did not hide.
+    func hiddenForBar(_ view: UIView) -> Bool {
+        guard let node = view as? NodeView, node.style["display"]?.string != "none" else { return false }
+        #if os(iOS)
+        if controllers.values.contains(where: { $0.liftedBottomRows.first === node }) || dialogBars.values.contains(where: { $0.lifted === node }) { return true }
+        #endif
+        return controllers.values.contains { $0.lifted === node || $0.scoped === node || $0.barNodes.contains { $0 === node } }
+    }
+
     /// The navigation bar and, in it, the frame UIKit presents from for an
     /// authored header node's item: the bar's overflow button for an item in
     /// its overflow menu.
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
         #if os(iOS)
+        if let (item, nav) = bottomItem(node.id), let window = nav.viewIfLoaded?.window {
+            guard !item.isHidden,
+                  let frame = item.frame(in: window), !frame.isEmpty,
+                  let hit = window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil),
+                  hit.isDescendant(of: nav.tabBarController?.view ?? nav.view),
+                  barTop(nav).map({ !hit.isDescendant(of: $0.view) }) == true else { return .failure(BarItemMissing()) }
+            let control = sequence(first: hit, next: \.superview).first { view in
+                guard view is UIControl else { return false }
+                if let id = view.accessibilityIdentifier, !id.isEmpty { return id == item.accessibilityIdentifier }
+                let rect = view.convert(view.bounds, to: window)
+                return abs(rect.midX - frame.midX) < 1 && abs(rect.midY - frame.midY) < 1
+                    && abs(rect.width - frame.width) < 1 && abs(rect.height - frame.height) < 1
+            }
+            guard let control else { return .failure(BarItemMissing()) }
+            return .success((control, window.convert(frame, to: control)))
+        }
         guard let (bar, item, navigationItem) = barButtonItem(node) else { return nil }
         // UIKit gives an item in the menu the button's frame, but none where it places a vertical bar (the iPhone Duo)
         let places = [item.frame(in: bar), item.isHidden ? nil : navigationItem.overflowPresentationSource?.frame(in: bar)]
@@ -297,6 +323,11 @@ extension NavigationHost: NavigationHosting {
             }
         }
         for route in controllers.values {
+            if let store = route.bottomToolbar {
+                for id in store.barItemsMade.keys {
+                    if let node = presenter.views[id] { boxes[id] = itemBox(node) }
+                }
+            }
             if let nav = route.navigationController, barShows(nav) {
                 read(route.projectedSource, items: Array(route.barItemsMade.keys), controller: route, nav: nav)
             }

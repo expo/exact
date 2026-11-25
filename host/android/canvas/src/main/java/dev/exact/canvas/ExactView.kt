@@ -461,8 +461,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         invalidate()
     }
 
-    /** The owner published: what it made, drawn (a move through the ticker, a paint through this view). */
-    fun onPublished() { publish() }
+    /** A publication waits for attachment: hosted Compose views need a window before they measure. */
+    fun onPublished() { if (isAttachedToWindow) publish() else post { publish() } }
 
     /** What the owner published, drawn; whether there was any. */
     internal fun publish(): Boolean {

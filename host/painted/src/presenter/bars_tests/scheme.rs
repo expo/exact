@@ -160,3 +160,24 @@ fn translucent_bar_ink_reads_the_window_behind_the_band() {
     assert!(has_ink(top, 0..200, [0, 0, 0, 255]));
     assert!(!p.chrome().status_light_icons);
 }
+
+#[test]
+fn changing_only_the_seed_keeps_an_icon_only_headers_layout() {
+    let source = APP
+        .replace(
+            "main navigationKey",
+            r##"main accent-color=(said == "nothing" ? "#245c46" : "#bb2222") navigationKey"##,
+        )
+        .replace(r#"press=open("/detail")"#, "press=edit");
+    let (mut p, pictures) = barred(&source);
+    p.reader_bars(1.).unwrap();
+    let top_targets = p.bars.top.as_ref().unwrap().layout.targets.as_ptr();
+    let nav = pictures.borrow().last().unwrap().clone();
+    tap(&mut p, "open").unwrap();
+    p.reader_bars(1.).unwrap();
+    assert_eq!(
+        top_targets,
+        p.bars.top.as_ref().unwrap().layout.targets.as_ptr()
+    );
+    assert_ne!(nav.data(), pictures.borrow().last().unwrap().data());
+}

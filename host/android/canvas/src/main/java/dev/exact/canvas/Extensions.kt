@@ -668,11 +668,10 @@ internal object Extensions {
             Log.e("exact", "extension call $id: $e")
             refuse("Error", e.message)
         }
-        // A list answer comes as `{"exact:answer": [...]}`, since a reply is an object (as on Apple).
         val reply = { answer: JSONObject ->
             if (answered.compareAndSet(false, true)) {
-                val listed = answer.length() == 1 && answer.has("exact:answer")
-                Exact.answer(id, if (listed) answer.get("exact:answer").toString() else answer.toString())
+                try { Exact.answer(id, moduleReplyJson(answer)) }
+                catch (_: org.json.JSONException) { Exact.refuseModule(id, "Error", "the reply was not JSON") }
             }
         }
         val request = try { JSONObject(body) } catch (e: org.json.JSONException) { return refuse(message = e.message) }

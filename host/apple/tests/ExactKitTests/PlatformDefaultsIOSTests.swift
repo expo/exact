@@ -525,6 +525,15 @@ final class PlatformDefaultsIOSTests: XCTestCase {
         // The axis it scrolls is part of the unsaid answer.
         p.apply(wireBatch([["op": "style", "id": 3, "style": ["overflow_x": "scroll", "overflow_y": "scroll"]]]))
         XCTAssertEqual(try mode(3), .interactive)
+        // Each of UIKit's five modes by its name (LLP 1123 D7).
+        let modes: [(String, UIScrollView.KeyboardDismissMode)] = [
+            ("none", .none), ("on-drag", .onDrag), ("interactive", .interactive),
+            ("on-drag-with-accessory", .onDragWithAccessory), ("interactive-with-accessory", .interactiveWithAccessory),
+        ]
+        for (said, expected) in modes {
+            p.apply(wireBatch([["op": "props", "id": 3, "set": ["keyboardDismissMode": said], "clear": []]]))
+            XCTAssertEqual(try mode(3), expected, said)
+        }
     }
 
     /// LLP 1115.000 D11.6: a button's `aria-keyshortcuts` is a key command

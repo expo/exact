@@ -100,6 +100,21 @@ test('speech action queries and package queries share one element and deduplicat
   ].join('\n'));
 });
 
+test("an app's Kotlin shares the package query allow-list and merged entries", () => {
+  const tts = { action: 'android.intent.action.TTS_SERVICE' };
+  const mail = { action: 'android.intent.action.SENDTO', scheme: 'mailto' };
+  const health = { package: 'com.google.android.apps.healthdata' };
+  const xml = manifestFragment(impl({ queries: [tts, mail] }), { appQueries: [tts, health] });
+  assert.equal(xml, manifestFragment(impl({ queries: [tts, health, mail] })));
+  assert.match(manifestFragment([], { appQueries: [mail] }), /<intent><action android:name="android\.intent\.action\.SENDTO" \/><data android:scheme="mailto" \/><\/intent>/);
+  for (const invalid of [null, {}, [null], [{}], [{ ...health, ...tts }], [{ ...tts, mimeType: '*/*' }],
+    [{ package: 'com.example' }], [{ action: 'android.intent.action.MAIN' }],
+    [{ ...mail, scheme: 'https' }], [{ ...mail, action: 'constructor' }], [{ ...mail, action: [mail.action] }]]) {
+    assert.throws(() => manifestFragment([], { appQueries: invalid }), /app.json host\.android\.queries/);
+    assert.throws(() => manifestFragment(impl({ queries: invalid })), /alarms's Android implementation/);
+  }
+});
+
 test('an unlisted query action is refused with the package and action named', () => {
   assert.throws(() => manifestFragment([{
     extension: 'speech-recognition', className: 'exact.speechrecognition.SpeechRecognitionModule',
@@ -347,8 +362,13 @@ test('Android registers each custom protocol_handlers scheme on the one activity
   // Never the web's pair; a packaged-only scheme only in a production build; schemes lowercased, as Android matches them.
   assert.deepEqual(androidProtocolHandlers(manifest), [{ protocol: 'sscontrol', url: '/open?u=%s' }]);
   assert.deepEqual(androidProtocolHandlers(manifest, true).map((h) => h.protocol), ['sscontrol', 'packaged']);
-  assert.equal(withProtocolHandlers('unchanged', []), 'unchanged');
-  const xml = withProtocolHandlers('', androidProtocolHandlers(manifest));
+  assert.equal(withProtocolHandlers('unchanged', {}), 'unchanged');
+  const xml = withProtocolHandlers('', { ...manifest, host: { android: { urlSchemes: ['Notes', 'notes'] } } });
+  assert.equal((xml.match(/android:scheme="notes"/g) ?? []).length, 1);
+  assert.match(xml, /android:scheme="Notes"/);
+  const direct = withProtocolHandlers('', { host: { android: { urlSchemes: ['notes'] } } });
+  assert.match(direct, /android:scheme="notes"/);
+  assert.doesNotMatch(direct, /dev.exact.protocol_handlers/);
   assert.equal((xml.match(/<activity /g) ?? []).length, 1);
   assert.match(xml, /android:launchMode="singleTask"/);
   assert.match(xml, /<category android:name="android.intent.category.BROWSABLE" \/>\n\s*<data android:scheme="sscontrol" \/>/);
@@ -357,7 +377,7 @@ test('Android registers each custom protocol_handlers scheme on the one activity
   assert.deepEqual(JSON.parse(handlers?.[1].replaceAll('&quot;', '"')), [{ protocol: 'sscontrol', url: '/open?u=%s' }]);
   // A share target, a handler and an auth callback of the same scheme: one activity, the scheme filtered once.
   const { androidShareActivity } = await import('./share-target.mjs');
-  const all = withAuthCallbacks(withProtocolHandlers(withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } })), [{ protocol: 'app.test', url: '/open?u=%s' }]), ['app.test:/cb', 'other.test:/cb']);
+  const all = withAuthCallbacks(withProtocolHandlers(withMetaData('', androidShareActivity({ action: '/share', params: { text: 'text' } })), { protocol_handlers: [{ protocol: 'app.test', url: '/open?u=%s' }] }), ['app.test:/cb', 'other.test:/cb']);
   assert.equal((all.match(/<activity /g) ?? []).length, 1);
   assert.equal((all.match(/android:scheme="app.test"/g) ?? []).length, 1);
   assert.match(all, /android:scheme="other.test"/);

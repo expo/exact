@@ -420,6 +420,7 @@ final class NavigationStack {
     weak var controller: UINavigationController?
     let proxy = NavigationDelegateProxy()
     let faceTint = BarFaceTintView()
+    var showingRouteToolbar = false
     var showsBar: Bool
     let order: Int
     let label: String
@@ -485,11 +486,13 @@ extension NavigationHost {
             return c.viewIfLoaded?.window != nil
         }
         #if os(iOS)
+        let bottom = bottomItem(node.id) != nil
         let dialogs = shownDialogBars
         #else
+        let bottom = false
         let dialogs: [RouteController] = []
         #endif
-        guard shown.contains(where: { c in
+        guard bottom || shown.contains(where: { c in
             c.barPresses.contains { $0.id == node.id } || c.lifted.map { node === $0 || node.isDescendant(of: $0) } == true
         }) || dialogs.contains(where: { bar in bar.barPresses.contains { $0.id == node.id } }) else { return nil }
         guard !node.disabled, !node.inert, before(nil), !node.disabled, !node.inert, presenter.views[node.id] === node else { return ["error": "bar item #\(id) is unavailable"] }
@@ -658,6 +661,9 @@ extension NavigationHost {
             }
             // Let a root under More go back: UIKit's Back returns to More's list
             let canGoBack = (index > 0 || detail ? canInvokeBack : front > 0) && shape?.authoredBack != true
+            #if os(iOS)
+            projectBottomToolbar(c, in: nav)
+            #endif
             let scroller = contentScroller(of: c), scroll = contentScrollView(of: c)
             let dataset = c.node.props["dataset"]
             func barSource(_ key: (HeaderShape.Item) -> String) -> BarSource {
@@ -785,7 +791,7 @@ extension NavigationHost {
     private func coverLifted(_ routes: [RouteController]) {
         var lifted = false
         for c in routes {
-            for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) where covers[node.id] != Self.cover(of: node, in: c) {
+            for node in c.coveredBarNodes where covers[node.id] != Self.cover(of: node, in: c) {
                 covers[node.id] = Self.cover(of: node, in: c)
                 lifted = true
             }
@@ -870,7 +876,7 @@ extension NavigationHost {
         item.leftItemsSupplementBackButton = true
         #endif
         c.barPresses = []
-        let leading = shape.map { barItems($0.leading, c) }, trailing = shape.map { barItems(Array($0.trailing.reversed()), c) }
+        let leading = shape.map { shown(barItems($0.leading, c), in: c) }, trailing = shape.map { shown(barItems(Array($0.trailing.reversed()), c), in: c) }
         let ids = Set(((shape?.leading ?? []) + (shape?.trailing ?? [])).map(\.id))
         c.barItemsMade = c.barItemsMade.filter { ids.contains($0.key) }
         c.barSpaces = c.barSpaces.filter { ids.contains($0.key) }
@@ -893,6 +899,29 @@ extension NavigationHost {
             for id in c.barPictures { presenter.views[id]?.drawnByBar = true }
             if !c.barPictures.isEmpty { presenter.session?.rasters?.visibilityChanged() }
         }
+    }
+
+    /// The bar items of `items` the bar shows: on iOS, a readout's only while
+    /// its element has a size, so UIKit brings it in and takes it out at that
+    /// size (`BarHosted`, LLP 1141.004 D3), and a group's space only between
+    /// two items.
+    func shown(_ items: [UIBarButtonItem], in c: RouteController) -> [UIBarButtonItem] {
+        #if os(iOS)
+        let shown = items.filter(HostedItemView.shows)
+        guard shown.count < items.count else { return items }
+        let spaces = Set(c.barSpaces.values.map(ObjectIdentifier.init))
+        let space = { (i: Int) in spaces.contains(ObjectIdentifier(shown[i])) }
+        return shown.indices.filter { !space($0) || ($0 > 0 && $0 < shown.count - 1 && !space($0 + 1)) }.map { shown[$0] }
+        #else
+        items
+        #endif
+    }
+
+    /// Project `c`'s bar again, its hatch after it: a hosted item came or went
+    /// with no change to the header (`BarHosted`).
+    func projectBar(of c: RouteController) {
+        guard c.host === self, let stack = c.stack else { return }
+        prepareRoutes(stack.stackRoutes.compactMap { $0 as? RouteController }, in: stack)
     }
 
     /// A picture a bar face draws (`BadgeFace`) arrived: its stack's bars
@@ -1226,7 +1255,7 @@ extension NavigationHost {
         // cover goes is at the edge either way.
         let peers = arrangementScrollers(in: c, top: false)
         let peer = contentScroller(of: c).flatMap { node in peers.contains(where: { $0 === node }) ? node : nil } ?? peers.first
-        let found = presented || presenter.viewportFit != "cover" ? (Self.bottomScroller(in: c.node, cover: c.bottomClearance) ?? peer) : nil
+        let found = presented || presenter.viewportFit != "cover" ? (Self.bottomScroller(in: c.node, cover: c.bottomClearance, lifting: c.liftedBottomRows) ?? peer) : nil
         // Nor one the route opts out of the bottom clearance of (LLP 1123 D4).
         let target = found === c.collapseScroll && RouteGeometry.insetsNoTop(c.node) || RouteGeometry.clearanceOff(c.node) & 4 != 0 ? nil : found
         let projects = !c.nativeContentScrollEdges.contains(.bottom)
@@ -1261,7 +1290,7 @@ extension NavigationHost {
     /// cover. One that scrolls vertically only: UIKit's bottom inset would
     /// let a sideways carousel scroll up and down. `cover` is the route's
     /// bottom cover, which the route's child may end above.
-    static func bottomScroller(in route: NodeView, cover: CGFloat = 0) -> NodeView? {
+    static func bottomScroller(in route: NodeView, cover: CGFloat = 0, lifting: [NodeView] = []) -> NodeView? {
         let flowing = RouteGeometry.inFlow
         // The last in-flow child spans the bottom edge alone when every other
         // ends above its top, as children stacked down a block or a column
@@ -1273,7 +1302,7 @@ extension NavigationHost {
         }
         var parent = route
         while true {
-            let children = parent.container.subviews.compactMap { $0 as? NodeView }.filter(flowing)
+            let children = parent.container.subviews.compactMap { $0 as? NodeView }.filter { child in flowing(child) && !lifting.contains(where: { $0 === child }) }
             guard let last = children.last, alone(last, among: children) else { return nil }
             // Each reaches the foot of its parent's content box: the route's
             // child that box less the cover the kernel may pad it by, a
@@ -1317,16 +1346,6 @@ extension NavigationHost {
         return result
     }
 
-    /// Whether the page hides `view` only because a bar shows it: a lifted
-    /// header, or a node the bar placed, that its author did not hide.
-    func hiddenForBar(_ view: UIView) -> Bool {
-        guard let node = view as? NodeView, node.style["display"]?.string != "none" else { return false }
-        #if os(iOS)
-        if dialogBars.values.contains(where: { $0.lifted === node }) { return true }
-        #endif
-        return controllers.values.contains { $0.lifted === node || $0.scoped === node || $0.barNodes.contains { $0 === node } }
-    }
-
     /// Each of `shape`'s items enabled as it says, on the item made for it; false when one has none.
     func enable(_ shape: HeaderShape, in c: any BarItemStore) -> Bool {
         let items = shape.leading + shape.trailing
@@ -1342,7 +1361,7 @@ extension NavigationHost {
         return true
     }
 
-    private func barItem(_ i: HeaderShape.Item, _ c: any BarItemStore) -> UIBarButtonItem {
+    func barItem(_ i: HeaderShape.Item, _ c: any BarItemStore) -> UIBarButtonItem {
         let item = barItemMade(i, c)
         #if EXACT_INSPECT
         c.itemNodes[ObjectIdentifier(item)] = i.id // (inspect mode's bar walk, InspectIOS.swift)

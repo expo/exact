@@ -155,7 +155,6 @@ impl<D: DataSource> Presenter<D> {
             pointer_kind: _,
             slop: _,
             window: _,
-            segments: _,
             choice: _,
             #[cfg(any(windows, test))]
                 deferred_painter: _,

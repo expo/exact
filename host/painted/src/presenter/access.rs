@@ -465,7 +465,7 @@ impl<D: DataSource> Presenter<D> {
     /// else its children's, a space between them, less what is hidden from
     /// assistive technology and, unless `all`, less the controls inside it,
     /// which are named apart.
-    fn access_words(&self, node: &NodeRef<'_>, all: bool) -> String {
+    pub(in crate::presenter) fn access_words(&self, node: &NodeRef<'_>, all: bool) -> String {
         let kernel = self.host.kernel();
         match node.node_type {
             NodeType::Text => return self.access_inline_words(node),

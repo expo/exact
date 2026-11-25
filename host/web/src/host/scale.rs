@@ -104,7 +104,7 @@ impl<D: DataSource> Host<D> {
             self.restore_geometry(before);
             return Err(format!("viewport geometry: {error:?}"));
         }
-        let answer = self.runner.set_view(size, Some(f64::from(keyboard)));
+        let answer = self.runner.set_view(size, Some(f64::from(keyboard)), None);
         if answer.is_err() {
             self.restore_geometry(before);
         }

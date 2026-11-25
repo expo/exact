@@ -26,6 +26,19 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// as the stack's routes are prepared, before UIKit shows any of them
     /// (`NavigationRules.bar`).
     var pushed = false
+    #if os(iOS)
+    var bottomToolbar: BottomToolbarItems?
+    #endif
+    var liftedBottomRows: [NodeView] {
+        #if os(iOS)
+        bottomToolbar?.rows ?? []
+        #else
+        []
+        #endif
+    }
+    var coveredBarNodes: [NodeView] {
+        (lifted.map { [$0] } ?? barNodes) + [scoped].compactMap { $0 } + liftedBottomRows
+    }
     weak var lifted: NodeView?
     var barNodes: [NodeView] = []
     /// The pictures the bar's faces draw (`NodeView.drawnByBar`).
@@ -249,6 +262,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             scroll.contentInsetAdjustmentBehavior = .never
             scroll.keyboardDismissMode = viewportKeyboardDismissal
             #if os(iOS)
+            KeyboardDrag.watch(scroll) { [weak scroll] in scroll?.documentNode }
             scroll.scrollsToTop = false
             #endif
             scroll.delegate = self

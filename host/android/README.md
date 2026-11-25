@@ -1,9 +1,6 @@
 # The Android reader
 
-The Kotlin side of Android's Canvas host (LLP 1076 §3.3), in the repository by LLP 1115.001 D2 (Charlie, 2026-10-11).
-
-An app on Android is its Rust, built for `aarch64-linux-android` or `x86_64-linux-android` (`host/painted`: the runner, the kernel, layout, text
-and the paint walk), and this. The Rust records what it paints as an op stream (`host/painted/src/canvas.rs`). The
+The Kotlin reader is part of Android’s Canvas host (LLP 1076 §3.3, LLP 1115.001 D2). The Rust host (`host/painted`, built for `aarch64-linux-android` or `x86_64-linux-android`) runs the app, lays out its text and records its paint operations (`host/painted/src/canvas.rs`). The
 reader replays that stream onto Android's own Canvas: a `RenderNode` for each row, scroller and animated layer,
 hardware bitmaps for pictures, `drawGlyphs` for text the Rust has shaped (below Android 12, the glyphs' outlines:
 "Android 10 and 11", below). The two meet at `dev.exact.canvas.Native`,
@@ -19,9 +16,9 @@ one line in the log, `exact canvas: unknown op …; the frame stops here`.
 | `app/` | the shell: one activity over the reader, packaging the app that `-Papp=<name>` names |
 | `gradlew`, `gradle/` | the Gradle wrapper (9.8.0), committed. Its jar is Gradle's own (sha256 `238e777f…`, as services.gradle.org publishes it) and the distribution's sha256 is pinned in `gradle-wrapper.properties` |
 
-minSdk the app's manifest's `host.android.minimumOS` gives: 31 (Android 12) without one, 29 at `"10"` ("Android 10
-and 11", below). targetSdk 36, compileSdk 37.2, AGP 9.4.1, Kotlin 2.4.10, `arm64-v8a` by default. Views, with no Compose,
-AppCompat or Material library.
+The app defaults to minSdk 31 (Android 12). Set `host.android.minimumOS` to `"10"` for minSdk 29 (see "Android 10 and 11").
+The shell targets SDK 36, compiles with SDK 37.2, AGP 9.4.1 and Kotlin 2.4.10, and defaults to `arm64-v8a`. It uses Views without Compose, AppCompat or Material.
+Jetpack WindowManager supplies the activity's fold. A half-open hinge reports `devicePosture="folded"`. A separating hinge gives the window two columns or two rows, even when flat. See the [foldables recipe](../../docs/recipes/foldables.md).
 
 The Android reader displays `image` sources from HTTPS URLs (LLP 1011 §2).
 
@@ -54,6 +51,8 @@ What changed on the way in, one commit each:
 - The package is `dev.exact.canvas` (it was `dev.exact.bench.exactcanvas`), in Kotlin and in the JNI's function names.
 
 ## Building an app
+
+`host.android.urlSchemes` registers browsable links on the activity. `notes:///links?from=test` opens `/links?from=test` at launch or sends one `navigate` while running. Use `protocol_handlers` to receive the complete URL at a template’s `%s` (LLP 1038 D8).
 
 ### Shared elements
 
@@ -508,7 +507,8 @@ keyboard goes. `interactive`, up and down: once the finger reaches the keyboard,
 the platform's control of the IME's inset animation (`controlWindowInsetsAnimation`, Android 11 and later); at the
 lift it goes, and the field lets go of the focus, when the finger was moving down or had pulled it more than half
 away, and comes back otherwise. The page is laid out for where the keyboard ends, not each step of the follow. Before
-Android 11 the finger reaching the keyboard puts it away.
+Android 11 the finger reaching the keyboard puts it away. UIKit's `on-drag-with-accessory` and
+`interactive-with-accessory` are `on-drag` and `interactive` here: Android shows no accessory bar over its keyboard.
 
 **The ends and the indicator.** The stretch is `EdgeEffect`'s own: it stretches the `RenderNode` it is drawn into, so
 while an edge is stretched the scroller's rows are drawn through a node the size of its box (`Scrolling.record`).
@@ -575,7 +575,7 @@ A palette has a swatch for tones 100, 99, 95, 90, 80 … 10 and 0 (`system_neutr
 them (98, 96, 94, 92, 6, 12, 17, 22) is the palette's colour at that lightness, which the platform computes
 (`ColorStateList.withLStar`).
 
-**The call.** `Native.colors(IntArray)`: the twelve roles light and then the same twelve dark, ARGB, in the order of
+**The call.** `Native.colors(IntArray)` carries 36 light roles and then 36 dark roles in ARGB, followed by the float bits of the system contrast level and, from Android 12, eleven swatches and the light and dark palette keys for each of primary, secondary and error (zero where unavailable). The roles are in the order of
 the table (`presenter::Material`). Told before the host boots, so its first frame is in them, and again whenever what
 the reader reads is not what it last told: each time a reader is made (the activity made, or started after a stop) and
 on every configuration change. A new wallpaper changes the palette; the activity does not declare that change
@@ -588,7 +588,7 @@ blue) keeps its table pair.
 
 **One accent.** A control, a field's focused indicator and a filled button paint in the node's `accent-color` where it sets one, else
 in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a switch's thumb, a filled button's title):
-the device's `primary` and `onPrimary`. The painter's own blue is desktop Linux's alone, where nothing is reported.
+the device’s `primary` and `onPrimary`. Desktop Linux keeps the painter’s blue when no palette is reported. The root’s `accent-color` supplies the RGB seed for the bars’ Material tonal-spot scheme at the device’s contrast level.
 
 **An icon button is Material's** (D9; `host/painted/src/paint/icon_button.rs`): a button holding a symbol and no
 title is a round 40 dp container round a 24 dp icon (the `icon-button-` rows, Compose Material 3 1.4's
@@ -767,7 +767,7 @@ time control alike. A date control shows its value as the device writes it: `Dev
 **Hatches** (D4, D5). The app's Rust hatches (`modules/linux`, or Rust in `modules/android`) run on this host as on
 Linux: `canvas_jni!`'s `hatches` hands the host their install, they connect as the reader takes its first requests after a displayed frame, and an overlay is painted as a canvas is, as a picture. Beside them, Kotlin in the app's `modules/android` defines `class exact.app.Hatches : ExactHatches()` (`Hatches.kt`), which hears the same moments for the same words (`app.json`'s for `android`) as request kind 10: `app`, `element`, `elementEnded`, on the main thread. Its handle, `ExactElement`, has the node's word, `id`, box and `data-*` words; `click`, `focus`, `blur` and `input(text)`, which cross by the node's number (`Native.hatchAct`) and run between exact2's turns; and `view`, a text field's `EditText` where the reader hosts it; `host { context -> view }`, a view of the app's own in the node's box, made for each activity and shown by `Natives` as element kind 5 wherever the node is painted; and `diagnostics`. The module has exact2's clock and input: `frames`, `after` and `observe`, each a ticket that `stop()` ends, told back as scopes 5, 6 and 7 of kind 10. `picker(element, picker)` is asked as a hatched date or time control's picker opens: it may set the title, the text-entry mode, the mode toggle, the days allowed, the 24-hour clock, or show its own (`ExactPicker.show`). `apps/native-fixture/modules/android` is one: it logs every moment under `ExactHatch`, gives its `due` pickers titles, no weekends and a 24-hour clock, and hosts a dial at `spin` that turns on exact2's clock and stops at a tap. `bun scripts/exact.mjs hatch <word> <app>` writes the class for an app with an `android/` crate.
 
-An app's optional native module views (LLP 1024) live in the same `modules/android` source directory. Their Maven libraries are named in `app.json` under `host.android.maven` ("Maven libraries" below). Define `class exact.app.Modules : dev.exact.canvas.NativeModules` with a `modules: Map<String, NativeModule>` roster; the APK resolves it only at the first module view. Each module creates and updates its real Android `View`. `events(view, emit)` binds before its first update; call `emit("change", value)` with a string value, `emit("message", payload)` with the guest message, `emit("load", "")`, or `emit("press", "")`. A view reports focus with `emit("focus", "")` and blur with `emit("blur", "")`. A live, eligible view can take or release focus even without a handler. Other events need a handler on the node. Retired bindings and events for an old node allocation are ignored.
+An app's optional native module views (LLP 1024) live in the same `modules/android` source directory. Their Maven libraries are named in `app.json` under `host.android.maven` ("Maven libraries" below). For package visibility, `host.android.queries` takes the same entries as a package's `manifest.queries`. An entry outside the allow-list fails the Android build. For example, `[{"action":"android.intent.action.TTS_SERVICE"}]` lets the app's Kotlin discover installed speech engines on Android 11 and later. Define `class exact.app.Modules : dev.exact.canvas.NativeModules` with a `modules: Map<String, NativeModule>` roster; the APK resolves it only at the first module view. Each module creates and updates its real Android `View`. `events(view, emit)` binds before its first update; call `emit("change", value)` with a string value, `emit("message", payload)` with the guest message, `emit("load", "")`, or `emit("press", "")`. A view reports focus with `emit("focus", "")` and blur with `emit("blur", "")`. A live, eligible view can take or release focus even without a handler. Other events need a handler on the node. Retired bindings and events for an old node allocation are ignored.
 
 ### Kotlin data modules
 
@@ -976,9 +976,9 @@ tree, so it is written twice; it belongs in shared Rust.
   the actions as written, on a second line where they do not fit one; a `destructive` action in the error role.
 - *A menu*: a popover that is no confirmation, each `button` row with a `press` an item. Opened by a button's
   `popovertarget`, or by holding a node that names it with `contextPopover` (its `contextmenu` runs first). Material's
-  menu: `surfaceContainer`, 4 dp corners, 3 dp of elevation (the window's own shadow), 112 to 280 dp wide, 48 dp
-  rows, a leading symbol where the row's button has one (a check where it is `aria-checked`), a `destructive` row in
-  the error role, a line where the author wrote `hr`. It hangs under its invoker from the invoker's start, ends at
+  menu: `surfaceContainer`, 4 dp corners, 3 dp of elevation (the window's own shadow), 112 to 280 dp wide. Rows start at 48 dp and grow with the subtitle,
+  in body-medium and on-surface-variant. A checked row keeps its symbol leading and shows its check trailing, or shows
+  a leading check when it has no symbol. A destructive action uses the error role. An `hr` draws a divider. It hangs under its invoker from the invoker's start, ends at
   the invoker's end where that does not fit, and opens upward where there is no room below (Compose's
   `DropdownMenuPositionProvider`); a context menu opens where the finger is.
 - *A dialog whose author painted its surface* (its own `background-color` or `background-image`, of any rows, a field
@@ -1062,7 +1062,7 @@ Not built of D10:
   `alertdialog` today, so the two cannot be told apart (LLP 1115.000 D13.4).
 - The arrow keys reach a surface; nothing else of D7.6's hardware keys is built for the page.
 
-Not checked on a phone in this menu/dialog qualification: Shelf itself (its Android crate is `apps/shelf/android`; the fixture uses its shapes); an `alertdialog` written as a popover, and an `aria-checked` row (neither is in a test either); a font scale changed with a menu open; rotation with a surface open; a second display; TalkBack. The dialog's width between its limits is the window less 24 dp a side, which was not compared with a Compose dialog on the same phone, and no screenshot here was compared with a reference app's.
+Not checked on a phone in this menu/dialog qualification: Shelf itself (its Android crate is `apps/shelf/android`; the fixture uses its shapes); an `alertdialog` written as a popover (also absent from the tests); a font scale changed with a menu open; rotation with a surface open; a second display; TalkBack. The dialog's width between its limits is the window less 24 dp a side, which was not compared with a Compose dialog on the same phone, and no screenshot here was compared with a reference app's.
 
 ## Sheets and route motion (LLP 1115.001 D10, D12)
 
@@ -1121,7 +1121,7 @@ tabs by the rule and tells the kernel what the bars cover (`HostCover`, the Appl
 
 So the page's content starts under the top bar and ends at the navigation bar, and neither bar is in the page's stream. Both are over it: the top bar at the window's top, reaching under the status bar, whose area is the bar's own colour; the navigation bar at the window's bottom, reaching under the gesture bar. **A keyboard does not move the navigation bar.** It ends the page above itself and covers the bar, as it covers a Material app's, and the room the bar took of the routes goes to nothing while it is covered (`Presenter::fit_bars`).
 
-The title, Up arrow, action icons and unselected destinations use the bar element’s own `color`, or black or white on its authored background. An enabled button’s own `color` still wins. On translucent fills, automatic ink uses the window colour behind the band. Set `color` when page content shows through. The ink roles below are defaults.
+The title, Up arrow, action icons and unselected destinations use the bar element’s own `color`, or black or white on its authored background. An enabled button’s own `color` still wins. On an authored bar background, accent ink below [4.5:1 for text](https://www.w3.org/TR/WCAG22/#contrast-minimum) or [3:1 for symbols](https://www.w3.org/TR/WCAG22/#non-text-contrast) takes the other scheme’s role, then another readable tone of the same hue if needed. On translucent fills, automatic ink uses the window colour behind the band. Set `color` when page content shows through. The ink roles below are defaults.
 
 **The top app bar** (Compose’s small `TopAppBar`)
 
@@ -1147,8 +1147,8 @@ A level-1 heading is the same small bar: Material's medium and large bars, which
 | Colour | The root tablist’s `background-color`, through the gesture bar. Defaults to `surfaceContainer` | `surfaceContainer` |
 | Destinations | the root tablist's tabs that name a panel, sharing the width 8 dp apart | 3 to 5, the same (`NavigationBarItemHorizontalPadding`) |
 | Symbol and label | a 24 dp symbol 16 dp from the top, its label under it (label-medium, 12/16 sp), 16 dp from the bottom | the same |
-| Active indicator | a 56 by 32 dp pill in `secondaryContainer` behind the selected symbol | the same |
-| Colours | the selected destination's symbol `onSecondaryContainer` and its label `secondary`; the others `onSurfaceVariant`, at 38 % when disabled | the same (`NavigationBarItemDefaults.colors`) |
+| Active indicator | a 56 by 32 dp pill in `secondaryContainer` behind the selected symbol or lone label, seeded by the root accent when written | 56 by 32 dp in the theme’s `secondaryContainer` |
+| Colours | the selected symbol uses `onSecondaryContainer` and its label uses `secondary` from the same seed. A lone label on a seeded indicator uses `onSecondaryContainer` when `secondary` falls below 4.5:1 against the pill. Unselected destinations use the tablist’s ink, defaulting to `onSurfaceVariant`, at 38 % when disabled | `NavigationBarItemDefaults.colors` reads the theme’s selected and unselected roles |
 | Badge | a tab's badge box (LLP 1075.003 §9.9): its text, label-small in `onError` on an `error` pill at least 16 dp square, 4 dp either side of the text, its start 12 dp before the symbol's end and 14 dp into it; not run on a device | `Badge` with content in a `BadgedBox` (`BadgeTokens`, `Badge.kt`, read at the pinned version) |
 
 "Here" in both tables is what was seen on a Pixel 10 Pro XL (Android 16, 2.4375 pixels a dp), from `state.bars`

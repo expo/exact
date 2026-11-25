@@ -157,6 +157,10 @@ fn composed_package_dispatches_calls_and_refuses_non_app_origins() {
         ),
         (
             json!({"extension":"clipboard", "send":"write", "args":{"data":[]}}),
+            json!({"error":"NotAllowedError", "message":"person-required"}),
+        ),
+        (
+            json!({"extension":"clipboard", "send":"write", "origin":"app", "args":{"data":[]}}),
             json!({}),
         ),
     ] {

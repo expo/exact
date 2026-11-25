@@ -14,6 +14,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cargoCheckout, cargoEnvironment, checkoutPathRefusal, lockedMetadata, pathFrom, patchLines, readManifest as readAppManifest } from './app.mjs';
 import { dependencyTables, pathWithin } from './paths.mjs';
+import { baseManifest } from './variants.mjs';
 import { directDependencies, nativePackages } from './package-libraries.mjs';
 import { MEMBER_OF, appCrates, authoredWorkspace, gpuShellsDir, notAMember, shellsDir } from './cargo-check.mjs';
 import { OFFLINE_MISSING } from './filesystem.mjs';
@@ -75,17 +76,21 @@ const hostDefaults = (platform) => ({
   windows: { window: { width: 1024, height: 720, minWidth: 360, minHeight: 500 } },
 }[platform] ?? {});
 
-const readManifest = (dir) => readAppManifest(dir, basename(dir));
+// All installs share the workspace and the platform declarations that determine its members (LLP 1153 D1).
+function readBaseManifest(dir) {
+  const selected = readAppManifest(dir, basename(dir));
+  return selected[baseManifest] ?? selected;
+}
 const writeManifest = (dir, manifest) => writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest, null, 2) + '\n');
 
-/** Whether the manifest names the platform. */
-export const namesPlatform = (manifest, platform) => platform in (manifest.host ?? {});
+/** An icon override in a variant does not declare a platform the app ships. */
+export const namesPlatform = (manifest, platform) => platform in ((manifest[baseManifest] ?? manifest).host ?? {});
 
 /** Name `platform` in the app's manifest: `host.<platform>`, and its store for one that has a stream. Returns the
  * keys written, none when it was named already. */
 export function namePlatform(dir, platform) {
   if (!(platform in PLATFORMS)) throw new Error(`${platform} is not a platform; the platforms are ${Object.keys(PLATFORMS).join(', ')}`);
-  const manifest = readManifest(dir), wrote = [];
+  const manifest = readBaseManifest(dir), wrote = [];
   manifest.host ??= {};
   if (!(platform in manifest.host)) { manifest.host[platform] = hostDefaults(platform); wrote.push(`host.${platform}`); }
   if (STORED.includes(platform)) {
@@ -101,7 +106,7 @@ export function namePlatform(dir, platform) {
 export function withoutPlatformKeys(dir, platform) {
   if (platform === 'web') throw new Error('update --without web: the web host is the dev loop\'s and the agent\'s (`web`, `test web`, `agent web`), so it stays');
   if (!(platform in PLATFORMS)) throw new Error(`update --without ${platform}: the platforms are ${Object.keys(PLATFORMS).join(', ')}`);
-  const manifest = readManifest(dir), removed = [];
+  const manifest = readBaseManifest(dir), removed = [];
   for (const [key, table] of [['host', manifest.host], ['deploy.store', manifest.deploy?.store], ['deploy.binaries', manifest.deploy?.binaries]]) {
     if (table && platform in table) { delete table[platform]; removed.push(`${key}.${platform}`); }
   }
@@ -601,8 +606,9 @@ const takenLine = (from, { name, dir, defaults }) => `${name} = { path = ${JSON.
  * Its lock is the app's captured `Cargo.lock` when it has one (LLP 1153.003 D1.4), copied in; otherwise exact2's,
  * re-resolved offline for these members, and one this machine's cache cannot resolve is left as the copy for the
  * build, which `settleLock` resolves. */
-export function ensureShells(dir, manifest = readManifest(dir), name = null) {
+export function ensureShells(dir, manifest = readBaseManifest(dir), name = null) {
   dir = realpathSync(dir);
+  if (manifest.variant) manifest = manifest[baseManifest] ?? readBaseManifest(dir);
   name = appCrateName(dir, name ?? basename(dir));
   const shells = shellsDir(dir), crates = shellCrates(manifest), members = appMembers(dir, name);
   const config = hostConfiguration(dir, manifest, name, members.host, true);
@@ -1132,7 +1138,7 @@ export function lockShells(dir, workspace, captured = resolve(dir, 'Cargo.lock')
 export async function bringPlatform(dir, platform, { report = null, os = process.platform, name = null, verb = platform === 'macos' ? 'mac' : platform } = {}) {
   const lines = [];
   verb = `bun exact.mjs ${verb}`;
-  const manifest = existsSync(resolve(dir, 'app.json')) ? readManifest(dir) : null;
+  const manifest = existsSync(resolve(dir, 'app.json')) ? readBaseManifest(dir) : null;
   if (!namesPlatform(manifest ?? {}, platform)) {
     if (platform === 'ios' && !['darwin', 'linux'].includes(os)) return { refused: `${verb}: iOS builds need macOS or Linux (use WSL on Windows); nothing was written` };
     if (platform === 'macos' && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };

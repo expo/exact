@@ -65,7 +65,7 @@ component App
     assert!(!row(&r), "a hardware keyboard's bar");
     // The keys and the viewport they shrink: one commit.
     let since = journal_end(&r);
-    r.set_view(Some((390.0, 508.0)), Some(336.0))
+    r.set_view(Some((390.0, 508.0)), Some(336.0), None)
         .unwrap()
         .unwrap();
     assert_eq!(asked_again(&r, since), 1);

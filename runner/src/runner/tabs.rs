@@ -52,7 +52,8 @@ impl<D: DataSource> Runner<D> {
         // Read from the plan once: a runner's plan is fixed, and a host asks at every batch's end
         let (sites, navigation) = self.panel_navigation.get_or_init(|| {
             let sites = crate::instance::tabs::panel_sites(&self.plan);
-            let navigation = crate::instance::tabs::sites_need_navigation(&self.plan, &sites);
+            let navigation =
+                crate::instance::tabs::sites_need_navigation(&self.plan, &sites, self.platform);
             (sites, navigation)
         });
         panels

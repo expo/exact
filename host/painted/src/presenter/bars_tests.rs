@@ -204,7 +204,7 @@ fn text(p: &Presenter<Nothing>, name: &str) -> String {
     node.text_runs().iter().map(|r| &*r.text).collect()
 }
 
-fn tap(p: &mut Presenter<Nothing>, name: &str) -> Result<String, String> {
+pub(super) fn tap(p: &mut Presenter<Nothing>, name: &str) -> Result<String, String> {
     let view = id(p, name);
     let result = p.tap(view);
     p.run_commands(|| Nothing);

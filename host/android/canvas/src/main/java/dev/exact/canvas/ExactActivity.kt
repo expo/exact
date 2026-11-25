@@ -3,11 +3,14 @@ package dev.exact.canvas
 import android.app.Activity
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import androidx.window.WindowSdkExtensions
+import androidx.window.layout.WindowInfoTracker
 import java.io.File
 
 /**
@@ -163,8 +166,15 @@ open class ExactActivity : Activity() {
         // The raw insets go to the host whenever they change, and the window's size when it does; nothing is padded
         // here (D3.3).
         root.setOnApplyWindowInsetsListener { _, insets -> window(insets); insets }
-        root.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
-            if (r - l != or - ol || b - t != ob - ot) root.rootWindowInsets?.let { window(it) }
+        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> window() }
+        // A freeform window can move without laying out its children again.
+        val location = IntArray(2)
+        root.viewTreeObserver.addOnPreDrawListener {
+            val x = location[0]
+            val y = location[1]
+            root.getLocationOnScreen(location)
+            if (location[0] != x || location[1] != y) window()
+            true
         }
         setContentView(root)
         accessibility.addAccessibilityStateChangeListener(accessWatch)
@@ -372,10 +382,10 @@ open class ExactActivity : Activity() {
         val colors = Palette.read(this).also { toldColors = it }
         // The window as it is now, with the system's raw insets (D3.3): told before the host boots too, so the page is
         // laid out where it will be shown. The view's own size is never told: the presenter places the page.
-        val size = windowSize()
+        val placement = foldWindow()
+        val size = placement.bounds.width() to placement.bounds.height()
         val density = Device.scale(this)
-        val insets = root.rootWindowInsets ?: if (Build.VERSION.SDK_INT >= 30) windowManager.currentWindowMetrics.windowInsets else null
-        val edges = insets?.let { edges(it) } ?: IntArray(16)
+        val edges = geometry(root.rootWindowInsets, placement)
         toldWindow = Triple(size, density, edges.toList())
         // asyncboot=0: boot when the view is laid out, on the main thread, to compare. Otherwise now, on a thread that
         // also loads the library: exact2 loads, boots and paints its first frame while Android sets the activity up,
@@ -507,21 +517,54 @@ open class ExactActivity : Activity() {
         return out
     }
 
-    /** The window's size, in pixels. */
-    private fun windowSize(): Pair<Int, Int> =
-        if (Build.VERSION.SDK_INT >= 30) windowManager.currentWindowMetrics.bounds.let { it.width() to it.height() }
-        else Legacy.windowSize(this)
+    private val foldTracker by lazy { WindowInfoTracker.getOrCreate(this) }
+    private val hasHinge by lazy {
+        packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_SENSOR_HINGE_ANGLE) || try {
+            WindowSdkExtensions.getInstance().extensionVersion >= 6 && foldTracker.supportedPostures.isNotEmpty()
+        } catch (_: UnsupportedOperationException) { false }
+    }
+    private val folds by lazy {
+        val snapshot = if (WindowSdkExtensions.getInstance().extensionVersion >= 9)
+            ({ foldTracker.getCurrentWindowLayoutInfo(this) }) else null
+        WindowFolds(foldTracker.windowLayoutInfo(this), snapshot, ::foldWindow) { window() }
+    }
+
+    private fun geometry(insets: android.view.WindowInsets?, placement: FoldWindow): IntArray {
+        val current = insets ?: if (Build.VERSION.SDK_INT >= 30) windowManager.currentWindowMetrics.windowInsets else null
+        // Before API 30 a layout can arrive between inset dispatches, with no metrics fallback.
+        val edges = current?.let(::edges) ?: toldWindow?.third?.take(16)?.toIntArray() ?: IntArray(16)
+        val fold = folds.report(placement, hasHinge) ?: return edges
+        return edges + fold
+    }
+
+    private fun foldWindow(): FoldWindow {
+        val display = if (Build.VERSION.SDK_INT >= 30) this.display else Legacy.display(this)
+        return FoldWindow(windowBounds(), display?.displayId ?: 0, display?.rotation ?: 0)
+    }
+
+    private fun windowBounds(): Rect {
+        if (Build.VERSION.SDK_INT >= 30) return windowManager.currentWindowMetrics.bounds
+        if (root.width == 0 || root.height == 0) {
+            val (width, height) = Legacy.windowSize(this)
+            return Rect(0, 0, width, height)
+        }
+        val location = IntArray(2)
+        root.getLocationOnScreen(location)
+        return Rect(location[0], location[1], location[0] + root.width, location[1] + root.height)
+    }
 
     /** The window's size, density and insets as the host was last told them. */
     private var toldWindow: Triple<Pair<Int, Int>, Float, List<Int>>? = null
 
     /** Tell the host the window, whole, when its size, the display's density or any inset is not what it was last
      * told (LLP 1115.001 D3.3). The host answers with where the page is ([chrome]). */
-    private fun window(insets: android.view.WindowInsets) {
-        if (!reads()) return
-        val size = if (root.width > 0 && root.height > 0) root.width to root.height else windowSize()
+    private fun window(insets: android.view.WindowInsets? = root.rootWindowInsets) {
+        if (stopped || !reads()) return
+        val placement = foldWindow()
+        val size = if (root.width > 0 && root.height > 0) root.width to root.height
+            else placement.bounds.width() to placement.bounds.height()
         val density = Device.scale(this)
-        val edges = edges(insets)
+        val edges = geometry(insets, placement)
         loopNotice?.place(maxOf(edges[0], edges[4]), maxOf(edges[1], edges[5]))
         val now = Triple(size, density, edges.toList())
         if (now == toldWindow) return
@@ -579,6 +622,7 @@ open class ExactActivity : Activity() {
             if (id == windowManager.defaultDisplay.displayId && Device.orientation(this@ExactActivity) != told?.orientation) configure()
         }
     }
+    private var stopContrastUpdates: (() -> Unit)? = null
     private val screenReaderChanged = android.view.accessibility.AccessibilityManager.TouchExplorationStateChangeListener { configure() }
 
     /** The device's colours as the host was last told them ([Palette]). */
@@ -619,7 +663,7 @@ open class ExactActivity : Activity() {
         configure()
         // The channels' names are the strings tables' (LLP 1133.004.000 D1).
         if (config.locales != channelLocales) { channelLocales = config.locales; Channels.made(this) }
-        root.rootWindowInsets?.let { window(it) }
+        window()
     }
 
     /** The activity was stopped since its reader was made: Android discarded what that reader kept. */
@@ -637,8 +681,16 @@ open class ExactActivity : Activity() {
     override fun onStart() {
         super.onStart()
         nativeStarted = true
+        folds.start()
         modulePhase = 2; moduleOwners?.move(modulePhase)
         if (stopped) { stopped = false; take(); read() }
+        if (Build.VERSION.SDK_INT >= 34) {
+            getSystemService(android.app.UiModeManager::class.java)?.let { mode ->
+                val listener = android.app.UiModeManager.ContrastChangeListener { configure() }
+                mode.addContrastChangeListener(mainExecutor, listener)
+                stopContrastUpdates = { mode.removeContrastChangeListener(listener) }
+            }
+        }
         contentResolver.registerContentObserver(android.provider.Settings.Global.getUriFor(android.provider.Settings.Global.ANIMATOR_DURATION_SCALE), false, settings)
         contentResolver.registerContentObserver(android.provider.Settings.System.getUriFor(android.provider.Settings.System.TIME_12_24), false, settings)
         getSystemService(android.hardware.display.DisplayManager::class.java)?.registerDisplayListener(displayChanges, null)
@@ -698,6 +750,8 @@ open class ExactActivity : Activity() {
         if (!Exact.drainStore()) android.util.Log.w("exact", "the store's writes did not finish before the stop")
         Partitions.flush(natives?.profiles().orEmpty())
         if (reads() && !isChangingConfigurations) updateWidgets()
+        stopContrastUpdates?.invoke()
+        stopContrastUpdates = null
         contentResolver.unregisterContentObserver(settings)
         getSystemService(android.hardware.display.DisplayManager::class.java)?.unregisterDisplayListener(displayChanges)
         getSystemService(android.view.accessibility.AccessibilityManager::class.java)?.removeTouchExplorationStateChangeListener(screenReaderChanged)
@@ -722,6 +776,7 @@ open class ExactActivity : Activity() {
      * reads again what the person may have changed in Settings ([Extensions.resumed]). */
     override fun onResume() {
         super.onResume()
+        window()
         configure()
         nativeResumed = true
         modulePhase = 3; moduleOwners?.move(modulePhase)
@@ -772,6 +827,7 @@ open class ExactActivity : Activity() {
     }
 
     override fun onDestroy() {
+        folds.stop()
         accessibility.removeAccessibilityStateChangeListener(accessWatch)
         requests.destroy()
         release()

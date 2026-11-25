@@ -57,6 +57,7 @@ pub(crate) fn read(
                 .as_str()
                 .ok_or_else(|| refuse("an interface has a `name`".into()))?;
             let dir = path.parent().unwrap_or(Path::new("."));
+            file.uses = implementation::shape_imports(&json, dir, origin, consulted, span).map_err(refuse)?;
             let implementations = implementation::endorsed(dir).map_err(refuse)?;
             for (subpath, implementation) in &implementations {
                 let names: Vec<UseName> = object(&implementation["shapes"])

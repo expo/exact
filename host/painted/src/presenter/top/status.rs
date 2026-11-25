@@ -131,6 +131,8 @@ impl<D: DataSource> Presenter<D> {
                 entries.push(Entry::Item(Row {
                     node: EXIT,
                     title: "Exit".into(),
+                    menu_label: None,
+                    subtitle: None,
                     direction: exact_kernel::Direction::Ltr,
                     symbol: None,
                     destructive: false,

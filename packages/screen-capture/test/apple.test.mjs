@@ -16,7 +16,7 @@ test.skipIf(process.platform !== 'darwin')('macOS still fixtures use the native 
       '-emit-module', '-emit-module-path', join(out, 'ExactPackage.swiftmodule'),
       'host/apple/modules/ExactPackage.swift', '-o', join(out, 'libExactPackage.a')]);
     run('xcrun', ['swiftc', '-parse-as-library', '-I', out, '-L', out, '-lExactPackage',
-      'packages/screen-capture/apple/ScreenCapture.swift', 'packages/screen-capture/apple/CaptureFiles.swift',
+      'packages/screen-capture/apple/ScreenCapture.swift', 'packages/screen-capture/apple/CaptureSources.swift', 'packages/screen-capture/apple/CaptureFiles.swift',
       'host/apple/Sources/ExactCore/AppFileWalk.swift', 'packages/screen-capture/test/apple.swift', '-o', join(out, 'capture')]);
     run(join(out, 'capture'), []);
   } finally { rmSync(out, { recursive: true, force: true }); }

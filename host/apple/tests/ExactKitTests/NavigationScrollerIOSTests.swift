@@ -17,7 +17,7 @@ final class NavigationScrollerIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    private func fixture(_ scene: UIWindowScene) throws -> ExactSession {
+    private func fixture(_ scene: UIWindowScene, plan: String = "NAVIGATION_SCROLLER") throws -> ExactSession {
         let session = ExactApp.shared.makeSession(label: "navigation-scroller")
         self.session = session
         let view = ExactView(session: session), host = UIViewController()
@@ -29,7 +29,7 @@ final class NavigationScrollerIOSTests: XCTestCase {
         view.frame = host.view.bounds
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         host.view.addSubview(view)
-        XCTAssertNil(session.boot(plan: try fixturePlan("NAVIGATION_SCROLLER"), size: view.bounds.size).error)
+        XCTAssertNil(session.boot(plan: try fixturePlan(plan), size: view.bounds.size).error)
         view.layoutIfNeeded()
         settle(session)
         return session
@@ -51,6 +51,109 @@ final class NavigationScrollerIOSTests: XCTestCase {
     private func press(_ session: ExactSession, _ name: String) throws {
         session.presenter.press(try node(session, name).id)
         settle(session)
+    }
+
+    func testBottomToolbarFollowsTheLiveRowsOnScreen() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit places the route toolbar in a window") }
+        let session = try fixture(scene, plan: "BOTTOM_TOOLBAR_LIVE"), navigation = session.presenter.navigationHost
+        let route = try XCTUnwrap(navigation.activeRoute), nav = try XCTUnwrap(route.navigationController)
+        func tap(_ name: String) throws {
+            let id = try node(session, name).id
+            XCTAssertNil(Agent(session: session).tap(["id": Int(id)])["error"], name)
+        }
+        XCTAssertNil(navigation.split)
+        XCTAssertTrue(try node(session, "load-tools").isHidden)
+        let initial = try XCTUnwrap(route.toolbarItems)
+        XCTAssertEqual(initial.count, 2)
+        XCTAssertNil(initial.first?.action, "a spacer with a button role still makes a flexible space")
+        XCTAssertNotNil(initial.last?.frame(in: route.view))
+        try tap("load")
+        let line = "route \(route.key) has multiple bottom toolbars"
+        func notices() -> Int { session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: line).count - 1 }
+        for (name, rows) in [("equal", 1), ("unequal", 1), ("filtered", 1), ("unequal", 2)] {
+            waitFor("one toolbar item for \(name)") {
+                route.toolbarItems?.count == 1 && route.toolbarItems?.first?.accessibilityIdentifier == name
+            }
+            let item = try XCTUnwrap(route.toolbarItems?.first)
+            XCTAssertNotNil(item.frame(in: route.view), "UIKit presents the route's item")
+            XCTAssertEqual(route.liftedBottomRows.count, rows)
+            XCTAssertEqual(notices(), rows == 2 ? 1 : 0)
+            if rows == 2 {
+                XCTAssertEqual(route.liftedBottomRows.map { $0.props["testId"] }, ["unequal-tools", "loop-tools"])
+                XCTAssertTrue(route.liftedBottomRows.allSatisfy(\.isHidden))
+            }
+            try tap(name)
+        }
+        waitFor("only the spacer row is live") { route.liftedBottomRows.first?.props["testId"] == "space-tools" }
+        let space = try XCTUnwrap(route.bottomToolbar?.barSpaces.values.first)
+        XCTAssertEqual(route.toolbarItems?.count, 1)
+        XCTAssertTrue(route.toolbarItems?.first === space)
+        XCTAssertFalse(nav.isToolbarHidden)
+        XCTAssertEqual(notices(), 1)
+        try tap("advance")
+        waitFor("removing the final row clears its items") { route.liftedBottomRows.isEmpty && (route.toolbarItems ?? []).isEmpty }
+        XCTAssertTrue(nav.isToolbarHidden)
+    }
+
+    func testBottomToolbarBelongsToItsRouteAndClearsItsLastRow() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit places the tab bar and toolbar in a window") }
+        let session = try fixture(scene, plan: "BOTTOM_TOOLBAR"), navigation = session.presenter.navigationHost
+        let route = try XCTUnwrap(navigation.activeRoute), nav = try XCTUnwrap(route.navigationController)
+        let items = try XCTUnwrap(route.toolbarItems)
+        XCTAssertFalse(nav.isToolbarHidden)
+        XCTAssertEqual(items.count, 3)
+        let star = try XCTUnwrap(items.first), add = try XCTUnwrap(items.last)
+        XCTAssertEqual(star.accessibilityIdentifier, "favorite")
+        XCTAssertEqual(star.accessibilityLabel, "Favorite")
+        XCTAssertNotNil(star.image)
+        XCTAssertEqual(add.accessibilityIdentifier, "add")
+        XCTAssertEqual(add.title, "Add")
+        let traits = route.traitCollection
+        XCTAssertEqual(try XCTUnwrap(add.tintColor).resolvedColor(with: traits), try XCTUnwrap(route.node.ownAccent).resolvedColor(with: traits))
+        for item in [star, add] {
+            XCTAssertTrue(UIApplication.shared.sendAction(try XCTUnwrap(item.action), to: item.target, from: item, for: nil))
+        }
+        let counts = try node(session, "counts")
+        waitFor("both toolbar actions reach the route") { counts.accessibleText == "Favorites 1, additions 1" && route.toolbarItems?.last?.isEnabled == false && route.toolbarItems?.first?.menu != nil }
+        XCTAssertTrue(try node(session, "tools").isHidden)
+        XCTAssertTrue(try XCTUnwrap(route.toolbarItems?.last).accessibilityTraits.contains(.notEnabled))
+        let scroll = try XCTUnwrap(try node(session, "content").scrollView)
+        let last = try node(session, "row-30")
+        scroll.setContentOffset(CGPoint(x: 0, y: max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)), animated: false)
+        let starBox = try XCTUnwrap(route.toolbarItems?.first?.frame(in: route.view)), addBox = try XCTUnwrap(route.toolbarItems?.last?.frame(in: route.view))
+        if route.traitCollection.userInterfaceIdiom == .pad {
+            XCTAssertGreaterThan(min(starBox.midY, addBox.midY), route.view.bounds.midY)
+            XCTAssertLessThan(starBox.midX, route.view.bounds.width / 4)
+            XCTAssertGreaterThan(addBox.midX, route.view.bounds.width * 3 / 4)
+        } else if !nav.navigationBar.traitCollection.placesVerticalBar {
+            let tabs = try XCTUnwrap(navigation.tabController?.tabBar)
+            let agent = Agent(session: session)
+            for item in try XCTUnwrap(tabs.items) {
+                let control = try XCTUnwrap(agent.drawnTabControl(item, in: tabs))
+                let button = control.convert(control.bounds, to: route.view)
+                XCTAssertGreaterThan(button.midX, starBox.maxX)
+                XCTAssertLessThan(button.midX, addBox.minX)
+                XCTAssertEqual(button.midY, starBox.midY, accuracy: 2)
+            }
+        }
+        let lastBox = last.convert(last.bounds, to: route.view)
+        // On the Duo one item can be in the rail beside the list.
+        let overList = [starBox, addBox].filter { $0.minX < lastBox.maxX && lastBox.minX < $0.maxX }
+        let visibleBottom = try XCTUnwrap(overList.map(\.minY).min())
+        let lastBottom = lastBox.maxY
+        XCTAssertLessThanOrEqual(lastBottom, visibleBottom + 1)
+        XCTAssertEqual(lastBottom, route.view.safeAreaLayoutGuide.layoutFrame.maxY, accuracy: 1, "the last row scrolls to UIKit's safe area")
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.adjustedContentInset.top), animated: false)
+        try press(session, "detail-link")
+        XCTAssertNil(nav.topViewController?.toolbarItems)
+        XCTAssertTrue(nav.isToolbarHidden)
+        nav.popViewController(animated: true)
+        settle(session)
+        XCTAssertTrue(nav.topViewController === route)
+        XCTAssertFalse(nav.isToolbarHidden)
+        XCTAssertEqual(route.toolbarItems?.map(\.accessibilityIdentifier), ["favorite", nil, "add"])
+        XCTAssertNotNil(route.toolbarItems?.first?.menu)
+        XCTAssertEqual(route.toolbarItems?.last?.isEnabled, false)
     }
 
     func testACompletedProjectedTransitionDoesNotMakeContentUpdatesOweNavigation() throws {

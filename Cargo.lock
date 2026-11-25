@@ -2371,6 +2371,7 @@ dependencies = [
  "jpeg-encoder",
  "libc",
  "libloading",
+ "material-colors",
  "memmap2",
  "messages-stress-data",
  "mimalloc",
@@ -4188,6 +4189,15 @@ dependencies = [
  "exact-web",
  "exact-web-capabilities",
  "markdown-data",
+]
+
+[[package]]
+name = "material-colors"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57a5bf6a9d1cf6319a36cebc589b9a681a6b1c699e162f27c020877783579cc7"
+dependencies = [
+ "libm",
 ]
 
 [[package]]

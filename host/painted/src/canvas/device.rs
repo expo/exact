@@ -28,8 +28,9 @@ pub struct Told {
     pub size: (u32, u32),
     /// Pixels a point: the display's density.
     pub scale: f32,
-    /// Bars, cutout, keyboard, gestures; each top, right, bottom, left.
-    pub insets: [i32; 16],
+    /// Four insets each for bars, cutout, keyboard and gestures, then the
+    /// folding feature's state, separating axis and bounds (LLP 1078 D11).
+    pub geometry: [i32; 20],
 }
 
 #[cfg(target_os = "android")]
@@ -37,7 +38,7 @@ impl Told {
     /// The window in points.
     fn window(&self) -> Window {
         let side = |at: usize| -> [f32; 4] {
-            std::array::from_fn(|i| self.insets[at * 4 + i].max(0) as f32 / self.scale)
+            std::array::from_fn(|i| self.geometry[at * 4 + i].max(0) as f32 / self.scale)
         };
         Window {
             size: (
@@ -144,6 +145,9 @@ impl<D: DataSource + Default> CanvasHost<D> {
                 eprintln!("exact: scale: {e}");
             }
         }
+        let [.., state, axis, start, end] = told.geometry;
+        self.p
+            .folding_feature(state, axis, [start, end].map(|px| px as f32 / told.scale));
         if let Some(e) = self.p.set_window(told.window()) {
             eprintln!("exact: window: {e}");
         }

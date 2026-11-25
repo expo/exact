@@ -750,13 +750,14 @@ the browser's supported schemes and installation behavior. Linux's CLI URL
 argument retains the ordinary location conversion because it does not
 register OS protocol handlers.
 
-A scheme registered with `host.ios.urlSchemes` or `host.macos.urlSchemes`
+A scheme in `host.ios.urlSchemes`, `host.macos.urlSchemes` or `host.android.urlSchemes`
 alone delivers its link as a location, cold as the launch location and warm
 as one navigation, with no `/open` route. A non-empty authority is the first
 segment and an empty one is none: `notes://post/42?x=1`,
 `notes:///post/42?x=1` and `notes:/post/42?x=1` are all `/post/42?x=1`, the
 fragment kept (LLP 1038 §3). Expo's `Linking.createURL("/post/42")` writes
-the three-slash form.
+the three-slash form. Android matches the declared spelling and its lowercase form,
+and refuses a scheme declared in both `urlSchemes` and `protocol_handlers`.
 
 For packaged-only Apple registration, add `"distribution_only": true` to an
 entry, for example `{"protocol":"notes","url":"/open?u=%s","distribution_only":true}`.
@@ -770,7 +771,7 @@ the web manifest or explicit `host.<platform>.urlSchemes`.
 `http` and `https` are the web's own schemes. An app declares both or
 neither: each once, with the same `url` and the same `distribution_only`.
 `readManifest` refuses any other form, so every build does, and
-`host.ios.urlSchemes` and `host.macos.urlSchemes` refuse both. The pair makes
+all three hosts refuse both in `urlSchemes`. The pair makes
 the app a web browser:
 
 | host | what the pair does |
@@ -1508,7 +1509,10 @@ in its middle, as every app's does. `host.android.launchImage` replaces it:
 platform shows within a centred square 192 dp across and, on stock Android, cuts
 to the circle in that square (a `width` above 192 is refused); before Android 12,
 whose launch window has no icon, the picture is centred on the window. `false`
-shows no icon. Changing a colour or a picture requires a new native build.
+shows no icon in either appearance. Both hosts accept a dark PNG inside `launchImage`:
+`{ "src": "mark-light.png", "width": 128, "color_scheme_dark": { "src": "mark-dark.png" } }`.
+Each picture uses the parent's width and its own aspect ratio. Without a dark PNG the
+same picture appears in both schemes. Changing a colour or picture requires a new native build.
 
 ### Store category, Game Mode and memory
 
@@ -2089,9 +2093,9 @@ the app directly with `EXACT_IDENTITY` and `EXACT_PROFILE`.
 From the app's directory, `bun exact.mjs android --release --no-install --json`
 builds an APK without querying adb. `bun exact.mjs android --bundle --json`
 builds a production App Bundle (`.aab`) without installing. Both report the
-artifact's absolute path. An outside app's outputs are
-`target/android/app/outputs/apk/release/app-release.apk` and
-`target/android/app/outputs/bundle/release/app-release.aab`.
+artifact's absolute path. An outside app's outputs are `target/android/app/outputs/apk/release/app-release.apk` and `target/android/app/outputs/bundle/release/app-release.aab`.
+
+For Android package visibility, put `"queries": [{"action": "android.intent.action.TTS_SERVICE"}]` in `host.android`. Entries take `{package}`, `{action}` or `{action, scheme}` under the same allow-list as a bound package's `manifest.queries`. The APK merges matching entries once.
 
 `EXACT_BUILD_NUMBER` sets Android's `versionCode` (1 by default, an integer
 from 1 through 2100000000); `EXACT_VERSION` sets `versionName` (0.1.0 by
@@ -3177,7 +3181,11 @@ does. A mutation fails on its first overrun. `failure(x).code` is `error`
 and `failure(x).reason` is `overrun` for either failure. The app can show a
 retry button for a failed mutation. A development build also reports the
 overrun in the host console (the app’s logcat tag on Android). The Apple
-development window shows it until the next input or plan replacement.
+development window shows it until the next input or plan replacement. A launch
+with `EXACT_DEV_PILL=0` draws no such pill, nor the dev loop's status pill: for a
+screenshot of a development build (a simulator screenshot service such as Exact Build's,
+whose emulated clock can overrun budgets a device keeps). The budgets, the refusal and the
+console line are unchanged.
 The runner never retries a stream message
 that overruns.
 The host asks a yielded answer again at once, in its place among the source's
@@ -5198,7 +5206,7 @@ asks, from a press. [Recipe](recipes/displays.md).
 
 ### Still desktop capture (`@exact/screen-capture`)
 
-`captureScreens({directory, type?, quality?})` writes a still of every
+`captureScreens({directory, type?, quality?, screen?, rect?, window?, cursor?})` defaults to a still of every
 display, in display-list order, without a picker or window activation
 (LLP 1178). It answers `{captures: [{path, width, height, type, screen}]}`:
 physical pixel sizes and the corresponding `ScreenDetailed`, with
@@ -5216,19 +5224,24 @@ wake cannot request or capture. Files publish in call order after all
 encodes finish; cancellation before publication leaves previous files.
 A failure before publication preserves every previous file; a failure
 between renames reports `EncodingError` and may leave some files new.
-Limits are 8,192² pixels per display and 2²⁷ per call, checked before
+Limits are 8,192² pixels per picture and 2²⁷ per call, checked before
 allocation (`QuotaExceededError`). Unsupported encodings fall back to PNG;
 JPEG is supported on both desktop hosts.
 
 On macOS, status is `prompt` until this install has asked, `denied` after an
 unsuccessful request, and `granted` when the OS permits capture. It is read
 again when the app becomes active. A denial is changed in System Settings.
+On macOS, select a display with `screen` from `getScreenDetails()`. A `rect` within that
+display uses display-local CSS pixels. Select a window with the handle from
+`getWindowAtPoint({x, y})` or `getFrontmostWindow()`. Both lookups use the
+capture grant and app origin. The window still adds its desktop `frame`.
+The Screen Capture API's `cursor` accepts `always` or `never` (default).
 See the [capture recipe](recipes/screen-capture.md) for setup and fixtures.
 
 | host | still capture |
 | --- | --- |
-| macOS 14+ | `SCScreenshotManager`, sRGB at backing pixels, without the pointer; Screen Recording permission, checked at each capture |
-| Windows | per-monitor `BitBlt` with `SRCCOPY \| CAPTUREBLT`, physical pixels, no pointer or permission dialog; GDI's SDR colors, tagged sRGB |
+| macOS 14+ | `SCScreenshotManager`, sRGB at backing pixels, Screen Recording checked at each capture |
+| Windows | per-monitor GDI for the default call. Window lookup and explicit capture selectors or cursor settings return `NotSupportedError` |
 | web, Linux | deterministic fixture images under the agent; real capture answers `NotSupportedError` |
 | mobile, TV, watch, terminal | unavailable |
 

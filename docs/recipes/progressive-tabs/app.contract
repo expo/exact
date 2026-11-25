@@ -24,11 +24,14 @@ component App
                 if e.name == "explore"
                   Explore(shown=(nav.tab == "explore"), ordered=ordered)
                 else
+                  header
+                    text "Home" role="heading" aria-level=1
                   button press=compare testId="compare"
                     text (ordered ? "Use independent history" : "Use ordered history")
       row role="tablist"
         for t in nav.tabs key=t.name
           button role="tab" aria-controls=`panel-${t.name}` aria-selected=(nav.tab == t.name) press=pick(t.name) testId=`tab-${t.name}`
+            image (t.name == "home" ? "symbol:home" : "symbol:search")
             text (t.name == "home" ? "Home" : "Explore")
 
 component Explore

@@ -13,6 +13,9 @@ import android.os.Build
  *   of its inset animation ([android.view.WindowInsetsController.controlWindowInsetsAnimation]); it goes when the
  *   finger was moving down or had pulled it more than half away, and the field then lets go of the focus. Before
  *   Android 11 nothing moves the keyboard by hand: the finger reaching it puts it away.
+ *
+ * UIKit's `on-drag-with-accessory` and `interactive-with-accessory` arrive as `on-drag` and `interactive`: Android shows
+ * no accessory bar over its keyboard.
  */
 internal class Dismissal(private val view: ExactView) {
     /** The drag that is down follows the keyboard. */

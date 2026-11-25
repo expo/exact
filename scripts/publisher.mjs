@@ -8,6 +8,7 @@
 //   module pair, checked by the caller against the stream's cohort (`classifyArtifacts`);
 // - the signed publish (`publishStream`): blobs read back, `seq` under the stream's lock, the head signed, an
 //   immutable release record (LLP 1026 D11).
+import { addedSwiftPackageInputs, swiftPackageInputChanged } from './package-libraries.mjs';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
@@ -243,7 +244,7 @@ function binaryInputEvidence(bytes) {
   return evidence;
 }
 
-export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = binaryInputEvidence(bytes), env = process.env) {
+export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = binaryInputEvidence(bytes), env = process.env, extensions) {
   const platform = compat.inputs.platform, apple = ['ios', 'macos'].includes(platform);
   const assetApp = { ...app, appleIcons, manifest: { host: app.manifest.host } };
   const appleAssetCatalogs = apple ? appleAssetCatalogInventory(assetApp, compat.target.includes('-tvos') ? 'tvos' : platform) : [];
@@ -266,8 +267,13 @@ export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = bi
   check(evidence.directories, (path, row) => canonicalJson(directoryInputNames(path, skip)) === canonicalJson(row.names));
   check(evidence.absent, path => !existsSync(path));
   check(evidence.links, (path, row) => sha256(Buffer.from(readlinkSync(path))) === row.sha256);
+  if (apple) changed.push(...addedSwiftPackageInputs(app.dir, compat.target.includes('-tvos') ? 'tvos' : platform, extensions, evidence.inventories));
   for (const row of evidence.inventories ?? []) {
     if (!Object.hasOwn(roots, row.root)) refuse(`the binary input receipt names an unknown source root ${row.root}`);
+    if (row.kind === 'swift-package') {
+      if (swiftPackageInputChanged(resolve(roots[row.root], row.path), row.identity)) changed.push(`${row.identity.interface}/${row.identity.directory} Swift package`);
+      continue;
+    }
     if (row.kind !== 'notification-service') refuse(`the binary input receipt names an unknown inventory ${row.kind}`);
     changed.push(...notificationServiceInputChanges(resolve(roots[row.root], row.path), row.identity).map(name => name === notificationServiceSourceRoot ? `${row.root}/${row.path}` : `${row.root}/${row.path}/${name}`));
   }
@@ -367,7 +373,7 @@ export async function streamCandidates(app, origin, found, env, { baker = null, 
       nativeData = superseded.filter(key => key === 'dataCrate');
       // The native files and manifest metadata the binary's evidence names, which the compatibility id does not all encode.
       const unchecked = evidence === null;
-      const pendingInputs = [...superseded, ...(unchecked ? [] : binaryInputChanges(evidenceBytes, app, compat, graph.appleIcons, evidence, env))];
+      const pendingInputs = [...superseded, ...(unchecked ? [] : binaryInputChanges(evidenceBytes, app, compat, graph.appleIcons, evidence, env, graph.extensions))];
       // The named entries are this bake's, in place of the last generation's whole.
       const entries = [...built.entries].map(([name, bytes]) => ({ name, bytes, sha256: sha256(bytes) }));
       const staticAssets = snapshot

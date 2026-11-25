@@ -166,8 +166,10 @@ extension Presenter {
     /// wrapper: reveal its caret, not that wrapper's far edge. The input keeps
     /// its own internal scrolling.
     func revealFocusedEditor() {
-        // While a finger drags the keyboard away, the offset is the finger's
-        guard let editor, !interactiveKeyboardDrag else { return }
+        guard let editor else { revealOwed = false; return }
+        // Hold the reveal while a finger drags the keyboard, whose offset is the finger's, and run it as the drag ends
+        guard !interactiveKeyboardDrag else { revealOwed = true; return }
+        revealOwed = false
         if editor.field == nil, editor.textArea == nil,
            let native = FirstResponder.current as? UIView, let input = native as? UITextInput,
            let end = input.selectedTextRange?.end, let view = input.textInputView {
@@ -181,6 +183,17 @@ extension Presenter {
             }
         }
         reveal(editor)
+    }
+
+    /// A finger's drag of a scroller ended (`KeyboardDrag`): a reveal the drag held runs on the main queue's next turn,
+    /// once UIKit has ended the scroll view's drag and set the keyboard's end, unless another drag holds it still.
+    func keyboardDragEnded() {
+        guard revealOwed else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.revealOwed, !self.interactiveKeyboardDrag else { return }
+            self.revealOwed = false
+            self.revealSettledEditor()
+        }
     }
 
     /// Reveal after native blocks and any pending list fill have settled.

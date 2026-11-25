@@ -2,6 +2,7 @@
 
 use super::*;
 
+pub(crate) mod bottom_toolbar;
 pub(crate) mod tab_accessory;
 
 impl Lowerer<'_> {
@@ -198,6 +199,8 @@ pub(crate) enum NavPlace {
     PanelChild(Vec<String>, Vec<Expr>),
     /// Deeper inside a root, behind a wrapper, outside any route.
     InRoot(Vec<String>, Vec<Expr>),
+    /// Directly inside the column that owns a route.
+    RouteColumn,
     /// Inside a route.
     InRoute,
 }
@@ -350,7 +353,7 @@ impl NavPlace {
         } else {
             match self {
                 NavPlace::Outside => "a tablist outside every navigation root".into(),
-                NavPlace::InRoute => "a tablist inside a route".into(),
+                NavPlace::InRoute | NavPlace::RouteColumn => "a tablist inside a route".into(),
                 _ => return Ok(()),
             }
         };
@@ -506,7 +509,7 @@ impl NavPlace {
                         modal.map_or(span, |a| a.span),
                     );
                 }
-                NavPlace::InRoute => {
+                NavPlace::InRoute | NavPlace::RouteColumn => {
                     return err(
                         "lower-route-place",
                         format!("this `{tag}` has a `navigationKey` inside another route; a route is a child of the navigation root or of a linked `role=\"tabpanel\"` in it, never of a route, so no host would show it"),
@@ -516,7 +519,7 @@ impl NavPlace {
                 NavPlace::Outside => return Ok(NavPlace::Outside),
                 _ => {
                     check_scroll(tag, attrs, children)?;
-                    return Ok(NavPlace::InRoute);
+                    return Ok(if tag == "column" { NavPlace::RouteColumn } else { NavPlace::InRoute });
                 }
             };
             return err(
@@ -546,6 +549,7 @@ impl NavPlace {
                     NavPlace::InRoot(path(p), tabs.clone())
                 }
             }
+            NavPlace::RouteColumn => NavPlace::InRoute,
             other => other.clone(),
         })
     }

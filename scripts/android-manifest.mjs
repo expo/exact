@@ -152,12 +152,30 @@ export function withMetaData(fragment, meta) {
   return [fragment, '    <application>', ...meta, '    </application>'].filter(Boolean).join('\n');
 }
 
-/** The manifest's children for every bound implementation's fragment (a `<queries>` element and an `<application>`
- * one, each when it has entries), or '' when none declares one. Throws, naming the package and what the allow-list
- * refuses. `bound` is `androidImplementations`' list; `privacyPolicy` is the app's `privacy_policy`, carried as
- * meta-data when a fragment declares an activity. */
-export function manifestFragment(bound, { privacyPolicy = null } = {}) {
+function addQueries(queries, list, refuse) {
+  if (!Array.isArray(list)) refuse('has queries that is not a list');
+  for (const c of list) {
+    for (const key of Object.keys(c ?? {})) if (!FIELDS.queries.has(key)) refuse(`gives a query "${key}", which the list does not allow`);
+    const keys = Object.keys(c ?? {}).sort().join();
+    if (c == null || typeof c !== 'object' || Array.isArray(c) || !['package', 'action', 'action,scheme'].includes(keys)) refuse('gives a query without exactly one of package or action (with a scheme or not)');
+    if (Object.hasOwn(c, 'package')) {
+      if (!QUERY_PACKAGES.has(c.package)) refuse(`gives a query the package ${JSON.stringify(c.package)}, which is not on the list`);
+      queries.add(`        <package android:name="${c.package}" />`);
+    } else if (Object.hasOwn(c, 'scheme')) {
+      if (typeof c.action !== 'string' || !Object.hasOwn(QUERY_SCHEMES, c.action) || !QUERY_SCHEMES[c.action].has(c.scheme)) refuse(`gives a query the action ${JSON.stringify(c.action)} with the scheme ${JSON.stringify(c.scheme)}, which is not on the list`);
+      queries.add(`        <intent><action android:name="${c.action}" /><data android:scheme="${c.scheme}" /></intent>`);
+    } else {
+      if (!QUERY_ACTIONS.has(c.action)) refuse(`gives a query the action ${JSON.stringify(c.action)}, which is not on the list`);
+      queries.add(`        <intent><action android:name="${c.action}" /></intent>`);
+    }
+  }
+}
+
+/** Merge the app's and bound implementations' visibility queries with the packages' application entries.
+ * A refused entry names its source. A rationale activity carries the app's privacy policy as meta-data. */
+export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] } = {}) {
   const lines = [], queries = new Set(), names = new Set(), removed = new Set();
+  addQueries(queries, appQueries, (what) => { throw new Error(`app.json host.android.queries: ${what} (LLP 1133.030 D9's allow-list)`); });
   let activities = 0;
   for (const impl of bound) {
     const fragment = impl.manifest;
@@ -176,26 +194,12 @@ export function manifestFragment(bound, { privacyPolicy = null } = {}) {
     const kinds = Object.keys(fragment).sort((a, b) => (a === 'aliases') - (b === 'aliases'));
     for (const kind of kinds) {
       const list = fragment[kind];
+      if (kind === 'queries') { addQueries(queries, list, refuse); continue; }
       if (kind === 'permissions') continue; // fragmentPermissions'
       if (!FIELDS[kind]) refuse(`names "${kind}"; only ${[...Object.keys(FIELDS), 'permissions'].join(', ')} are allowed`);
       if (!Array.isArray(list)) refuse(`has ${kind} that is not a list`);
       for (const c of list) {
         for (const key of Object.keys(c ?? {})) if (!FIELDS[kind].has(key)) refuse(`gives a ${ONE[kind]} "${key}", which the list does not allow`);
-        if (kind === 'queries') {
-          const keys = Object.keys(c ?? {}).sort().join();
-          if (c == null || typeof c !== 'object' || Array.isArray(c) || !['package', 'action', 'action,scheme'].includes(keys)) refuse('gives a query without exactly one of package or action (with a scheme or not)');
-          if (Object.hasOwn(c, 'package')) {
-            listed(QUERY_PACKAGES, c.package, 'a query the package');
-            queries.add(`        <package android:name="${c.package}" />`);
-          } else if (Object.hasOwn(c, 'scheme')) {
-            if (!QUERY_SCHEMES[c.action]?.has(c.scheme)) refuse(`gives a query the action ${JSON.stringify(c.action)} with the scheme ${JSON.stringify(c.scheme)}, which is not on the list`);
-            queries.add(`        <intent><action android:name="${c.action}" /><data android:scheme="${c.scheme}" /></intent>`);
-          } else {
-            listed(QUERY_ACTIONS, c.action, 'a query the action');
-            queries.add(`        <intent><action android:name="${c.action}" /></intent>`);
-          }
-          continue;
-        }
         if (kind === 'metadata') {
           const field = Object.hasOwn(c ?? {}, 'resource') ? 'resource' : 'value';
           if (c == null || typeof c !== 'object' || Array.isArray(c) || typeof c.name !== 'string' || typeof c[field] !== 'string' || (field === 'resource' && Object.hasOwn(c, 'value'))) refuse('gives a meta-data without a string name and one string value or resource');
@@ -305,13 +309,14 @@ export const androidProtocolHandlers = (manifest, distributed = false) => (manif
   .filter((h) => !['http', 'https'].includes(h.protocol.toLowerCase()) && (!h.distribution_only || distributed))
   .map(({ protocol, url }) => ({ protocol: protocol.toLowerCase(), url }));
 
-/** The protocol handlers on the app's activity (LLP 1038 D8): a VIEW filter for each scheme, and the handlers as the
- * application's `dev.exact.protocol_handlers` meta-data, which the reader gives exact2 so that the whole URL arrives at
- * the template's `%s` (cold, the launch location; warm, `navigate`), as Apple's `ExactProtocolHandlers`. */
-export function withProtocolHandlers(fragment, handlers = []) {
-  if (!handlers.length) return fragment;
-  const filters = [...new Set(handlers.map((h) => h.protocol))].flatMap(viewFilter);
-  return onMainActivity(fragment, filters, [`        <meta-data android:name="dev.exact.protocol_handlers" android:value="${escape(JSON.stringify(handlers))}" />`]);
+/** Both declarations register browsable VIEW filters. Only protocol handlers supply templates to the reader.
+ * A URL with no template reaches `location_of` directly (LLP 1038 D8). */
+export function withProtocolHandlers(fragment, manifest, distributed = false) {
+  const handlers = androidProtocolHandlers(manifest, distributed), urlSchemes = manifest?.host?.android?.urlSchemes ?? [];
+  const schemes = new Set([...handlers.map((h) => h.protocol), ...urlSchemes.flatMap((s) => [s, s.toLowerCase()])]);
+  if (!schemes.size) return fragment;
+  const metadata = handlers.length ? [`        <meta-data android:name="dev.exact.protocol_handlers" android:value="${escape(JSON.stringify(handlers))}" />`] : [];
+  return onMainActivity(fragment, [...schemes].flatMap(viewFilter), metadata);
 }
 
 /** The App Links on the app's activity (LLP 1038 D8): for each claimed host (`androidLinkFilters`), an `autoVerify`

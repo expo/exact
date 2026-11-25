@@ -39,8 +39,7 @@ class ExactReply internal constructor(private val id: Int, session: ModuleSessio
     private val session = WeakReference(session)
     private val answered = AtomicBoolean()
     fun send(value: JSONObject) {
-        val sent = if (value.length() == 1 && value.has("exact:answer")) value.get("exact:answer") else value
-        val json = try { moduleJson(sent) } catch (_: JSONException) { return fail("the reply was not JSON") }
+        val json = try { moduleReplyJson(value) } catch (_: JSONException) { return fail("the reply was not JSON") }
         if (answered.compareAndSet(false, true)) session.get()?.hand(OwnerReplies.Handed.Answer(id, json))
     }
     fun fail(message: String) = refuse("Error", message)
@@ -51,6 +50,10 @@ class ExactReply internal constructor(private val id: Int, session: ModuleSessio
     // A retained reply may answer on any thread. ART can identify an abandoned one only at collection.
     protected fun finalize() { fail("the module dropped the reply") }
 }
+
+// Module callbacks take an object. The single-key envelope carries a scalar or list back to data code.
+internal fun moduleReplyJson(value: JSONObject): String =
+    moduleJson(if (value.length() == 1 && value.has("exact:answer")) value.get("exact:answer") else value)
 
 // JSONStringer also quotes scalar replies and reports invalid values instead of returning null.
 private fun moduleJson(value: Any): String {

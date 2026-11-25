@@ -1311,6 +1311,8 @@ mod tests {
             ("web+notes://n/1", "/n/web%2Bnotes%3A%2F%2Fn%2F1"),
             // An App Link and an unregistered scheme keep their ordinary location.
             ("https://links.example/ficha/7", "/ficha/7"),
+            ("notes:///links?from=cold#part", "/links?from=cold#part"),
+            ("notes://links?from=warm", "/links?from=warm"),
             ("other://post/42", "/post/42"),
             ("/urgencies", "/urgencies"),
         ] {

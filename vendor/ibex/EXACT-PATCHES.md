@@ -1297,3 +1297,11 @@ executes the app’s network work on a separate host with its own transports.
 
 `Fetch::new` binds grants to a supplied HTTP transport. Exact's driver uses
 it for a fixture response without constructing a WebSocket client or stores.
+
+## Local patch 53, cancelling portable HTTP
+
+A fired signal ends DNS, connect and socket I/O with `ConnectionAborted`,
+including a pending Winsock connect. This lets rustls and `write_all` finish
+on cancellation. Fetch checks the signal after I/O and returns its
+`AbortError` to the caller. Replay on refresh in `transport/rustls_http.rs`
+and `transport/windows_connect.rs` (expo/exact#1578).

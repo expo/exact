@@ -20,6 +20,7 @@ import {binaryInputFile, cohortReceipt} from './deploy-heads.mjs';
 import {binarySourceInputs, buildInputCollector, directoryInputNames, swiftTargetInputs, watchOutput} from './cargo-dep-info.mjs';
 import {appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory} from '../host/apple/assets.mjs';
 import {notificationServiceInputChanges, notificationServiceSourceRoot} from './notification-service.mjs';
+import {addedSwiftPackageInputs, swiftPackageInputChanged} from './package-libraries.mjs';
 import {need} from './coverage.mjs';
 // The tools these tests run as built (docs/testing.md: a test runs a built binary and builds none), in Cargo's target
 // directory, the lane's own if it set one: the reason a test that needs one is skipped here, or null.
@@ -53,7 +54,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {appBake, bake, graphT
   const bindings={
     ...Object.fromEntries(['closeSync','existsSync','mkdirSync','openSync','readFileSync','readlinkSync','writeFileSync','mkdtempSync','rmSync'].map(name=>[name,fs[name]])), watch,
     filesystem, filesystemRead, filesystemTree, unbundledTextures, streamBundle,
-    nativeManifestMetadata, directoryInputNames, watchOutput, notificationServiceInputChanges, notificationServiceSourceRoot, appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory,
+    nativeManifestMetadata, directoryInputNames, watchOutput, addedSwiftPackageInputs, swiftPackageInputChanged, notificationServiceInputChanges, notificationServiceSourceRoot, appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory,
     channelOf,validateChannel,resolve,relative,homedir,ROOT:fileURLToPath(new URL('..',import.meta.url)),
     process:{env:{EXACT_GAME_PROOF_PROFILE:'gpu-dev',EXACT_UPDATE_TRUST:'development'}},
     console:{log(){}},Refusal:Error,refuse(message){throw Error(message)},

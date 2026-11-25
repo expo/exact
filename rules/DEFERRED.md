@@ -46,6 +46,12 @@ scheme and fragment. A no-router URL event remains deferred; Charlie's ruling
 keeps the navigation root requirement. Take: no second delivery mechanism is
 added.
 
+**Dark launch pictures (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 3–1).**
+`host.ios.launchImage` and `host.android.launchImage` take `color_scheme_dark: { src }` for the system launch screen (LLP 1030 D2 and LLP 1115.001 D3.6).
+
+**Android app schemes (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 3–1).**
+`host.android.urlSchemes` registers browsable `VIEW` links. `location_of` supplies the launch location or one warm `navigate`. Android refuses a scheme also listed in `protocol_handlers` (LLP 1038 D8).
+
 **Expanded (Charlie, 2026-10-26, #1003):** an iOS app can ask to be the default
 browser. `host.ios.webBrowser: true` emits Apple's managed
 `com.apple.developer.web-browser` entitlement, registers the `http` and `https`
@@ -420,7 +426,12 @@ route pushed while the authored tablist is, no bar for a route with no
 header, and a named scroller under an inline title's bar (LLP 1075.003
 §9.10). The Signal Clone's conversation header and photo viewer are the
 consumer. Unblocks them with no module. Take: none offered; waived by
-Charlie's approval. No new attribute, no title menu, no bar added by a route.
+Charlie's approval. No new attribute or title menu.
+**Expanded (Charlie, 2026-11-24, "recs ok"):** one bottom toolbar row directly
+inside the route's column supplies its UIKit buttons and flexible spaces
+(LLP 1123 C11b). Every other host draws the row where the column places it
+(Charlie, 2026-11-24, "ask panel about questions then follow recs of panel";
+panel 4–0). Android's Material bottom app bar waits for an Android consumer.
 **Clarified (James Ide, 2026-11-24, for Exact Chat's contact menu):** "no
 title menu" is UIKit's title pull-down. A pressable title's group keeps the
 `contextPopover` it has on the page when the bar draws it (LLP 1021 §5.1),
@@ -721,6 +732,8 @@ commands, writes on the location (`todo add milk`), and printing a GUI app
   No take was named; the ruling stands as its own waiver until Charlie names
   one.
 
+  **Menu rows** (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"): LLP 1115.001 D10 admits a supporting line and a trailing check beside a leading symbol on Android (panel 4–0), and a supporting line with the check before the symbol in Windows flyouts (panel 3–1).
+
   **Expanded (Charlie, 2026-10-23, LLP 1115.001.003 §5):** Android TV is
   admitted as a variant of the Android phone host, as tvOS is of the iOS
   presenter: the same APK, Canvas reader and presenter, which tell a TV by
@@ -861,6 +874,12 @@ the app's own Swift may name products at exact versions, with one committed
 Unblocks vendor SDKs distributed as Swift packages; app-local xcframeworks
 remain supported. CocoaPods stays out: its trunk stops accepting podspecs
 on 2026-12-02, and the Apple build has no Xcode project for it to integrate into.
+
+**Expanded (Charlie, 2026-11-24, "recs ok"), #1327.** An implementation may
+ship a Swift package by relative path inside its npm package, with symlinks
+resolved. Targets used by the named products on an Apple destination may
+have no `unsafeFlags` for that destination. Each remote dependency must be
+listed at its exact version. Only remote packages enter the Swift lock.
 
 **Expanded (Charlie, 2026-10-13, issue-program ruling 10):** runner-owned
 WebSocket sending: the stream mapper receives a socket handle and a mutation
@@ -1896,6 +1915,11 @@ reading. Nothing that isn't HTML is added by it.
   moves to Later.
   **Clipboard reads (Charlie, 2026-11-24, "recs ok").** Float and Pocket Lab
   need reads from a person's action. Exact provides them on macOS, the web and iOS (LLP 1133.006 D6).
+  **Android text reads (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 3–1).**
+  Pocket Lab’s Paste text button and paste at the caret require person-started work and window input focus.
+  Without either, reject with `NotAllowedError`. On a focused read, `readText()` returns the first plain-text
+  item and `read()` returns only `text/plain`. An empty clipboard gives `""` and `[]` respectively
+  (LLP 1133.006 D6 and the Android entry in D7).
   **Formatted clipboard writes (Charlie, 2026-11-24, "recs ok").** Pocket Lab
   can write sanitized `text/html` on macOS, iOS and the web (LLP 1133.006 D1).
   **Device-local and expiring copies (Charlie, 2026-11-24, "recs ok").**
@@ -1904,7 +1928,8 @@ reading. Nothing that isn't HTML is added by it.
   `android.isSensitive`, Windows clipboard reads, Windows HTML writes, `text/uri-list` until a
   second consumer asks, RTF, custom formats, file
   promises, several items in one write, a Contract `write`, a
-  clipboard-change event, and the Linux and Android cells.
+  clipboard-change event, the Linux cell, Android image reads and all Android `@exact/clipboard` writes,
+  including HTML and images.
   **Built (maintainers' agent, 2026-11-12, #196;
   LLP 1133.006 D7):** Windows
   writes a PNG by `app:/` path, sanitized within the same 64 MiB file and
@@ -2325,8 +2350,8 @@ from `tree`, `state`, or `layout`. The old repo's six primitives grew eighty wir
 one reasonable "view" at a time; the count is the cost. (Charlie, 2026-08-29.)
 
 **Admitted (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** Pocket Lab's Fold lab can move an iOS simulator's hinge
-with `fold <degrees>` in a drive or authored test (LLP 1078 D7). The driver acts
-outside the app and waits for the device's angle. The wire still has ten operations.
+with `fold <degrees>` in a drive or authored test (LLP 1078 D7). The driver acts outside the app and waits for the device's angle. The wire still has ten operations.
+**Admitted (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** Android reads posture and viewport segments from Jetpack WindowManager for Pocket Lab (LLP 1078 D11).
 
 Not shipping: causal trace, behavior diff and verify, mutation
 dry-run, contract witness / dataflow / ~~source-map~~ / bindings, accessibility audit (narrowed below), plan
@@ -2444,10 +2469,10 @@ is recorded beside the entry, in his words. Without a take or a waiver, the answ
 is no. **Restated (Charlie, 2026-09-27):** the take stays the default; the waiver
 exists so that an exception is a visible act and not drift.
 
-**Web fetches on tenant domains (expo/exact#1486, LLP 1016 D6).** One website
-build can fetch each site's data under `net.fetch self` in the browser and
-during server rendering. A native source has no page origin. Take waived
-(Charlie, 2026-11-24, "recs ok"). A data API for reading the origin stays out.
+**App-owned Android queries (Charlie, 2026-11-24, "recs ok").** `host.android.queries` takes the package, action and action-with-scheme entries and allow-lists of a package’s `manifest.queries` (LLP 1133.030 D9). This lets an app’s Kotlin discover installed speech engines.
+
+**Web fetches on tenant domains (expo/exact#1486, LLP 1016 D6).** One website build can fetch each site's data under `net.fetch self` in the browser and
+during server rendering. A native source has no page origin. Take waived (Charlie, 2026-11-24, "recs ok"). A data API for reading the origin stays out.
 
 **Install-page slice, 2026-09-12 (Charlie, LLP 1030.003 D6a/D6b):** bake a
 standard `/.exact/install/` page for web/iOS/macOS with configured installation
@@ -2518,8 +2543,13 @@ Anthonyy232's screenshot annotation tool (#505, #506). Unblocks putting its
 toolbar on the display that holds the pointer and capturing before showing
 its window, without its own Win32 monitor and capture code.
 Take: none offered; waived by Charlie, 2026-11-14, after the panel (decision
-D5: all three seats chose to build both). Still out: `getDisplayMedia`, one
-display, a region, a named window, placing another window, and the desktop Linux, iPadOS and Android cells.
+D5: all three seats chose to build both). Still out: `getDisplayMedia`,
+placing another window, and the desktop Linux, iPadOS and Android cells.
+
+**Expanded (Charlie, 2026-11-24, W1, panel 3–1).** A guide recorder (#1582)
+can capture one window, one display or a display-local region and include
+the cursor. The capture package identifies the frontmost window and the
+window at a screen point under the existing recording grant (LLP 1178 D3).
 
 **Expanded (Charlie, 2026-11-24, "recs ok").** Float may read its own window's
 `screenX`, `screenY`, `outerWidth` and `outerHeight` on macOS and the web,

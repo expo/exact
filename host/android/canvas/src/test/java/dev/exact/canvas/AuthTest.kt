@@ -467,6 +467,27 @@ class AuthTest {
         assertEquals("sscontrol://urgencies", Host.urls.lastOrNull())
     }
 
+    @Test fun customSchemeDeliveredDuringRecreationOrWhileStoppedArrivesOnce() {
+        controller.pause().stop().destroy()
+        Exact.live = false
+        val original = intent("notes:///links?from=cold#part")
+        controller = Robolectric.buildActivity(Reader::class.java, original)
+        controller.create().start().resume()
+        assertEquals(original.dataString, Environment.values["EXACT_LAUNCH_URL"])
+        val saved = Bundle()
+        controller.pause().saveInstanceState(saved).stop().destroy()
+        controller = Robolectric.buildActivity(Reader::class.java, original)
+        controller.create(saved)
+        val first = "notes:///links?from=recreation"
+        controller.newIntent(intent(first)).start().resume()
+        val second = "notes://links?from=stopped"
+        controller.pause().stop().newIntent(intent(second)).restart().start().resume()
+        controller.pause().saveInstanceState(saved).stop().destroy()
+        controller = Robolectric.buildActivity(Reader::class.java, intent(second))
+        controller.create(saved).start().resume()
+        assertEquals(listOf(first, second), Host.urls)
+    }
+
     @Test fun aCallbackRecreatesTheActivityWithSavedStateInTheLiveProcess() {
         browser(true)
         Auth.open(activity, 1, "https://login.test/authorize", "app.test:/cb", "s1")

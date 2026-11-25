@@ -834,7 +834,7 @@ fn prefer<D: DataSource>(p: &mut Presenter<D>, line: &str) -> String {
         "device-posture": fold.posture.keyword(),
         "horizontal-viewport-segments": fold.cols,
         "vertical-viewport-segments": fold.rows,
-        "viewport-segments": p.segments.iter().map(|r| [r.x, r.y, r.width, r.height]).collect::<Vec<_>>(),
+        "viewport-segments": p.host().kernel().env().segments.iter().map(|r| [r.x, r.y, r.width, r.height]).collect::<Vec<_>>(),
     }, "mode": p.host().runner().modes().into_iter().map(|(a, v)| (a, v.into())).collect::<serde_json::Map<String, serde_json::Value>>()})
     .to_string()
 }

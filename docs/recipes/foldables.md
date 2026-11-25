@@ -1,9 +1,10 @@
 # Recipe: foldables
 
-Duo simulator drives and tests take `fold 130`. `devicePosture` is `continuous` at
-0° and 180°, `folded` at 90° and 130°. `exactViewport()` gives
-`horizontalViewportSegments=2` (book) or `verticalViewportSegments=2` (laptop).
-`env(viewport-segment-<left|top|width|height> <x> <y>)` reads segment `x, y`’s bounds.
+Drive a Duo simulator with `fold 130`. Its `devicePosture` is `continuous` at 0° and
+180°, `folded` at 90° and 130°. Android reports `folded` only for a half-open hinge.
+Place panes by `horizontalViewportSegments` (columns) and `verticalViewportSegments`
+(rows). A flat separating hinge still gives two segments, the cover display one.
+`env(viewport-segment-<left|top|width|height> <x> <y>)` excludes the hinge band.
 Some browsers (Safari 27) report no fold.
 
 ```contract
@@ -27,25 +28,24 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
 [Apple's talk](https://developer.apple.com/videos/play/tech-talks/111463/)):
 
 - Scrolling content can span the hinge; keep controls off it.
-- A pane that does not scroll keeps its width: centred (full width on narrow
-  screens), or on the trailing segment of a book fold.
+- Centre a non-scrolling pane (full width on narrow screens), or use the trailing book segment.
 - **A list and its detail** is a split view (`pattern list-detail`; UIKit's on iOS,
   LLP 1127). **Peer panes** use [native containers](../contract-for-agents.md#arranged-panes)
   on iOS 27.1 and responsive CSS elsewhere (Duo Lab's Panes tab).
 - A route on the trailing segment keeps its title with
   `navigationBar=(book ? "none" : "auto")`: its first-child `header` paints in
   that pane, with its own Back if pushed; otherwise UIKit makes the bar.
-- Put the first pane on the leading segment: segment 1 in RTL; indices count from the left.
-- Segments are viewport-relative: start the panes' container at its left. Duo Lab's Arrangement
-  panes stay below the header: across a fold, a `space-between` row; down one, a box after the
-  container ends it at the fold, the lower `absolute`. Inset controls from safe edges.
+- Segment indices count from the left. Start on segment 1 in RTL.
+- Start the panes at the viewport's left edge. Duo Lab's Arrangement keeps panes below the header
+  with a `space-between` row across a fold, or a box ending at the fold and an `absolute` lower pane.
+  Inset controls from safe edges.
 - In a laptop fold, put authored controls on the bottom segment. Cap a bottom
   sheet's `max-height` at the room below its header and
   `calc(100% - env(viewport-segment-top 0 1))`, from the viewport origin.
   An iOS keyboard can leave that segment below the viewport and zero tall;
   Duo Lab's note sheet then lifts the cap.
 - End panes under the keyboard at `100%` or `bottom: 0`; hosts' segment heights differ.
-- Keep the same pane instances to retain field text; UIKit may end editing on a panel switch.
+- Keep pane instances to retain field text. UIKit may end editing on a panel switch.
 - Panes move as UIKit's with `-exact-layout-transition="-exact-spring(439, 41.9, 1)"`; browsers drop
   `env()` early on opening (fall back to `exactViewport().segments`).
 - UIKit's alerts and sheets on a fold: [Folds on iOS](../contract-for-agents.md#folds-on-ios).

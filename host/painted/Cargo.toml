@@ -78,6 +78,7 @@ swash = "0.2"
 # Canvas 2D's vertical metrics read `hhea` and `OS/2` (the version Parley uses).
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
 memmap2 = "0.9"
+material-colors = { version = "0.5.0", default-features = false, features = ["libm"] }
 # Scratch reservation is audited against this decoder's row-buffer growth.
 png = "=0.18.1"
 libc = "0.2"

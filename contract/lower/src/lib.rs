@@ -386,7 +386,7 @@ pub fn lower_all(
             span: checked.expanded.root.span,
         }]);
     }
-    let (mut asset_errors, asset_warnings) = asset_root
+    let (mut asset_errors, mut notes) = asset_root
         .filter(|_| !theme::retained::stops_at_retention())
         .map(|root| {
             let checking = contract_checking::Checking::new(checked);
@@ -403,11 +403,12 @@ pub fn lower_all(
         profile,
         warned.as_ref().map(|_| &mut text_styles),
     );
+    asset_errors.extend(routes::bottom_toolbar::check(checked, &mut notes));
     if let Some((selection, out)) = warned {
         out.extend(warnings::with_text_styles(
             checked,
             &text_styles,
-            asset_warnings,
+            notes,
             selection,
         ));
     }
@@ -435,8 +436,7 @@ fn lower_with_sites(
     profile: Profile,
     text_styles: Option<&mut warnings::TextStyles>,
 ) -> Result<(Plan, Option<Sites>), Vec<LowerError>> {
-    // An earlier compile's targets and roles go first: lowering may stop
-    // before the design is read, and the warnings still run.
+    // Warnings can run even if lowering stops before the design is read.
     control_roles::unlowered();
     let Checked {
         file,

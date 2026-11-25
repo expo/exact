@@ -356,7 +356,13 @@ impl<D: DataSource> Presenter<D> {
                     return None;
                 }
             }
-            shape::menu(kernel, pop, &pressed)
+            shape::menu(kernel, pop, &pressed, |node| {
+                if self.top.overlay.enabled {
+                    shape::row(kernel, node, false)
+                } else {
+                    self.menu_row(node)
+                }
+            })
         });
         self.with_exit(pop, plan)
     }

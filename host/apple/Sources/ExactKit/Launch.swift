@@ -38,6 +38,8 @@ public final class ExactLaunch: NSObject {
     private(set) var activation = "pending"
     private(set) var bootPath: String?
     private weak var launchSession: ExactSession?
+    /// Where the observer's lines go with `EXACT_OBSERVE_LOG=1`: stderr, or a test's own; nil without it.
+    var observeLog: ((String) -> Void)? = ExactEnv.environment["EXACT_OBSERVE_LOG"] == "1" ? { fputs("observe: \($0)\n", stderr) } : nil
     private var commitPending = false
     private(set) var link: CADisplayLink?
     private var vsync: Vsync?
@@ -281,7 +283,11 @@ public final class ExactLaunch: NSObject {
     private func resolveWorldPresentation() {
         guard marks[.world] == nil, let at = firstWorldPresentation,
               let present = marks[.present] else { return }
-        marks[.world] = max(at, present)
+        let world = max(at, present)
+        marks[.world] = world
+        // A canvas's first frame, which the startup line (its tree alone) may already have been printed without: said
+        // once, on the startup line's clock, for a reader waiting to capture a GPU canvas.
+        if launchSession != nil, let process = marks[.process] { observeLog?("world \(String(format: "%.1f", (world - process) * 1000))") }
     }
 
     @objc private func tick(_ link: CADisplayLink) { frame(Vsync(link)) }
@@ -481,7 +487,7 @@ public final class ExactLaunch: NSObject {
         ttiOutcome = outcome
         stopWatching()
         ExactJournal.shared.record("startup", report())
-        if ExactEnv.environment["EXACT_OBSERVE_LOG"] == "1", launchSession != nil { fputs("observe: startup \(smokeLine())\n", stderr) }
+        if launchSession != nil { observeLog?("startup \(smokeLine())") }
         if marks[.present] != nil { loadServices(.afterStartup) }
     }
 

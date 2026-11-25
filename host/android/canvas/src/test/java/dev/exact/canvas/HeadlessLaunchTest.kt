@@ -5,12 +5,20 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.os.HandlerThread
 import android.os.Looper
 import android.view.View
 import android.widget.FrameLayout
+import androidx.window.WindowSdkExtensions
+import androidx.window.WindowSdkExtensionsDecorator
+import androidx.window.layout.FoldingFeature
+import androidx.window.layout.WindowInfoTracker
+import androidx.window.layout.WindowInfoTrackerDecorator
+import androidx.window.layout.WindowLayoutInfo
+import kotlinx.coroutines.flow.MutableSharedFlow
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -45,6 +53,8 @@ class HeadlessLaunchTest {
         companion object {
             /** What the host was told of its boot, its locations and its frames, in order. */
             val told = CopyOnWriteArrayList<String>()
+            val windowFolds = CopyOnWriteArrayList<List<Int>>()
+            var windowGeometry = emptyList<Int>()
             val environment = HashMap<String, String>()
             @JvmStatic @Implementation fun environment(bytes: ByteArray) {
                 String(bytes, Charsets.UTF_8).split('\u0000').filter { '=' in it }.forEach {
@@ -90,6 +100,8 @@ class HeadlessLaunchTest {
             @JvmStatic @Implementation fun open(href: String) { told += "open $href" }
             @JvmStatic @Implementation fun share(request: String) { told += "share $request" }
             @JvmStatic @Implementation fun window(width: Int, height: Int, scale: Float, insets: IntArray) {
+                windowFolds += insets.drop(16)
+                windowGeometry = listOf(width, height, insets[0])
                 if (insets[0] == 16) {
                     // The software canvas uses the stream's coordinates inside the root's clip.
                     paint = rectangle(Color.BLUE, top = 24f)
@@ -131,7 +143,7 @@ class HeadlessLaunchTest {
     private val made = ArrayList<org.robolectric.android.controller.ActivityController<Reader>>()
 
     @Before fun setup() {
-        Host.told.clear(); Host.turns.clear(); Host.environment.clear(); Environment.values.clear()
+        Host.told.clear(); Host.turns.clear(); Host.windowFolds.clear(); Host.environment.clear(); Environment.values.clear()
         Host.pageHidden = false; Host.bootResult = true; Host.bootEntered = null; Host.releaseBoot = null
         Host.paint = null; Host.chrome = null
         Exact.owner = null; Exact.reader = null; Exact.live = false; Exact.unshown = false
@@ -174,6 +186,83 @@ class HeadlessLaunchTest {
     }
 
     private fun visibilityReports() = Host.turns.filter { it.startsWith("hidden ") }
+
+    @Test fun layoutUsesTheRootSizeWhenMetricsStillDescribeAnotherSize() {
+        val controller = start(Intent(Intent.ACTION_MAIN))
+        val root = ReflectionHelpers.getField<Root>(controller.get(), "root")
+        root.layout(0, 0, 357, 113)
+        Exact.owner?.ask { }
+        assertEquals(listOf(357, 113), Host.windowGeometry.take(2))
+    }
+
+    @Test @Config(sdk = [29]) fun theFirstReaderKeepsDispatchedInsetsThroughAnUnattachedLayout() {
+        val intent = Intent(Intent.ACTION_MAIN).putExtra("warmlaunch", "0")
+        val controller = Robolectric.buildActivity(Reader::class.java, intent).create()
+        val root = ReflectionHelpers.getField<Root>(controller.get(), "root")
+        try {
+            root.dispatchApplyWindowInsets(android.view.WindowInsets.Builder()
+                .setSystemWindowInsets(android.graphics.Insets.of(0, 17, 0, 0)).build())
+            root.layout(0, 0, 200, 300)
+            Exact.owner?.ask { }
+            assertEquals(listOf(200, 300, 17), Host.windowGeometry)
+        } finally { made += controller.start().resume() }
+    }
+
+    @Test fun aStreamOnlyFoldSurvivesPauseAndTracksTheWindowWhileStopped() = resumeFold(5)
+    @Test fun resumeReadsTheCurrentFoldEvenWithoutAFlowEmission() = resumeFold(9)
+
+    private fun resumeFold(extension: Int) {
+        val empty = WindowLayoutInfo(emptyList())
+        var current = empty
+        val events = MutableSharedFlow<WindowLayoutInfo>(extraBufferCapacity = 1)
+        WindowSdkExtensions.overrideDecorator(object : WindowSdkExtensionsDecorator {
+            override fun decorate(windowSdkExtensions: WindowSdkExtensions) = object : WindowSdkExtensions() {
+                override val extensionVersion = extension
+            }
+        })
+        WindowInfoTracker.overrideDecorator(object : WindowInfoTrackerDecorator {
+            override fun decorate(tracker: WindowInfoTracker) = object : WindowInfoTracker by tracker {
+                override fun windowLayoutInfo(activity: Activity) = events
+                override fun getCurrentWindowLayoutInfo(context: android.content.Context) = current
+            }
+        })
+        try {
+            val app = RuntimeEnvironment.getApplication()
+            shadowOf(app.packageManager).setSystemFeature(android.content.pm.PackageManager.FEATURE_SENSOR_HINGE_ANGLE, true)
+            val controller = start(Intent(Intent.ACTION_MAIN))
+            settle()
+            val bounds = controller.get().windowManager.currentWindowMetrics.bounds
+            val x = bounds.width() / 2
+            val book = WindowLayoutInfo(listOf(object : FoldingFeature {
+                override val bounds = Rect(x, 0, x, bounds.height())
+                override val orientation = FoldingFeature.Orientation.VERTICAL
+                override val state = FoldingFeature.State.HALF_OPENED
+                override val isSeparating = true
+                override val occlusionType = FoldingFeature.OcclusionType.NONE
+            }))
+            current = book
+            assertTrue(events.tryEmit(book))
+            settle()
+            assertEquals(listOf(2, 1, x, x), Host.windowFolds.last())
+            controller.pause()
+            if (extension >= 9) current = empty
+            controller.resume()
+            settle()
+            assertEquals(if (extension >= 9) listOf(1, 0, 0, 0) else listOf(2, 1, x, x), Host.windowFolds.last())
+            controller.pause().stop()
+            val before = Host.windowFolds.size
+            current = if (extension >= 9) book else empty
+            if (extension < 9) assertTrue(events.tryEmit(current))
+            settle()
+            assertEquals(before, Host.windowFolds.size)
+            controller.restart().resume()
+            settle()
+            assertEquals(if (extension >= 9) listOf(2, 1, x, x) else listOf(1, 0, 0, 0), Host.windowFolds.last())
+        } finally {
+            WindowInfoTracker.reset()
+            WindowSdkExtensions.reset()
+        }
+    }
 
     @Test fun aColdActivitySendsNoVisibilityNotification() {
         activity(Intent(Intent.ACTION_MAIN))

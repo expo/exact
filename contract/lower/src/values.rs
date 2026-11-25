@@ -1013,6 +1013,18 @@ pub(crate) fn check_prop_value(
     ty: &Ty,
 ) -> Result<(), LowerError> {
     media::check(name, value, span)?;
+    if let (PropId::ToolbarPlacement, Expr::Str(word, _)) = (prop, value) {
+        if !vocab::TOOLBAR_PLACEMENTS.contains(&word.as_str()) {
+            return err(
+                "lower-attr-value",
+                format!(
+                    "`toolbarPlacement` takes {}; given {word:?}",
+                    vocab::TOOLBAR_PLACEMENTS.join(", ")
+                ),
+                span,
+            );
+        }
+    }
     if prop == PropId::AccessibilityRole {
         crate::roles::check(value)?;
     }

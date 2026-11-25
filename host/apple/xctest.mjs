@@ -58,6 +58,8 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
     }
   }
   contract([resolve(root, 'host/apple/tests/fixtures/navigation-scroller.contract'), '-o', env[`${prefix}_NAVIGATION_SCROLLER_PLAN`] = resolve(dir, 'navigation-scroller.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/bottom-toolbar.contract'), '-o', env[`${prefix}_BOTTOM_TOOLBAR_PLAN`] = resolve(dir, 'bottom-toolbar.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/bottom-toolbar-live.contract'), '-o', env[`${prefix}_BOTTOM_TOOLBAR_LIVE_PLAN`] = resolve(dir, 'bottom-toolbar-live.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/overflowing-tabs.contract'), '-o', env[`${prefix}_OVERFLOWING_TABS_PLAN`] = resolve(dir, 'overflowing-tabs.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/shop-scroll.contract'), '-o', env[`${prefix}_SHOP_SCROLL_PLAN`] = resolve(dir, 'shop-scroll.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/quiet-scroll.contract'), '-o', env[`${prefix}_QUIET_SCROLL_PLAN`] = resolve(dir, 'quiet-scroll.plan')]);

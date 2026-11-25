@@ -241,6 +241,7 @@ function moduleType(t, inList=false) {
     return moduleType(json[1],inList);
   }
   if (t==='unit') return 'void';
+  if (t==='DOMRect') return '{ x: number; y: number; width: number; height: number }';
   // Bytes are data code's (LLP 1133.006 D8 item 1); an option that may be either takes both (LLP 1133.035 D2).
   if (t==='string|bytes') return inList ? '(string | Uint8Array)' : 'string | Uint8Array';
   if (t.endsWith('[]')) return moduleType(t.slice(0,-2),true)+'[]';

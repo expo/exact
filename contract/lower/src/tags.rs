@@ -86,6 +86,7 @@ pub fn tag(name: &str) -> Option<Tag> {
             ],
             &[],
         ),
+        "spacer" => view(crate::routes::bottom_toolbar::SPACE, &[]),
         "row" => view(
             &[(StyleId::Display, "flex"), (StyleId::FlexDirection, "row")],
             &[],
@@ -1171,7 +1172,6 @@ pub(crate) fn html_tag(name: &str) -> Option<&'static str> {
         }
         "hstack" | "vstack" | "stack" | "flex" => "a horizontal stack is `row`, a vertical one `column`",
         "container" | "card" => "a box is `view` (or `column`, `row`), styled by a `style` declared in this file",
-        "spacer" => "a spacer is `view flex=1` in a `row` or `column`",
         "divider" => "a divider is `hr`",
         "br" => "a line break is a new `text`, or `\\n` in a string with `white-space=\"pre-line\"`",
         "icon" => "an icon is `image \"symbol:<role>\"`, or an `svg`",

@@ -419,6 +419,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         if view.frame != frame { view.frame = frame }
     }
 
+    // A background window stays mounted. UIKit can leave a push begun there unfinished through the next
+    // activation, holding later route changes until the scene enters the foreground a second time.
+    private func canAnimate(in view: UIView) -> Bool {
+        guard let window = view.window, !PageFacts.hidden else { return false }
+        return window.windowScene.map { $0.activationState == .foregroundActive } ?? true
+    }
+
     private func installPrimary(_ p: Projection, first: [RouteController]) {
         guard primaryOwner == nil else { return }
         // Find the containing controller before installing our child.
@@ -660,7 +667,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for index in 0...common where index < owners.count {
             let stack = Array(wanted[parts[index]])
             if index == 0, let split {
-                let animated = index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && !crossFading && split.controller.view.window != nil
+                let animated = index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && !crossFading && canAnimate(in: split.controller.view)
                 if syncSplit(split, stack, animated: animated) { held = true }
                 continue
             }
@@ -700,7 +707,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 }
                 #endif
                 let animated = (pushOrPop || arrives) && index == owners.count - 1 && mounted.count == boundaries.count
-                    && !ExactEnv.agentFreezes && !unanimated && !crossFading && nav.view.window != nil
+                    && !ExactEnv.agentFreezes && !unanimated && !crossFading && canAnimate(in: nav.view)
                 guard writeStack(nav.stackFront + stack, in: nav, animated: animated, visible: true) else { continue }
                 lastTransition = "idle"
                 // A press that pushed may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS).
@@ -792,7 +799,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// route hatch hears `routeEnded` (LLP 1075.003 §3.2).
     private func end(_ c: RouteController) {
         #if os(iOS)
+        projectBottomToolbar(c, in: nil)
         barHosted.show([], in: c)
+        barHosted.ended(c)
         #endif
         if let header = c.lifted { header.isHidden = false; c.lifted = nil }
         c.scoped?.isHidden = false

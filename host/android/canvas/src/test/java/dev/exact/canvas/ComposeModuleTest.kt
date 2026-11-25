@@ -3,6 +3,7 @@ package dev.exact.canvas
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.HandlerThread
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -33,6 +34,8 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.util.ReflectionHelpers
+import java.nio.IntBuffer
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], manifest = Config.NONE, shadows = [HeadlessLaunchTest.Host::class, AuthTest.Environment::class])
@@ -83,6 +86,7 @@ class ComposeModuleTest {
     }
 
     class Reader : ExactActivity() {
+        companion object { internal var publication: Owner? = null }
         val module = Module()
         val plain = PlainModule()
         lateinit var nestedMemory: Any
@@ -105,6 +109,23 @@ class ComposeModuleTest {
         override fun onCreate(state: Bundle?) {
             super.onCreate(state)
             content = findViewById<FrameLayout>(android.R.id.content).getChildAt(0) as Root
+        }
+        override fun setContentView(view: View) {
+            publication?.let { owner ->
+                content = view as Root
+                assertFalse(content.isAttachedToWindow)
+                val reader = (0 until content.childCount).map { content.getChildAt(it) }.filterIsInstance<ExactView>().single()
+                reader.owner = owner
+                reader.ownerStarted(true)
+                val bytes = "{\"module\":\"hello-compose\",\"slot\":2,\"generation\":3}".toByteArray()
+                val words = IntArray((bytes.size + 3) / 4)
+                for (i in bytes.indices) words[i / 4] = words[i / 4] or ((bytes[i].toInt() and 255) shl (8 * (i % 4)))
+                val ops = intArrayOf(28, 7, 2, 0, 0, 360f.toBits(), 48f.toBits()) + IntArray(8) + intArrayOf(bytes.size) + words
+                owner.queue.add(Owner.Pub(1, IntBuffer.wrap(ops), false, 0, 0, null, null, null, null))
+                reader.onPublished()
+                assertFalse(owner.queue.isEmpty())
+            }
+            super.setContentView(view)
         }
         fun mount() {
             hosted = content.getChildAt(0) as Natives
@@ -132,6 +153,12 @@ class ComposeModuleTest {
     }
 
     @After fun finish() {
+        Reader.publication?.let { owner ->
+            val thread = ReflectionHelpers.getField<HandlerThread>(owner, "thread")
+            thread.quitSafely(); thread.join(5000)
+            assertFalse(thread.isAlive)
+        }
+        Reader.publication = null
         if (!destroyed) controller.pause().stop().destroy()
         settle()
         Exact.owner = null; Exact.reader = null; Exact.live = false; Exact.unshown = false
@@ -279,9 +306,11 @@ class ComposeModuleTest {
         old.module.change("kept")
         settle()
         assertEquals("kept", old.module.shown)
+        Reader.publication = Owner(false, false, 0) { "0" }
         controller.recreate()
-        activity.mount()
         settle()
+        assertEquals(360, activity.module.view.measuredWidth)
+        assertEquals(48, activity.module.view.measuredHeight)
         assertNotSame(old, activity)
         assertEquals(Lifecycle.State.DESTROYED, old.state())
         assertTrue(old.module.disposed)

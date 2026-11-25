@@ -97,6 +97,7 @@ impl Lowerer<'_> {
         // @ref LLP 1084 D7 — a grouped list's sheet, under its classes.
         let constant =
             |e: &Expr, string_only| self.constants(scope).template_constant(e, string_only);
+        let literal_bottom = routes::bottom_toolbar::bottom(attrs);
         let mut authored = std::borrow::Cow::Borrowed(attrs.as_slice());
         values::fold_attr_templates(&mut authored, &constant);
         let attrs = authored.as_ref();
@@ -419,6 +420,12 @@ impl Lowerer<'_> {
         let sheet_page = self.nav_place.sheet_page(expanded, *span);
         let expanded = sheet_page.as_deref().unwrap_or(expanded);
         // @ref LLP 1013.001 D4 — a route's entrance and exit, by its place.
+        if routes::bottom_toolbar::bottom(expanded) {
+            if !literal_bottom {
+                return err("lower-toolbar-place", "Write `toolbarPlacement=\"bottom\"` directly on the route's toolbar row so its children and placement can be checked", *span);
+            }
+            routes::bottom_toolbar::check_row(&self.nav_place, tag, expanded, *span)?;
+        }
         self.check_route_parts(&self.nav_place, tag, expanded)?;
         let nav_place = self
             .nav_place

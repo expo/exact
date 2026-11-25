@@ -6,6 +6,60 @@ use contract_syntax::{File, Span, UseDecl, UseName};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+/// Read another package's nominal record through the same resolver as a Contract use.
+pub(super) fn shape_imports(
+    json: &Value,
+    dir: &Path,
+    origin: &Origin,
+    consulted: &mut Vec<PathBuf>,
+    span: Span,
+) -> Result<Vec<UseDecl>, String> {
+    let Some(imports) = json.get("shapeImports") else {
+        return Ok(Vec::new());
+    };
+    let mut uses = Vec::new();
+    for (path, names) in imports
+        .as_object()
+        .ok_or("shapeImports maps packages to record names")?
+    {
+        let resolved = resolve(path, dir, origin, dir, consulted).map_err(|(_, e)| e)?;
+        if resolved.key.file_name().and_then(|s| s.to_str()) != Some("exact.json") {
+            return Err(format!("{path} must export an interface declaration"));
+        }
+        consulted.push(resolved.key.clone());
+        let source: Value =
+            serde_json::from_slice(&std::fs::read(resolved.key).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        let mut records = Vec::new();
+        for name in names.as_array().ok_or("shapeImports lists record names")? {
+            let name = name.as_str().ok_or("an imported record needs a name")?;
+            // Paths and other fields with admission policies belong to their declaring package.
+            if source["kind"] != "interface"
+                || !source["shapes"][name].as_object().is_some_and(|fields| {
+                    fields
+                        .values()
+                        .all(|v| matches!(v.as_str(), Some("number" | "string" | "bool")))
+                })
+            {
+                return Err(format!(
+                    "{path}'s {name} must be a record of numbers, strings or booleans"
+                ));
+            }
+            records.push(UseName {
+                name: name.into(),
+                alias: None,
+                span,
+            });
+        }
+        uses.push(UseDecl {
+            names: records,
+            path: path.clone(),
+            span,
+        });
+    }
+    Ok(uses)
+}
+
 pub(super) fn read(
     path: &Path,
     json: &Value,
