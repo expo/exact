@@ -37,7 +37,7 @@ const APP: &str = r##"component App
         box testId="pan-child" pan=moved touch-action="none" width=300 height=40
       box testId="pan-outer" pan=moved touch-action="none" width=300 height=60
         box testId="pan-inner" draggable=true dataTransfer=DataTransfer(text="inner") width=300 height=40
-      box testId="swipe" draggable=true dataTransfer=DataTransfer(text="swipe") swiperight=swiped touch-action="pan-y" width=300 height=60
+      box testId="swipe" draggable=true dataTransfer=DataTransfer(text="swipe") swipe=swiped swipe-follow="right" touch-action="pan-y" width=300 height=60
       box testId="nest" draggable=true dataTransfer=DataTransfer(text="nest") width=300 height=60
         button testId="nest-button" press=pressed width=100 height=40
           text "Open"
