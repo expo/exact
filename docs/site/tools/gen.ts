@@ -520,6 +520,13 @@ writeFileSync(join(OUT, 'pages.json'), JSON.stringify(listed.map(p => ({ path: p
 const app = readFileSync(APP, 'utf8');
 const begin = app.indexOf(ROUTES_BEGIN), end = app.indexOf(ROUTES_END);
 if (begin < 0 || end < begin) throw new Error(`app.contract: the routes block has no "${ROUTES_BEGIN.trim()}" ... "${ROUTES_END.trim()}" markers`);
+const hiddenPaths = docs.filter(doc => doc.nav.hidden).map(doc => doc.nav.path);
+const isHidden = (path: string) => hiddenPaths.some(hidden => path === hidden || path.startsWith(`${hidden}/`));
+const movedWithoutRedirect = [...app.slice(begin, end).matchAll(/^ {2}\w+ "([^"]+)"/gm)]
+  .map(([, path]) => path)
+  .filter(path => !paths.has(path) && !Object.hasOwn(redirects, path) && !isHidden(path));
+for (const path of movedWithoutRedirect) console.error(`route ${path}: no page lives there now, and constants/redirects.ts has no redirect for it. Add one to the page's new path.`);
+if (movedWithoutRedirect.length) process.exit(1);
 const routes = pages.map(p => `  ${p.route} "${p.path}" render=build activate=idle`).join('\n');
 writeFileSync(APP, `${app.slice(0, begin + ROUTES_BEGIN.length)}\n${routes}\n${app.slice(end)}`);
 

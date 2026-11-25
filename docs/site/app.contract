@@ -56,8 +56,10 @@ routes nav
   learnContractForAgentsInspectionAndTesting "/learn/contract-for-agents/inspection-and-testing" render=build activate=idle
   learnContractForAgentsRepairCommonMistakes "/learn/contract-for-agents/repair-common-mistakes" render=build activate=idle
   learnContractForAgentsCompletionCriteria "/learn/contract-for-agents/completion-criteria" render=build activate=idle
+  learnContractForAgentsCssLayoutAndPainting "/learn/contract-for-agents/css-layout-and-painting" render=build activate=idle
   recipeAfterAWrite "/recipes/after-a-write" render=build activate=idle
   recipeAlternateAppIcons "/recipes/alternate-app-icons" render=build activate=idle
+  recipeAnnounce "/recipes/announce" render=build activate=idle
   recipeAppJson "/recipes/app-json" render=build activate=idle
   recipeBackgroundTransfers "/recipes/background-transfers" render=build activate=idle
   recipeBackgroundWork "/recipes/background-work" render=build activate=idle
@@ -80,6 +82,7 @@ routes nav
   recipeFetchLoadingError "/recipes/fetch-loading-error" render=build activate=idle
   recipeFilesAndGrants "/recipes/files-and-grants" render=build activate=idle
   recipeFirstLaunch "/recipes/first-launch" render=build activate=idle
+  recipeFloatingWindow "/recipes/floating-window" render=build activate=idle
   recipeFoldables "/recipes/foldables" render=build activate=idle
   recipeForma "/recipes/forma" render=build activate=idle
   recipeFunctions "/recipes/functions" render=build activate=idle
@@ -96,6 +99,7 @@ routes nav
   recipeLocalNetwork "/recipes/local-network" render=build activate=idle
   recipeLongLists "/recipes/long-lists" render=build activate=idle
   recipeLongText "/recipes/long-text" render=build activate=idle
+  recipeMacBinaryUpdates "/recipes/mac-binary-updates" render=build activate=idle
   recipeMiniPlayer "/recipes/mini-player" render=build activate=idle
   recipeMobileBuild "/recipes/mobile-build" render=build activate=idle
   recipeModelViewer "/recipes/model-viewer" render=build activate=idle
@@ -115,6 +119,7 @@ routes nav
   recipePhoneManifest "/recipes/phone-manifest" render=build activate=idle
   recipePortingAndRelease "/recipes/porting-and-release" render=build activate=idle
   recipePortsAndBrowsers "/recipes/ports-and-browsers" render=build activate=idle
+  recipeProgressiveTabs "/recipes/progressive-tabs" render=build activate=idle
   recipeProperties "/recipes/properties" render=build activate=idle
   recipePurchases "/recipes/purchases" render=build activate=idle
   recipePush "/recipes/push" render=build activate=idle
@@ -138,6 +143,7 @@ routes nav
   recipeSupabase "/recipes/supabase" render=build activate=idle
   recipeSuspendingFeed "/recipes/suspending-feed" render=build activate=idle
   recipeSymbols "/recipes/symbols" render=build activate=idle
+  recipeSystemControls "/recipes/system-controls" render=build activate=idle
   recipeTabs "/recipes/tabs" render=build activate=idle
   recipeTests "/recipes/tests" render=build activate=idle
   recipeTheme "/recipes/theme" render=build activate=idle
@@ -147,12 +153,14 @@ routes nav
   recipeTips "/recipes/tips" render=build activate=idle
   recipeTools "/recipes/tools" render=build activate=idle
   recipeUsbHidSerial "/recipes/usb-hid-serial" render=build activate=idle
+  recipeWaitForAFrameClick "/recipes/wait-for-a-frame-click" render=build activate=idle
   recipeWaveformAndTail "/recipes/waveform-and-tail" render=build activate=idle
   recipeWebLook "/recipes/web-look" render=build activate=idle
   recipeWebSessions "/recipes/web-sessions" render=build activate=idle
   recipeWebsite "/recipes/website" render=build activate=idle
   recipeWebsiteHosting "/recipes/website-hosting" render=build activate=idle
   recipeWhiteLabel "/recipes/white-label" render=build activate=idle
+  recipeWindowBounds "/recipes/window-bounds" render=build activate=idle
   components "/_components" render=build activate=idle
   contractGrammar "/reference/contract-grammar" render=build activate=idle
   referenceContractGrammarLexicalRules "/reference/contract-grammar/lexical-rules" render=build activate=idle
@@ -177,11 +185,12 @@ routes nav
   referenceDeveloperRunAnAppFromATerminalOnMacos "/reference/developer/run-an-app-from-a-terminal-on-macos" render=build activate=idle
   referenceDeveloperOverTheAirUpdates "/reference/developer/over-the-air-updates" render=build activate=idle
   referenceDeveloperInstallADevelopmentBuildBesideTheReleaseOneVariants "/reference/developer/install-a-development-build-beside-the-release-one-variants" render=build activate=idle
-  referenceDeveloperControlsControlCenterTheLockScreenTheActionButton "/reference/developer/controls-control-center-the-lock-screen-the-action-button" render=build activate=idle
+  referenceDeveloperControlsControlCenterTheLockScreenTheActionButtonQuickSettings "/reference/developer/controls-control-center-the-lock-screen-the-action-button-quick-settings" render=build activate=idle
   referenceDeveloperAppleBundleMetadata "/reference/developer/apple-bundle-metadata" render=build activate=idle
   referenceDeveloperApplePrivacyManifests "/reference/developer/apple-privacy-manifests" render=build activate=idle
   referenceDeveloperOpenTheSameDevelopmentUrlOnAppleHosts "/reference/developer/open-the-same-development-url-on-apple-hosts" render=build activate=idle
   referenceDeveloperGenerateTypescriptDataSourceTypes "/reference/developer/generate-typescript-data-source-types" render=build activate=idle
+  referenceDeveloperPackageConfiguration "/reference/developer/package-configuration" render=build activate=idle
   referenceDeveloperAccessHatches "/reference/developer/access-hatches" render=build activate=idle
   referenceDeveloperRustDataSources "/reference/developer/rust-data-sources" render=build activate=idle
   referenceDeveloperTheSixChecks "/reference/developer/the-six-checks" render=build activate=idle
