@@ -297,15 +297,23 @@ impl Paint {
             let close = t.find(')')?;
             let inner = t[4..close].trim().trim_matches(|c| c == '"' || c == '\'');
             let id = inner.strip_prefix('#').filter(|id| !id.is_empty())?;
-            let fallback = match Paint::parse(&t[close + 1..]) {
-                _ if t[close + 1..].trim().is_empty() => PaintFallback::Default,
-                Some(Paint::None) => PaintFallback::None,
-                Some(Paint::CurrentColor) => PaintFallback::CurrentColor,
-                Some(Paint::Color(c)) => PaintFallback::Color(c),
-                _ => return None,
+            let rest = t[close + 1..].trim();
+            let fallback = if rest.is_empty() {
+                PaintFallback::Default
+            } else {
+                match Self::parse_non_url(rest)? {
+                    Paint::None => PaintFallback::None,
+                    Paint::CurrentColor => PaintFallback::CurrentColor,
+                    Paint::Color(c) => PaintFallback::Color(c),
+                    Paint::Url(..) => unreachable!(),
+                }
             };
             return Some(Paint::Url(id.into(), fallback));
         }
+        Self::parse_non_url(t)
+    }
+
+    fn parse_non_url(t: &str) -> Option<Paint> {
         if t.eq_ignore_ascii_case("none") {
             return Some(Paint::None);
         }

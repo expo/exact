@@ -235,6 +235,7 @@ pub(crate) struct Lowerer<'a> {
     source_places: Option<&'a contract_syntax::Expanded>,
     /// The app's theme, resolved (LLP 1095 D4).
     pub theme: Vec<theme::ThemeEntry>,
+    var_tokens: var_tokens::FileTokens<'a>,
     sites: Option<Sites>,
     text_styles: Option<&'a mut warnings::TextStyles>,
     pub types: &'a Types,
@@ -455,6 +456,7 @@ fn lower_with_sites(
         b: nodes::builder(source_places),
         source_places,
         theme: Vec::new(),
+        var_tokens: var_tokens::FileTokens::new(file),
         sites: (output == SourceOutput::Mapped).then(|| Sites::declared(ex)),
         text_styles,
         types,
@@ -1151,7 +1153,7 @@ impl<'a> Lowerer<'a> {
         if matches!(target, tags::AttrTarget::Styles([])) {
             return Ok(());
         }
-        crate::var_tokens::carried(a)?;
+        crate::var_tokens::carried(a, &self.var_tokens)?;
         // @ref LLP 1021 §5.3, LLP 1133.025 D11 item 4 — stable menu ids,
         // never localized titles.
         if a.name == "-exact-menu" {

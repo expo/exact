@@ -128,6 +128,52 @@ fn readable_stream_bodies_are_collected_by_responses() {
     );
 }
 
+#[test]
+fn native_compression_streams_enforce_memory_header_and_concurrency_limits() {
+    let mut module = Module::new(
+        include_bytes!(concat!(env!("OUT_DIR"), "/pure.hbc")).to_vec(),
+        "test.pure",
+        "",
+    );
+    // 2 MiB heap -> 1 MiB per-chunk codec output ceiling, rejecting a 2 MiB bomb cleanly.
+    module.set_max_heap(2 << 20);
+    module.set_budget_ms(f64::INFINITY);
+    module.load().unwrap();
+    module.bind(&contract::compile("component App\n  resource value = codecLimits() as shape string\n  view\n    text value\n").unwrap());
+    let raw = module.query("codecLimits", &[]).unwrap();
+    let reply: serde_json::Value = serde_json::from_str(raw.as_str().unwrap()).unwrap();
+    assert!(reply["bombBytes"].as_u64().unwrap() < 8192, "{reply}");
+    assert!(
+        reply["bombError"]
+            .as_str()
+            .unwrap()
+            .starts_with("TypeError: DecompressionStream: the output exceeds"),
+        "{reply}"
+    );
+    assert!(
+        reply["headerError"]
+            .as_str()
+            .unwrap()
+            .starts_with("TypeError: DecompressionStream: the gzip header is too large"),
+        "{reply}"
+    );
+    assert!(
+        reply["capError"]
+            .as_str()
+            .unwrap()
+            .starts_with("TypeError: DecompressionStream: too many open compression streams"),
+        "{reply}"
+    );
+    assert!(
+        reply["opened"].as_u64().unwrap() > 0 && reply["opened"].as_u64().unwrap() <= 64,
+        "{reply}"
+    );
+    assert!(
+        module.is_loaded(),
+        "module remains healthy after codec limit errors"
+    );
+}
+
 /// Each step of a URLSearchParams iteration once parsed the whole query
 /// again, so iterating N pairs parsed N² of them: 2,000 pairs three ways
 /// overran a two-second turn. An unchanged query is now parsed once.

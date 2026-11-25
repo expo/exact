@@ -198,10 +198,25 @@ fn literals(value: &Expr) -> Vec<String> {
         .collect()
 }
 
+/// Tokens and icons a library param may name even when the theme table
+/// does not bind them, such as durations and shadows (D1).
+pub(super) fn design_names(file: &File) -> std::collections::HashSet<String> {
+    file.design
+        .iter()
+        .chain(&file.package_designs)
+        .filter_map(|d| exact_forma::parse(&d.text).ok())
+        .flat_map(|d| d.tokens.into_iter().chain(d.icons).map(|t| t.name.value))
+        .collect()
+}
+
 /// Each literal knob of library component `c` (`lower-library-literal`):
 /// a spacing, corner or colour row of its view or of a style its view
 /// applies, and a param default, that names no token, role or base name.
-pub(crate) fn literal(c: &Component, file: &File) -> Vec<LowerError> {
+pub(crate) fn literal(
+    c: &Component,
+    file: &File,
+    design_names: impl Fn(&str) -> bool,
+) -> Vec<LowerError> {
     let mut out = Vec::new();
     let comp = &c.name;
     let refuse = |what: String, span: Span| {
@@ -211,20 +226,9 @@ pub(crate) fn literal(c: &Component, file: &File) -> Vec<LowerError> {
         span,
     }
     };
-    // Every kind's default names a token (D1): a motion or shadow token is
-    // the design's, which the theme table doesn't bind.
-    let designed: Vec<String> = file
-        .design
-        .iter()
-        .chain(&file.package_designs)
-        .filter_map(|d| exact_forma::parse(&d.text).ok())
-        .flat_map(|d| d.tokens.into_iter().chain(d.icons).map(|t| t.name.value))
-        .collect();
     for p in &c.params.list {
         let default = p.default.trim();
-        if !named(default)
-            && !designed.iter().any(|d| d == default)
-            && !default.starts_with(crate::params::PREFIX)
+        if !named(default) && !design_names(default) && !default.starts_with(crate::params::PREFIX)
         {
             out.push(refuse(
                 format!("param `{}`'s default `{default}`", p.name),

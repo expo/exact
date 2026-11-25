@@ -110,8 +110,9 @@
         Object.defineProperty(error, "name", { value: "NotSupportedError", writable: true, configurable: true });
       return error;
     }
-    // `accepted`, for a release (a lock's `unlock()`), runs once the operation is queued.
-    function storageCall(receiver, method, args, convert, accepted) {
+    // `accepted`, for a release (a lock's `unlock()`), runs once queued and may run after `call.lost`.
+    // `queued` runs once all admission checks pass without bypassing `call.lost`.
+    function storageCall(receiver, method, args, convert, accepted, queued) {
       if (env.overlaying()) return Promise.reject(inOverlay("storage." + method + "()"));
       var call = env.current();
       // An answer whose storage wait failed issues no more storage. A release in its `finally` still runs, as the
@@ -183,6 +184,7 @@
       call.storage++;
       storing.add(call);
       if (accepted) accepted();
+      if (queued) queued();
       // The web realm attributes the cell now, while this answer is current.
       // The adapter runs at issue, and a background round may be current then
       // (LLP 1097 D7). Hermes has no hook and runs the adapter at the call.
@@ -447,7 +449,6 @@
     [
       "readFile",
       "writeFile",
-      "atomicWriteFile",
       "appendFile",
       "readdir",
       "mkdir",
@@ -468,7 +469,7 @@
         var topics = fileTopics(arguments[0]);
         if (method === "rename" || method === "copyFile")
           topics = (method === "rename" ? topics : []).concat(fileTopics(arguments[1]));
-        if (!/^(writeFile|atomicWriteFile|appendFile|mkdir|rm|rename|copyFile|chmod|symlink)$/.test(method)) {
+        if (!/^(writeFile|appendFile|mkdir|rm|rename|copyFile|chmod|symlink)$/.test(method)) {
           watchTopics(topics);
           return result;
         }
@@ -476,30 +477,47 @@
       };
     });
     // LLP 1069.010.000 D4: a kept file the app replaces with its own atomic write stays kept: the host reads what the
-    // write replaces, then carries the entry to the file written.
-    var atomic = files.atomicWriteFile;
+    // write replaces once storageCall admits the operation, then carries the entry to the file written.
     files.atomicWriteFile = function (path) {
       var t;
-      try {
-        t = typeof path === "string" && path.indexOf("doc:/") === 0 ? host(6, "kept", "replacing " + path) : undefined;
-      } catch (e) {
-        t = undefined;
-      }
       var done = function (how) {
-        if (t)
+        if (t) {
+          var token = t;
+          t = undefined;
           try {
-            host(6, "kept", how + t);
+            host(6, "kept", how + token);
           } catch (e) {}
+        }
       };
-      return atomic.apply(null, arguments).then(
+      var result = storageCall(
+        nativeStorage && nativeStorage.fs,
+        "atomicWriteFile",
+        arguments,
+        undefined,
+        undefined,
+        function () {
+          try {
+            t =
+              typeof path === "string" && path.indexOf("doc:/") === 0
+                ? host(6, "kept", "replacing " + path)
+                : undefined;
+          } catch (e) {
+            t = undefined;
+          }
+        }
+      );
+      return announcing(result, fileTopics(path)).then(
         function (v) {
           // A kept set that cannot be saved fails the write, though the file is written; writing again keeps it.
-          if (t)
+          if (t) {
+            var token = t;
+            t = undefined;
             try {
-              host(6, "kept", "replaced " + t);
+              host(6, "kept", "replaced " + token);
             } catch (e) {
               throw storageError(String((e && e.message) || e));
             }
+          }
           return v;
         },
         function (e) {
@@ -583,9 +601,11 @@
     // LLP 1069.010.000 D5 (doc.keep): the host's kept list, which watch("doc:/") hears change, and the app's own
     // removal.
     files.recentDocuments = function () {
+      if (env.overlaying()) return Promise.reject(inOverlay("storage.recentDocuments()"));
       return web("recentDocuments", []) || kept("");
     };
     files.forgetDocument = function (path) {
+      if (env.overlaying()) return Promise.reject(inOverlay("storage.forgetDocument()"));
       return web("forgetDocument", [path]) || kept("forget " + path);
     };
     function web(method, args) {

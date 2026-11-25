@@ -148,6 +148,19 @@ pub struct Lighting {
     pub light: Light,
 }
 
+/// Maximum primitives in a filter chain (shared with the wire codec and well
+/// within `Input::Result(u16)`).
+pub const MAX_PRIMITIVES: usize = 4096;
+
+/// Maximum `feMerge` inputs or `feComponentTransfer` table values in one primitive.
+pub const MAX_TABLE_VALUES: usize = 4096;
+
+/// Maximum `feTurbulence` octaves (`numOctaves`).
+pub const MAX_OCTAVES: u32 = 64;
+
+/// Maximum `feConvolveMatrix` kernel order per axis.
+pub const MAX_CONVOLVE_ORDER: u32 = 64;
+
 /// `feBlend`'s modes, by index (Compositing and Blending 1).
 pub const BLEND_MODES: [&str; 16] = [
     "normal",
@@ -329,16 +342,29 @@ impl Filter {
                 ]),
                 Op::Displacement(scale, x, y) => out.extend([*scale, *x as f32, *y as f32]),
                 Op::Convolve(c) => {
-                    out.extend([c.order.0 as f32, c.order.1 as f32]);
-                    out.extend(&c.kernel);
-                    out.extend([
-                        c.divisor,
-                        c.bias,
-                        c.target.0 as f32,
-                        c.target.1 as f32,
-                        c.edge as f32,
-                        c.preserve_alpha as u8 as f32,
-                    ]);
+                    let valid = (1..=MAX_CONVOLVE_ORDER).contains(&c.order.0)
+                        && (1..=MAX_CONVOLVE_ORDER).contains(&c.order.1)
+                        && c.kernel.len() == (c.order.0 * c.order.1) as usize
+                        && c.target.0 < c.order.0
+                        && c.target.1 < c.order.1;
+                    if valid {
+                        out.extend([c.order.0 as f32, c.order.1 as f32]);
+                        out.extend(&c.kernel);
+                        out.extend([
+                            c.divisor,
+                            c.bias,
+                            c.target.0 as f32,
+                            c.target.1 as f32,
+                            c.edge as f32,
+                            c.preserve_alpha as u8 as f32,
+                        ]);
+                    } else {
+                        // Invalid convolution degrades to transparent flood so
+                        // the wire stream stays aligned across subsequent ops.
+                        let header = out.len() - 8;
+                        out[header] = 2.0;
+                        out.extend([0.0; 4]);
+                    }
                 }
                 Op::Lighting(l) => {
                     out.extend([
@@ -367,7 +393,7 @@ impl Filter {
     pub fn decode(v: &[f32]) -> Option<Filter> {
         let mut r = Reader(v);
         let region = (r.f()?, r.f()?, r.f()?, r.f()?);
-        let n = r.n(4096)?;
+        let n = r.n(MAX_PRIMITIVES)?;
         let mut primitives = Vec::with_capacity(n);
         for _ in 0..n {
             let code = r.n(14)?;
@@ -391,7 +417,7 @@ impl Filter {
                     Op::Composite(op, [r.f()?, r.f()?, r.f()?, r.f()?])
                 }
                 4 => {
-                    let k = r.n(4096)?;
+                    let k = r.n(MAX_TABLE_VALUES)?;
                     let mut inputs = Vec::with_capacity(k);
                     for _ in 0..k {
                         inputs.push(input_of(r.f()?)?);
@@ -419,7 +445,7 @@ impl Filter {
                         Some(match r.n(4)? {
                             0 => Transfer::Identity,
                             k @ (1 | 2) => {
-                                let len = r.n(4096)?;
+                                let len = r.n(MAX_TABLE_VALUES)?;
                                 let mut vals = Vec::with_capacity(len);
                                 for _ in 0..len {
                                     vals.push(r.f()?);
@@ -441,16 +467,23 @@ impl Filter {
                 11 => Op::Turbulence(
                     r.f()?,
                     r.f()?,
-                    r.n(64)? as u32,
+                    r.n(MAX_OCTAVES as usize)? as u32,
                     r.f()?,
                     r.f()? != 0.0,
                     r.f()? != 0.0,
                 ),
                 12 => Op::Displacement(r.f()?, r.n(3)? as u8, r.n(3)? as u8),
                 13 => {
-                    let order = (r.n(64)? as u32, r.n(64)? as u32);
-                    let mut kernel = Vec::new();
-                    for _ in 0..order.0 * order.1 {
+                    let order = (
+                        r.n(MAX_CONVOLVE_ORDER as usize)? as u32,
+                        r.n(MAX_CONVOLVE_ORDER as usize)? as u32,
+                    );
+                    if order.0 == 0 || order.1 == 0 {
+                        return None;
+                    }
+                    let count = (order.0 * order.1) as usize;
+                    let mut kernel = Vec::with_capacity(count);
+                    for _ in 0..count {
                         kernel.push(r.f()?);
                     }
                     Op::Convolve(Box::new(Convolve {
@@ -458,7 +491,10 @@ impl Filter {
                         kernel,
                         divisor: r.f()?,
                         bias: r.f()?,
-                        target: (r.n(63)? as u32, r.n(63)? as u32),
+                        target: (
+                            r.n((order.0 - 1) as usize)? as u32,
+                            r.n((order.1 - 1) as usize)? as u32,
+                        ),
                         edge: r.n(2)? as u8,
                         preserve_alpha: r.f()? != 0.0,
                     }))

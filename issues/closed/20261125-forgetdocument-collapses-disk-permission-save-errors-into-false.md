@@ -1,6 +1,7 @@
 # forgetDocument collapses disk/permission save errors into false ENOENT even though the document remains kept
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Return a distinct ForgetError::NotKept vs ForgetError::Save from kept::forget and propagate save I/O errors with their OS error suffix instead of collapsing them into document ENOENT.
 **Systems:** exact-js & exact-data-host (kept document forgetDocument error handling)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

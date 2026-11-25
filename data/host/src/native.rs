@@ -496,7 +496,7 @@ fn kept_request(spec: &str, op: &str, args: &Value, owner: u64) -> Option<Result
         _ => text(args, "path").and_then(|path| {
             kept::forget(owner, path)
                 .map(|()| Value::Null)
-                .map_err(|_| format!("document ENOENT: {path} is not a document this app keeps"))
+                .map_err(|e| e.into_storage_error(path))
         }),
     })
 }

@@ -1,6 +1,7 @@
 # Unbounded native decompression in DecompressionStream bypasses Hermes heap ceiling and OOM-kills the host process
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Bound codec output and concurrent contexts to HostState max_heap, stream gzip header parsing in O(1) memory with a 128 KiB cap, check interrupts in codec loops, and release peak codec_out capacity after copy, on error, and on runtime teardown.
 **Systems:** exact-js (Hermes native runtime, DecompressionStream / bytes door)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

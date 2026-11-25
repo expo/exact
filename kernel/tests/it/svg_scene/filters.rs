@@ -249,3 +249,199 @@ fn a_chains_region_grows_from_each_functions_result() {
         assert_eq!(filter.region, region, "{css}");
     }
 }
+
+#[test]
+fn filter_chains_enforce_max_primitives_without_underflow() {
+    use exact_kernel::svg::filter::{Filter, FilterFn, FilterList, MAX_PRIMITIVES};
+    use NodeType::*;
+
+    // CSS parser refuses chains over MAX_PRIMITIVES.
+    assert!(FilterList::parse(&"blur() ".repeat(65_536)).is_none());
+
+    // Direct FilterList over MAX_PRIMITIVES is refused by box_filter without panicking.
+    let black = exact_kernel::ColorValue::Fixed(exact_kernel::Color::rgba(0, 0, 0, 255));
+    let over = FilterList(vec![FilterFn::Blur(1.0); 65_536]);
+    assert!(scene::box_filter(&over, black, false).is_none());
+
+    // Exactly MAX_PRIMITIVES succeeds and round-trips through the wire codec.
+    let exact = FilterList(vec![FilterFn::Blur(1.0); MAX_PRIMITIVES]);
+    let built = scene::box_filter(&exact, black, false).unwrap();
+    assert_eq!(built.primitives.len(), MAX_PRIMITIVES);
+    assert_eq!(Filter::decode(&built.encode()), Some(built));
+
+    // Repeated url(#f) expanding to 65,536 primitives stops safely without u16 underflow.
+    let mut d = Doc::new();
+    let svg = d.node(
+        Svg,
+        &[(StyleId::Width, "100"), (StyleId::Height, "100")],
+        &[],
+    );
+    let filter_node = d.node(SvgFilter, &[], &[(PropId::Id, "f")]);
+    let mut prims = Vec::with_capacity(64);
+    for _ in 0..64 {
+        prims.push(d.node(SvgFe, &[], &[(PropId::Fe, "feOffset")]));
+    }
+    d.children(filter_node, &prims);
+    let chain = "url(#f) ".repeat(1_024);
+    let rect = d.node(
+        SvgRect,
+        &[
+            (StyleId::Width, "20"),
+            (StyleId::Height, "10"),
+            (StyleId::Filter, &chain),
+        ],
+        &[],
+    );
+    d.children(svg, &[filter_node, rect]);
+    let k = d.kernel(&[svg], 100.0);
+    let s = resolve(&k, svg);
+    let resolved = find(&s.items, rect).unwrap().filter.as_deref().unwrap();
+    assert!(resolved.primitives.len() <= MAX_PRIMITIVES);
+    assert_eq!(Filter::decode(&resolved.encode()), Some(resolved.clone()));
+}
+
+#[test]
+fn fe_convolve_matrix_and_sibling_limits_round_trip_through_wire() {
+    use exact_kernel::svg::filter::{Filter, Transfer, MAX_OCTAVES, MAX_TABLE_VALUES};
+    use NodeType::*;
+
+    // Malformed feConvolveMatrix cases degrade to transparent flood without desyncing trailing ops.
+    for props in [
+        &[
+            (PropId::Fe, "feConvolveMatrix"),
+            (PropId::FeOrder, "3 3"),
+            (PropId::KernelMatrix, "1 2 3 4"),
+        ][..],
+        &[
+            (PropId::Fe, "feConvolveMatrix"),
+            (PropId::FeOrder, "65 1"),
+            (PropId::KernelMatrix, "1"),
+        ][..],
+        &[
+            (PropId::Fe, "feConvolveMatrix"),
+            (PropId::FeOrder, "0 3"),
+            (PropId::KernelMatrix, ""),
+        ][..],
+        &[
+            (PropId::Fe, "feConvolveMatrix"),
+            (PropId::FeOrder, "1e20 1e20"),
+            (PropId::KernelMatrix, "1"),
+        ][..],
+        &[
+            (PropId::Fe, "feConvolveMatrix"),
+            (PropId::FeOrder, "2 2"),
+            (PropId::KernelMatrix, "1 0 0 1"),
+            (PropId::TargetX, "2"),
+        ][..],
+        &[
+            (PropId::Fe, "feConvolveMatrix"),
+            (PropId::FeOrder, "2 2"),
+            (PropId::KernelMatrix, "1 0 0 1"),
+            (PropId::TargetY, "-1"),
+        ][..],
+    ] {
+        let mut d = Doc::new();
+        let svg = d.node(
+            Svg,
+            &[(StyleId::Width, "100"), (StyleId::Height, "100")],
+            &[],
+        );
+        let f = d.node(SvgFilter, &[], &[(PropId::Id, "f")]);
+        let bad = d.node(SvgFe, &[], props);
+        let tail = d.node(
+            SvgFe,
+            &[(StyleId::FloodColor, "#ff0000")],
+            &[(PropId::Fe, "feFlood")],
+        );
+        d.children(f, &[bad, tail]);
+        let rect = d.node(
+            SvgRect,
+            &[
+                (StyleId::Width, "20"),
+                (StyleId::Height, "10"),
+                (StyleId::Filter, "url(#f)"),
+            ],
+            &[],
+        );
+        d.children(svg, &[f, rect]);
+        let k = d.kernel(&[svg], 100.0);
+        let s = resolve(&k, svg);
+        let resolved = find(&s.items, rect).unwrap().filter.as_deref().unwrap();
+        assert_eq!(resolved.primitives.len(), 2, "{props:?}");
+        assert_eq!(
+            resolved.primitives[0].op,
+            FilterOp::Flood([0.0; 4]),
+            "{props:?}"
+        );
+        assert_eq!(
+            resolved.primitives[1].op,
+            FilterOp::Flood([1.0, 0.0, 0.0, 1.0]),
+            "{props:?}"
+        );
+        assert_eq!(
+            Filter::decode(&resolved.encode()),
+            Some(resolved.clone()),
+            "{props:?}"
+        );
+    }
+
+    // Valid feConvolveMatrix, clamped feTurbulence octaves, and capped feComponentTransfer tables round-trip.
+    let mut d = Doc::new();
+    let svg = d.node(
+        Svg,
+        &[(StyleId::Width, "100"), (StyleId::Height, "100")],
+        &[],
+    );
+    let f = d.node(SvgFilter, &[], &[(PropId::Id, "f")]);
+    let conv = d.node(
+        SvgFe,
+        &[],
+        &[
+            (PropId::Fe, "feConvolveMatrix"),
+            (PropId::FeOrder, "2 2"),
+            (PropId::KernelMatrix, "1 0 0 1"),
+            (PropId::TargetX, "0"),
+            (PropId::TargetY, "1"),
+        ],
+    );
+    let turb = d.node(
+        SvgFe,
+        &[],
+        &[(PropId::Fe, "feTurbulence"), (PropId::NumOctaves, "999")],
+    );
+    let ct = d.node(SvgFe, &[], &[(PropId::Fe, "feComponentTransfer")]);
+    let big_table = "0.5 ".repeat(MAX_TABLE_VALUES + 100);
+    let func_r = d.node(
+        SvgFe,
+        &[],
+        &[
+            (PropId::Fe, "feFuncR"),
+            (PropId::Type, "table"),
+            (PropId::TableValues, &big_table),
+        ],
+    );
+    d.children(ct, &[func_r]);
+    d.children(f, &[conv, turb, ct]);
+    let rect = d.node(
+        SvgRect,
+        &[
+            (StyleId::Width, "20"),
+            (StyleId::Height, "10"),
+            (StyleId::Filter, "url(#f)"),
+        ],
+        &[],
+    );
+    d.children(svg, &[f, rect]);
+    let k = d.kernel(&[svg], 100.0);
+    let s = resolve(&k, svg);
+    let resolved = find(&s.items, rect).unwrap().filter.as_deref().unwrap();
+    assert!(matches!(resolved.primitives[0].op, FilterOp::Convolve(_)));
+    assert!(
+        matches!(resolved.primitives[1].op, FilterOp::Turbulence(_, _, oct, ..) if oct == MAX_OCTAVES)
+    );
+    assert!(matches!(
+        &resolved.primitives[2].op,
+        FilterOp::ComponentTransfer(funcs) if matches!(&funcs[0], Transfer::Table(v) if v.len() == MAX_TABLE_VALUES)
+    ));
+    assert_eq!(Filter::decode(&resolved.encode()), Some(resolved.clone()));
+}

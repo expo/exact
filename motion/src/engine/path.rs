@@ -161,6 +161,7 @@ impl Engine {
         let Some(value) = value.filter(T::is_finite) else {
             if T::tracks_mut(self).remove(&node).is_some() {
                 self.running.remove(&key);
+                self.pending.remove(&key);
                 self.played.remove(&key);
                 self.slots.remove(&key);
                 self.dirty.remove(&key);
@@ -224,6 +225,7 @@ impl Engine {
                 T::tracks_mut(self).remove(&node);
             }
             self.running.remove(&key);
+            self.pending.remove(&key);
             if self.slots.remove(&key).is_some() {
                 self.dirty.insert(key);
             }

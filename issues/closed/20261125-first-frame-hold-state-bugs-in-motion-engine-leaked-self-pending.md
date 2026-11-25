@@ -1,6 +1,7 @@
 # First-frame hold state bugs in `motion::Engine`: leaked `self.pending` keys, `unpresentable` bypass on timeline unbind, and missed overdue clocks
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Remove self.pending keys on hold takeover and path/filter cancellation, drop stale unshown keys in start_pending, respect unpresentable on timeline unbind, and iterate all pending clock origins in release_overdue.
 **Systems:** motion engine first-frame holds, gestures, path/filter transitions & timelines
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

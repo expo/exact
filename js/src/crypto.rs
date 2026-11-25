@@ -77,21 +77,28 @@ fn ec(state: &mut HostState, op: u32, a: &str, data: &[u8]) -> Result<String, St
             .and_then(|i| state.keys.get(&i).cloned())
             .ok_or_else(|| "InvalidAccessError: not a live CryptoKey".to_string())
     };
-    let push = |state: &mut HostState, k: EcKey| {
+    const MAX_KEYS: usize = 4096;
+    let push = |state: &mut HostState, k: EcKey| -> Result<u64, String> {
+        if state.keys.len() >= MAX_KEYS {
+            return Err("QuotaExceededError: too many live CryptoKeys".into());
+        }
         let handle = state.next_key;
         state.next_key += 1;
         state.keys.insert(handle, k);
-        handle
+        Ok(handle)
     };
-    let pair = |state: &mut HostState, p: EcKeyPair| {
-        let private = push(state, p.private);
-        let public = push(state, p.public);
-        format!("{{\"private\":{private},\"public\":{public}}}")
+    let pair = |state: &mut HostState, p: EcKeyPair| -> Result<String, String> {
+        if state.keys.len() + 2 > MAX_KEYS {
+            return Err("QuotaExceededError: too many live CryptoKeys".into());
+        }
+        let private = push(state, p.private)?;
+        let public = push(state, p.public)?;
+        Ok(format!("{{\"private\":{private},\"public\":{public}}}"))
     };
     match op {
         2 => {
             let p = c::generate_p256(store, a == "1").map_err(message)?;
-            Ok(pair(state, p))
+            pair(state, p)
         }
         3 => Ok(hex(
             &c::sign_es256(store, &key(state, a)?, data).map_err(message)?
@@ -101,7 +108,7 @@ fn ec(state: &mut HostState, op: u32, a: &str, data: &[u8]) -> Result<String, St
             let jwk = Jwk::from_json(&v["jwk"].to_string()).map_err(message)?;
             let k = EcKey::from_jwk(&jwk, v["extractable"].as_bool().unwrap_or(false))
                 .map_err(message)?;
-            Ok(push(state, k).to_string())
+            Ok(push(state, k)?.to_string())
         }
         5 => Ok(key(state, a)?.to_jwk().map_err(message)?.to_json()),
         // No store here (a let-go chain, background work): refused, never
@@ -129,7 +136,7 @@ fn ec(state: &mut HostState, op: u32, a: &str, data: &[u8]) -> Result<String, St
             Ok(String::new())
         }
         7 => match c::kept_key(store, a).map_err(message)? {
-            Some(p) => Ok(pair(state, p)),
+            Some(p) => pair(state, p),
             None => Ok(String::new()),
         },
         _ => Err(format!("__exact_bytes: no op {op}")),
@@ -175,7 +182,7 @@ pub(crate) unsafe extern "C" fn bytes_door(
                 std::ptr::copy_nonoverlapping(source.as_ptr(), bytes as *mut u8, len);
             }
             if op == 15 {
-                source.clear();
+                crate::compression::release_output(source);
             }
             (0, String::new())
         } else {
@@ -205,14 +212,21 @@ pub(crate) unsafe extern "C" fn bytes_door(
             }
             None => Err("fetch: no ticket or request metadata".into()),
         },
-        12..=14 => crate::compression::door(
-            &mut state.codecs,
-            &mut state.next_key,
-            &mut state.codec_out,
-            op,
-            &a,
-            data,
-        ),
+        12..=14 => {
+            let limits = crate::compression::Limits::for_heap(state.heap_limit());
+            let watch = state.watch.as_ref();
+            let interrupted = || watch.is_some_and(|w| w.is_interrupted());
+            crate::compression::door(
+                &mut state.codecs,
+                &mut state.next_key,
+                &mut state.codec_out,
+                limits,
+                &interrupted,
+                op,
+                &a,
+                data,
+            )
+        }
         8 if state.agent.is_none() => Err("decode: the gate's stub decode is the agent's".into()),
         8 => {
             let mut range = a.split(' ').map(str::parse::<usize>);

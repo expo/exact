@@ -1,6 +1,7 @@
 # SVG filter chains hit `u16` underflow panic past 65,535 primitives and `feConvolveMatrix` wire desync
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Export and enforce shared SVG filter limits (MAX_PRIMITIVES = 4096) with checked u16 indices, validate feConvolveMatrix and sibling op limits against Filter::decode, and guard Filter::encode and light::convolve.
 **Systems:** kernel SVG filter resolver & `svg-filter` wire codec
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

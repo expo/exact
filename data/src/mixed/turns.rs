@@ -17,7 +17,12 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                 .retain(|_, (_, call)| recorded_key(call).0 != rust);
             self.stages.retain(|(key, _), _| key.0 != rust);
             for set in &mut self.sets {
-                if set.running.as_ref().is_some_and(|r| r.key.0 == rust) {
+                let retired = match &set.running {
+                    Some(Running::Turn { key, .. }) => key.0 == rust,
+                    Some(Running::Delivery { .. }) => !rust,
+                    None => false,
+                };
+                if retired {
                     set.running = None;
                     set.busy = false;
                 }
@@ -32,6 +37,74 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
             let child: &dyn DataSource = if rust { &self.rust } else { &self.javascript };
             self.generations[at] = child.module_identity("").map(|m| m.instance());
         }
+    }
+
+    pub(super) fn start_delivery(&mut self, token: u64, store: &Store) -> Dispatch {
+        let set = self.set_of[0].expect("an ordered delivery");
+        if self.sets[set].busy {
+            self.delivery_waiters.insert(token);
+            return Dispatch::Held;
+        }
+        let Some((kept, outcome)) = self.deliveries.remove(&token) else {
+            return Dispatch::Missing;
+        };
+        self.delivery_waiters.remove(&token);
+        self.sets[set].busy = true;
+        self.sets[set].running = Some(Running::Delivery {
+            kept,
+            token,
+            child: None,
+        });
+        let grants = self.javascript.grants();
+        let mut local = Store::new(grants, envelope::snapshot(store, grants));
+        local.set_clock_ms(store.clock_ms());
+        let result = self
+            .javascript
+            .module_delivery(&mut local, kept, outcome)
+            .map(|request| request.map_or(Answer::Now(Value::Unit), Answer::Later));
+        let outcome = envelope::encode(result, &mut local, vec![]);
+        Dispatch::Run(Work::Now(Box::new(move || outcome)))
+    }
+
+    pub(super) fn clear_delivery(&mut self, set: usize, kept: u64) {
+        if matches!(
+            self.sets[set].running,
+            Some(Running::Delivery { kept: k, .. }) if k == kept
+        ) {
+            self.sets[set].running = None;
+        }
+        self.sets[set].busy = false;
+    }
+
+    pub(super) fn clear_missing_delivery(&mut self, outer: u64) {
+        if let Some(set) = self.set_of[0] {
+            if matches!(
+                self.sets[set].running,
+                Some(Running::Delivery { token, .. }) if token == outer
+            ) {
+                if let Some(Running::Delivery { kept, .. }) = self.sets[set].running.take() {
+                    self.delivery_phases.remove(&kept);
+                }
+                self.sets[set].busy = false;
+            }
+        }
+    }
+
+    pub(super) fn route_delivery(
+        &mut self,
+        request: Option<Request>,
+    ) -> Result<Option<Request>, DataError> {
+        let Some(mut request) = request else {
+            return Ok(None);
+        };
+        let child = request
+            .continuation
+            .ok_or_else(|| unavailable("a module delivery must yield a continuation"))?;
+        let token = self.token()?;
+        self.delivery_routes.insert(token, child);
+        request.continuation = Some(token);
+        request.grants = Some(self.javascript.grants().into());
+        Ok(Some(request))
     }
 
     pub(super) fn child_answer(
@@ -174,7 +247,10 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                 Some(Stage::Turn(_)) => {
                     // The reserved turn ended, however it ended.
                     self.sets[set].busy = false;
-                    let child = self.sets[set].running.take().and_then(|r| r.child);
+                    let child = match self.sets[set].running.take() {
+                        Some(Running::Turn { child, .. }) => child,
+                        _ => None,
+                    };
                     let answer = if self.child_placement(rust) == Placement::Worker {
                         store.with_grants(&grants, |store| {
                             self.child_parse_fetch(
@@ -637,5 +713,274 @@ mod tests {
             assert!(mixed.stages.is_empty());
             assert!(mixed.more.is_empty());
         }
+    }
+
+    struct DeliverySource {
+        identity: exact_runner::ModuleIdentity,
+        placement: Placement,
+        grants: &'static str,
+        next: u64,
+        delivery_request: Option<Request>,
+        retire_on_delivery: bool,
+        discarded: Vec<u64>,
+    }
+
+    impl DeliverySource {
+        fn new(placement: Placement, grants: &'static str) -> Self {
+            Self {
+                identity: Default::default(),
+                placement,
+                grants,
+                next: 100,
+                delivery_request: None,
+                retire_on_delivery: false,
+                discarded: Vec::new(),
+            }
+        }
+    }
+
+    impl DataSource for DeliverySource {
+        fn placement(&self) -> Placement {
+            self.placement
+        }
+        fn grants(&self) -> &str {
+            self.grants
+        }
+        fn module_identity(&self, _: &str) -> Option<exact_runner::ModuleIdentity> {
+            Some(self.identity.clone())
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            Ok(Value::str("ok"))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            if self.placement == Placement::Worker {
+                self.next += 1;
+                Ok(Answer::Later(Request::continuation::<TestWork>(self.next)))
+            } else {
+                Ok(Answer::Now(Value::str("ok")))
+            }
+        }
+        fn parse(
+            &mut self,
+            store: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            if self.placement == Placement::Worker {
+                envelope::apply(outcome, store, &mut Vec::new())
+            } else {
+                Ok(Answer::Now(Value::str("ok")))
+            }
+        }
+        fn dispatch(&mut self, _: u64, _: &Store) -> Dispatch {
+            let outcome = envelope::encode(
+                Ok(Answer::Now(Value::str("ok"))),
+                &mut Store::default(),
+                vec![],
+            );
+            Dispatch::Run(Work::Now(Box::new(move || outcome)))
+        }
+        fn module_delivery(
+            &mut self,
+            _: &mut Store,
+            _: u64,
+            _: Outcome,
+        ) -> Result<Option<Request>, DataError> {
+            if self.retire_on_delivery {
+                self.identity.retire("heap exhausted".into());
+                return Err(DataError::Unavailable("heap exhausted".into()));
+            }
+            Ok(self.delivery_request.take())
+        }
+        fn discard(&mut self, token: u64) {
+            self.discarded.push(token);
+        }
+    }
+
+    fn run_now(dispatch: Dispatch) -> Outcome {
+        match dispatch {
+            Dispatch::Run(Work::Now(work)) => work(),
+            _ => panic!("expected immediate work"),
+        }
+    }
+
+    #[test]
+    fn js_retirement_during_ordered_delivery_unblocks_the_ordered_set() {
+        // Both worker-placed JS (phase 2 active) and main-placed JS sharing a secret with a Rust worker (phase 1 active).
+        for (js_placement, rust_placement) in [
+            (Placement::Worker, Placement::Main),
+            (Placement::Main, Placement::Worker),
+        ] {
+            let mut js = DeliverySource::new(js_placement, "secret.keep shared");
+            if js_placement == Placement::Worker {
+                js.delivery_request = Some(Request::continuation::<TestWork>(77));
+            } else {
+                js.retire_on_delivery = true;
+            }
+            let rust = DeliverySource::new(rust_placement, "secret.keep shared");
+            let mut mixed = Mixed::new(js, rust, &["js"], &["rust"]).unwrap();
+            let mut store = Store::new("secret.keep shared", []);
+
+            let first = mixed
+                .module_delivery(&mut store, 11, Dispatch::again_outcome())
+                .unwrap()
+                .unwrap();
+            let delivery_token = first.continuation.unwrap();
+            let rust_turn = match mixed.answer(&mut store, "rust", &[]).unwrap() {
+                Answer::Later(r) => r.continuation.unwrap(),
+                _ => panic!("ordered turn"),
+            };
+
+            let phase1 = run_now(mixed.dispatch(delivery_token, &store));
+            assert!(mixed.sets[0].busy);
+            assert!(matches!(
+                mixed.sets[0].running,
+                Some(Running::Delivery { kept: 11, .. })
+            ));
+            // A Rust turn dispatched while the delivery holds the set waits behind it.
+            assert!(matches!(mixed.dispatch(rust_turn, &store), Dispatch::Held));
+
+            if js_placement == Placement::Worker {
+                // Phase 1 routes the worker's own continuation into phase 2; then the JS VM retires on OOM.
+                let routed = mixed
+                    .module_delivery(&mut store, 11, phase1)
+                    .unwrap()
+                    .unwrap();
+                let outer = routed.continuation.unwrap();
+                assert!(matches!(
+                    mixed.sets[0].running,
+                    Some(Running::Delivery {
+                        kept: 11,
+                        token,
+                        child: Some(77)
+                    }) if token == outer
+                ));
+                assert!(matches!(mixed.dispatch(outer, &store), Dispatch::Run(_)));
+                mixed.javascript.identity.retire("heap exhausted".into());
+            }
+            // Runner collects aborts and drops the retired module_work ticket without calling module_delivery again.
+            mixed.take_aborted();
+            assert!(!mixed.sets[0].busy, "retirement must clear busy");
+            assert!(mixed.sets[0].running.is_none());
+            assert!(mixed.deliveries.is_empty());
+            assert!(mixed.delivery_waiters.is_empty());
+            assert!(mixed.delivery_phases.is_empty());
+            assert!(mixed.delivery_routes.is_empty());
+
+            // The held Rust turn releases immediately, and a fresh JS turn also runs after it finishes.
+            let mut released = mixed.release(&store);
+            assert_eq!(released.len(), 1);
+            let (token, dispatch) = released.pop().unwrap();
+            assert_eq!(token, rust_turn);
+            let outcome = run_now(dispatch);
+            assert_eq!(
+                mixed.parse(&mut store, "rust", &[], outcome).unwrap(),
+                Answer::Now(Value::str("ok"))
+            );
+            mixed.javascript.retire_on_delivery = false;
+            let next_js = match mixed.answer(&mut store, "js", &[]).unwrap() {
+                Answer::Later(r) => r.continuation.unwrap(),
+                _ => panic!("ordered turn"),
+            };
+            assert!(matches!(mixed.dispatch(next_js, &store), Dispatch::Run(_)));
+        }
+    }
+
+    #[test]
+    fn discarding_an_ordered_delivery_clears_busy_and_forwards_to_javascript() {
+        let mut js = DeliverySource::new(Placement::Worker, "secret.keep shared");
+        js.delivery_request = Some(Request::continuation::<TestWork>(88));
+        let rust = DeliverySource::new(Placement::Main, "secret.keep shared");
+        let mut mixed = Mixed::new(js, rust, &["js"], &["rust"]).unwrap();
+        let mut store = Store::new("secret.keep shared", []);
+
+        // 1. Discard a queued delivery before it starts.
+        let queued = mixed
+            .module_delivery(&mut store, 1, Dispatch::again_outcome())
+            .unwrap()
+            .unwrap()
+            .continuation
+            .unwrap();
+        mixed.discard(queued);
+        assert!(mixed.deliveries.is_empty());
+        assert!(mixed.delivery_phases.is_empty());
+        assert!(!mixed.sets[0].busy);
+
+        // 2. Discard an in-flight delivery during phase 1.
+        let phase1_token = mixed
+            .module_delivery(&mut store, 2, Dispatch::again_outcome())
+            .unwrap()
+            .unwrap()
+            .continuation
+            .unwrap();
+        let _ = run_now(mixed.dispatch(phase1_token, &store));
+        assert!(mixed.sets[0].busy);
+        mixed.discard(phase1_token);
+        assert!(!mixed.sets[0].busy);
+        assert!(mixed.sets[0].running.is_none());
+        assert!(mixed.delivery_phases.is_empty());
+
+        // 3. Discard a routed worker delivery in phase 2: unblocks set and discards child token.
+        mixed.javascript.delivery_request = Some(Request::continuation::<TestWork>(99));
+        let start_token = mixed
+            .module_delivery(&mut store, 3, Dispatch::again_outcome())
+            .unwrap()
+            .unwrap()
+            .continuation
+            .unwrap();
+        let waiting = match mixed.answer(&mut store, "rust", &[]).unwrap() {
+            Answer::Later(r) => r.continuation.unwrap(),
+            _ => panic!("ordered turn"),
+        };
+        let phase1 = run_now(mixed.dispatch(start_token, &store));
+        assert!(matches!(mixed.dispatch(waiting, &store), Dispatch::Held));
+        let outer = mixed
+            .module_delivery(&mut store, 3, phase1)
+            .unwrap()
+            .unwrap()
+            .continuation
+            .unwrap();
+        mixed.discard(outer);
+        assert!(!mixed.sets[0].busy);
+        assert!(mixed.sets[0].running.is_none());
+        assert!(mixed.delivery_phases.is_empty());
+        assert!(mixed.delivery_routes.is_empty());
+        assert_eq!(mixed.javascript.discarded, [99]);
+        let released = mixed.release(&store);
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].0, waiting);
+    }
+
+    #[test]
+    fn delivery_route_error_clears_busy_and_unblocks_the_ordered_set() {
+        let mut js = DeliverySource::new(Placement::Worker, "secret.keep shared");
+        // Returning a Request without a continuation forces route_delivery to fail.
+        js.delivery_request = Some(Request::get("https://invalid.test/"));
+        let rust = DeliverySource::new(Placement::Main, "secret.keep shared");
+        let mut mixed = Mixed::new(js, rust, &["js"], &["rust"]).unwrap();
+        let mut store = Store::new("secret.keep shared", []);
+
+        let delivery_token = mixed
+            .module_delivery(&mut store, 5, Dispatch::again_outcome())
+            .unwrap()
+            .unwrap()
+            .continuation
+            .unwrap();
+        let waiting = match mixed.answer(&mut store, "rust", &[]).unwrap() {
+            Answer::Later(r) => r.continuation.unwrap(),
+            _ => panic!("ordered turn"),
+        };
+        let phase1 = run_now(mixed.dispatch(delivery_token, &store));
+        assert!(matches!(mixed.dispatch(waiting, &store), Dispatch::Held));
+        assert!(mixed.module_delivery(&mut store, 5, phase1).is_err());
+        assert!(!mixed.sets[0].busy);
+        assert!(mixed.sets[0].running.is_none());
+        assert!(mixed.delivery_phases.is_empty());
+        assert!(mixed.delivery_routes.is_empty());
+
+        let released = mixed.release(&store);
+        assert_eq!(released.len(), 1);
+        assert_eq!(released[0].0, waiting);
     }
 }

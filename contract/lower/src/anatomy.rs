@@ -539,6 +539,7 @@ impl Lowerer<'_> {
         for e in platform(file) {
             self.push(e);
         }
+        let design_names = std::cell::LazyCell::new(|| library::design_names(file));
         for c in &file.components {
             // An exported library component's slot (LLP 1139 D0, D4).
             let library = c
@@ -558,7 +559,7 @@ impl Lowerer<'_> {
             // reads.
             if library {
                 let controls = library::control(c);
-                for e in library::literal(c, file)
+                for e in library::literal(c, file, |name| design_names.contains(name))
                     .into_iter()
                     .chain(controls.refused)
                 {

@@ -262,12 +262,27 @@ pub(crate) fn refusal(live: bool, reaches: bool, agent: bool) -> Result<Option<S
     Ok((!reaches).then(|| if agent { "agent" } else { "unsupported" }.into()))
 }
 
-/// The kept files an atomic write from TypeScript is replacing, by the
-/// token the prelude holds until the write settles.
-#[allow(clippy::type_complexity)]
-static REPLACING: std::sync::Mutex<std::collections::BTreeMap<u64, (u64, String, ReplacedFiles)>> =
-    std::sync::Mutex::new(std::collections::BTreeMap::new());
-static NEXT_REPLACING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// The kept files atomic writes from one module are replacing, by the
+/// token the prelude holds until each write settles. Owned by `HostState`
+/// so unloading or retiring a runtime closes every directory handle and
+/// never poisons a later generation.
+#[derive(Default)]
+pub(crate) struct Replacing {
+    entries: BTreeMap<u64, (u64, String, ReplacedFiles)>,
+    next: u64,
+}
+
+impl Replacing {
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
 type ReplacedFiles = exact_data::documents::kept::Replaced;
 
 /// `storage.fs.recentDocuments()` (`ask` empty) and `forgetDocument(path)`
@@ -278,31 +293,40 @@ type ReplacedFiles = exact_data::documents::kept::Replaced;
 /// write: `replacing <path>` reads what it replaces and answers a token, or
 /// nothing when it replaces no kept file; `replaced <token>` carries the
 /// entry to the file written; `dropped <token>` lets it go (the write failed).
-pub(crate) fn kept(owner: Option<u64>, ask: &str) -> Result<Option<String>, String> {
+pub(crate) fn kept(
+    owner: Option<u64>,
+    replacing: &mut Replacing,
+    ask: &str,
+) -> Result<Option<String>, String> {
     use exact_data::documents::kept;
     let owner =
         owner.ok_or("storage: recentDocuments and forgetDocument need the doc.keep grant")?;
-    let replacing = || REPLACING.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(path) = ask.strip_prefix("replacing ") {
         // A save issued while an earlier one of the same file is in flight
         // replaces what that one writes: the earlier save may have renamed
         // its file and not yet carried the entry, so the identity at the path
         // is not yet the kept one. The queue runs the two in order.
-        let earlier = || {
-            (replacing().values())
-                .find(|(o, p, _)| *o == owner && p == path)
-                .map(|(.., r)| r.clone())
-        };
-        let Some(replaced) = earlier().or_else(|| kept::before_write(owner, path)) else {
+        let earlier = replacing
+            .entries
+            .values()
+            .find(|(o, p, _)| *o == owner && p == path)
+            .map(|(.., r)| r.clone());
+        let Some(replaced) = earlier.or_else(|| kept::before_write(owner, path)) else {
             return Ok(None);
         };
-        let token = NEXT_REPLACING.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        replacing().insert(token, (owner, path.to_owned(), replaced));
+        replacing.next += 1;
+        let token = replacing.next;
+        replacing
+            .entries
+            .insert(token, (owner, path.to_owned(), replaced));
         return Ok(Some(token.to_string()));
     }
     for (how, carry) in [("replaced ", true), ("dropped ", false)] {
         if let Some(token) = ask.strip_prefix(how) {
-            let held = token.parse().ok().and_then(|t: u64| replacing().remove(&t));
+            let held = token
+                .parse()
+                .ok()
+                .and_then(|t: u64| replacing.entries.remove(&t));
             if let Some((owner, _, replaced)) = held.filter(|_| carry) {
                 kept::carry(owner, replaced)?;
             }
@@ -312,7 +336,7 @@ pub(crate) fn kept(owner: Option<u64>, ask: &str) -> Result<Option<String>, Stri
     match ask.strip_prefix("forget ") {
         Some(path) => kept::forget(owner, path)
             .map(|()| None)
-            .map_err(|_| format!("document ENOENT: {path} is not a document this app keeps")),
+            .map_err(|e| e.into_storage_error(path)),
         // A session that keeps nothing (no store) has kept nothing.
         None => Ok(Some(
             kept::list(owner).map_or_else(|| "[]".into(), |list| list.to_string()),
@@ -535,7 +559,8 @@ mod tests {
             std::fs::write(dir.join("next"), text).unwrap();
             std::fs::rename(dir.join("next"), &file).unwrap();
         };
-        let ask = |ask: String| super::kept(Some(9140), &ask).unwrap();
+        let mut replacing = super::Replacing::default();
+        let mut ask = |ask: String| super::kept(Some(9140), &mut replacing, &ask).unwrap();
         let a = ask(format!("replacing {doc}")).unwrap();
         replace("a");
         let b = ask(format!("replacing {doc}")).expect("the later save carries too");
@@ -550,6 +575,153 @@ mod tests {
         );
         kept::end(9140);
         exact_data::documents::forget(9140);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Clearing `Replacing` on runtime teardown drops stale tokens so a
+    /// reloaded module re-reads `kept::before_write` instead of reusing a
+    /// stale entry from an earlier generation.
+    #[test]
+    fn clearing_replacing_drops_stale_tokens_for_later_saves() {
+        use exact_data::documents::kept;
+        let dir =
+            std::env::temp_dir().join(format!("exact-js-replacing-clear-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.md");
+        std::fs::write(&file, "first").unwrap();
+        let set = dir.join("kept.json");
+        kept::open(9141, "test.js.replacing-clear", &set);
+        let doc = kept::keep(9141, &file, "", "readwrite").unwrap();
+        let mut replacing = super::Replacing::default();
+        assert!(
+            super::kept(Some(9141), &mut replacing, &format!("replacing {doc}"))
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(replacing.len(), 1);
+        // Simulate OOM retirement / runtime teardown before `.then` settles.
+        replacing.clear();
+        assert_eq!(replacing.len(), 0);
+        // Another process replaces the file on disk (no longer the kept inode).
+        std::fs::write(dir.join("other"), "external").unwrap();
+        std::fs::rename(dir.join("other"), &file).unwrap();
+        // After reload with the same owner, `replacing` must re-read disk and
+        // see that the file at the path is no longer the kept document.
+        assert_eq!(
+            super::kept(Some(9141), &mut replacing, &format!("replacing {doc}")).unwrap(),
+            None
+        );
+        kept::end(9141);
+        exact_data::documents::forget(9141);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A `forgetDocument` save failure propagates the underlying OS error
+    /// instead of collapsing into `document ENOENT`, and keeps the document.
+    #[test]
+    fn forget_save_error_propagates_instead_of_enoent() {
+        use exact_data::documents::kept;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("exact-js-forget-err-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("set")).unwrap();
+        let file = dir.join("note.md");
+        std::fs::write(&file, "hello").unwrap();
+        let set = dir.join("set/kept.json");
+        kept::open(9142, "test.js.forget-err", &set);
+        let doc = kept::keep(9142, &file, "", "readwrite").unwrap();
+        let mut replacing = super::Replacing::default();
+        let mode = std::fs::Permissions::from_mode;
+        std::fs::set_permissions(dir.join("set"), mode(0o555)).unwrap();
+        let err = super::kept(Some(9142), &mut replacing, &format!("forget {doc}")).unwrap_err();
+        std::fs::set_permissions(dir.join("set"), mode(0o755)).unwrap();
+        assert!(!err.starts_with("document ENOENT:"), "{err}");
+        assert!(err.contains("could not save kept documents"), "{err}");
+        assert!(
+            err.ends_with(&format!("(os error {})", libc::EACCES)),
+            "{err}"
+        );
+        let listed = super::kept(Some(9142), &mut replacing, "")
+            .unwrap()
+            .unwrap();
+        assert!(listed.contains(&doc), "document must remain kept: {listed}");
+        // Unkept path still produces document ENOENT.
+        let missing =
+            super::kept(Some(9142), &mut replacing, "forget doc:/9999/missing.md").unwrap_err();
+        assert!(missing.starts_with("document ENOENT:"), "{missing}");
+        kept::end(9142);
+        exact_data::documents::forget(9142);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Calling `atomicWriteFile("doc:/...", ...)` inside an overlay records no
+    /// entry in `HostState.replacing`, and `unload()` clears any pending ones.
+    #[cfg(exact_js_engine)]
+    #[test]
+    fn overlay_records_no_replacing_token_and_unload_clears_replacing() {
+        use exact_data::documents::kept;
+        use exact_plan::Value;
+        use exact_runner::{Answer, DataSource, Store};
+        let dir =
+            std::env::temp_dir().join(format!("exact-js-overlay-replacing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.md");
+        std::fs::write(&file, "kept").unwrap();
+        let set = dir.join("kept.json");
+        kept::open(9143, "test.js.overlay-replacing", &set);
+        let doc = kept::keep(9143, &file, "", "readwrite").unwrap();
+
+        let grants =
+            "net.fetch https://fixture.exact.test\nfs.read app:/x\nfs.write doc:/\ndoc.keep\n";
+        let plan = contract::compile(
+            "shape Item\n  text: string\ncomponent App\n  resource items = items() as shape Item[]\n  mutation captured as shape string\n  action capture\n    send captured = capture(\"\")\n  view\n    text \"x\"\n",
+        )
+        .unwrap();
+        let mut module = crate::Module::new(
+            include_bytes!(concat!(env!("OUT_DIR"), "/overlay.hbc")).to_vec(),
+            "test.overlay",
+            grants,
+        );
+        module.set_budget_ms(f64::INFINITY);
+        module.set_document_owner(9143);
+        module.bind(&plan);
+        module.load().unwrap();
+        let mut store = Store::new(grants, vec![]);
+        assert!(matches!(
+            module
+                .answer(&mut store, "capture", &[Value::str(&doc)])
+                .unwrap(),
+            Answer::Now(_)
+        ));
+        assert!(module
+            .overlay("items", &[], &Value::list(vec![]), &[])
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            module.host.replacing.len(),
+            0,
+            "overlay must not register a replacing token"
+        );
+        assert!(
+            kept::list(9143).unwrap().to_string().contains(&doc),
+            "overlay must not forget kept documents"
+        );
+
+        // Register a pending token directly and confirm unload() clears it.
+        assert!(super::kept(
+            Some(9143),
+            &mut module.host.replacing,
+            &format!("replacing {doc}")
+        )
+        .unwrap()
+        .is_some());
+        assert_eq!(module.host.replacing.len(), 1);
+        module.unload();
+        assert_eq!(module.host.replacing.len(), 0);
+        kept::end(9143);
+        exact_data::documents::forget(9143);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

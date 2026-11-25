@@ -1,6 +1,7 @@
 # Wide-color GC omits `NodeArena::looks` and `Op::SetLooks`, reclaiming live `:hover`/`:focus-visible` colors
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Mark NodeArena::looks in wide_colors/wide_colors_shared, visit Op::SetLooks in Colors for Op, and retain a wide Keep on StyleTable.
 **Systems:** kernel wide-color GC & state looks (`Op::SetLooks`)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25
