@@ -42,9 +42,13 @@ final class RouteFlightsIOSTests: XCTestCase {
         let nav = UINavigationController(rootViewController: list)
         let delegate = Delegate()
         var crossed = false
+        // A picture of the route taken before, as a frozen one is.
+        let picture = UIView()
         delegate.willShow = { nav in
             guard let coordinator = nav.transitionCoordinator else { return }
-            crossed = p.crossFlights(coordinator, leaving: list.view, arriving: detail.view, zoom: nil)
+            picture.frame = list.view.bounds
+            list.view.addSubview(picture)
+            crossed = p.crossFlights(coordinator, leaving: list.view, arriving: detail.view, zoom: nil, picture: picture)
         }
         nav.delegate = delegate
         window.rootViewController = nav
@@ -58,6 +62,9 @@ final class RouteFlightsIOSTests: XCTestCase {
         XCTAssertTrue(crossed, "the photo pairs; the name the list holds twice does not")
         XCTAssertEqual(p.flights.keys.sorted(), [6])
         XCTAssertEqual(leaver.alpha, 0, "the leaver is hidden before UIKit draws the transition")
+        let cut = try XCTUnwrap(picture.layer.mask as? CAShapeLayer)
+        XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 132), using: .evenOdd) ?? true, "and cut out of the route's picture")
+        XCTAssertTrue(cut.path?.contains(CGPoint(x: 200, y: 400), using: .evenOdd) ?? false)
         let lifted = Date().addingTimeInterval(1)
         while !(arriver.superview is FlightClip), nav.transitionCoordinator != nil, Date() < lifted { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
         XCTAssertTrue(arriver.superview is FlightClip, "the arriver flies above both routes")

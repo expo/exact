@@ -213,15 +213,13 @@ private final class ModalController: UIViewController, UIGestureRecognizerDelega
     private func cross(opening: Bool) {
         guard modalPresentationStyle == .overFullScreen, let coordinator = transitionCoordinator, let presenter = host?.presenter,
               let beneath = presentingViewController?.view else { return }
-        guard presenter.flightHost.cross(coordinator, leaving: opening ? beneath : view, arriving: opening ? view : beneath, zoom: zoomSource),
-              let old = pixels else { return }
-        // A Close froze the route with what now flies: its picture again, without it.
-        old.removeFromSuperview()
-        freeze(updated: true)
+        // A Close froze the route with what now flies.
+        _ = presenter.flightHost.cross(coordinator, leaving: opening ? beneath : view, arriving: opening ? view : beneath, zoom: zoomSource,
+                                       picture: opening ? nil : pixels)
     }
     #endif
-    func freeze(updated: Bool = false) {
-        guard isViewLoaded, let pixels = view.snapshotView(afterScreenUpdates: updated) else { return }
+    func freeze() {
+        guard isViewLoaded, let pixels = view.snapshotView(afterScreenUpdates: false) else { return }
         pixels.frame = view.bounds
         pixels.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(pixels)

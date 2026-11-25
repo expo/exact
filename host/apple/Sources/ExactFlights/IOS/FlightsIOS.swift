@@ -84,8 +84,8 @@ final class BuiltInFlights: FlightHosting {
     func hold(leaving: UIView, arriving: UIView, zoom: String?) {
         presenter?.holdFlights(leaving: leaving, arriving: arriving, zoom: zoom)
     }
-    func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool {
-        presenter?.crossFlights(coordinator, leaving: leaving, arriving: arriving, zoom: zoom) ?? false
+    func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?, picture: UIView?) -> Bool {
+        presenter?.crossFlights(coordinator, leaving: leaving, arriving: arriving, zoom: zoom, picture: picture) ?? false
     }
     #endif
 }

@@ -1078,11 +1078,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // The names both routes hold fly alongside, unless it zooms (LLP 1013.004 D3).
         if let from = transition.viewController(forKey: .from) as? RouteController, let to = viewController as? RouteController {
             let zoomed = navigationController.viewControllers.contains(from) ? to : from
-            // A route the app removed was frozen with what now flies: its picture again, without it.
-            if presenter.flightHost.cross(transition, leaving: from.view, arriving: to.view, zoom: zoomed.zoomSource), let old = from.frozen {
-                old.removeFromSuperview()
-                from.freeze(updated: true)
-            }
+            // A route the app removed was frozen with what now flies, which is cut out of that picture: drawn
+            // again, it would show the views the batch emptied.
+            _ = presenter.flightHost.cross(transition, leaving: from.view, arriving: to.view, zoom: zoomed.zoomSource, picture: from.frozen)
         }
         #endif
         // That paints what shows as it starts. A swipe reveals the route a

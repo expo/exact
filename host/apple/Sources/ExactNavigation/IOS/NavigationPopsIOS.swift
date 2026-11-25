@@ -268,8 +268,8 @@ extension RouteController {
     /// before UIKit starts its pop, and UIKit's own pop reaches the router as
     /// it begins, before UIKit has drawn the route where it animates it, when
     /// no snapshot of what was drawn is to be had.
-    func freeze(updated: Bool = false) {
-        guard isViewLoaded, let snapshot = view.snapshotView(afterScreenUpdates: updated) ?? view.snapshotView(afterScreenUpdates: true) else { return }
+    func freeze() {
+        guard isViewLoaded, let snapshot = view.snapshotView(afterScreenUpdates: false) ?? view.snapshotView(afterScreenUpdates: true) else { return }
         snapshot.frame = view.bounds
         // Pinned to the top, never stretched: the viewport can grow under it
         // as the pop starts (a keyboard going away, see NavigationHost.sync).

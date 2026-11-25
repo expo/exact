@@ -50,7 +50,8 @@ extension Presenter {
         }
     }
 
-    func crossFlights(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool {
+    func crossFlights(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?,
+                      picture: UIView? = nil) -> Bool {
         // An unanimated change flies nothing, what it held included. Nor does a zoom: its card moves on its
         // own spring, and follows a drag to dismiss, where neither the coordinator's clock nor public API
         // reads it, so the names stay in their routes and the destination's ride the card, as in a
@@ -62,7 +63,7 @@ extension Presenter {
         // A hold lasts until the transition that flies it, or until its route leaves the window.
         holds = holds.filter { held in held.value.view.window != nil && !pairs.contains { $0.from === held.value.view } }
         guard !pairs.isEmpty else { return false }
-        // Hidden now, before a frozen route is pictured again without it.
+        // Hidden now, and cut out of a picture of the route taken before: the flight draws it.
         let held = pairs.map {
             (flight: Flight(id: $0.to.id, source: sources[ObjectIdentifier($0.from)]?.source ?? flightSource($0.from)), leaver: $0.from, alpha: $0.from.alpha)
         }
@@ -77,6 +78,14 @@ extension Presenter {
             }
         }
         UIView.performWithoutAnimation { for h in held { h.leaver.alpha = 0 } }
+        if let picture {
+            let cut = CAShapeLayer()
+            let path = UIBezierPath(rect: picture.bounds)
+            for h in held { path.append(UIBezierPath(rect: picture.convert(h.flight.source.rect, from: nil))) }
+            cut.path = path.cgPath
+            cut.fillRule = .evenOdd
+            picture.layer.mask = cut
+        }
         // Starts at 0, and the block animates it to 1.
         let probe = UIView()
         probe.isUserInteractionEnabled = false
@@ -92,28 +101,26 @@ extension Presenter {
                 for h in held where self.flights[h.flight.id] !== h.flight { h.leaver.alpha = h.alpha }
             }
             probe.alpha = 1
-            var last: CGFloat?
-            let tick = { [weak self, weak probe] (paced: Bool) in
+            let tick = { [weak self, weak probe] in
                 guard let self, let probe else { return }
-                // Before the transaction commits there is no presentation yet: the start.
-                let read = CGFloat(probe.layer.presentation()?.opacity ?? 0)
-                var p = read
-                // Unpinned, UIKit's own layers show a frame further on than the probe reads (they are paced on
-                // the render server), so the flight takes the frame's step once more to keep with them.
-                if paced, let l = last, !context.isInteractive { p = min(1, max(0, 2 * read - l)) }
-                last = paced ? read : nil
+                // UIKit drives the probe's linear animation paused, setting its time each frame before this runs;
+                // the presentation shows that time only after the frame commits, a frame behind the routes.
+                // Before UIKit drives it, the presentation: the start.
+                let driven = probe.layer.animationKeys()?.lazy.compactMap { probe.layer.animation(forKey: $0) as? CABasicAnimation }
+                    .first { $0.keyPath == "opacity" && $0.speed == 0 }
+                let p = min(1, max(0, driven.map { CGFloat($0.timeOffset / max($0.duration, 0.001)) } ?? CGFloat(probe.layer.presentation()?.opacity ?? 0)))
                 // Hidden each frame: a batch that applies the leaver's style shows it again.
                 for h in held where flights[h.flight.id] === h.flight { h.leaver.alpha = 0; h.flight.progress = p; showFlight(h.flight) }
                 // Text paints where it shows: what flies, as it flies.
                 paintVisibleText()
             }
-            UIView.performWithoutAnimation { tick(false) }
+            UIView.performWithoutAnimation(tick)
             // Each frame after UIKit moves its transition, which it does after the display link's callbacks:
             // read there, the probe is a frame behind the routes.
             #if !targetEnvironment(macCatalyst)
             if #available(iOS 18.0, *) {
                 let link = UIUpdateLink(view: probe)
-                link.addAction(to: .beforeCATransactionCommit) { _, _ in tick(true) }
+                link.addAction(to: .beforeCATransactionCommit) { _, _ in tick() }
                 link.requiresContinuousUpdates = true
                 link.preferredFrameRateRange = FrameClock.full(on: probe.window?.screen)
                 link.isEnabled = true
@@ -121,7 +128,7 @@ extension Presenter {
                 return
             }
             #endif
-            FrameClock.shared.want(owner, .stage, rate: FrameClock.full(on: probe.window?.screen)) { _ in tick(false) }
+            FrameClock.shared.want(owner, .stage, rate: FrameClock.full(on: probe.window?.screen)) { _ in tick() }
         }, completion: { [weak self] _ in
             stop()
             probe.removeFromSuperview()
@@ -132,6 +139,7 @@ extension Presenter {
             self?.paintVisibleText()
         })
         guard queued else {
+            picture?.layer.mask = nil
             for h in held { flights.removeValue(forKey: h.flight.id); h.leaver.alpha = h.alpha }
             return false
         }

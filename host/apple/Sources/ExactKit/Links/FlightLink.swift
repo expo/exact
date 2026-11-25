@@ -83,8 +83,9 @@ package protocol FlightHosting: AnyObject {
     func hold(leaving: UIView, arriving: UIView, zoom: String?)
     /// A route change UIKit runs on `coordinator`, from the route `leaving` to the route `arriving`: the
     /// names both hold once fly alongside it (LLP 1013.004 D3). `zoom` is the `navigationSource` the
-    /// change zooms by, which carries its own element. True when something flies.
-    func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool
+    /// change zooms by, which carries its own element. What flies is cut out of `picture`, a picture of the
+    /// leaving route taken before. True when something flies.
+    func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?, picture: UIView?) -> Bool
     #endif
 }
 
@@ -110,7 +111,7 @@ package final class NoFlights: FlightHosting {
     #endif
     #if os(iOS)
     package func hold(leaving: UIView, arriving: UIView, zoom: String?) {}
-    package func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?) -> Bool { false }
+    package func cross(_ coordinator: UIViewControllerTransitionCoordinator, leaving: UIView, arriving: UIView, zoom: String?, picture: UIView?) -> Bool { false }
     #endif
 }
 
