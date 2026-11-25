@@ -303,6 +303,8 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-list-supplementary-insets-reference", "exact LLP 1123 D15", AttrTarget::Styles(&[StyleId::ListSupplementaryInsetsReference])),
     ("-exact-list-cell-margins", "exact LLP 1123 D15", AttrTarget::Styles(&[StyleId::ListCellMarginsTop, StyleId::ListCellMarginsRight, StyleId::ListCellMarginsBottom, StyleId::ListCellMarginsLeft])),
     ("-exact-list-background-insets", "exact LLP 1123 D15", AttrTarget::Styles(&[StyleId::ListBackgroundInsetsTop, StyleId::ListBackgroundInsetsRight, StyleId::ListBackgroundInsetsBottom, StyleId::ListBackgroundInsetsLeft])),
+    ("-exact-list-insets-content-to-safe-area", "exact LLP 1123 D15", AttrTarget::Styles(&[StyleId::ListInsetsContentToSafeArea])),
+    ("-exact-list-cell-margins-follow-readable-width", "exact LLP 1123 D15", AttrTarget::Styles(&[StyleId::ListCellMarginsFollowReadableWidth])),
     ("-exact-keyboard-dismiss-padding", "exact LLP 1123 D7", AttrTarget::Styles(&[StyleId::KeyboardDismissPadding])),
     ("-exact-safe-area-track", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::SafeAreaTrack])),
     ("-exact-scroll-vertical-indicator-insets", "exact LLP 1123 D14", AttrTarget::Styles(&[ StyleId::ScrollVerticalIndicatorInsetsTop, StyleId::ScrollVerticalIndicatorInsetsRight, StyleId::ScrollVerticalIndicatorInsetsBottom, StyleId::ScrollVerticalIndicatorInsetsLeft, ])),

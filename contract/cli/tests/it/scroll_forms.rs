@@ -414,6 +414,30 @@ fn the_list_forms_lower_to_their_rows() {
 }
 
 #[test]
+fn the_table_forms_lower_to_their_rows_and_refuse_other_words() {
+    // D15's table rows: each its word's number, UIKit's default 0, so a box that says none holds
+    // 0 and the host, which reads only what a box says, leaves the table's own choice
+    let source = "component A\n  view\n    column\n      column testId=\"said\" -exact-list-insets-content-to-safe-area=\"false\" -exact-list-cell-margins-follow-readable-width=\"true\"\n      column testId=\"defaults\" -exact-list-insets-content-to-safe-area=\"true\" -exact-list-cell-margins-follow-readable-width=\"false\"\n      column testId=\"plain\"\n";
+    let mut r = boot(source);
+    let rows = ["said", "defaults", "plain"].map(|t| {
+        let style = style(&mut r, t);
+        let rare = &style.rare;
+        (
+            rare.list_insets_content_to_safe_area,
+            rare.list_cell_margins_follow_readable_width,
+        )
+    });
+    assert_eq!(rows, [(1, 1), (0, 0), (0, 0)]);
+    for wrong in [
+        "component A\n  view\n    column -exact-list-insets-content-to-safe-area=\"yes\"\n",
+        "component A\n  view\n    column -exact-list-cell-margins-follow-readable-width=\"auto\"\n",
+        "component A\n  view\n    column -exact-list-insets-content-to-safe-area=\"false true\"\n",
+    ] {
+        assert!(contract::compile(wrong).is_err(), "{wrong}");
+    }
+}
+
+#[test]
 fn the_keyboard_dismiss_padding_lowers_to_its_row() {
     // D7's padding is a length on a scroller, 0 where unsaid; a negative length is kept as said,
     // and the host uses 0 for it
