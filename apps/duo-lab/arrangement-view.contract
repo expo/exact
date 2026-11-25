@@ -2,13 +2,13 @@ use PaneViewport, paneDirection, foldWidth, foldTop, foldBottom, foldSpring from
 
 // The Arrangement screen: a UIKit app's arrangement screen (one navigation
 // controller, a route whose `UIArrangementViewController` holds two scrolling
-// panes) written in Contract. The Layout menu picks UIKit's split or overlay
-// arrangement through the `arranged-panes` hatch. The Options menus set the
-// route's navigation item and bar scroll view through the route hatch: title
-// display, bar minimization, the safe-area adjustment and the content scroll
-// view, a pane found through the `arrangement-pane` element hatch. Next pushes
-// another screen with the same settings. Hosts without
-// UIArrangementViewController show the panes in CSS and only Next.
+// panes) written in Contract. The Layout menu picks the panes' `arrangement`,
+// UIKit's split or overlay. The Options menus set the route's navigation item
+// and bar scroll view through the route hatch: title display, bar
+// minimization, the safe-area adjustment and the content scroll view, a pane
+// found through the `arrangement-pane` element hatch. Next pushes another
+// screen with the same settings. Hosts without UIArrangementViewController
+// show the panes in CSS and only Next.
 
 shape ArrangementSettings
   layout: string
@@ -16,6 +16,9 @@ shape ArrangementSettings
   barMinimization: string
   safeAreaAdjustment: string
   contentScroll: string
+
+// The menu's choice as `arrangement` says it
+fn arrangementOf(layout: string): string = layout == "horizontal" or layout == "vertical" ? `split ${layout}` : layout
 
 // A row's number as the UIKit app prints it (`%03d`)
 fn rowNumber(n: number): string = n < 10 ? `00${n}` : n < 100 ? `0${n}` : `${n}`
@@ -92,7 +95,7 @@ component ArrangementView
       // UIKit lays out the two panes where it supports arrangements. Elsewhere CSS puts them side by side or stacked, clear
       // of a fold: across it each is as wide as the narrower segment, at either end; down it the container ends with the
       // upper segment, as the box after it takes the rest of the route, and the secondary takes the lower one
-      column hatch="arranged-panes" data-pane-layout=(native ? settings.layout : "css") testId=`${prefix}-container` flex=1 min-height=0 flex-direction=paneDirection(viewport) justify-content=(across ? "space-between" : "flex-start")
+      column arrangement=(native ? arrangementOf(settings.layout) : "none") testId=`${prefix}-container` flex=1 min-height=0 flex-direction=paneDirection(viewport) justify-content=(across ? "space-between" : "flex-start")
         ArrangementPane(id=`${key}-primary`, name=`${prefix}-primary`, native=native, label="Primary", ground="pane.primary", stripe="pane.primary.stripe", band="pane.primary.band", grow=(across ? 0 : 1), width=(across ? foldWidth(viewport) : "100%"), lower=false, top="auto", spring=spring)
         ArrangementPane(id=`${key}-secondary`, name=`${prefix}-secondary`, native=native, label="Secondary", ground="pane.secondary", stripe="pane.secondary.stripe", band="pane.secondary.band", grow=(across ? 0 : 1), width=(across ? foldWidth(viewport) : "100%"), lower=down, top=(down ? foldBottom(viewport) : "auto"), spring=spring)
       if down

@@ -38,6 +38,7 @@ mod intrinsic;
 mod keyboard;
 pub(crate) mod margins;
 pub(crate) mod observe;
+mod observed_max;
 pub(crate) mod owner;
 mod owner_update;
 mod provenance;

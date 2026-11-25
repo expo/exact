@@ -152,6 +152,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(update.chain[0].target.frame)
         XCTAssertNil(update.chrome)
         XCTAssertNil(update.windowMap)
+        XCTAssertNil(update.configuration)
         XCTAssertEqual(update.keyboard, .unreported)
     }
 
@@ -218,6 +219,21 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(top.y, frame.minY, accuracy: 0.01)
     }
 
+    /// A route's configuration stays while nothing of it changes and moves when its navigation bar
+    /// hides, coming back when the bar does (D9, "Moving edges").
+    func testARoutesConfigurationMovesWithItsBars() throws {
+        let session = try fixture()
+        let (route, view) = try firstRoute(session)
+        let navigation = try XCTUnwrap(route.navigationController)
+        let sample = { OwnerUpdateIOS.sample(controller: route, view: view, session: self.sessionView).configuration }
+        let first = try XCTUnwrap(sample())
+        XCTAssertEqual(sample(), first)
+        navigation.setNavigationBarHidden(!navigation.isNavigationBarHidden, animated: false)
+        XCTAssertNotEqual(sample(), first)
+        navigation.setNavigationBarHidden(!navigation.isNavigationBarHidden, animated: false)
+        XCTAssertEqual(sample(), first)
+    }
+
     func testATargetsIdentityIsItsViewsForLife() {
         let (a, b) = (UIView(), UIView())
         XCTAssertEqual(TargetIds.id(of: a), TargetIds.id(of: a))
@@ -279,6 +295,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         update.barRegions = [nil, nil, .init(distance: 24, sides: (16, 8.5)), nil]
         update.chrome = .init(verticalBarEdge: 2, sidebarAvailable: false)
         update.windowMap = CGAffineTransform(a: 0.9, b: 0.1, c: 0.2, d: 0.8, tx: 5, ty: 62)
+        update.configuration = 7
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
         func u32(_ v: UInt32) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
@@ -293,6 +310,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
         w += [1, 1, 2, 1, 0]
         w.append(1); f(0.9, 0.1, 0.2, 0.8, 5, 62)
+        w.append(1); u64(7)
         XCTAssertEqual([UInt8](update.encode()), w)
         // The keyboard's state, after an empty update's band, lists and margins: 0 unreported, 1 dismissed
         XCTAssertEqual([UInt8](OwnerUpdateIOS().encode())[14], 0)

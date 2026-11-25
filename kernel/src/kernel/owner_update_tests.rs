@@ -65,6 +65,7 @@ fn full() -> OwnerUpdate {
             sidebar_available: Some(false),
         }),
         window_map: Some(WindowMap([0.9, 0.1, 0.2, 0.8, 5.0, 62.0])),
+        configuration: Some(7),
     }
 }
 
@@ -90,9 +91,9 @@ fn an_owner_update_round_trips_and_a_malformed_one_is_refused() {
     presence[0] = 2;
     assert!(OwnerUpdate::decode(&presence).is_err());
     // An operation past the five, at the contribution's byte 25, a relation past the seven, at the
-    // first relation's byte 120, and a vertical bar edge past the three, before the window map's
-    // 25 bytes and the sidebar's two
-    for (at, unknown) in [(25, 5), (120, 7), (bytes.len() - 28, 3)] {
+    // first relation's byte 120, and a vertical bar edge past the three, before the sidebar's two
+    // bytes, the window map's 25 and the configuration's 9
+    for (at, unknown) in [(25, 5), (120, 7), (bytes.len() - 37, 3)] {
         let mut bad = bytes.clone();
         bad[at] = unknown;
         assert!(OwnerUpdate::decode(&bad).is_err(), "byte {at}");
@@ -186,6 +187,9 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.extend([1, 1, 2, 1, 0]);
     w.push(1);
     f(&mut w, &[0.9, 0.1, 0.2, 0.8, 5.0, 62.0]);
+    // and the configuration's identity
+    w.push(1);
+    w.extend(7u64.to_le_bytes());
     assert_eq!(full().encode(), w);
 }
 
@@ -381,6 +385,7 @@ fn session() -> crate::kernel::SessionUpdate {
         }),
         keyboard_policy: Some(crate::kernel::KeyboardPolicy::ResizesVisual),
         window_map: Some(WindowMap([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
+        configuration: Some(3),
     }
 }
 
@@ -398,8 +403,9 @@ fn a_session_update_round_trips_and_a_malformed_one_is_refused() {
         assert!(SessionUpdate::decode(&bytes[..n]).is_err(), "{n} bytes");
     }
     assert!(SessionUpdate::decode(&[bytes.clone(), vec![0]].concat()).is_err());
-    // The policy, before the window map's 25 bytes: 2 is `resizes-visual`, and none past the three
-    let policy = bytes.len() - 26;
+    // The policy, before the window map's 25 bytes and the configuration's 9: 2 is
+    // `resizes-visual`, and none past the three
+    let policy = bytes.len() - 35;
     assert_eq!(bytes[policy], 2);
     let mut bad = bytes.clone();
     bad[policy] = 4;
@@ -454,4 +460,51 @@ fn a_window_map_places_a_rectangle_and_one_that_folds_the_plane_is_refused() {
     };
     assert!(k.update_owner(2, folded).is_err());
     assert_eq!(k.window_map(2), None);
+}
+
+#[test]
+fn an_observed_max_reader_keeps_the_largest_band_of_its_configuration() {
+    // 3 pads by its top observation under `observed-max`: after a 100-point band and then a
+    // 50-point one in configuration 1 it keeps 100 while its readout follows to 50;
+    // configuration 2 starts again from 50, and a host that reports no configuration leaves it
+    // reading the band live
+    let mut ops = create(3..=3);
+    let track = [
+        (StyleId::Height, "10"),
+        (StyleId::SafeAreaTrack, "observed-max"),
+    ];
+    ops.push(style(
+        3,
+        vec![(StyleId::PaddingTop, observed(Edge::Top, None))],
+        &track,
+    ));
+    ops.extend([children(1, &[2]), children(2, &[3])]);
+    let mut k = owner(390.0, 844.0, ops);
+    let band = |top: f32, configuration: Option<u64>| OwnerUpdate {
+        band: Some([top, 0.0, 0.0, 0.0]),
+        configuration,
+        ..OwnerUpdate::default()
+    };
+    k.update_owner(2, band(100.0, Some(1))).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 100.0);
+    k.update_owner(2, band(50.0, Some(1))).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 100.0, "the largest band of its configuration");
+    assert_eq!(
+        k.observation(3).map(|o| o[0]),
+        Some(Some(50.0)),
+        "its readout is live"
+    );
+    k.update_owner(2, band(50.0, Some(2))).unwrap();
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 50.0);
+    k.update_owner(2, band(100.0, Some(2))).unwrap();
+    k.update_owner(2, band(50.0, None)).unwrap();
+    lay_out(&mut k);
+    assert_eq!(
+        top(&k, 3),
+        50.0,
+        "with no configuration it reads the band live"
+    );
 }

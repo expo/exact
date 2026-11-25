@@ -60,7 +60,7 @@ component ArrangementScreen
         ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, inset=flowed, native=native, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))
       // Segment edges are viewport-relative. Keep the chrome inside the first pane whenever the panes anchor, so it adds no
       // offset above them.
-      column id=`${prefix}-container` hatch="arranged-panes" data-pane-layout=active testId=`${prefix}-container` flex=1 min-height=0 position=(flowed ? "static" : "relative") display="flex" flex-direction=(anchored ? "column" : direction) justify-content=(flowed and across ? "space-between" : "flex-start") gap=(folded ? 0 : 12)
+      column id=`${prefix}-container` arrangement=(native ? mode : "none") testId=`${prefix}-container` flex=1 min-height=0 position=(flowed ? "static" : "relative") display="flex" flex-direction=(anchored ? "column" : direction) justify-content=(flowed and across ? "space-between" : "flex-start") gap=(folded ? 0 : 12)
         Pane(name="Workspace", prefix=`${prefix}-workspace`, anchored=anchored, flowed=flowed, leading=true, across=across, down=down, sidesOff=sidesOff, native=native, segment=foldWidth(viewport), lowerTop=foldBottom(viewport), spring=spring)
           if anchored
             ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, inset=false, native=false, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))

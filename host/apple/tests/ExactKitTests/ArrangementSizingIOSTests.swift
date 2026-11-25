@@ -465,6 +465,82 @@ final class ArrangementSizingIOSTests: XCTestCase {
         XCTAssertEqual(widths.first ?? 0, 400, accuracy: 1, "laid out inside the animation")
     }
 
+    /// An author's `arrangement` (LLP 1188 D3): UIKit's panes, one controller across its words, and CSS's boxes again
+    /// at `none`. A controller a hatch gave the box keeps it, and the author's comes back as the hatch lets go.
+    func testAnAuthorsArrangementKeepsOneControllerAcrossItsWordsAndYieldsToAHatchs() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let session = try booted(CGSize(width: 1000, height: 600)), arrangements = session.presenter.arrangements
+        let box = try node("arrangement"), panes = [try node("primary"), try node("secondary")]
+        func say(_ word: String) { session.apply(wireBatch([["op": "props", "id": box.id, "set": ["arrangement": word]]])) }
+        say("split")
+        let made = try XCTUnwrap(arrangements.entries[box.id])
+        XCTAssertEqual(made.panes, panes, "the first child is the primary")
+        XCTAssertTrue(panes.allSatisfy { $0.isDescendant(of: made.controller.view) })
+        func secondary(_ says: String, of entry: ArrangementHost.Entry, _ holds: @escaping (CGFloat) -> Bool) {
+            waitFor(says, cap: 5) { self.window?.layoutIfNeeded(); return holds(entry.isHidden(entry.holders[1]) ? 0 : entry.holders[1].view.bounds.width) }
+        }
+        secondary("beside the primary", of: made) { $0 > 0 && $0 < 900 }
+        say("split vertical")
+        secondary("not beside it", of: made) { $0 == 0 || $0 > 900 }
+        say("split horizontal")
+        secondary("beside it again", of: made) { $0 > 0 && $0 < 900 }
+        say("overlay")
+        secondary("under it, as wide as the box", of: made) { $0 > 900 }
+        XCTAssertTrue(arrangements.entries[box.id]?.controller === made.controller, "one controller's")
+        for word in ["none", "sideways"] {
+            say(word)
+            XCTAssertNil(arrangements.entries[box.id], "\(word) is CSS's layout")
+            XCTAssertEqual(box.container.subviews.compactMap { $0 as? NodeView }, panes, "in their order")
+            say("split")
+            XCTAssertNotNil(arrangements.entries[box.id])
+        }
+        let own = UIArrangementViewController()
+        XCTAssertTrue(arrangements.set(box.id, controller: own), "over the author's")
+        XCTAssertTrue(arrangements.entries[box.id]?.controller === own, "the hatch's")
+        say("overlay")
+        XCTAssertTrue(arrangements.entries[box.id]?.controller === own, "still")
+        XCTAssertTrue(arrangements.set(box.id, controller: nil))
+        let back = try XCTUnwrap(arrangements.entries[box.id])
+        XCTAssertFalse(back.controller === own, "the author's again")
+        secondary("an overlay, as said while the hatch had it", of: back) { $0 > 900 }
+    }
+
+    /// Where UIKit's arrangement cannot stand, an author's is CSS's layout and the journal says why, once (LLP 1188 D3).
+    func testAnAuthorsArrangementInAScrollerOrWithoutTwoChildrenIsCSSs() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let session = try booted(CGSize(width: 1000, height: 600)), arrangements = session.presenter.arrangements
+        let box = try node("arrangement")
+        func journal() throws -> Int {
+            let reply = session.agent(#"{"op":"logs"}"#)
+            return reply.components(separatedBy: "`arrangement` on").count - 1
+        }
+        session.apply(wireBatch([
+            ["op": "create", "id": 9_000, "kind": "view", "props": ["arrangement": "split"]], ["op": "create", "id": 9_001, "kind": "view"],
+            ["op": "create", "id": 9_002, "kind": "view"], ["op": "create", "id": 9_010, "kind": "scroll", "style": ["overflow_y": "auto"]],
+            ["op": "create", "id": 9_011, "kind": "view", "props": ["arrangement": "split"]], ["op": "create", "id": 9_012, "kind": "view"], ["op": "create", "id": 9_013, "kind": "view"],
+            ["op": "children", "id": 9_000, "ids": [9_001]], ["op": "children", "id": 9_011, "ids": [9_012, 9_013]], ["op": "children", "id": 9_010, "ids": [9_011]],
+            ["op": "children", "id": box.id, "ids": [try node("primary").id, try node("secondary").id, 9_000, 9_010]],
+            ["op": "frame", "id": 9_010, "x": 0, "y": 0, "w": 400, "h": 100], ["op": "content", "id": 9_010, "w": 400, "h": 500], ["op": "frame", "id": 9_011, "x": 0, "y": 0, "w": 400, "h": 500],
+        ]))
+        XCTAssertTrue(arrangements.entries.isEmpty)
+        XCTAssertEqual(try journal(), 2)
+        session.apply(wireBatch([["op": "children", "id": 9_000, "ids": [9_001, 9_002]]]))
+        XCTAssertNotNil(arrangements.entries[9_000], "two children now")
+        XCTAssertEqual(try journal(), 2, "and each reason is said once")
+        // Into the scroller and out of it, and from inside one arrangement to the outer one's place, in one batch
+        func place(_ ids: [UInt32: [UInt32]]) { session.apply(wireBatch(ids.map { ["op": "children", "id": $0.key, "ids": $0.value] })) }
+        let outside = [try node("primary").id, try node("secondary").id]
+        place([box.id: outside + [9_010], 9_010: [9_011, 9_000]])
+        XCTAssertNil(arrangements.entries[9_000], "in a scroll view")
+        XCTAssertEqual(try journal(), 3)
+        place([box.id: outside + [9_000, 9_010], 9_010: [9_011]])
+        XCTAssertNotNil(arrangements.entries[9_000], "out of it")
+        place([9_001: [9_011], 9_010: []])
+        XCTAssertNil(arrangements.entries[9_011], "in another arrangement")
+        session.apply(wireBatch([["op": "props", "id": 9_000, "set": ["arrangement": "none"]]]))
+        XCTAssertNotNil(arrangements.entries[9_011], "the outer one is CSS's")
+    }
+
     func testIntrinsicAllocationFollowsContentAndOtherDimensionsStillWork() throws {
         guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
         let (session, controller, pane) = try fixture()

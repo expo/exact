@@ -403,7 +403,7 @@ pub fn lower_all(
         profile,
         warned.as_ref().map(|_| &mut text_styles),
     );
-    asset_errors.extend(routes::bottom_toolbar::check(checked, &mut notes));
+    asset_errors.extend(routes::placed(checked, &mut notes));
     if let Some((selection, out)) = warned {
         out.extend(warnings::with_text_styles(
             checked,

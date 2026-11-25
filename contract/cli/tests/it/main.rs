@@ -14,6 +14,7 @@ mod answer_source;
 mod app_action_snapshots;
 mod app_icon;
 mod aria;
+mod arrangement;
 mod asset_paths;
 mod at;
 mod atoms;

@@ -116,6 +116,10 @@ pub(crate) struct Observations {
     pub(crate) keyboards: super::keyboard::Keyboards,
     /// The chrome each owner's host reports (D6).
     pub(crate) chrome: IdMap<u32, super::owner_update::OwnerChrome>,
+    /// The largest incoming band each owner's host reported for its configuration, with that
+    /// configuration's identity, and the session's (D9, "Moving edges").
+    pub(crate) max_bands: IdMap<u32, (u64, [f32; 4])>,
+    pub(crate) session_max: Option<(u64, [f32; 4])>,
     /// Each owner's map into its window, and the document's (D6's `"window"` space).
     pub(crate) window_maps: IdMap<u32, super::window_map::WindowMap>,
     pub(crate) session_window_map: Option<super::window_map::WindowMap>,
@@ -202,6 +206,7 @@ impl Observations {
             targets: self.targets.after_reset(),
             keyboards: self.keyboards.after_reset(),
             session_window_map: self.session_window_map,
+            session_max: self.session_max,
             ..Default::default()
         }
     }
@@ -249,6 +254,7 @@ impl Observations {
         self.segments.remove(&slot);
         self.chrome.remove(&slot);
         self.window_maps.remove(&slot);
+        self.max_bands.remove(&slot);
         self.stopped_reading(slot);
     }
 
@@ -513,7 +519,11 @@ impl Kernel {
                 }
                 let space = band_at(self, s);
                 let readout = measure(&self.arena, s, &space);
-                let (measured, caps) = (readout.observed, readout.depths);
+                // A reader of the largest band settles against it, its readout staying live (D9)
+                let tracked = super::observed_max::tracked(&self.arena, s, &space)
+                    .map(|t| measure(&self.arena, s, &t));
+                let input_from = tracked.as_ref().unwrap_or(&readout);
+                let (measured, caps) = (input_from.observed, input_from.depths);
                 let observations = &mut self.arena.observations;
                 if readout.top_layer || readout.projects {
                     observations.always.insert(s);

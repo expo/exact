@@ -427,3 +427,23 @@ fn the_keyboard_dismiss_padding_lowers_to_its_row() {
     );
     assert_eq!(plain.rare.keyboard_dismiss_padding, Dimension::Points(0.0));
 }
+
+#[test]
+fn the_safe_area_track_lowers_to_its_row_and_refuses_other_words() {
+    // D9's track is a reader's own choice, `live` where unsaid
+    use exact_kernel::SafeAreaTrack;
+    let source = "component A\n  view\n    column\n      column testId=\"max\" -exact-safe-area-track=\"observed-max\"\n      column testId=\"live\" -exact-safe-area-track=\"live\"\n      column testId=\"plain\"\n";
+    let mut r = boot(source);
+    let [max, live, plain] =
+        ["max", "live", "plain"].map(|t| style(&mut r, t).rare.safe_area_track);
+    assert_eq!(
+        [max, live, plain],
+        [
+            SafeAreaTrack::ObservedMax,
+            SafeAreaTrack::Live,
+            SafeAreaTrack::Live
+        ]
+    );
+    let wrong = "component A\n  view\n    column -exact-safe-area-track=\"max\"\n";
+    assert!(contract::compile(wrong).is_err());
+}
