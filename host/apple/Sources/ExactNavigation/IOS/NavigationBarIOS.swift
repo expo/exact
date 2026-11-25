@@ -886,6 +886,15 @@ extension NavigationHost {
         c.barProjected = true
         if !Self.same(item.leftBarButtonItems, leading) { item.setLeftBarButtonItems(leading, animated: animated) }
         if !Self.same(item.rightBarButtonItems, trailing) { item.setRightBarButtonItems(trailing, animated: animated) }
+        #if os(iOS)
+        // A readout first in its list is the one at the bar's edge, a leading one where no Back button is
+        let back = c.pushed && !item.hidesBackButton
+        for (list, edge) in [(leading, HostedItemView.Edge.leading), (trailing, .trailing)] {
+            for (index, bar) in (list ?? []).enumerated() {
+                (bar.customView as? HostedItemView)?.edge = index == 0 && (edge == .trailing || !back) ? edge : nil
+            }
+        }
+        #endif
         if let shape {
             if shape.authored.isEmpty {
                 shape.header.isHidden = true
