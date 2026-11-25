@@ -339,11 +339,13 @@ enum FrameHealthCardText {
     }
 
     /// Exact's own frame clock, in words: idle, at the default rate, or at the rate it requested and any system limit.
-    static func clock(_ exact: Clock) -> String {
-        guard exact.running else { return "Exact's clock idle" }
-        guard exact.rates.requestedHz > 0 else { return "Exact's clock at the default rate" }
-        return "Exact asks \(Int(exact.rates.requestedHz.rounded())) FPS"
-            + (exact.rates.limited ? ", limit \(Int(exact.rates.scheduleHz.rounded()))" : "")
+    /// `long` gives Share's wording, which follows "Exact's frame clock"; the card's context row has room for the short.
+    static func clock(_ exact: Clock, long: Bool = false) -> String {
+        guard exact.running else { return long ? "idle" : "Exact's clock idle" }
+        guard exact.rates.requestedHz > 0 else { return long ? "running at the default rate" : "Exact's clock at the default rate" }
+        let requested = Int(exact.rates.requestedHz.rounded()), limit = Int(exact.rates.scheduleHz.rounded())
+        guard exact.rates.limited else { return long ? "asks for \(requested) FPS" : "Exact asks \(requested) FPS" }
+        return long ? "asks for \(requested) FPS, limited by the system to \(limit) FPS" : "Exact asks \(requested) FPS, limit \(limit)"
     }
 
     /// The table's caption: the deadline Exact's frames have, or what makes the screen's frames late.
@@ -359,22 +361,21 @@ enum FrameHealthCardText {
         let windows = [(0.5, reader.window(0.5)), (5, reader.window(5)), (30, reader.window(30))]
             .map { (window($0.1, nominal: $0.0, source: source).lowercased(), $0.1) }
         let windowFigures = windows.map { figures($0.1, rates: rates, adaptiveSync: display.adaptiveSync, source: source, count: { String($0) }) }
-        func limit(_ rates: Rates) -> String { rates.limited ? ", limited by the system to \(Int(rates.scheduleHz.rounded())) FPS" : "" }
         let measured: [String]
         if case .screen(_, let exact) = source {
-            let clock = !exact.running ? "idle" : exact.rates.requestedHz > 0
-                ? "asks for \(Int(exact.rates.requestedHz.rounded())) FPS" + limit(exact.rates) : "running at the default rate"
             measured = ["Every UI update of this app on its screen, each one a frame. There is one only when something changes, so "
                 + "a frame rate below the display's is normal while little moves.",
-                "Exact's frame clock, the display link that drives Exact's own drawing: " + clock,
-                "Display: \(display.name), \(display.detail)", "A frame is late when the app finishes its changes after UIKit's deadline, the time by which the system "
-                    + "needs the changes to show the frame on time.",
+                "Exact's frame clock, the display link that drives Exact's own drawing: " + Self.clock(exact, long: true),
+                "Display: \(display.name), \(display.detail)",
+                "A frame is late when the app finishes its changes after UIKit's deadline, the time by which the system needs the "
+                    + "changes to show the frame on time.",
                 "Not measured: the time between the screen's frames (the card cannot tell a pause in drawing from a stall; "
                     + "the second report gives Exact's own frame times), when pictures actually appeared on screen, compositor and "
                     + "GPU time, Core Animation's own animations, and input latency"]
         } else {
             let varied = windows[2].1.counts.epochs > 0
-            measured = ["Exact's frames", rates.requestedHz > 0 ? "Requested rate: \(Int(rates.requestedHz.rounded())) FPS" + limit(rates)
+            let limit = rates.limited ? ", limited by the system to \(Int(rates.scheduleHz.rounded())) FPS" : ""
+            measured = ["Exact's frames", rates.requestedHz > 0 ? "Requested rate: \(Int(rates.requestedHz.rounded())) FPS" + limit
                 : "Requested rate: none", "Display: \(display.name), \(display.detail)",
                 !FrameHealthAssessment.deadlinesObserved
                     ? "Lateness is not known on the simulator, whose frame deadlines carry no information."
@@ -407,9 +408,9 @@ enum FrameHealthCardText {
             ? "Work time is the main thread's time to make a frame, less any waits. Main thread, longest is its longest stretch "
                 + "of work without waiting, and Main thread over \(ms(source.refreshMs)) counts the stretches longer than one "
                 + "refresh, which would hold up a frame."
-            : "Work time is how long a frame took to make, from its start until its work was applied. Frame time is the time "
-                + "from one frame to the next. A missed frame was asked for but not made in time. Pacing changes count frames "
-                + "that came a different number of refreshes after the one before."
+            : "Frame rate leaves out idle time. Work time is how long a frame took to make, from its start until its work was "
+                + "applied. Frame time is the time from one frame to the next. A missed frame was asked for but not made in time. "
+                + "Pacing changes count frames that came a different number of refreshes after the one before."
         return (["What was measured"] + measured + ["", "Figures", legend] + figureLines + ["", heading, reach] + results)
             .joined(separator: "\n")
     }

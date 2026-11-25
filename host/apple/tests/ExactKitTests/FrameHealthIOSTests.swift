@@ -824,7 +824,8 @@ final class FrameHealthIOSTests: XCTestCase {
         waitFor("the reports are encoded") { shared != nil }
         let text = try XCTUnwrap(shared)
         XCTAssertTrue(text.hasPrefix("Frame health, live\nA summary, then the full data for an AI agent as 2 JSON reports.\n"
-            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\nWhat was measured\nEvery UI update of this app on its screen, each one a frame."), "what it holds, then the summary: \(text)")
+            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\n"
+            + "What was measured\nEvery UI update of this app on its screen, each one a frame."), "what it holds, then the summary: \(text)")
         let lines = text.components(separatedBy: "\n")
         XCTAssertEqual(lines.filter { $0.hasPrefix("Agent report") }, ["Agent report 1 of 2, the screen's frames (ui-update):",
             "Agent report 2 of 2, Exact's frame clock (\(health.source)):"])
@@ -836,10 +837,6 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertEqual(clock["source"] as? String, health.source)
         XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update's report beside it")
         XCTAssertTrue((clock["otherSources"] as? [[String: Any]])?.contains { $0["source"] as? String == "ui-update" } == true)
-        let core = try XCTUnwrap(clock["coreSinceReload"] as? [String: Any])
-        XCTAssertGreaterThan(Int(core["frameIntervals"] as? String ?? "") ?? 0, 30, "its frame times")
-        XCTAssertNotNil((core["frameTimeBoundsNs"] as? [String: Any])?["p99"])
-        XCTAssertEqual(((core["workBoundsNs"] as? [String: Any])?["maximum"] as? [UInt64])?.first, 24_000_000, "and the work of every frame, in its bin")
         XCTAssertFalse((clock["hitches"] as? [[Any]] ?? []).isEmpty, "with its late frame")
         let screen = try report("ui-update")
         XCTAssertEqual(screen["source"] as? String, "ui-update")

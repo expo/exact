@@ -1431,6 +1431,8 @@ final class FrameHealthMetricsTests: XCTestCase {
         let screen = FrameHealthCardText.summary(reader: reader, clock: reader, rates: rates, display: display,
             source: .screen(refreshMs: 1000 / 120.0, exact: .init(running: true, rates: rates)), health: health)
         XCTAssertLessThan(screen.utf8.count, 4000, "the screen's summary too")
+        XCTAssertTrue(text.contains("\nFigures\nFrame rate leaves out idle time. "), text)
+        XCTAssertTrue(screen.contains("\nExact's frame clock, the display link that drives Exact's own drawing: asks for 120 FPS\n"), screen)
         // Share's text says what it holds and the card's status, and names each report's source in words
         let report = Data("{}".utf8)
         let shared = FrameHealthCardText.shared(summary: screen, status: .paused,
