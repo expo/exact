@@ -330,6 +330,11 @@ impl AppDirectories {
             (parent.write_in(&staging, &leaf, data.unwrap_or(&[]), &token)).map_err(error)?;
             return Ok(FsResult::Done);
         }
+        if op == FsOp::ReadDir && parts.is_empty() {
+            return Ok(FsResult::Names(
+                staging::listed(&self.roots[index]).map_err(error)?,
+            ));
+        }
         let source = Target::pin(&self.roots[index], &parts).map_err(error)?;
         let target = destination
             .map(|path| {
@@ -338,7 +343,6 @@ impl AppDirectories {
             })
             .transpose()?;
         crate::stdlib::windows_fs::perform(op, &source, target.as_ref(), data)
-            .map(|result| staging::unlisted(result, parts.is_empty()))
     }
 }
 /// Validate a native SQLite location for a trusted provider. The embedder must
@@ -397,7 +401,7 @@ pub(crate) fn atomic_native(path: &Path, data: &[u8]) -> Result<FsResult, HostEr
 }
 
 #[path = "app_fs_staging.rs"]
-mod staging;
+pub(super) mod staging;
 #[cfg(test)]
 #[path = "app_fs_windows_tests.rs"]
 mod tests;

@@ -75,11 +75,7 @@ static ROOTS: Mutex<Option<[PathBuf; 3]>> = Mutex::new(None);
 /// a download or an atomic write unfinished (ibex2's `claim_staging`).
 pub fn set_roots(data: PathBuf, cache: PathBuf, temporary: PathBuf) {
     empty_landings(&temporary);
-    for root in [&data, &cache, &temporary] {
-        if let Ok(directories) = ibex2::stdlib::app_fs::AppDirectories::new(root, root, root) {
-            directories.claim_staging();
-        }
-    }
+    ibex2::stdlib::app_fs::claim_staging(&[&data, &cache, &temporary]);
     *ROOTS.lock().unwrap_or_else(|e| e.into_inner()) = Some([data, cache, temporary]);
 }
 

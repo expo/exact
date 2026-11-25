@@ -263,7 +263,7 @@ mod create;
 pub(crate) use create::create_below;
 use create::{atomic, atomic_in};
 #[path = "app_fs_staging.rs"]
-mod staging;
+pub(super) mod staging;
 
 /// A folder where `what` needs a file: EISDIR, the code a write to one gets
 /// from the kernel and the web's store gives every such operation.
@@ -546,6 +546,11 @@ impl AppDirectories {
             None => None,
         };
         let (index, parts) = self.parse(path)?;
+        if op == FsOp::ReadDir && parts.is_empty() {
+            return Ok(FsResult::Names(
+                staging::listed(&self.root(index)?).map_err(error)?,
+            ));
+        }
         if op == FsOp::AtomicWriteFile {
             let (parent, leaf) = below(path)?.parent()?;
             let staging = self.staging_or(index, &parent)?;
@@ -553,7 +558,6 @@ impl AppDirectories {
             return Ok(FsResult::Done);
         }
         run_below(op, below(path)?, destination, data.unwrap_or(&[]))
-            .map(|result| staging::unlisted(result, parts.is_empty()))
     }
 }
 

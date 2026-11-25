@@ -14,6 +14,11 @@
 //! if it is a directory holding `.namespace.lock`, or an empty one. A root
 //! with no staging directory of ours, or one that cannot be made, stages
 //! beside the target as before.
+//!
+//! Not covered: on a case-insensitive APFS volume, a name that folds to
+//! `.exact-staging` only under Unicode case folding (`ſ`, U+017F) still
+//! reaches the directory, as an 8.3 short name can on Windows. A temporary
+//! file takes the root's permissions, not its destination folder's.
 use super::*;
 use std::sync::Mutex;
 
@@ -47,15 +52,25 @@ pub(super) fn reserved(name: &str) -> bool {
     name.eq_ignore_ascii_case(STAGING)
 }
 
-/// A root's listing, without the staging directory.
-pub(super) fn unlisted(result: FsResult, root: bool) -> FsResult {
-    match result {
-        FsResult::Names(mut names) if root => {
-            names.retain(|name| !reserved(name));
-            FsResult::Names(names)
+/// A root's names, sorted, without the staging directory, which is left out
+/// as the root is read so it never counts against the listing's budget.
+pub(super) fn listed(root: &Dir) -> io::Result<Vec<String>> {
+    let mut names = Vec::new();
+    let mut used = 0;
+    let mut keep = |name: String| {
+        if reserved(&name) {
+            return Ok(());
         }
-        result => result,
-    }
+        crate::stdlib::fs::push_name(&mut names, &mut used, name)
+    };
+    #[cfg(unix)]
+    each_name(root, usize::MAX, |name| {
+        keep(name.to_string_lossy().into_owned())
+    })?;
+    #[cfg(windows)]
+    root.visit_names(&mut keep)?;
+    names.sort();
+    Ok(names)
 }
 
 impl AppDirectories {
@@ -75,13 +90,24 @@ impl AppDirectories {
         self.staging(index)
             .or_else(|_| parent.try_clone().map_err(error))
     }
+}
 
-    /// Make this launch's staging directory in each root now, removing those
-    /// of launches that have ended. A root's first staged or atomic write
-    /// does it otherwise.
-    pub fn claim_staging(&self) {
-        for index in 0..3 {
-            let _ = self.staging(index);
+/// Make this launch's staging directory now in each of `roots` that exists,
+/// once a root, removing those of launches that have ended. A root's first
+/// staged or atomic write does it otherwise, so a launch that only reads
+/// would leave them.
+pub fn claim_staging<P: AsRef<Path>>(roots: &[P]) {
+    let mut claimed = Vec::new();
+    for root in roots {
+        let Ok(root) = open_root(root.as_ref()) else {
+            continue;
+        };
+        let Ok(id) = identity_of(&root) else {
+            continue;
+        };
+        if !claimed.contains(&id) {
+            claimed.push(id);
+            let _ = launch(&root);
         }
     }
 }
@@ -90,12 +116,16 @@ fn launch(root: &Dir) -> io::Result<Dir> {
     let mut launches = LAUNCHES.lock().unwrap_or_else(|e| e.into_inner());
     let id = identity_of(root)?;
     if let Some(at) = launches.iter().position(|launch| launch.root == id) {
-        // Made again if it is gone, or if another directory took the
-        // identity of a root that was removed.
-        let found = child(root, STAGING).and_then(|staging| child(&staging, &launches[at].name));
-        match found {
+        match reopen(root, &launches[at].name) {
             Ok(dir) if identity_of(&dir)? == launches[at].dir => return Ok(dir),
-            _ => drop(launches.remove(at)),
+            // Made again if it is gone, or if another directory took its name
+            // or the identity of a root that was removed.
+            Ok(_) => drop(launches.remove(at)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => drop(launches.remove(at)),
+            // Any other error (`EMFILE`, a passing failure) keeps the entry and
+            // its lock, which a `Staged` in flight relies on: the write stages
+            // beside its target this once.
+            Err(e) => return Err(e),
         }
     }
     let staging = match child(root, STAGING) {
@@ -143,6 +173,15 @@ fn launch(root: &Dir) -> io::Result<Dir> {
     Ok(dir)
 }
 
+/// This launch's directory in `root`, opened again.
+fn reopen(root: &Dir, name: &str) -> io::Result<Dir> {
+    #[cfg(test)]
+    if tests::REOPEN_FAILS.with(std::cell::Cell::get) {
+        return Err(io::Error::other("an injected failure, as EMFILE"));
+    }
+    child(root, STAGING).and_then(|staging| child(&staging, name))
+}
+
 /// Remove the launch directories in `staging` whose lock no process holds.
 /// Only a launch's name is considered, so nothing else there is removed.
 fn sweep(staging: &Dir) {
@@ -156,7 +195,15 @@ fn sweep(staging: &Dir) {
         let Ok(dir) = child(staging, &name) else {
             continue;
         };
-        let free = lock_file(&dir, LOCK).is_ok_and(|lock| try_lock(&lock));
+        let free = match open_lock(&dir) {
+            Ok(lock) => try_lock(&lock),
+            // A launch makes its directory and its lock under the namespace
+            // lock, so a directory with none is one whose launch ended between
+            // the two.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => true,
+            // A lock that cannot be opened otherwise leaves the directory.
+            Err(_) => false,
+        };
         drop(dir);
         if free {
             let _ = remove_tree(staging, &name);
@@ -182,6 +229,20 @@ fn make(dir: &File, name: &str) -> io::Result<File> {
 #[cfg(unix)]
 fn lock_file(dir: &File, name: &str) -> io::Result<File> {
     open_at(dir, name, libc::O_RDWR | libc::O_CREAT)
+}
+#[cfg(unix)]
+fn open_lock(dir: &File) -> io::Result<File> {
+    open_at(dir, LOCK, libc::O_RDWR)
+}
+#[cfg(unix)]
+fn open_root(path: &Path) -> io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    if !path.is_absolute() {
+        return Err(io::Error::other("app directory must be absolute"));
+    }
+    (std::fs::OpenOptions::new().read(true))
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path.components().as_path())
 }
 #[cfg(unix)]
 fn has_file(dir: &File, name: &str) -> bool {
@@ -221,6 +282,18 @@ fn lock_file(dir: &Directory, name: &str) -> io::Result<File> {
     dir.file(name, libc::O_RDWR | libc::O_CREAT)
 }
 #[cfg(windows)]
+fn open_lock(dir: &Directory) -> io::Result<File> {
+    dir.file(LOCK, libc::O_RDWR)
+}
+#[cfg(windows)]
+fn open_root(path: &Path) -> io::Result<Directory> {
+    Directory::root(
+        path.to_str()
+            .ok_or_else(|| io::Error::other("non-Unicode path"))?,
+        false,
+    )
+}
+#[cfg(windows)]
 fn has_file(dir: &Directory, name: &str) -> bool {
     dir.kind(name).is_ok_and(|kind| kind.regular)
 }
@@ -256,6 +329,9 @@ mod tests {
     fn directories(path: &Path) -> AppDirectories {
         AppDirectories::new(path.join("data"), path.join("cache"), path.join("tmp")).unwrap()
     }
+    fn claim(path: &Path) {
+        claim_staging(&["data", "cache", "tmp"].map(|root| path.join(root)));
+    }
     fn call(
         dirs: &AppDirectories,
         op: FsOp,
@@ -281,6 +357,108 @@ mod tests {
     }
 
     const ENDED: &str = "IBEX_STAGING_ENDED_ROOTS";
+
+    thread_local! {
+        /// Reopening this thread's launch directory fails, as on `EMFILE`.
+        pub(super) static REOPEN_FAILS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    #[test]
+    fn a_passing_error_keeps_the_launch_and_its_lock() {
+        let path = roots("passing");
+        let grants = GrantSet::parse("fs.write app:/data").unwrap();
+        let dirs = directories(&path);
+        let mut first = dirs.stage(&grants, "app:/data/a").unwrap();
+        first.write_all(b"first").unwrap();
+        let launch = launches(&path);
+        assert_eq!(launch.len(), 1);
+        let lock = path.join("data").join(STAGING).join(&launch[0]).join(LOCK);
+        REOPEN_FAILS.with(|fails| fails.set(true));
+        // The write lands, staged beside its target this once.
+        call(&dirs, FsOp::AtomicWriteFile, "app:/data/b", Some(b"b")).unwrap();
+        REOPEN_FAILS.with(|fails| fails.set(false));
+        // The launch still holds its lock, so no sweep can take `first`.
+        let other = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock)
+            .unwrap();
+        assert!(
+            !try_lock(&other),
+            "the passing error released the launch's lock"
+        );
+        drop(other);
+        first.publish().unwrap();
+        assert_eq!(fs::read(path.join("data/a")).unwrap(), b"first");
+        assert_eq!(fs::read(path.join("data/b")).unwrap(), b"b");
+        assert_eq!(launches(&path), launch);
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn the_sweep_judges_a_lock_it_finds_and_makes_none() {
+        let path = roots("judges");
+        let staging = path.join("data").join(STAGING);
+        // A launch that ended after making its directory, before its lock.
+        let unlocked = staging.join("00000000000000000000000a");
+        fs::create_dir_all(&unlocked).unwrap();
+        fs::write(unlocked.join("left.partial"), b"left").unwrap();
+        // A lock that cannot be opened as a file.
+        let odd = staging.join("00000000000000000000000b");
+        fs::create_dir_all(odd.join(LOCK)).unwrap();
+        fs::write(staging.join(NAMESPACE), b"").unwrap();
+        claim(&path);
+        assert!(!unlocked.exists());
+        assert_eq!(listed(odd.clone()), [LOCK]);
+        assert!(odd.join(LOCK).is_dir());
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn a_roots_listing_spends_none_of_its_budget_on_the_staging_directory() {
+        let path = roots("budget");
+        fs::write(path.join("data/a"), b"a").unwrap();
+        claim(&path);
+        assert!(path.join("data").join(STAGING).is_dir());
+        let grants = GrantSet::parse("fs.read app:/data").unwrap();
+        let dirs = directories(&path);
+        // `["a"]` fits in 16 bytes; with `".exact-staging"` it would not.
+        let limits = crate::stdlib::fs::ResultLimits { bytes: 16 };
+        let listing = crate::stdlib::fs::run_with_limits(
+            &grants,
+            Some(&dirs),
+            None,
+            limits,
+            FsOp::ReadDir,
+            "app:/data",
+            None,
+            None,
+        );
+        assert_eq!(listing.unwrap(), FsResult::Names(vec!["a".into()]));
+        let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn a_root_named_twice_is_claimed_once_and_a_missing_one_is_skipped() {
+        let path = roots("once");
+        let data = path.join("data");
+        let staging = data.join(STAGING);
+        fs::create_dir(&staging).unwrap();
+        // Another launch holds the namespace lock for longer than a claim
+        // asks it.
+        let held = fs::File::create(staging.join(NAMESPACE)).unwrap();
+        assert!(try_lock(&held));
+        let started = std::time::Instant::now();
+        claim_staging(&[data.clone(), path.join("absent"), data.clone()]);
+        let waited = started.elapsed();
+        // One wait of about half a second, not one for each time it is named.
+        assert!(waited < std::time::Duration::from_millis(900), "{waited:?}");
+        assert!(launches(&path).is_empty());
+        drop(held);
+        claim_staging(&[data]);
+        assert_eq!(launches(&path).len(), 1);
+        let _ = fs::remove_dir_all(path);
+    }
 
     #[test]
     fn a_launch_removes_the_staging_files_of_one_that_ended_and_spares_the_rest() {
@@ -332,7 +510,7 @@ mod tests {
         fs::write(other.join("kept"), b"kept").unwrap();
 
         let dirs = directories(&path);
-        dirs.claim_staging();
+        claim(&path);
         assert!(!left.exists());
         assert_eq!(fs::read(live.join("held.partial")).unwrap(), b"live");
         assert_eq!(fs::read(other.join("kept")).unwrap(), b"kept");
@@ -371,7 +549,7 @@ mod tests {
         fs::write(folder.join("notes"), b"notes").unwrap();
         fs::write(path.join("cache").join(STAGING), b"file").unwrap();
         let dirs = directories(&path);
-        dirs.claim_staging();
+        claim(&path);
         let grants = GrantSet::parse("fs.write app:/data\nfs.write app:/cache").unwrap();
         let mut staged = dirs.stage(&grants, "app:/data/a").unwrap();
         staged.write_all(b"staged").unwrap();
@@ -418,7 +596,7 @@ mod tests {
         // A development reload or an applied update activates storage again
         // while the first executor's workers may still be writing.
         let again = directories(&path);
-        again.claim_staging();
+        claim(&path);
         call(
             &again,
             FsOp::AtomicWriteFile,

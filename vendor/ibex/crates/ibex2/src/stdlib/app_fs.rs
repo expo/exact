@@ -6,6 +6,8 @@ mod implementation;
 #[path = "app_fs_windows.rs"]
 mod implementation;
 #[cfg(any(unix, windows))]
+pub use implementation::staging::claim_staging;
+#[cfg(any(unix, windows))]
 pub use implementation::*;
 #[cfg(any(unix, windows))]
 pub(crate) use implementation::{atomic_native, document, document_file};
@@ -111,8 +113,8 @@ mod implementation {
         pub fn stage(&self, _grants: &GrantSet, _path: &str) -> Result<Staged, HostError> {
             Err(unsupported())
         }
-        pub fn claim_staging(&self) {}
     }
+    pub fn claim_staging<P: AsRef<Path>>(_roots: &[P]) {}
     impl Staged {
         pub fn write_all(&mut self, _bytes: &[u8]) -> Result<(), HostError> {
             Err(unsupported())
