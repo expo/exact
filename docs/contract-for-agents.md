@@ -6502,11 +6502,15 @@ these bounds do not substitute for measuring whole-hook overhead on real devices
 ### Startup marks of any build: `EXACT_OBSERVE_LOG=1`
 
 An Apple app launched with `EXACT_OBSERVE_LOG=1` prints its startup measurement to stderr once launch
-has settled, in a release build too. The one `observe: startup` line has the launch type (`cold`,
+has settled, in a release build too. The `observe: startup` line has the launch type (`cold`,
 `warm`), how the first tree booted (`baked`), how time to interactive ended, Observe's metrics, and each
 mark in ms from process start (`main`, `didFinishLaunching`, `boot`, `commit`, `present`, `interactive`
 …). The metrics are `timeToFirstRender` (the first vsync after the first tree's commit) and
-`timeToInteractive`, both from `didFinishLaunching`, and `coldLaunchTime` or `warmLaunchTime`. On a
+`timeToInteractive`, both from `didFinishLaunching`, and `coldLaunchTime` or `warmLaunchTime`.
+Time to interactive covers the native tree only, so an app with a GPU canvas (a game, a painted
+surface) also prints `observe: world <ms>` once, when the canvas's first frame reaches the screen:
+the `world` mark, in ms from process start like the startup line's marks. It may come before or after
+the startup line. A tool that captures the screen should wait for it when the app draws a canvas. On a
 simulator, give the variable to the app through `simctl`'s prefix and read its console:
 
 ```sh
