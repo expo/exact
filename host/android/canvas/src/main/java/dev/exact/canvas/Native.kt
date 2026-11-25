@@ -182,8 +182,9 @@ object Native {
     @JvmStatic external fun dragDropped(x: Float, y: Float)
     /** The drag was released at ([x], [y]) px before its items arrive: the drop's number, 0 when nothing takes it. */
     @JvmStatic external fun dropReleased(x: Float, y: Float): Int
-    /** Whether field [id] is what is painted at ([x], [y]) px. */
-    @JvmStatic external fun fieldUnder(id: Int, x: Float, y: Float): Boolean
+    /** Who takes a drop Android gives field [id]'s view at ([x], [y]) px: -1 not the field (another node is painted
+     * there, or the field takes no touch), else 0 the field, 1 its own node, 2 one above it. */
+    @JvmStatic external fun fieldDrop(id: Int, x: Float, y: Float): Int
     /** Drop [id]'s items arrived, as JSON (`{"paths": […], "text": "…", "url": "…"}`). */
     @JvmStatic external fun dropLanded(id: Int, items: String)
     /** A finger began dragging scroller [id] (its `scrolldragstart`), or ([ended]) let go of it (its

@@ -34,9 +34,10 @@ impl<D: DataSource + Default> CanvasHost<D> {
             .unwrap_or(0)
     }
 
-    /// Whether field `id` is what is painted at pixels (`x`, `y`).
-    pub fn field_under(&mut self, id: u32, x: f32, y: f32) -> bool {
-        self.p.field_under(id, (x / self.scale, y / self.scale))
+    /// Who takes a drop Android gives field `id`'s view at pixels (`x`,
+    /// `y`): -1 not the field, else 0 the field, 1 its own node, 2 one above.
+    pub fn field_drop(&mut self, id: u32, x: f32, y: f32) -> i32 {
+        self.p.field_drop(id, (x / self.scale, y / self.scale))
     }
 
     /// Drop `id`'s items arrived, as the reader's JSON

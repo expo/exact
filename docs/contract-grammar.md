@@ -2546,7 +2546,7 @@ the drag's plain text, its items' joined by line breaks; `url` is its first
 link that is not a file (a `file:` URL is a file), of any scheme, so check
 it before following it. Each is `""` when the drag has none, and neither is
 made from the other: a link whose source gives no plain text has `text` `""`. Files of any type
-are taken, and a dropped folder, on a host that takes one, is a folder's handle (`fs.stat` says
+the host takes arrive, and a dropped folder, on a host that takes one, is a folder's handle (`fs.stat` says
 `isDirectory`, `fs.readdir` lists it); the app never learns an absolute
 path. A drag with files over an `input` or a `textarea` inside such a node
 is the node's, as on the web, where its listener prevents the field's own

@@ -28,7 +28,7 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29, 33], manifest = Config.NONE, shadows = [DragInTest.Journal::class])
 class DragInTest {
-    @Before fun begin() { Journal.lines.clear(); Journal.drags.clear(); Journal.release = 0; Journal.painted = true }
+    @Before fun begin() { Journal.lines.clear(); Journal.drags.clear(); Journal.release = 0; Journal.owner = 2 }
 
     /** exact2's journal, as the reader writes to it with no owner. */
     @Implements(Native::class, isInAndroidSdk = false)
@@ -44,11 +44,12 @@ class DragInTest {
             @JvmStatic @Implementation fun dragDropped(x: Float, y: Float) { drags += "dropped ${x.toInt()} ${y.toInt()}" }
             /** The drop number exact2 answers a release with (0: nothing takes it). */
             var release = 0
-            /** Whether a field is what is painted where a drop lands. */
-            var painted = true
+            /** Who takes a drop on a field's view, as exact2 answers as it lands: -1 not the field, 0 the field, 1 its
+             * own node, 2 one above it. */
+            var owner = 2
             @JvmStatic @Implementation fun dropReleased(x: Float, y: Float): Int { drags += "released ${x.toInt()} ${y.toInt()}"; return release }
             @JvmStatic @Implementation fun dropLanded(id: Int, items: String) { drags += "landed $id $items" }
-            @JvmStatic @Implementation fun fieldUnder(id: Int, x: Float, y: Float): Boolean = painted
+            @JvmStatic @Implementation fun fieldDrop(id: Int, x: Float, y: Float): Int = owner
         }
     }
 
@@ -194,21 +195,28 @@ class DragInTest {
 
     @Test fun aFieldWhoseNodeTakesDropsGivesTheDragToTheRoot() {
         val two = twoFields(state = 1 or 4)
+        Journal.owner = 1
         drag(two.root, 170f, 230f)
         assertEquals("2", two.second.text.toString())
         assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
     }
 
-    @Test fun aFieldDecidesAtTheDropByItsStateThen() {
+    @Test fun aFieldDecidesAtTheDropByWhoTakesItThen() {
         val two = twoFields(state = 1 or 8)
+        Journal.owner = 1
         drag(two.root, 170f, 230f) { two.tell(1 or 4) }
         assertEquals("its node took drops while the drag was over it", "2", two.second.text.toString())
         assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
+        Journal.drags.clear()
+        Journal.owner = 2
+        drag(two.root, 170f, 230f) { two.tell(1 or 8) }
+        assertTrue("and no longer did when it dropped", two.second.text.toString().contains("Fuji"))
+        assertEquals(listOf("over 170 230", "dropped 170 230"), Journal.drags)
     }
 
     @Test fun aNodePaintedOverTheFieldTakesTheDropThere() {
         val two = twoFields(state = 1 or 8)
-        Journal.painted = false
+        Journal.owner = -1
         drag(two.root, 170f, 230f)
         assertEquals("2", two.second.text.toString())
         assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
@@ -226,19 +234,26 @@ class DragInTest {
         assertTrue(resolver.getType(Uri.parse("content://typed/photo.png")) == "image/png")
     }
 
-    @Test fun aDropTheWindowTakesLandsWhenItsCopiesEnd() {
+    @Test fun aDropTheWindowTakesLandsOnceWhenItsCopiesEnd() {
         val resolver = RuntimeEnvironment.getApplication().contentResolver
         org.robolectric.shadows.ShadowContentResolver.registerProviderInternal("names", FilePickerTest.PhotoProvider())
         val photo = Uri.parse("content://names/a")
-        shadowOf(resolver).registerInputStream(photo, "pixels".byteInputStream())
+        val writer = java.io.PipedOutputStream()
+        shadowOf(resolver).registerInputStream(photo, java.io.PipedInputStream(writer))
         val two = twoFields(state = 1 or 4)
         Journal.release = 7
         val clip = ClipData("photo", arrayOf("image/png"), ClipData.Item(photo)).apply { addItem(ClipData.Item("Glasshouse")) }
         assertTrue(drag(two.root, 200f, 330f, clip, local = DragOut.OWN))
-        val landed = { Journal.drags.firstOrNull { it.startsWith("landed") } }
+        val landed = { Journal.drags.filter { it.startsWith("landed") } }
+        fun settle(ms: Long) { val until = System.currentTimeMillis() + ms; while (System.currentTimeMillis() < until) { shadowOf(android.os.Looper.getMainLooper()).idle(); Thread.sleep(10) } }
+        settle(200)
+        assertEquals("the drag ended, and its copy is still reading", emptyList<String>(), landed())
+        writer.write("pixels".toByteArray()); writer.close()
         val until = System.currentTimeMillis() + 5000
-        while (landed() == null && System.currentTimeMillis() < until) { shadowOf(android.os.Looper.getMainLooper()).idle(); Thread.sleep(10) }
-        val items = JSONObject(landed()!!.removePrefix("landed 7 "))
+        while (landed().isEmpty() && System.currentTimeMillis() < until) settle(20)
+        settle(200)
+        assertEquals(1, landed().size)
+        val items = JSONObject(landed().single().removePrefix("landed 7 "))
         assertEquals("Glasshouse", items.getString("text"))
         assertEquals("pixels", File(items.getJSONArray("paths").getString(0)).readText())
     }
