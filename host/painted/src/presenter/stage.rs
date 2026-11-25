@@ -614,6 +614,14 @@ impl<D: DataSource> Presenter<D> {
             self.stage.shift = None;
             self.stage.preview = None;
         }
+        // A container moves with the names in it as one transform, and they
+        // start at the first frame that shows them (LLP 1003.001 D9): it
+        // waits with them, so its last frame is theirs (LLP 1013.004 D4).
+        if let Some(s) = (self.stage.shift.as_mut()).filter(|s| s.container.is_some()) {
+            if let Some(start) = self.host.route_flights_start() {
+                s.progress.start = start.unwrap_or(now);
+            }
+        }
         // A route that flies in as a whole covers the route beneath only
         // when it lands, so that one is drawn until then.
         let flies_in = |s: &Shift| {
@@ -840,18 +848,28 @@ impl<D: DataSource> Presenter<D> {
                 Some(_) => zoom::clock(forward),
                 None => bounds_spring(),
             };
-            self.fly_routes(forward, (*old, *new), &curve);
+            let previewed = from.is_some() && container.is_none();
+            self.fly_routes(forward, (*old, *new), &curve, previewed);
         }
     }
 
     /// Fly the names a push from `old` to `new`, or a pop of `old`, pairs.
-    fn fly_routes(&mut self, forward: bool, (old, new): (NodeKey, NodeKey), curve: &Transition) {
+    /// After predictive Back's preview the route leaving does not fly as a
+    /// whole: it goes on from where the gesture left it, as Compose's
+    /// `NavHost` crossfades at full size while the names in it fly.
+    fn fly_routes(
+        &mut self,
+        forward: bool,
+        (old, new): (NodeKey, NodeKey),
+        curve: &Transition,
+        previewed: bool,
+    ) {
         let pairs = match forward {
             true => pair_routes(self.host.kernel(), old, new),
             false if self.stage.pops.1 == Some(old) => self.stage.pops.2.clone(),
             false => Vec::new(),
         };
-        for (from, to) in pairs {
+        for (from, to) in pairs.into_iter().filter(|p| !previewed || p.0 != old) {
             self.host.fly(from, to, curve, true);
         }
     }

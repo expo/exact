@@ -241,9 +241,20 @@ internal class SharedElements(
                 clip.addRoundRect(around.box, r, r, Path.Direction.CW)
                 canvas.clipPath(clip)
             }
+            // A dissolve's box ends where its contents do, each scaled by width: the source's
+            // height at first, the destination's once it has dissolved, as Material's container
+            // transform masks its height, so neither shows past the other.
+            val t = ((flight.progress - 0.2f) / 0.4f).coerceIn(0f, 1f)
+            val shown = RectF(pose.box)
+            if (flight.content != null && element.fit != LABEL) {
+                val w = pose.box.width()
+                val from = flight.box!!.height() * w / flight.box.width().coerceAtLeast(0.001f)
+                val to = element.box.height() * w / element.box.width().coerceAtLeast(0.001f)
+                shown.bottom = min(shown.bottom, shown.top + from + (to - from) * t)
+            }
             clip.reset()
-            val radius = pose.radius.coerceIn(0f, min(pose.box.width(), pose.box.height()) / 2f)
-            clip.addRoundRect(pose.box, radius, radius, Path.Direction.CW)
+            val radius = pose.radius.coerceIn(0f, min(shown.width(), shown.height()) / 2f)
+            clip.addRoundRect(shown, radius, radius, Path.Direction.CW)
             canvas.clipPath(clip)
             val opacity = ancestorOpacity(element, flight)
             if (element.fit in IMAGE) {
@@ -259,7 +270,6 @@ internal class SharedElements(
                 // dissolves early in the flight, the two laid out differently overlapping
                 // briefly, and each holds full strength half that time, so content alike
                 // at both ends does not dim.
-                val t = ((flight.progress - 0.2f) / 0.4f).coerceIn(0f, 1f)
                 // Bounded by the box: a null bound is the view's clip, which would cut off
                 // what reaches into the bars' bands.
                 val bounds = RectF(0f, 0f, pose.box.width(), pose.box.height())

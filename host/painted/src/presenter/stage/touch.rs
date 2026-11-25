@@ -23,8 +23,10 @@
 //! itself, whose pop starts from where the preview left the route. Nothing
 //! commits before the gesture does. A route whose exit is declared, pushed
 //! or full screen, previews that exit instead (`authored.rs`); one zoomed
-//! from a source runs its container's return (`zoom.rs`). One whose pop
-//! flies names stays in place while the gesture seeks them (LLP 1013.004 D4).
+//! from a source runs its container's return (`zoom.rs`), and the gesture
+//! seeks the names it flies with it; other names fly when Back commits, as
+//! Compose's `NavHost` holds its shared bounds while the gesture moves
+//! (LLP 1013.004 D4).
 use super::*;
 
 /// A slop of Android's (`ViewConfiguration`'s touch slop, 8 dp).
@@ -93,9 +95,6 @@ pub(in crate::presenter) struct Preview {
     /// The container a zoomed route returns into: the preview runs its
     /// return, as Compose seeks a shared transition.
     pub(super) container: Option<zoom::Container>,
-    /// The pop flies names: the gesture seeks them and the route keeps
-    /// its place, as Compose's NavHost seeks its shared transition.
-    flies: bool,
 }
 
 impl Preview {
@@ -193,9 +192,6 @@ impl Preview {
     fn pose_at(&self, p: f32, width: f32, height: f32) -> Pose {
         if let Some(container) = self.container {
             return container.pose(false, zoom::emphasized(p), None);
-        }
-        if self.flies {
-            return Pose::REST;
         }
         let way = if self.edge == 1 { -1.0 } else { 1.0 };
         Pose {
@@ -645,20 +641,12 @@ impl<D: DataSource> Presenter<D> {
                         .and_then(|n| self.return_container(outgoing, n.id)),
                     _ => None,
                 };
-                let flies = self.host.flights.enabled
-                    && matches!(target, Some(Target::Page { outgoing, .. })
-                    if self.stage.pops.1 == Some(outgoing)
-                        && (self.stage.pops.2.iter()).any(|(from, _)| {
-                            (self.host.flights.recorded)
-                                .contains(&exact_kernel::motion::motion_node(*from))
-                        }));
                 self.stage.preview = target.map(|target| Preview {
                     target,
                     progress,
                     edge,
                     release: None,
                     container,
-                    flies,
                 });
             }
             1 => {
@@ -683,18 +671,15 @@ impl<D: DataSource> Presenter<D> {
         {
             self.stage.preview = None;
         }
-        // The names the pop would fly follow the gesture (LLP 1013.004 D4).
+        // The names a container's return would fly follow the gesture
+        // (LLP 1013.004 D4).
         let seeks = (self.stage.preview.as_ref())
-            .filter(|p| p.release.is_none())
+            .filter(|p| p.release.is_none() && p.container.is_some())
             .and_then(Preview::pair);
         match seeks {
             Some((outgoing, _)) if self.stage.pops.1 == Some(outgoing) => {
                 let pairs = self.stage.pops.2.clone();
-                let progress = match self.stage.preview.and_then(|p| p.container) {
-                    Some(_) => zoom::emphasized(progress),
-                    None => progress,
-                };
-                self.host.seek_flights(&pairs, progress);
+                self.host.seek_flights(&pairs, zoom::emphasized(progress));
             }
             _ => {
                 let curve = (self.stage.preview.as_ref())
