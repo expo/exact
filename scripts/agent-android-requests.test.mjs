@@ -23,6 +23,20 @@ test('the Android carrier waits for the hold duration acknowledged by the host',
   }
 });
 
+test('an Android module tap waits for the reader to acknowledge each injected edge', async () => {
+  const replies = ['DOWN', 'UP'].map(moduleMotion => JSON.stringify({moduleMotion, display:2, x:30, y:42.5}));
+  const result = '{"tapped":7,"delivery":"platform"}';
+  replies.push(result);
+  const edges = [], confirmations = [];
+  const got = await readerReply({op:'tap'}, next => {
+    if (next) confirmations.push(JSON.parse(next));
+    return replies.shift();
+  }, undefined, (...args) => { edges.push(args); return {status:0}; });
+  expect(got).toBe(result);
+  expect(edges).toEqual(['DOWN', 'UP'].map(action => ['shell','input','touchscreen','-d','2','motionevent',action,'30','42.5']));
+  expect(confirmations).toEqual(Array(2).fill({op:'moduleMotion', error:''}));
+});
+
 test("a drop's files go to the device, each in a folder of its own, and the request names them there; an enter's stay", () => {
   const base = '/data/local/tmp/exact/app/drops-1';
   const { request, pushes } = dropPushes({ op: 'tap', id: 7, drop: ['/a/notes.pdf', '/b/notes.pdf'], text: 'Fuji' }, base);

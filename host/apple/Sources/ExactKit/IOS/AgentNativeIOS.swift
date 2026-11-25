@@ -158,12 +158,8 @@ extension Agent {
             if let shown {
                 boxes[list.id] = BarLayoutBox(shown, nil, shown is UITabBar ? "UITabBar" : "UICollectionView")
                 for (index, tab) in tabs.enumerated() {
-                    if let bar = shown as? UITabBar {
-                        let item = controller != nil ? nav.barItem(ofTab: index) : presenter.segments.barItem(of: tab)?.item
-                        if let item, let control = drawnTabControl(item, in: bar) {
-                            boxes[tab.id] = BarLayoutBox(control, nil, "UITabBarItem")
-                        }
-                    } else if case .success(let control)? = tabItem(tab) {
+                    let item = controller != nil ? nav.barItem(ofTab: index) : presenter.segments.barItem(of: tab)?.item
+                    if let item, case .success(let control) = presentedTabItem(item, in: shown, controller: controller) {
                         boxes[tab.id] = BarLayoutBox(control, nil, "UITabBarItem")
                     }
                 }
@@ -174,11 +170,15 @@ extension Agent {
     }
 
     #if os(iOS)
-    /// Before accessibility loads, the visible title can still identify a tab.
-    /// Glass can draw the same title twice at one place.
+    /// Before accessibility loads, follow the item's backing view, including into the Duo rail.
+    /// In the bar itself its title can identify a control that glass draws twice at one place.
     func drawnTabControl(_ item: UITabBarItem, in bar: UITabBar) -> UIView? {
         let items = bar.items ?? [], id = item.accessibilityIdentifier, title = item.title
         if let id, !id.isEmpty, items.filter({ $0.accessibilityIdentifier == id }).count != 1 { return nil }
+        if let window = bar.window, let view = item.agentBackingView, view.window === window, RouteGeometry.shownBar(view) != nil {
+            let middle = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+            if bar.bounds.contains(view.convert(middle, to: bar)) { return view }
+        }
         let uniqueTitle = title?.isEmpty == false && items.filter { $0.title == title }.count == 1
         var named: [UIView] = [], titled: [UIView] = [], pending = bar.subviews
         while let view = pending.popLast() {

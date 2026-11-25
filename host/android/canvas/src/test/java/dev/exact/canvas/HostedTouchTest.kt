@@ -184,6 +184,66 @@ class HostedTouchTest {
         fun answer() { Engine.replies.removeFirst().invoke(); flush() }
     }
 
+    @Test fun agentAcknowledgesOnlyEdgesDeliveredToTheAddressedModule() {
+        val f = Fixture(scroller = true)
+        f.controller.setup()
+        f.activity.setContentView(f.parent)
+        f.controller.windowFocusChanged(true)
+        f.parent.measure(View.MeasureSpec.makeMeasureSpec(600, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY))
+        f.parent.layout(0, 0, 600, 800)
+        val target = f.natives.taker(7, 2, 3, 0L)!!
+        val scale = Device.scale(f.activity)
+        fun finger(x: Int, y: Int, plain: Boolean) = AgentModuleFinger(f.view, ModuleBinding(7, 2, 3, 0L),
+            target, org.json.JSONArray(listOf(x / scale, y / scale)), 7, plain)
+        val location = IntArray(2).also(f.view::getLocationOnScreen)
+        fun inject(command: JSONObject, action: Int) {
+            assertEquals(command.toString(), MotionEvent.actionToString(action).removePrefix("ACTION_"), command.optString("moduleMotion"))
+            f.touch(action, command.getDouble("x").toFloat() - location[0], command.getDouble("y").toFloat() - location[1])
+        }
+        for ((x, y, plain) in listOf(Triple(120, 80, true), Triple(30, 45, true), Triple(120, 80, false))) {
+            val contact = finger(x, y, plain)
+            inject(contact.start(), MotionEvent.ACTION_DOWN)
+            val down = contact.confirm("")
+            val up = if (plain) down else {
+                assertTrue(down.getBoolean("contact"))
+                assertTrue(finger(x, y, true).start().has("error"))
+                contact.phase("up", JSONObject())
+            }
+            inject(up, MotionEvent.ACTION_UP)
+            assertEquals("platform", contact.confirm("").getString("delivery"))
+            assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), f.events)
+            assertEquals(List(2) { (x - 10f) to (y - 20f) }, f.points)
+            f.events.clear(); f.points.clear()
+        }
+        val drag = finger(100, 180, false)
+        inject(drag.start(), MotionEvent.ACTION_DOWN)
+        assertTrue(drag.confirm("").getBoolean("contact"))
+        val move = JSONObject().put("dx", 0).put("dy", -100f / scale)
+        inject(drag.phase("move", move), MotionEvent.ACTION_MOVE)
+        assertEquals("Android scroll", drag.confirm("").getString("native"))
+        inject(drag.phase("up", JSONObject()), MotionEvent.ACTION_UP)
+        assertFalse(drag.confirm("").getBoolean("contact"))
+        assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_CANCEL), f.events)
+        f.events.clear()
+        Engine.reply[Engine.reply.lastIndex] = 7
+        val deferred = finger(120, 80, false)
+        inject(deferred.start(), MotionEvent.ACTION_DOWN)
+        assertEquals("pending gesture arbitration", deferred.confirm("").getString("native"))
+        assertTrue(f.events.isEmpty())
+        inject(deferred.phase("up", JSONObject()), MotionEvent.ACTION_UP)
+        assertEquals("platform", deferred.confirm("").getString("delivery"))
+        assertEquals(listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP), f.events)
+        f.events.clear()
+        val covered = finger(80, 80, true)
+        covered.start()
+        assertEquals("CANCEL", covered.confirm("").getString("moduleMotion"))
+        assertTrue(covered.confirm("").getString("error").contains("covered"))
+        assertTrue(f.events.isEmpty())
+        f.view.running(false, false)
+        f.controller.pause().stop().destroy()
+    }
+
     private fun field(f: Fixture, multiline: Boolean = false): Fields {
         val fields = Fields(f.activity).also { it.adopted(f.view); f.view.fields = it; f.parent.addView(it) }
         val value = (if (multiline) (1..40).joinToString("\n") { "line $it" } else "").toByteArray()

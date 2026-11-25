@@ -1,11 +1,12 @@
-//! Drags from other apps over the window (LLP 1094.001 D8). Wayland's own
-//! data device, on winit's connection, says where a drag is and what it
-//! offers by MIME type; the window takes a drop as a copy, and reads the
-//! drop's items from the pipes the source writes them to.
+//! Drags from other apps over the window (LLP 1094.001 D8), and out of it
+//! (`lift.rs`, LLP 1094.000 D13). Wayland's own data device, on winit's
+//! connection, says where a drag is and what it offers by MIME type; the
+//! window takes a drop as a copy, and reads the drop's items from the pipes
+//! the source writes them to.
 //!
-//! A listening thread owns the data devices, their offers and every request
-//! to the compositor about them, and reads each drop's pipes in the same
-//! loop, as a toolkit's main loop would. It waits on the connection itself,
+//! A listening thread owns the data devices, their offers and sources and
+//! every request to the compositor about them, and reads and writes each
+//! drag's pipes in the same loop, as a toolkit's main loop would. It waits on the connection itself,
 //! because winit's loop goes back to sleep when none of the events it read
 //! were its own queue's. The event loop tells the presenter what the
 //! listener heard and sends back the presenter's answers.
@@ -28,6 +29,11 @@ use smithay_client_toolkit::reexports::client::{
     },
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum,
 };
+use std::sync::Arc;
+
+#[path = "lift.rs"]
+mod lift;
+pub(in crate::window) use lift::{Pointed, Press};
 use std::ffi::OsString;
 use std::io::{ErrorKind, PipeReader, PipeWriter, Read, Write};
 use std::os::fd::{AsFd, AsRawFd};
@@ -61,9 +67,12 @@ const DEADLINE: Duration = Duration::from_secs(10);
 const LARGEST: usize = 64 << 20;
 
 /// The event loop's side of drags: the drag over the window as the
-/// presenter knows it, and the way to the listener.
+/// presenter knows it, the lifts out of it, whether it can lift, and the
+/// way to the listener.
 pub(super) struct Drops {
     hover: Option<Hover>,
+    lifts: lift::Lifts,
+    lifting: bool,
     commands: Sender<Command>,
     wake: Option<PipeWriter>,
     listener: Option<JoinHandle<()>>,
@@ -80,8 +89,18 @@ struct Hover {
 }
 
 /// What the listener heard, in order: a drag at a point, the drag gone, a
-/// drop, and later the drop's items, each by the drag's number.
+/// drop, and later the drop's items, each by the drag's number; what a
+/// seat's pointer did on the window's surface; the end of a drag out of the
+/// window, whose press's release the window never hears; and the listener's
+/// own end, after which the window takes winit's pointer.
 pub(in crate::window) enum Heard {
+    Pointer {
+        seat: u32,
+        pointed: Pointed,
+        modifiers: Option<u32>,
+    },
+    Ended(Press),
+    Gone,
     Over {
         number: u64,
         point: (f32, f32),
@@ -100,11 +119,26 @@ pub(in crate::window) enum Heard {
 
 /// The presenter's answers: whether a node under drag `number` takes the
 /// drop, the drop the presenter made of it (none: nothing took it), and
-/// whether the drop was delivered once its items arrived.
+/// whether the drop was delivered once its items arrived; and a lift of
+/// `press`, with its types' bytes and its icon.
 enum Command {
-    Takes { number: u64, takes: bool },
-    Released { number: u64, id: Option<u32> },
-    Landed { number: u64, delivered: bool },
+    Takes {
+        number: u64,
+        takes: bool,
+    },
+    Released {
+        number: u64,
+        id: Option<u32>,
+    },
+    Landed {
+        number: u64,
+        delivered: bool,
+    },
+    Lift {
+        press: Press,
+        offers: Vec<(&'static str, Arc<[u8]>)>,
+        icon: Option<lift::Icon>,
+    },
 }
 
 impl Drops {
@@ -130,6 +164,8 @@ impl Drops {
             .bind::<WlDataDeviceManager, _, _>(&handle, 1..=3, ())
             .ok()?;
         let (commands, heard) = std::sync::mpsc::channel();
+        let lifting = manager.version() >= 3;
+        let out = lift::Out::new(&globals, &handle, &connection, &surface);
         let mut listener = Listener {
             surface,
             manager,
@@ -139,6 +175,8 @@ impl Drops {
             drags: 0,
             proxy,
             commands: heard,
+            handle: handle.clone(),
+            out,
         };
         globals.contents().with_list(|list| {
             for global in list.iter().filter(|g| g.interface == "wl_seat") {
@@ -154,10 +192,31 @@ impl Drops {
             .ok()?;
         Some(Self {
             hover: None,
+            lifts: lift::Lifts::default(),
+            lifting,
             commands,
             wake: Some(wake),
             listener: Some(listener),
         })
+    }
+
+    /// The cell the window keeps its held left press in, which decides
+    /// whether a lift is taken.
+    pub(super) fn held(&self) -> std::rc::Rc<std::cell::Cell<Option<Press>>> {
+        self.lifts.held()
+    }
+
+    /// The presenter's lifter, when the compositor's data sources can offer
+    /// a copy alone (version 3).
+    pub(super) fn lifter(&self) -> Option<exact_painted::presenter::drag_out::Lifter> {
+        self.lifting.then(|| self.lifts.lifter())
+    }
+
+    /// Send the listener the lift the presenter made, if any.
+    pub(super) fn flush(&mut self) {
+        if let Some(command) = self.lifts.take() {
+            self.send(command);
+        }
     }
 
     /// Tell the presenter what the listener heard, and send back its answer.
@@ -193,6 +252,8 @@ impl Drops {
                 let delivered = p.drop_landed(id, &dropped).is_some();
                 self.send(Command::Landed { number, delivered });
             }
+            // The window's input hears these
+            Heard::Pointer { .. } | Heard::Ended(_) | Heard::Gone => {}
         }
     }
 
@@ -242,17 +303,29 @@ impl Drop for Drops {
     }
 }
 
-/// The listening thread's state: the data devices, one a seat, the drag
-/// over the window, and the drops released to the presenter.
+/// The listening thread's state: the seats, the drag over the window, the
+/// drops released to the presenter, and the drags out of it.
 struct Listener {
     surface: ObjectId,
     manager: WlDataDeviceManager,
-    seats: Vec<(u32, WlSeat, WlDataDevice)>,
+    seats: Vec<Seat>,
     drag: Option<Drag>,
     released: Vec<Released>,
     drags: u64,
     proxy: EventLoopProxy<super::Event>,
     commands: Receiver<Command>,
+    handle: QueueHandle<Self>,
+    out: lift::Out,
+}
+
+/// A seat, by its global's name: its data device, and its pointer while it
+/// has one.
+struct Seat {
+    name: u32,
+    seat: WlSeat,
+    device: WlDataDevice,
+    pointer: Option<lift::Pointer>,
+    keyboard: Option<lift::Keyboard>,
 }
 
 /// A drag the window follows, on the device it entered by. `accepted` is
@@ -308,6 +381,8 @@ impl Listener {
     /// fails: every offer it holds then ends unfinished.
     fn listen(mut self, connection: &Connection, mut queue: EventQueue<Self>, woken: &PipeReader) {
         self.run(connection, &mut queue, woken);
+        self.tell(Heard::Gone);
+        self.out.close();
         for drag in self
             .drag
             .take()
@@ -351,6 +426,8 @@ impl Listener {
             ];
             let pipes: Vec<(usize, usize, i32)> = self.pipes().collect();
             fds.extend(pipes.iter().map(|&(.., fd)| poll_for(fd, libc::POLLIN)));
+            let sends: Vec<(usize, i32)> = self.out.pipes().collect();
+            fds.extend(sends.iter().map(|&(_, fd)| poll_for(fd, libc::POLLOUT)));
             let now = Instant::now();
             let wait = self
                 .released
@@ -362,6 +439,7 @@ impl Listener {
                         .as_millis()
                         .min(i32::MAX as u128) as i32
                 })
+                .chain(self.out.due(now))
                 .min()
                 .unwrap_or(-1);
             let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, wait) };
@@ -391,7 +469,14 @@ impl Listener {
             }
             // A drop past its deadline lands before its pipes are read, so nothing arrives after it
             self.land();
-            for (fd, &(r, k, _)) in fds[2..].iter().zip(&pipes) {
+            let ready: Vec<usize> = fds[2 + pipes.len()..]
+                .iter()
+                .zip(&sends)
+                .filter(|(fd, _)| fd.revents != 0)
+                .map(|(_, &(k, _))| k)
+                .collect();
+            self.out.send(&ready);
+            for (fd, &(r, k, _)) in fds[2..2 + pipes.len()].iter().zip(&pipes) {
                 if fd.revents == 0 {
                     continue;
                 }
@@ -413,7 +498,13 @@ impl Listener {
     ) {
         let seat = registry.bind::<WlSeat, _, _>(name, version.min(7), handle, ());
         let device = self.manager.get_data_device(&seat, handle, ());
-        self.seats.push((name, seat, device));
+        self.seats.push(Seat {
+            name,
+            seat,
+            device,
+            pointer: None,
+            keyboard: None,
+        });
     }
 
     fn tell(&self, heard: Heard) {
@@ -486,6 +577,11 @@ impl Listener {
                         None => self.released.remove(at).drag.offer.destroy(),
                     }
                 }
+                Command::Lift {
+                    press,
+                    offers,
+                    icon,
+                } => self.lift(press, offers, icon),
                 Command::Landed { number, delivered } => {
                     let Some(at) = self.released.iter().position(|r| r.drag.number == number)
                     else {
@@ -640,7 +736,7 @@ impl Wanted {
 /// The items a drop's URI list (RFC 2483), titled link and text give: each
 /// local `file:` URI a path, the first other URI the link, else the titled
 /// link's URL, and the text as it came.
-fn items(uris: &[u8], link: &[u8], text: &[u8]) -> Dropped {
+pub(super) fn items(uris: &[u8], link: &[u8], text: &[u8]) -> Dropped {
     let mut dropped = Dropped {
         text: String::from_utf8_lossy(text).into_owned(),
         ..Default::default()
@@ -664,17 +760,20 @@ fn items(uris: &[u8], link: &[u8], text: &[u8]) -> Dropped {
     dropped
 }
 
-/// `text`, trimmed, as a link that is not a file: a line with a URI scheme
-/// (RFC 3986: a letter, then letters, digits, `+`, `-` or `.`) and no
-/// whitespace or control character. The app checks the URL before following
-/// it (D1), as GTK's URI-list reader and Android's leave its parts.
+/// `text`, its ASCII spaces and controls trimmed, as a link that is not a
+/// file: a line with a URI scheme (RFC 3986: a letter, then letters, digits,
+/// `+`, `-` or `.`) and no ASCII space or control inside, the bytes D1's URL
+/// test refuses, so a URL D1 admits arrives whole. The app checks the URL
+/// before following it (D1), as GTK's URI-list reader and Android's leave
+/// its parts.
 fn web_link(text: &str) -> Option<&str> {
-    let text = text.trim();
+    let blank = |c: char| c <= ' ' || c == '\u{7f}';
+    let text = text.trim_matches(blank);
     let (scheme, _) = text.split_once(':')?;
     let mut letters = scheme.chars();
     let valid = letters.next().is_some_and(|c| c.is_ascii_alphabetic())
         && letters.all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
-        && !text.chars().any(|c| c.is_whitespace() || c.is_control());
+        && !text.chars().any(blank);
     (valid && !scheme.eq_ignore_ascii_case("file")).then_some(text)
 }
 
@@ -754,12 +853,30 @@ impl Dispatch<WlRegistry, GlobalListContents> for Listener {
                 state.add_seat(registry, name, version, handle);
             }
             wl_registry::Event::GlobalRemove { name } => {
-                let Some(at) = state.seats.iter().position(|(n, ..)| *n == name) else {
+                let Some(at) = state.seats.iter().position(|s| s.name == name) else {
                     return;
                 };
-                let (_, seat, device) = state.seats.remove(at);
+                let Seat {
+                    seat,
+                    device,
+                    pointer,
+                    keyboard,
+                    ..
+                } = state.seats.remove(at);
+                if let Some(keyboard) = keyboard {
+                    keyboard.release();
+                }
                 if state.drag.as_ref().is_some_and(|d| d.device == device.id()) {
                     state.left();
+                }
+                state.seat_gone(name);
+                if let Some(pointer) = pointer {
+                    pointer.release();
+                    state.tell(Heard::Pointer {
+                        seat: name,
+                        pointed: Pointed::Lost,
+                        modifiers: None,
+                    });
                 }
                 if device.version() >= 2 {
                     device.release();
@@ -770,18 +887,6 @@ impl Dispatch<WlRegistry, GlobalListContents> for Listener {
             }
             _ => {}
         }
-    }
-}
-
-impl Dispatch<WlSeat, ()> for Listener {
-    fn event(
-        _: &mut Self,
-        _: &WlSeat,
-        _: <WlSeat as Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
     }
 }
 

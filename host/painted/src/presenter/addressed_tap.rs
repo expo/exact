@@ -68,6 +68,10 @@ impl<D: DataSource> Presenter<D> {
                 "view {id} is covered or not hit at its projected center"
             ));
         }
+        #[cfg(target_os = "android")]
+        if self.module_ancestor(id).is_some() {
+            return Err("this module tap needs a supported Android reader touch".into());
+        }
         let now = self.host.now();
         let actual = self.hit(x, y).and_then(|hit| {
             self.control_target(hit)

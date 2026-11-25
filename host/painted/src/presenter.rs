@@ -55,6 +55,8 @@ mod device;
 mod display_frame;
 pub mod drag_out;
 #[cfg(test)]
+mod drag_out_mouse_tests;
+#[cfg(test)]
 mod drag_out_tests;
 pub mod edit_menu;
 mod events;
@@ -466,6 +468,13 @@ pub struct Presenter<D: DataSource> {
     booting: bool,
     content_registration: Option<crate::content_region::ContentRegionRegistration>,
     last_region_frame: Option<Arc<Pixmap>>,
+    /// The desktop host that lifts a mouse's drags (LLP 1094.000 D13).
+    lifter: Option<drag_out::Lifter>,
+    /// The frame last shown and its scale, kept beside the boxes acknowledged
+    /// with it for a lift's picture, while the plan drags.
+    shown: Option<(Arc<Pixmap>, f32)>,
+    /// Whether the plan has a node that drags, asked once a plan.
+    plan_drags: Option<bool>,
     last_region_scale: Option<u32>,
     /// The app's hatches (LLP 1075.003.000.001; `presenter/hatch.rs`).
     pub(crate) hatches: crate::hatches::Session,
@@ -778,6 +787,9 @@ impl<D: DataSource> Presenter<D> {
             booting: true,
             content_registration: region,
             last_region_frame: None,
+            lifter: None,
+            shown: None,
+            plan_drags: None,
             last_region_scale: None,
             hatches: Default::default(),
             frame_partitions: None,

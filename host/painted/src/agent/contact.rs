@@ -106,6 +106,10 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
         } else {
             None
         };
+        #[cfg(target_os = "android")]
+        if p.module_ancestor(id).is_some() {
+            return Err("a module view needs the Android reader to receive touch".into());
+        }
         let (x, y, w, h) = p.rect_of(id).ok_or("contact target has no painted box")?;
         let (x, y) = xy.unwrap_or((x + w / 2., y + h / 2.));
         let taken = p.pointer_down(x, y, from);

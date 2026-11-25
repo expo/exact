@@ -729,6 +729,25 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// Run `pointer` with `modifiers` held, as the seat that sent a pointer
+    /// event held them when it sent it, then give the keyboard back its own:
+    /// a host whose pointer and keys reach it on separate queues (Linux's
+    /// Wayland window) keeps each event's modifiers in that event's order.
+    pub fn with_pointer_modifiers<R>(
+        &mut self,
+        modifiers: exact_runner::KeyModifiers,
+        pointer: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let keyboard = self.held;
+        self.held = u8::from(modifiers.shift)
+            | u8::from(modifiers.ctrl) << 2
+            | u8::from(modifiers.alt) << 4
+            | u8::from(modifiers.meta) << 6;
+        let result = pointer(self);
+        self.held = keyboard;
+        result
+    }
+
     /// The modifiers held, as a `key` event carries them.
     pub fn modifiers(&self) -> exact_runner::KeyModifiers {
         exact_runner::KeyModifiers {

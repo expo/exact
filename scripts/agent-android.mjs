@@ -719,10 +719,10 @@ async function relay([serial, id, vars, encodedLease]) {
       const dropped = pushDrops(req, drops, sh);
       if (dropped.error) return say(JSON.stringify(dropped));
       if (dropped.request) line = JSON.stringify(dropped.request);
-      if (req?.op !== 'screenshot') return say(await readerReply(req, () => {
-        socket.write(line + '\n');
+      if (req?.op !== 'screenshot') return say(await readerReply(req, (next = line) => {
+        socket.write(next + '\n');
         return answer();
-      }));
+      }, Bun.sleep, sh));
       if (req.film) return say(JSON.stringify({ error: 'the reader carrier films nothing: its picture is a screencap of the device' }));
       await new Promise((r) => setTimeout(r, SHOT_SETTLE_MS));
       const shot = sh('shell', `screencap -p ${quote(req.path)}`);

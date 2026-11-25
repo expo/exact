@@ -166,14 +166,20 @@ impl<D: DataSource + Default> App<'_, D> {
         let closed = self.closed.clone();
         presenter.set_window_closer(move || closed.set(true));
         window.request_redraw();
+        let drops = drop::Drops::new(&window, self.proxy.clone());
+        let mut input = input::Input::default();
+        if let Some(drops) = drops.as_ref() {
+            input.listen(drops.held());
+            presenter.set_lifter(drops.lifter());
+        }
         Ok(Live {
             access,
             output_surface,
             surface,
-            drops: drop::Drops::new(&window, self.proxy.clone()),
+            drops,
             window,
             presenter,
-            input: input::Input::default(),
+            input,
             extent: (size.width, size.height, scale),
             presented: false,
             app_name,
@@ -261,8 +267,43 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
             }
             Event::Drag(heard) => {
                 if let Some(live) = self.live.as_mut() {
+                    let now = self.started.elapsed().as_secs_f64() * 1000.0;
+                    let heard = match heard {
+                        drop::Heard::Pointer {
+                            seat,
+                            pointed,
+                            modifiers,
+                        } => {
+                            if matches!(pointed, drop::Pointed::Button { pressed: true, .. }) {
+                                live.caret.restart(now);
+                            }
+                            warn(live.presenter.advance(now));
+                            let now = live.presenter.host().now();
+                            let p = &mut live.presenter;
+                            live.input
+                                .pointed(p, &live.window, seat, pointed, modifiers, now)
+                        }
+                        drop::Heard::Gone => {
+                            live.presenter.set_lifter(None);
+                            let now = live.presenter.host().now();
+                            live.input.unlisten(&mut live.presenter, now)
+                        }
+                        drop::Heard::Ended(press) => {
+                            let now = live.presenter.host().now();
+                            live.input.ended(&mut live.presenter, press, now)
+                        }
+                        heard => {
+                            if let Some(drops) = live.drops.as_mut() {
+                                drops.heard(&mut live.presenter, heard);
+                            }
+                            Ok(())
+                        }
+                    };
+                    if let Err(error) = heard {
+                        eprintln!("exact: {error}");
+                    }
                     if let Some(drops) = live.drops.as_mut() {
-                        drops.heard(&mut live.presenter, heard);
+                        drops.flush();
                     }
                     if live.presenter.dirty() {
                         live.window.request_redraw();
@@ -296,6 +337,7 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
     fn exiting(&mut self, _: &ActiveEventLoop) {
         // The drag thread reads the display, which the event loop disconnects as it ends
         if let Some(live) = self.live.as_mut() {
+            live.presenter.set_lifter(None);
             live.drops = None;
         }
     }
@@ -354,6 +396,9 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
                     .handle(&mut live.presenter, &live.window, event, now)
                 {
                     eprintln!("exact: {error}");
+                }
+                if let Some(drops) = live.drops.as_mut() {
+                    drops.flush();
                 }
             }
         }
