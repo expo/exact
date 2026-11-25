@@ -134,8 +134,7 @@ package final class Presenter {
     package lazy var stickies: any StickyHosting = StickyLink.make?(self) ?? NoStickies()
     let tableGrid = TableGrid()
     lazy var pool = NodePool(self)
-    /// Heavy leaves held mid-fling (LLP 1068 §5.1).
-    /// The heavy leaves' hold, when a product that makes heavy leaves is linked.
+    /// Heavy leaves held mid-fling (LLP 1068 §5.1). The heavy leaves' hold, when a product that makes heavy leaves is linked.
     package lazy var leaves: HeavyLeafHolding? = LeavesLink.make?(self)
     /// The list whose row is creating node `id` now, for the hold.
     package func listCreating(_ id: UInt32) -> NodeView? { pool.list(creating: id) }
@@ -230,6 +229,7 @@ package final class Presenter {
     var revealOwed = false
     /// The first root, as of the last batch.
     private(set) weak var documentRoot: NodeView?
+    private var aspectFitWord: String? // the first root's `-exact-safe-area-aspect-fit` as last read (LLP 1123 D16)
     /// The safe-area insets the kernel was given (LLP 1008 §9): the
     /// screen's under `viewport-fit=cover`, zero when the viewport is the
     /// safe area itself. Reported to the agent as `env`.
@@ -245,13 +245,11 @@ package final class Presenter {
     /// Whether `UIHingeInteraction` has reported once (a hinge or none):
     /// before that, a 27.1 device's fold is unknown (LLP 1078 D7).
     var hingeReported = false
-    /// The keyboard's overlap with the viewport before avoidance,
-    /// derived by `ExactView.fit`.
+    /// The keyboard's overlap with the viewport before avoidance, derived by `ExactView.fit`.
     package var keyboardInset: CGFloat = 0
     /// The keyboard's own contribution to the viewport's shared insets.
     private let keyboardViewportInset = KeyboardInset()
-    /// What scrollers took below their content to show a field above pinned
-    /// content, while the keyboard is up (`PinnedRoom`).
+    /// What scrollers took below their content to show a field above pinned content, while the keyboard is up (`PinnedRoom`).
     let pinnedRoom = PinnedRoom()
     /// A native prompt outside the session's mounts, associated by its creator.
     package weak var keyboardPrompt: UITextField?
@@ -1227,6 +1225,8 @@ package final class Presenter {
         }
         let fit = first?.props["viewportFit"]
         if fit != viewportFit { viewportFit = fit; onViewportFit?() }
+        // A new aspect fit lays the session's view out again, which claims the window's guide at it (`AspectFitIOS`)
+        if first?.style["safe_area_aspect_fit"]?.string != aspectFitWord { aspectFitWord = first?.style["safe_area_aspect_fit"]?.string; session?.view?.setNeedsLayout() }
         session?.canvases.cancelMovedControls()
         PaintOrder.flush()
         let changed = touchedAndAbove(touchedIDs + geometryApplied)

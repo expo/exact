@@ -55,6 +55,9 @@ public final class ExactView: UIView {
     private var lastScreen: CGSize?
     /// The keyboard's overlap last told (`exactViewport().keyboardHeight`).
     private var lastKeyboard: CGFloat = 0
+    /// The window's aspect-fit guide the first root claims, and its rectangle as last told (LLP 1123 D16).
+    private let aspectFit = AspectFitIOS()
+    private var lastAspectFit: CGRect?
     /// What the keys cover of the page, whatever is presented over it
     /// (`fitKeyboard`); `presenter.keyboardInset` is what avoidance takes.
     package private(set) var keyboardCovers: CGFloat = 0
@@ -84,6 +87,9 @@ public final class ExactView: UIView {
     /// canvas colour (the window's background under the safe areas is the
     /// window's business).
     public var onViewportFit: (() -> Void)?
+    /// Whether the standalone adapter mounted this view across its window, which only lets its first
+    /// root claim the window's aspect-fit guide (LLP 1123 D16); an app that embeds a session leaves it off.
+    public var standaloneWindow = false
     public var onCanvasColor: ((UIColor) -> Void)?
     /// The adapter's hook for the head's title (LLP 1048.003 D1): the scene
     /// title is the app's to set. It hears the current title when set.
@@ -357,6 +363,8 @@ public final class ExactView: UIView {
 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
+        // Out of its window, the claim on that window's guide ends; the next fit tells the root
+        if window == nil { aspectFit.release() }
         let owner = disappearingOwner
         disappearingOwner = nil
         owner?.endAppearanceTransition()
@@ -688,6 +696,11 @@ public final class ExactView: UIView {
         if segments != lastFold, (segments.posture, segments.cols, segments.rows) == (lastFold.posture, lastFold.cols, lastFold.rows) {
             keyed = segments; lastFold = segments
         }
+        let fit = aspectFit.rectangle(for: self)
+        if fit != lastAspectFit {
+            lastAspectFit = fit
+            change.aspectFit = .some(fit)
+        }
         change.blocks = presenter.owners.takeChanges()
         session.view(change, fold: keyed)
         // Scale reports also lay out the native container, so size goes first.
@@ -769,6 +782,7 @@ public final class ExactView: UIView {
         primedInsets = nil
         lastRegions = nil  // the next fit tells the new runner
         lastKeyboard = 0  // as the new runner holds
+        lastAspectFit = nil  // the new runner fits no root: the next fit tells it the guide
         session.segments(lastFold)
         reportScheme()
         fit()

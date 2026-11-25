@@ -441,6 +441,7 @@ component App
         Some((450., 900.)),
         None,
         None,
+        None,
         &[],
         &[],
         Default::default(),
@@ -508,4 +509,55 @@ component App
         err.contains("viewport:") && err.contains("; "),
         "both timer error and viewport refusal should be kept: {reply}"
     );
+}
+
+#[test]
+fn the_aspect_fit_guide_rides_the_view() {
+    // LLP 1123 D16: the view's transaction gives the first root the window's aspect-fit guide, a rectangle
+    // with no size takes it back, and a malformed one is refused before anything changes
+    let source = "shape V\n  width: number\ncomponent App\n  resource v = exactViewport() as shape V\n  view\n    column viewport-fit=\"cover\" -exact-safe-area-aspect-fit=\"16 / 9\" width=\"100%\" height=\"100%\" testId=\"root\"\n      column width=\"50%\" height=10 testId=\"half\"\n";
+    let plan = contract::compile(source).unwrap().encode();
+    let measurer = Box::new(MonospaceMeasurer::default());
+    let (mut h, _) = Host::boot(&plan, NoData, measurer, 402., 874.).unwrap();
+    let frame = |h: &Host<NoData>, id: &str| {
+        let kernel = h.runner().kernel();
+        let f = kernel
+            .node_by_key(kernel.find_by_test_id(id)[0])
+            .unwrap()
+            .frame;
+        [f.x, f.y, f.width, f.height]
+    };
+    let width = |h: &Host<NoData>| {
+        let state: serde_json::Value =
+            serde_json::from_str(&exact_runner::agent::state(h.runner())).unwrap();
+        state["resources"]["v"]["width"].clone()
+    };
+    let fit = |h: &mut Host<NoData>, fit: Option<[f32; 4]>| {
+        h.set_view_at(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(fit),
+            &[],
+            &[],
+            Default::default(),
+            None,
+        )
+    };
+    let batch = fit(&mut h, Some([0.0, 324.0, 402.0, 226.125]));
+    assert!(!batch.contains("\"error\":\""), "{batch}");
+    assert_eq!(frame(&h, "root"), [0.0, 324.0, 402.0, 226.125]);
+    assert_eq!(frame(&h, "half")[2], 201.0);
+    assert_eq!(width(&h), 402, "the viewport stays the window's");
+    let refused = fit(&mut h, Some([0.0, 0.0, f32::NAN, 10.0]));
+    assert!(
+        refused.contains("the aspect-fit guide is refused"),
+        "{refused}"
+    );
+    assert_eq!(frame(&h, "root"), [0.0, 324.0, 402.0, 226.125], "unchanged");
+    fit(&mut h, None);
+    assert_eq!(frame(&h, "root"), [0.0, 0.0, 402.0, 874.0]);
 }

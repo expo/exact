@@ -1009,7 +1009,9 @@ uint32_t exact_screen(ExactRuntime rt, float width, float height);
  * viewport's width and height, the regions' count (20 or 0) and their insets,
  * then, with 16, the rects' count and each rect's x y w h, on the grid
  * exact_segments set, then, with 32, the software keyboard's overlap with the
- * viewport (exactViewport().keyboardHeight), then, with 64, block,
+ * viewport (exactViewport().keyboardHeight), then, with 128, the window's
+ * aspect-fit guide for the first root (LLP 1123 D16), its x, y, width and
+ * height in the view's points, a zero size clearing it, then, with 64, block,
  * placement and owner update records as exact_host_covers kinds 4, 5, 6,
  * 7, 13 and 21, each update checked and applied as exact_host_covers does.
  * The call is exact_screen, exact_insets, exact_regions, exact_resize and a

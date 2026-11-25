@@ -1,0 +1,25 @@
+// AspectFitIOSTests (LLP 1123 D16): a first root that claims the window's aspect-fit guide, whose
+// ratio a timer changes, so no press or focus lays the session's view out with the change.
+component App
+  state fit = "16 / 9"
+  state widening = false
+  state ending = false
+  action widen
+    widening = true
+  action end
+    ending = true
+  action wide
+    fit = "2"
+  action off
+    fit = "none"
+  task toWide when widening
+    after(300, wide)
+  task toOff when ending
+    after(300, off)
+  view
+    column viewport-fit="cover" -exact-safe-area-aspect-fit=(fit) width="100%" height="100%" testId="root"
+      column width="50%" height="20px" testId="half"
+      button testId="wide" press=widen
+        text "Wide"
+      button testId="off" press=end
+        text "Off"

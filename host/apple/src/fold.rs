@@ -228,6 +228,7 @@ impl<D: DataSource> Host<D> {
             size,
             segments,
             keyboard,
+            None,
             blocks,
             placements,
             crate::host::OwnerReports::default(),
@@ -246,6 +247,7 @@ impl<D: DataSource> Host<D> {
         size: Option<(f32, f32)>,
         segments: Option<Vec<exact_kernel::Rect>>,
         keyboard: Option<f32>,
+        fit: Option<Option<[f32; 4]>>,
         blocks: &[(exact_kernel::ViewId, Option<exact_kernel::HostBlock>)],
         placements: &[(exact_kernel::ViewId, Option<exact_runner::BlockPlacement>)],
         owners: crate::host::OwnerReports,
@@ -292,6 +294,20 @@ impl<D: DataSource> Host<D> {
         if let Some(why) = self.refused_report(&owners) {
             return self.finish(Batch::new(), Some(why));
         }
+        // The window's aspect-fit guide for the first root (LLP 1123 D16): the kernel refuses a
+        // malformed rectangle before it changes anything, and so before the blocks are applied
+        let fitted = match (fit, self.runner.roots().first().copied()) {
+            (Some(fit), Some(root)) => match self.runner.kernel_mut().set_root_fit(root, fit) {
+                Ok(fitted) => fitted,
+                Err(e) => {
+                    return self.finish(
+                        Batch::new(),
+                        Some(format!("view: the aspect-fit guide is refused: {e:?}")),
+                    )
+                }
+            },
+            _ => false,
+        };
         let (mut batch, error) = if size.is_some() {
             if let Some(now) = now_ms {
                 self.now_ms = now.max(self.now_ms);
@@ -334,7 +350,7 @@ impl<D: DataSource> Host<D> {
                     }
                     Ok(None) => {}
                 }
-                if changed != Ok(true) && blocks.is_empty() && !owed {
+                if changed != Ok(true) && blocks.is_empty() && !owed && !fitted {
                     return self.finish(batch, error);
                 }
                 let laid_out = self.layout(&mut batch).err();

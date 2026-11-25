@@ -320,6 +320,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         w.backgroundColor = launchColor
         adapter.window = w
         exactView = ExactView(session: ExactIOS.session)
+        exactView.standaloneWindow = true
         // The root's background into the safe areas (`Presenter.paintCanvas`).
         exactView.onCanvasColor = { [weak w] color in w?.backgroundColor = color; w?.rootViewController?.view.backgroundColor = color }
         // The head's title is the scene's (LLP 1048.003 D1): the app switcher's name for it.

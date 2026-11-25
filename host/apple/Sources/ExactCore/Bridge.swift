@@ -1085,9 +1085,13 @@ package final class Runtime {
         package var size: CGSize? = nil
         package var segments: [CGRect]? = nil
         package var keyboard: CGFloat? = nil
+        /// The window's aspect-fit guide for the first root in the document's space (LLP 1123 D16); `nil` inside to give it back.
+        package var aspectFit: CGRect?? = nil
         /// Native block and placement records, as `exact_host_covers` takes them.
         package var blocks = Data()
-        package var isEmpty: Bool { screen == nil && insets == nil && regions == nil && size == nil && segments == nil && keyboard == nil && blocks.isEmpty }
+        package var isEmpty: Bool {
+            screen == nil && insets == nil && regions == nil && size == nil && segments == nil && keyboard == nil && aspectFit == nil && blocks.isEmpty
+        }
         package init(screen: CGSize?? = nil, insets: (top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat)? = nil,
                      regions: [CGFloat]?? = nil, size: CGSize? = nil) {
             self.screen = screen; self.insets = insets; self.regions = regions; self.size = size
@@ -1103,12 +1107,24 @@ package final class Runtime {
         if change.segments != nil { mask |= 16 }
         if change.keyboard != nil { mask |= 32 }
         if !change.blocks.isEmpty { mask |= 64 }
+        if change.aspectFit != nil { mask |= 128 }
         let screen = (change.screen ?? nil) ?? .zero, insets = change.insets ?? (0, 0, 0, 0), size = change.size ?? .zero
         let floats = [screen.width, screen.height, insets.top, insets.right, insets.bottom, insets.left, size.width, size.height]
         let rects = change.segments.map { rects in [UInt32(rects.count)] + rects.flatMap { [$0.minX, $0.minY, $0.width, $0.height].map { Float($0).bitPattern } } } ?? []
         let keyboard = change.keyboard.map { [Float($0).bitPattern] } ?? []
-        var bytes = Data(capacity: (11 + regions.count + rects.count) * 4)
-        for word in [mask] + floats.map({ Float($0).bitPattern }) + [UInt32(regions.count)] + regions.map({ Float($0).bitPattern }) + rects + keyboard {
+        // With 128, the guide's x, y, width and height; no size gives the root back
+        var fit: [UInt32] = []
+        if let given = change.aspectFit {
+            let rect: CGRect = given ?? .zero
+            fit = [rect.minX, rect.minY, rect.width, rect.height].map { Float($0).bitPattern }
+        }
+        var words: [UInt32] = [mask]
+        words += floats.map { Float($0).bitPattern }
+        words.append(UInt32(regions.count))
+        words += regions.map { Float($0).bitPattern }
+        words += rects + keyboard + fit
+        var bytes = Data(capacity: words.count * 4)
+        for word in words {
             withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
         }
         bytes.append(change.blocks)
