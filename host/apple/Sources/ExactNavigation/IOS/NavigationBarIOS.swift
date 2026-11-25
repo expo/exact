@@ -474,8 +474,10 @@ extension NavigationHost {
             }
             #if os(iOS)
             let field = shows ? shape?.search : nil
-            let optedIn = field?.props["accessibilityControls"]?.contains { !$0.isWhitespace } == true
-            let resultsOwner = optedIn && split?.searchOwner === c ? c : nil
+            let detailSearch = field?.props["searchResultsPlacement"] == "detail"
+            let optedIn = detailSearch || field?.props["accessibilityControls"]?.contains { !$0.isWhitespace } == true
+            let ownsResults = split?.searchOwner === c || (detailSearch && tabSplits.values.contains { $0.searchOwner === c })
+            let resultsOwner = optedIn && ownsResults ? c : nil
             scope(c, shape: shows && resultsOwner == nil ? shape : nil)
             #endif
             collapse(c, shape: shape, shows: shows, scroller: scroller)
@@ -791,7 +793,8 @@ extension NavigationHost {
             }
         }
         guard let field else { return }
-        let search = c.search ?? HeaderSearch(host: self, resultsOwner: resultsOwner)
+        let search = c.search ?? HeaderSearch(host: self, resultsOwner: resultsOwner,
+                                             detailPlacement: field.props["searchResultsPlacement"] == "detail")
         if c.search !== search {
             c.search = search
             if #available(iOS 26.0, *) {

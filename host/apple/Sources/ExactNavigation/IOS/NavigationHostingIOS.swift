@@ -136,9 +136,8 @@ extension NavigationHost: NavigationHosting {
 
     func floatingSearchKeyboard(in view: UIView) -> CGRect? {
         #if os(iOS)
-        guard presenter.keyboardPolicy != "overlays-content", let occupancy = searchOccupancy(in: view),
-              !occupancy.docked, !occupancy.keyboard.isEmpty else { return nil }
-        return occupancy.keyboard
+        guard presenter.keyboardPolicy != "overlays-content" else { return nil }
+        return searchOccupancy(in: view)?.floatingKeyboard(in: view.bounds)
         #else
         return nil
         #endif

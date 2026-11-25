@@ -237,7 +237,12 @@ extension Agent {
         let responding = presenter.views.values
             .filter { $0.isFirstResponder || editor(of: $0)?.isFirstResponder == true }
             .min { $0.id < $1.id }
-        if let node = responding ?? presenter.editing {
+        #if os(iOS)
+        let editing = presenter.editing.flatMap { $0.headerSearch == nil ? $0 : nil }
+        #else
+        let editing = presenter.editing
+        #endif
+        if let node = responding ?? editing {
             focus["logical"] = Int(node.id)
             let native = editor(of: node)
             if native != nil { focus["editor"] = Int(node.id) }
@@ -259,6 +264,12 @@ extension Agent {
         }
         #if !os(tvOS)
         if let view = presenter.session?.view, view.hasKeyboardGuide { keyboard["guide"] = Agent.r2(view.keyboardLayoutGuide.layoutFrame.minY) }
+        if let window = vp.window, let sample = KeyboardSampleIOS.existing(in: window)?.sample {
+            let frame = sample.frame
+            keyboard["frame"] = ["x": Agent.r2(frame.minX), "y": Agent.r2(frame.minY),
+                                 "w": Agent.r2(frame.width), "h": Agent.r2(frame.height)]
+            keyboard["visible"] = true
+        }
         #endif
         var navigation = presenter.navigation.observation()
         navigation["presentation"] = presenter.modals.presentation ?? NSNull()

@@ -91,6 +91,63 @@ fn off_a_route_the_attribute_is_refused_naming_where_it_belongs() {
     assert_eq!(error.id, "lower-route-bar", "{error}");
 }
 
+#[test]
+fn detail_search_placement_reaches_the_host_only_on_paired_header_search() {
+    let field = r#"input type="search" aria-controls="results" testId="search""#;
+    let attr = r#"searchResultsPlacement="detail""#;
+    let source = |field: &str, parent: &str| {
+        stack("", "", "").replace(
+            "column \n",
+            &format!("{parent}\n            {field}\n          column id=\"results\"\n"),
+        )
+    };
+    let src = source(&format!("{field} {attr}"), "header");
+    let plan = contract::bake(contract::compile(&src).unwrap(), boxed(NoData)).unwrap();
+    let runner = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let kernel = runner.kernel();
+    let search = kernel
+        .node_by_key(kernel.find_by_test_id("search")[0])
+        .unwrap();
+    assert_eq!(
+        search.props.str(PropId::SearchResultsPlacement),
+        Some("detail")
+    );
+    assert_eq!(
+        search.props.str(PropId::AccessibilityControls),
+        Some("results")
+    );
+    for (parent, field, diagnostic) in [
+        ("column", format!("{field} {attr}"), "lower-attr-tag"),
+        (
+            "header",
+            format!("input type=\"text\" aria-controls=\"results\" {attr}"),
+            "lower-attr-tag",
+        ),
+        (
+            "header",
+            format!("input type=\"search\" {attr}"),
+            "lower-attr-tag",
+        ),
+        (
+            "header",
+            format!("{field} searchResultsPlacement=\"sidebar\""),
+            "lower-attr-value",
+        ),
+    ] {
+        assert_eq!(
+            contract::compile(&source(&field, parent)).unwrap_err().id,
+            diagnostic
+        );
+    }
+}
+
 /// A button that presses nothing and opens no popover is no item of the iOS
 /// bar and is hidden with the header (euxy port 14's "● Clock" readout):
 /// the warning says so and names a readout's `role="status"`.

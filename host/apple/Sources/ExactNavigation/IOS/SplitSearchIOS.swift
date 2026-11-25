@@ -11,7 +11,15 @@ final class SplitSearchState {
     final class Press {
         let kind: Activation
         var revision: UInt64
-        init(_ kind: Activation, revision: UInt64) { (self.kind, self.revision) = (kind, revision) }
+        let visits: [Visit]
+        init(_ kind: Activation, revision: UInt64, visits: [Visit]) {
+            (self.kind, self.revision, self.visits) = (kind, revision, visits)
+        }
+    }
+
+    struct Visit: Equatable {
+        let key: String
+        let location: String?
     }
 
     struct Reveal {
@@ -21,16 +29,19 @@ final class SplitSearchState {
 
     final class Pop {
         let navigation: UINavigationController
-        let destination: RouteController
+        let destination: UIViewController
         let origin: String
         let source: String
-        var landing: String { destination.key }
+        let landing: String
+        let returnsToResults: Bool
         let steps: Int
         let revision: UInt64
         var tracksCompletion = false
         var cancelled: Bool?
-        init(in navigation: UINavigationController, origin: String, source: String, to destination: RouteController, steps: Int, revision: UInt64) {
+        init(in navigation: UINavigationController, origin: String, source: String, to destination: UIViewController,
+             landing: String, returnsToResults: Bool, steps: Int, revision: UInt64) {
             (self.navigation, self.destination) = (navigation, destination)
+            (self.landing, self.returnsToResults) = (landing, returnsToResults)
             (self.origin, self.source, self.steps, self.revision) = (origin, source, steps, revision)
         }
     }
@@ -42,6 +53,9 @@ final class SplitSearchState {
     var ownerMoving = false
     var children: [UInt32]?
     var committed: [RouteController] = []
+    var resultBase: String?
+    var retainedResultBase: String?
+    var followingResultsBack = false
     var press: Press?
     var reveal: Reveal?
     var pop: Pop?
@@ -88,10 +102,7 @@ extension NavigationHost {
     }
 
     var splitSearchTransition: Bool {
-        guard let split, let search = split.pairedSearch else { return false }
-        return split.moving || split.writing || split.columnsAboutToMove || split.controller.transitionCoordinator != nil
-            || split.list.transitionCoordinator != nil || split.detail.transitionCoordinator != nil
-            || search.presenting || search.dismissing || search.controller.transitionCoordinator != nil
+        split?.searchInTransition == true
     }
 
     var committedSplitRoutes: [RouteController] {
@@ -115,11 +126,17 @@ extension NavigationHost {
         return splitPrimaryExposed && selectedStack.last === committed.last
     }
 
-    func searchInteracted(_ search: HeaderSearch) {
+    func searchInteracted(_ search: HeaderSearch, editing: Bool = false) {
         guard let split, split.pairedSearch === search, splitPrimaryExposed,
               !split.searchState.ownerMoving, !split.moving, !split.writing,
               split.list.transitionCoordinator == nil, split.detail.transitionCoordinator == nil else { return }
         split.searchState.primaryForeground = true
+        let state = split.searchState
+        if editing, search.placesResultsInDetail, let base = state.resultBase {
+            state.retainedResultBase = base
+            state.resultBase = nil
+            scheduleSplitProjection()
+        }
     }
 
     func startPairedActivation(from node: NodeView) -> (() -> Void)? {
@@ -136,7 +153,8 @@ extension NavigationHost {
 
     func startPairedActivation(_ kind: SplitSearchState.Activation, in split: SplitIOS) -> () -> Void {
         let state = split.searchState
-        let press = SplitSearchState.Press(kind, revision: routerRevision)
+        let visits = kind == .result && split.pairedSearch?.placesResultsInDetail == true ? splitVisits(committedSplitRoutes) : []
+        let press = SplitSearchState.Press(kind, revision: routerRevision, visits: visits)
         let previous = state.press
         state.press = press
         return { [weak self, weak split] in
@@ -149,6 +167,10 @@ extension NavigationHost {
         }
     }
 
+    private func splitVisits(_ routes: [RouteController]) -> [SplitSearchState.Visit] {
+        routes.map { .init(key: $0.key, location: presenter.session?.runtime.visitLocation($0.key)) }
+    }
+
     func recordPairedActivation(in split: SplitIOS, hasPresenter: Bool) {
         guard let press = split.searchState.press else { return }
         let revision = routerRevision
@@ -156,8 +178,25 @@ extension NavigationHost {
         press.revision = revision
         let state = split.searchState
         if hasPresenter {
+            split.pairedSearch?.prepareCoverMove()
             state.beginOwnerMove()
         } else {
+            if press.kind == .incoming {
+                state.resultBase = nil
+                state.retainedResultBase = nil
+            }
+            if !press.visits.isEmpty {
+                let after = splitVisits(committedSplitRoutes)
+                let changed = zip(press.visits, after).prefix { $0 == $1 }.count
+                if after.count > 1 {
+                    let projectedBase = split.detailRoutes.first?.key
+                    state.resultBase = changed > 0 && changed < after.count
+                        ? after[changed].key
+                        : (state.resultBase ?? state.retainedResultBase).flatMap { key in after.contains { $0.key == key } ? key : nil }
+                            ?? after.dropFirst().first { $0.key == projectedBase }?.key ?? after[1].key
+                    state.retainedResultBase = nil
+                }
+            }
             state.reveal = .init(revision: revision, activation: press.kind)
             scheduleSplitProjection()
         }
@@ -180,8 +219,15 @@ extension NavigationHost {
             trackSplitPop(pop, in: split)
             return
         }
-        guard !split.moving, !split.writing, let destination = landing as? RouteController,
-              let origin = selectedKey else { return }
+        guard !split.moving, !split.writing, let origin = selectedKey else { return }
+        let toResults = landing === split.pairedSearch?.results
+            || (nav === split.list && landing === split.searchOwner && state.resultBase != nil)
+        let landingKey: String
+        if toResults, let base = state.resultBase, let index = shownKeys.firstIndex(of: base), index > 0 {
+            landingKey = shownKeys[index - 1]
+        } else if let route = landing as? RouteController {
+            landingKey = route.key
+        } else { return }
         let transition = nav.transitionCoordinator
         let from = departing ?? transition?.viewController(forKey: .from)
         let source: RouteController
@@ -202,8 +248,9 @@ extension NavigationHost {
             && (nav !== split.list || state.detailWasNested)
         guard namesEndpoints || removed,
               source.key == NavigationRules.poppedTop(selected: origin, inspecting: inspectorKey, shownKeys: shownKeys),
-              let first = shownKeys.firstIndex(of: destination.key), let last = shownKeys.firstIndex(of: source.key), first < last else { return }
-        let pop = SplitSearchState.Pop(in: nav, origin: origin, source: source.key, to: destination, steps: last - first, revision: routerRevision)
+              let first = shownKeys.firstIndex(of: landingKey), let last = shownKeys.firstIndex(of: source.key), first < last else { return }
+        let pop = SplitSearchState.Pop(in: nav, origin: origin, source: source.key, to: landing,
+                                       landing: landingKey, returnsToResults: toResults, steps: last - first, revision: routerRevision)
         state.pop = pop
         trackSplitPop(pop, in: split)
         scheduleSplitProjection()
@@ -233,10 +280,26 @@ extension NavigationHost {
               NavigationRules.poppedTop(selected: pop.origin, inspecting: inspectorKey, shownKeys: shownKeys) == pop.source,
               (state.reveal?.revision ?? 0) <= pop.revision else { return }
         let clearing = pop.landing == shownKeys.first
+        let location = pop.returnsToResults ? presenter.session?.runtime.visitLocation(pop.landing) : nil
         lastTransition = "completed"
+        state.followingResultsBack = pop.returnsToResults
         if pop.steps == 1, pop.origin == pop.source { goBack() }
         else { goBack(from: pop.origin, to: pop.landing) }
-        if clearing {
+        state.followingResultsBack = false
+        if pop.returnsToResults {
+            let returned = selectedKey == pop.landing && presenter.session?.runtime.visitLocation(pop.landing) == location
+            if returned {
+                state.resultBase = nil
+                state.reveal = nil
+                state.primaryForeground = true
+                state.collapseToPrimary = split.controller.isCollapsed
+                if !split.controller.isCollapsed && !split.resultsBesidePrimary { split.controller.show(.primary) }
+            } else {
+                if routerRevision != pop.revision { state.resultBase = nil }
+                state.primaryForeground = false
+                state.reveal = .init(revision: routerRevision, activation: nil)
+            }
+        } else if clearing {
             state.primaryForeground = selectedKey == pop.landing
             if !state.primaryForeground { state.reveal = .init(revision: routerRevision, activation: nil) }
         }
@@ -285,6 +348,10 @@ extension NavigationHost {
             state.pop = nil
             followSplitPop(pop, in: split, cancelled: pop.cancelled ?? (pop.navigation.topViewController !== pop.destination))
         }
+        if state.ownerMoving, let search = split.pairedSearch, exposesSearchOwner(search) {
+            state.ownerMoving = false
+        }
+        split.pairedSearch?.restoreActivationAfterPosture()
         resync()
         guard self.split === split, split.searchState === state else { return }
         guard !pendingSync, !state.pending, !splitSearchTransition else {
@@ -296,6 +363,8 @@ extension NavigationHost {
         publishSplitSearch()
         coversChanged()
         presenter.flushPendingFocus()
+        // Moving the results and laying out the bar can still reset the editor's range during resync.
+        if !state.pending { split.pairedSearch?.restoreEditingAfterPosture() }
     }
 
     func publishSplitSearch() {
@@ -307,9 +376,11 @@ extension NavigationHost {
         state.noteContainment(nested: split.nested)
         // UIKit can hide the primary while the inspector is shown. Keep the foreground choice underneath it.
         if split.inspecting == nil {
-            if state.primaryExposed != state.detailExposed {
+            if state.primaryExposed != state.detailExposed,
+               !(split.pairedSearch?.placesResultsInDetail == true && split.pairedSearch?.open == true && !state.primaryExposed) {
                 state.primaryForeground = state.primaryExposed
-            } else if state.detailExposed, state.committed.count > 1, split.pairedSearch?.controller.isActive == false {
+            } else if state.detailExposed, state.committed.count > 1,
+                      split.pairedSearch?.controller.isActive == false, split.pairedSearch?.open == false {
                 state.primaryForeground = false
             }
         }

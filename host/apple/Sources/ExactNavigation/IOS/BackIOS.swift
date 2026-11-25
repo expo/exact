@@ -31,8 +31,8 @@ extension NavigationHost {
                 split.inspectorClosed()
                 return ""
             }
-            if split.searchState.primaryForeground {
-                guard splitPrimaryExposed, search.controller.isActive else { return "the list has no Back action" }
+            if split.searchState.primaryForeground && (splitPrimaryExposed || !split.searchState.detailExposed) {
+                guard splitPrimaryExposed, search.controller.isActive || search.open else { return "the list has no Back action" }
                 search.closeFromAgent()
                 return ""
             }

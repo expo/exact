@@ -763,6 +763,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // @ref LLP 1077 D12 — what a discrete symbol effect plays on.
         "symbolEffectValue" => AttrTarget::Prop(p("symbolEffectValue")),
         "href" | "target" | "keyboardAvoidance" | "searchStyle" => AttrTarget::Prop(p(name)),
+        "searchResultsPlacement" => AttrTarget::Prop(p(name)),
         "disabled" => AttrTarget::Prop(p("disabled")),
         "inert" => AttrTarget::Prop(p("inert")),
         "readonly" => AttrTarget::InvertedBoolProp(p("editable")),

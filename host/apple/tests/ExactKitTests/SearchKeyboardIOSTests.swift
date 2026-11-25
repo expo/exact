@@ -105,6 +105,11 @@ final class SearchKeyboardIOSTests: XCTestCase {
         let floating = SearchClearance.Occupancy(keyboard: CGRect(x: 410, y: 270, width: 180, height: 150))
         XCTAssertEqual(floating.contentBlock(detail, policy: "resizes-content", ignoringKeyboard: false), detail)
         XCTAssertEqual(floating.bottomDepth(in: detail), 0, "an interior keyboard rectangle adds no bottom inset")
+        XCTAssertNil(floating.floatingKeyboard(in: sidebar))
+        XCTAssertEqual(floating.floatingKeyboard(in: detail), floating.keyboard)
+        let straddling = SearchClearance.Occupancy(keyboard: CGRect(x: 240, y: 270, width: 180, height: 150))
+        XCTAssertEqual(straddling.floatingKeyboard(in: sidebar), CGRect(x: 240, y: 270, width: 60, height: 150))
+        XCTAssertEqual(straddling.floatingKeyboard(in: detail), CGRect(x: 300, y: 270, width: 120, height: 150))
         XCTAssertEqual(SearchClearance.Occupancy().bottomDepth(in: sidebar), 0, "the dismissed guide adds no clearance")
 
         let presenter = Presenter()

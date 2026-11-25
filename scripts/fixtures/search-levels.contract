@@ -24,6 +24,10 @@ component App
   state coverSearch = false
   state toolbarSearch = false
   state noAvoidance = false
+  state detailSearch = false
+  state pushResult = false
+  state repeatResult = false
+  state backMode = ""
   state widget = "resizes-content"
   derive target = mode == "ordinary" ? "" : (mode == "alternate" ? "alternate" : "found")
   derive resultsShown = mode == "suggestions" or (query.trim() != "" and mode != "hidden")
@@ -44,6 +48,14 @@ component App
       query = "newer"
     else if url == "/take-query"
       keep = false
+    else if url == "/detail-search"
+      detailSearch = true
+    else if url == "/push-result"
+      pushResult = true
+    else if url == "/repeat-result"
+      repeatResult = true
+    else if ["/back-refuse", "/back-redirect", "/back-normal"].includes(url)
+      backMode = url
     else if url == "/cover-search" or url == "/toolbar-search"
       coverSearch = true
       toolbarSearch = url == "/toolbar-search"
@@ -67,7 +79,12 @@ component App
       nav = open(nav, url)
   action back
     backs = backs + 1
-    nav = back(nav)
+    if backMode == "/back-refuse"
+      nav = select(nav, "unavailable")
+    else if backMode == "/back-redirect"
+      nav = open(nav, "/chapter/c")
+    else
+      nav = back(nav)
   action search(v: string)
     if v == ""
       emptyEdits = emptyEdits + 1
@@ -77,7 +94,12 @@ component App
     if keep
       preventDefault()
   action choose(url: string)
-    nav = open(nav, url)
+    if repeatResult
+      nav = go(nav, url)
+    else
+      nav = pushResult ? push(nav, url) : open(nav, url)
+  action chapter
+    nav = push(nav, "/chapter/c")
   action refuse
     refusedPresses = refusedPresses + 1
     nav = select(nav, "unavailable")
@@ -99,7 +121,10 @@ component App
             column navigationKey=`${e.id}` navigationScroll="books" navigationSplit=(splits ? "auto" : "none") position="absolute" inset=0 display="flex" flex-direction="column" testId="library" pointerdown=resultPointer
               header
                 text (coverSearch ? "" : "Library") role="heading" aria-level=(coverSearch ? 2 : 1)
-                input type="search" id="levels-search" value=query input=search cancel=cancel focus=searchFocus aria-controls=target placeholder="Search" aria-label="Search" testId="search" searchStyle=(toolbarSearch ? "minimized" : "automatic")
+                if detailSearch
+                  input type="search" id="levels-search" value=query input=search cancel=cancel focus=searchFocus aria-controls=target searchResultsPlacement="detail" placeholder="Search" aria-label="Search" testId="search" searchStyle=(toolbarSearch ? "minimized" : "automatic")
+                else
+                  input type="search" id="levels-search" value=query input=search cancel=cancel focus=searchFocus aria-controls=target placeholder="Search" aria-label="Search" testId="search" searchStyle=(toolbarSearch ? "minimized" : "automatic")
               list id="books" testId="books" appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
                 section
                   for id in ["a", "b"] key=id
@@ -143,6 +168,9 @@ component App
                   image "symbol:back"
               scroll flex=1 min-height=0 testId="detail-scroll"
                 text "Reading"
+                if detailSearch and e.name == "book"
+                  button testId="push-chapter" press=chapter
+                    text "Chapter"
                 box tabindex=0 testId="held-contact" min-height=52 pointerup=liftContact press=pressContact
                   text "Hold"
                 box tabindex=0 testId="contact-starts-route" min-height=52 pointerdown=startContact pointerup=liftContact press=pressContact

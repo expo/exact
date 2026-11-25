@@ -62,6 +62,43 @@ fn canonical_type_expr(value: &Expr) -> Option<Expr> {
     }
 }
 
+pub(crate) fn check_search_results_placement(
+    tag: &str,
+    parent: Option<&str>,
+    attrs: &[contract_syntax::Attr],
+) -> Result<(), LowerError> {
+    let Some(placement) = attrs.iter().find(|a| a.name == "searchResultsPlacement") else {
+        return Ok(());
+    };
+    let search = attrs
+        .iter()
+        .rev()
+        .find(|a| a.name == "type")
+        .is_some_and(|a| matches!(&a.value, Expr::Str(kind, _) if kind == "search"));
+    if tag != "input" || parent != Some("header") || !search {
+        return err(
+            "lower-attr-tag",
+            "`searchResultsPlacement` belongs on a header's `input type=\"search\"`",
+            placement.span,
+        );
+    }
+    if !attrs.iter().any(|a| a.name == "aria-controls") {
+        return err(
+            "lower-attr-tag",
+            "`searchResultsPlacement` requires `aria-controls` to name the results root",
+            placement.span,
+        );
+    }
+    if !matches!(&placement.value, Expr::Str(value, _) if value == "detail") {
+        return err(
+            "lower-attr-value",
+            "`searchResultsPlacement` accepts only `detail`. Omit it for list-local results",
+            placement.span,
+        );
+    }
+    Ok(())
+}
+
 /// @ref LLP 1141.002 D1 — `rel` has HTML's meaning on a `link` or `form`,
 /// and on a tab, where `search` names the app's search tab; anywhere else it
 /// is refused. `role="search"` on a tab (a control that names a panel) is

@@ -21,9 +21,14 @@ final class SearchClearance {
             let keys = docked ? keyboard.intersection(port) : .null
             let search = bar.intersection(port)
             let reachesBottom = !search.isNull && search.maxY >= port.maxY - 1
-            let aboveKeys = !search.isNull && docked && bar.maxY <= keyboard.maxY && bar.maxY >= keyboard.minY - bar.height
+            let aboveKeys = !search.isNull && !keys.isNull && bar.maxY <= keyboard.maxY && bar.maxY >= keyboard.minY - bar.height
             let obstruction = reachesBottom || aboveKeys ? keys.union(search) : keys
             return obstruction.isNull ? 0 : max(0, port.maxY - obstruction.minY)
+        }
+
+        func floatingKeyboard(in port: CGRect) -> CGRect? {
+            let overlap = keyboard.intersection(port)
+            return docked || overlap.isEmpty ? nil : overlap
         }
     }
 

@@ -103,9 +103,9 @@ extension NavigationHost {
         }
         #if os(iOS)
         if let root = first.first { split.setSearchOwner(root, children: searchChildIDs(of: root.node)) }
-        split.stageForExpansion = { [weak self, weak split] in
+        split.stageForExpansion = { [weak self, weak split] mode in
             guard let self, let split, self.split === split else { return }
-            split.stageExpansion(committedSplitRoutes, awaitingCommit: split.searchState.pop != nil)
+            split.stageExpansion(committedSplitRoutes, mode: mode, awaitingCommit: split.searchState.pop != nil)
         }
         #endif
         split.listWillBeCovered = { [weak split] in
@@ -153,12 +153,29 @@ extension NavigationHost {
         prepareRoutes(Array(stack.prefix(1)), in: split.list)
         prepareRoutes(Array(stack.dropFirst()), in: split.detail)
         let top = split.detailRoutes.last
-        let changingRoutes = !split.shown.elementsEqual(stack, by: ===)
+        let changingRoutes: Bool
+        #if os(iOS)
+        if split.pairedSearch?.placesResultsInDetail == true {
+            changingRoutes = !split.matchesResultsProjection(stack) || split.searchOwner !== stack.first
+        } else {
+            changingRoutes = !split.shown.elementsEqual(stack, by: ===)
+        }
+        #else
+        changingRoutes = !split.shown.elementsEqual(stack, by: ===)
+        #endif
         // UIKit lays an arriving route out as it is given the stack: a lifted header must have left the layout by then
         if changingRoutes, liftHeld { return true }
         let location = stack.count > 1 ? stack.last.flatMap { split.rule?.locations[$0.node.id] } : nil
         let relocated = location != nil && split.topLocation != nil && location != split.topLocation && stack.last === split.detailRoutes.last
-        guard split.show(stack, animated: animated, relocated: relocated, revealsDetail: reveal) else { return split.moving }
+        guard split.show(stack, animated: animated, relocated: relocated, revealsDetail: reveal) else {
+            #if os(iOS)
+            if split.pairedSearch?.placesResultsInDetail == true {
+                scheduleSplitProjection()
+                return true
+            }
+            #endif
+            return split.moving
+        }
         split.topLocation = location
         if changingRoutes { lastTransition = "idle" }
         // A press that opened a detail may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS)
@@ -463,11 +480,28 @@ extension NavigationHost {
         let modes: [UISplitViewController.DisplayMode: String] = [.secondaryOnly: "secondaryOnly", .oneBesideSecondary: "oneBesideSecondary",
             .oneOverSecondary: "oneOverSecondary", .twoBesideSecondary: "twoBesideSecondary", .twoOverSecondary: "twoOverSecondary",
             .twoDisplaceSecondary: "twoDisplaceSecondary"]
-        return ["installed": true, "collapsed": split.controller.isCollapsed, "nested": split.nested, "displayMode": modes[split.controller.displayMode] ?? "automatic",
+        var observation: [String: Any] = ["installed": true, "collapsed": split.controller.isCollapsed, "nested": split.nested, "displayMode": modes[split.controller.displayMode] ?? "automatic",
                 "listWidth": InspectionValue.r2(split.list.view.bounds.width),
                 "list": split.list.stackRoutes.compactMap { ($0 as? RouteController)?.key }, "detail": split.detailRoutes.map(\.key),
-                "empty": split.detailRoutes.isEmpty, "inspector": split.inspecting.map { [$0.key] } ?? [], "beside": shown.beside.map(\.key), "under": shown.under.map(\.key),
+                "empty": split.detail.topViewController === split.empty, "inspector": split.inspecting.map { [$0.key] } ?? [], "beside": shown.beside.map(\.key), "under": shown.under.map(\.key),
                 "row": (detailRow ?? nil).map { Int($0) } ?? NSNull()]
+        #if os(iOS)
+        if let search = split.pairedSearch, let field = search.field, let results = search.results {
+            let state = split.searchState
+            let covering = modalNavigation != nil || presenter.dialogs.top != nil || split.inspecting != nil
+            let column = results.visible ? (results.coversList ? "primary" : "secondary") : nil
+            let foreground = covering ? "presentation" : state.primaryForeground && state.primaryExposed
+                ? (column == nil ? "primary" : "results") : state.detailExposed ? "secondary" : "primary"
+            observation["search"] = [
+                "field": Int(field.id), "value": field.props["value"] ?? "",
+                "open": search.placesResultsInDetail ? search.open : search.controller.isActive,
+                "active": search.controller.isActive, "root": results.root.map { Int($0.id) } ?? NSNull(),
+                "column": column ?? NSNull(), "covered": results.root != nil && !results.visible,
+                "foreground": foreground,
+            ] as [String: Any]
+        }
+        #endif
+        return observation
     }
     #endif
 

@@ -13,6 +13,7 @@ final class HeaderSearchResults: UIViewController {
     private let mount = PresentationMount()
     private let clearance = SearchClearance()
     private var focusedBeforeChange = false
+    private weak var movingAccessibilityFocus: UIView?
 
     init(host: NavigationHost, owner: RouteController) {
         self.host = host
@@ -46,15 +47,24 @@ final class HeaderSearchResults: UIViewController {
     }
 
     var exposed: Bool {
-        guard let owner, let search = owner.search, search.controller.isActive,
-              search.controller.showsSearchResultsController, let view = viewIfLoaded,
+        guard let owner, let search = owner.search, let host,
+              authoredVisible, let view = viewIfLoaded,
               view.window != nil, !view.bounds.isEmpty else { return false }
+        if search.placesResultsInDetail, (!host.splitPrimaryExposed || host.presenter.dialogs.top != nil) { return false }
+        if let split = host.split, parent === split.detail {
+            guard search.open, split.detail.topViewController === self,
+                  split.resultsBesidePrimary else { return false }
+        } else {
+            guard search.controller.isActive, search.controller.showsSearchResultsController else { return false }
+        }
         return sequence(first: view, next: \.superview).allSatisfy { !$0.isHidden && $0.alpha > 0.01 }
     }
 
     private func visibilityChanged() {
-        if let host, visible != (exposed && host.splitPrimaryExposed) { host.scheduleSplitProjection() }
+        if visible != (exposed && host?.splitPrimaryExposed == true) { host?.scheduleSplitProjection() }
     }
+
+    var coversList: Bool { visible && parent !== host?.split?.detail }
 
     var block: (root: NodeView, view: UIView, block: CGRect, shown: Bool)? {
         guard let root, let owner else { return nil }
@@ -108,11 +118,67 @@ final class HeaderSearchResults: UIViewController {
     }
 
     func update(_ search: HeaderSearch) {
-        let shown = search.controller.isActive && root.map {
-            $0.style["display"]?.string != "none" && $0.style["visibility"]?.string != "hidden"
-        } == true
+        let shown = search.controller.isActive && authoredVisible &&
+            (!search.placesResultsInDetail || isInSearchContainer(search))
         if search.controller.showsSearchResultsController != shown { search.controller.showsSearchResultsController = shown }
+        if search.placesResultsInDetail, let split = host?.split, split.pairedSearch === search, split.needsResultsProjection {
+            host?.scheduleSplitProjection()
+        }
         visibilityChanged()
+    }
+
+    var authoredVisible: Bool {
+        root.map { $0.style["display"]?.string != "none" && $0.style["visibility"]?.string != "hidden" } == true
+    }
+
+    func isInSearchContainer(_ search: HeaderSearch) -> Bool {
+        guard let container = search.resultsContainer else { return true }
+        return parent === container
+    }
+
+    var isDetached: Bool { parent == nil && navigationController == nil && viewIfLoaded?.superview == nil }
+
+    /// Takes the view out of a stack's wrapper that no longer holds the controller: UIKit leaves it there when the
+    /// stack drops the results off screen, and with no parent left nothing else removes it
+    func releaseOrphanedView() {
+        guard parent == nil, navigationController == nil, transitionCoordinator == nil,
+              let view = viewIfLoaded, view.superview != nil, view.window == nil else { return }
+        view.removeFromSuperview()
+    }
+
+    func rememberAccessibilityFocus() {
+        guard UIAccessibility.isVoiceOverRunning, let view = viewIfLoaded,
+              let focused = UIAccessibility.focusedElement(using: .notificationVoiceOver) as? UIView,
+              focused.isDescendant(of: view) else { return }
+        movingAccessibilityFocus = focused
+    }
+
+    func moveIntoSearchContainer(_ search: HeaderSearch) -> Bool {
+        guard let container = search.resultsContainer, isDetached, container.transitionCoordinator == nil,
+              !container.children.contains(where: { $0 === self }) else { return false }
+        container.addChild(self)
+        view.frame = container.view.bounds
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        container.view.addSubview(view)
+        didMove(toParent: container)
+        return true
+    }
+
+    func leaveSearchContainer(_ search: HeaderSearch) -> Bool {
+        guard let container = search.resultsContainer, parent === container else { return true }
+        guard transitionCoordinator == nil else { return false }
+        rememberAccessibilityFocus()
+        willMove(toParent: nil)
+        view.removeFromSuperview()
+        removeFromParent()
+        return true
+    }
+
+    func prepareDetailBar() {
+        if navigationItem.title == nil {
+            navigationItem.title = NSLocalizedString("Search Results", comment: "Back landing for a result opened from split search")
+            navigationItem.largeTitleDisplayMode = .never
+        }
     }
 
     /// Publish coverage together with the placed block once UIKit settles.
@@ -120,11 +186,31 @@ final class HeaderSearchResults: UIViewController {
         guard let host, let owner else { return }
         let wasVisible = visible
         visible = exposed && host.splitPrimaryExposed
-        if visible {
+        let inDetail = parent === host.split?.detail
+        if !visible {
+            covered = root.map { [$0] } ?? []
+        } else if !inDetail {
             let header = HeaderShape.bar(of: owner.node)?.header
             covered = host.searchBody(of: owner.node).filter { $0 !== root && $0 !== header }
         } else {
-            covered = root.map { [$0] } ?? []
+            covered = []
+        }
+        // The router can still select the detail visit while the results occupy its column.
+        if let split = host.split, split.detail.topViewController === self, let retained = split.projectedDetailTop {
+            covered.append(retained.node)
+        }
+        if owner.search?.placesResultsInDetail == true {
+            viewIfLoaded?.accessibilityElementsHidden = !visible
+            viewIfLoaded?.isUserInteractionEnabled = visible
+        }
+        if let focused = movingAccessibilityFocus {
+            movingAccessibilityFocus = nil
+            if visible, focused.window != nil, focused.isDescendant(of: view),
+               UIAccessibility.focusedElement(using: .notificationVoiceOver) as? UIView !== focused {
+                UIAccessibility.post(notification: .layoutChanged, argument: focused)
+            } else if !visible {
+                owner.search?.returnAccessibilityFocus()
+            }
         }
         if wasVisible && !visible, focusedBeforeChange || containsFocus {
             owner.search?.returnAccessibilityFocus()
@@ -137,7 +223,15 @@ final class HeaderSearchResults: UIViewController {
         guard let host, let root, let view = viewIfLoaded, exposed,
               let occupancy = host.searchOccupancy(in: view) else { return }
         let policy = host.presenter.keyboardPolicy
-        let safe = view.bounds.inset(by: view.safeAreaInsets)
+        var safe = view.bounds.inset(by: view.safeAreaInsets)
+        if let split = host.split, parent === split.detail, let sidebar = split.list.viewIfLoaded {
+            // A beside sidebar may cover part of the detail controller's view.
+            let overlap = safe.intersection(view.convert(sidebar.bounds, from: sidebar))
+            if !overlap.isEmpty {
+                if overlap.minX <= safe.minX { safe = CGRect(x: overlap.maxX, y: safe.minY, width: safe.maxX - overlap.maxX, height: safe.height) }
+                else if overlap.maxX >= safe.maxX { safe.size.width = overlap.minX - safe.minX }
+            }
+        }
         var frame = occupancy.contentBlock(safe, policy: policy, ignoringKeyboard: SearchClearance.ignoresKeyboard(root))
         frame.size.height -= clearance.fit(root, in: view, allocation: frame, occupancy: occupancy, policy: policy, enabled: true)
         if mount.frame != frame { mount.frame = frame }

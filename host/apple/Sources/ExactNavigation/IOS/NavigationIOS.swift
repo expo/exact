@@ -651,7 +651,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                     tab.install(makeTabStack(panel.id, base(p.wanted[index]), navigation: tab.navigation))
                 }
             }
-            split = tabSplits[tabs.panels[p.at].id]
+            let nextSplit = tabSplits[tabs.panels[p.at].id]
+            #if os(iOS)
+            if split !== nextSplit { split?.pairedSearch?.prepareCoverMove() }
+            #endif
+            split = nextSplit
             if let split {
                 if let answer = splitRule(p.chosen.first) {
                     split.rule = answer
@@ -687,20 +691,24 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         if let split, let search = split.pairedSearch {
             let stack = Array(wanted[parts[0]])
             notePairedCommit(in: split, stack: stack, presented: inspecting != nil || parts.count > 1)
-            if splitSearchTransition || split.searchState.pop != nil || presenter.modalHost.inTransition {
+            if splitSearchTransition || split.searchState.pop != nil || split.searchState.followingResultsBack || presenter.modalHost.inTransition {
                 projectionHeld = true
                 owePress()
                 scheduleSplitProjection()
                 return
             }
-            if split.searchState.reveal?.activation == .primary, split.searchState.reveal?.revision == routerRevision, search.controller.isActive {
+            if split.searchState.reveal?.activation == .primary, split.searchState.reveal?.revision == routerRevision,
+               search.controller.isActive || search.open {
                 search.close()
                 projectionHeld = true
                 owePress()
                 scheduleSplitProjection()
                 return
             }
-            if (inspecting != nil || parts.count > 1) && presenter.modalHost.routes.isEmpty { split.searchState.beginOwnerMove() }
+            if (inspecting != nil || parts.count > 1) && presenter.modalHost.routes.isEmpty {
+                search.prepareCoverMove()
+                split.searchState.beginOwnerMove()
+            }
         }
         #endif
         guard !changing, !presenter.modalHost.inTransition, covered?.presenting != true else {
@@ -746,12 +754,19 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                     let reveals = state.reveal.map { wantedStack.count > 1 && $0.revision == routerRevision } ?? false
                     if reveals {
                         state.primaryForeground = false
-                        if split.controller.isCollapsed && !split.nested { state.beginOwnerMove() }
+                        search.discardPostureEditing()
+                        if split.controller.isCollapsed && !split.nested {
+                            search.prepareCoverMove()
+                            state.beginOwnerMove()
+                        }
                     }
                     if syncSplit(split, wantedStack, animated: animated, reveal: reveals) { held = true }
                     else { state.reveal = nil }
                     if reveals && !split.controller.isCollapsed && split.showsList && search.editor.isFirstResponder { search.resign() }
-                    if reveals || splitSearchTransition { scheduleSplitProjection() }
+                    if reveals || splitSearchTransition
+                        || (!state.draining && search.hasDeferredPostureRestore && exposesSearchOwner(search)) {
+                        scheduleSplitProjection()
+                    }
                     continue
                 }
                 #endif
@@ -1121,7 +1136,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             return owner?.view.accessibilityIdentifier
         }()
         let routes: [UIViewController]? = modalNavigation == nil ? split?.shown : nil
-        let stack = (routes ?? navigation?.viewControllers ?? primaryPlain?.stackRoutes ?? []).compactMap { ($0 as? RouteController)?.key }
+        var stack = (routes ?? navigation?.viewControllers ?? primaryPlain?.stackRoutes ?? []).compactMap { ($0 as? RouteController)?.key }
+        #if os(iOS)
+        if pairedSearch?.placesResultsInDetail == true { stack = shownKeys }
+        #endif
         let transition: [String: Any] = ["interactive": navigation?.transitionCoordinator?.isInteractive ?? false,
                                          "phase": changing || pendingSync || presenter.modalHost.inTransition ? "in-progress" : lastTransition]
         let root = container ?? presenter.root.subviews.first as? NodeView

@@ -384,7 +384,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             if paired, let occupancy, let split = host.split {
                 let allocation = (block ?? presenter.owners.block(in: view)).intersection(view.bounds.inset(by: view.safeAreaInsets))
                 let live = navigationController === split.list
-                    ? host.splitPrimaryExposed && split.pairedSearch?.results?.visible != true
+                    ? host.splitPrimaryExposed && split.pairedSearch?.results?.coversList != true
                     : !host.isInactiveRoute(containing: node)
                 searchBottomClearance = searchClearance.fit(node, in: view, allocation: allocation, occupancy: occupancy,
                                                             policy: presenter.keyboardPolicy, enabled: live, fallback: contentViewport)

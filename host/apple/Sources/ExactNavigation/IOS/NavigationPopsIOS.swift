@@ -42,7 +42,10 @@ extension NavigationHost {
     }
 
     private func inFlight(_ route: RouteController) -> Bool {
-        if let split, split.paired, let last = route.lastStack, split.holds(last) { return false }
+        if let last = route.lastStack {
+            if let split, split.paired, split.holds(last) { return false }
+            if tabSplits.values.contains(where: { $0.paired && $0.holds(last) }) { return false }
+        }
         return route.held && !route.inStack && route.lastStack.map { stacks[ObjectIdentifier($0)] != nil } == true
     }
 
@@ -107,6 +110,14 @@ extension NavigationHost {
                   (holder as? UINavigationController)?.transitionCoordinator == nil, !routesInFlight(wanted) else { continue }
             // A split shows its columns' routes as one stack (`SplitIOS.shown`)
             let columns = tabPanels.isEmpty ? split : tabSplits[tabPanels[index]]
+            #if os(iOS)
+            if let columns, columns.pairedSearch?.placesResultsInDetail == true {
+                if !columns.matchesResultsProjection(wanted) || !columns.list.stackRoutes.prefix(1).elementsEqual(wanted.prefix(1), by: { $0 === $1 }) {
+                    return "the split's search projection differs from its committed columns"
+                }
+                continue
+            }
+            #endif
             let held: [UIViewController]
             if let columns, columns.paired {
                 held = Array(columns.list.stackRoutes.prefix(1)) + columns.detailRoutes

@@ -45,7 +45,79 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private(set) weak var searchOwner: RouteController?
     var pairedSearch: HeaderSearch? { searchOwner?.search.flatMap { $0.paired ? $0 : nil } }
     var searchProjectionEpoch: UInt64 { searchState.projectionEpoch }
-    var stageForExpansion: () -> Void = {}
+    var stageForExpansion: (UISplitViewController.DisplayMode) -> Void = { _ in }
+    var resultsBesidePrimary: Bool { !controller.isCollapsed && Self.beside(controller.displayMode) }
+    var needsResultsProjection: Bool { !matchesResultsProjection(stack) }
+    private var releasingResults = false
+
+    var searchInTransition: Bool {
+        guard let search = pairedSearch else { return false }
+        return moving || writing || columnsAboutToMove || holdsResultsTransfer(search)
+    }
+
+    private func holdsResultsTransfer(_ search: HeaderSearch) -> Bool {
+        releasingResults || controller.transitionCoordinator != nil
+            || list.transitionCoordinator != nil || detail.transitionCoordinator != nil
+            || search.presenting || search.dismissing || search.controller.transitionCoordinator != nil
+    }
+
+    func matchesResultsProjection(_ stack: [RouteController]) -> Bool {
+        guard let search = pairedSearch, search.placesResultsInDetail, let results = search.results else { return true }
+        let beside = resultsBesidePrimary
+        let next = detailProjection(stack, expanded: !controller.isCollapsed, beside: beside)
+        let usesDetail = next.contains { $0 === results }
+        let usesContainer = !usesDetail && (controller.isCollapsed || overlaysDetail)
+        return Self.same(detail.viewControllers, next) && usesContainer == results.isInSearchContainer(search)
+    }
+
+    private static func beside(_ mode: UISplitViewController.DisplayMode) -> Bool {
+        [.oneBesideSecondary, .twoBesideSecondary, .twoDisplaceSecondary].contains(mode)
+    }
+
+    private func detailProjection(_ stack: [RouteController], expanded: Bool, beside: Bool) -> [UIViewController] {
+        let routes = Array(stack.dropFirst())
+        guard let search = pairedSearch, search.placesResultsInDetail, search.open, let results = search.results else {
+            return routes.isEmpty ? [empty] : routes
+        }
+        if let base = searchState.resultBase, let index = routes.firstIndex(where: { $0.key == base }) {
+            let branch = Array(routes[index...])
+            return expanded ? [results] + branch : branch
+        }
+        if beside, searchState.primaryForeground, results.authoredVisible { return [results] }
+        return routes.isEmpty ? [empty] : routes
+    }
+
+    private func prepareResults(for next: [UIViewController]) -> Bool {
+        guard let search = pairedSearch, search.placesResultsInDetail, let results = search.results else { return true }
+        guard !holdsResultsTransfer(search) else { return false }
+        guard next.contains(where: { $0 === results }), !detail.viewControllers.contains(where: { $0 === results }) else { return true }
+        guard results.leaveSearchContainer(search), !holdsResultsTransfer(search), releaseResults(results, in: search) else { return false }
+        results.prepareDetailBar()
+        return true
+    }
+
+    /// Takes back a view of the results UIKit left behind and says whether UIKit holds the results no more.
+    private func releaseResults(_ results: HeaderSearchResults, in search: HeaderSearch) -> Bool {
+        results.releaseOrphanedView()
+        return results.isDetached && results.transitionCoordinator == nil
+            && !detail.viewControllers.contains { $0 === results } && !detail.children.contains { $0 === results }
+            && search.resultsContainer?.children.contains(where: { $0 === results }) == false
+    }
+
+    private func placeCompactResults(_ compact: Bool) -> Bool {
+        guard let search = pairedSearch, search.placesResultsInDetail, let results = search.results else { return true }
+        let usesContainer = compact && !detail.viewControllers.contains { $0 === results }
+        if usesContainer != results.isInSearchContainer(search) {
+            guard !holdsResultsTransfer(search) else { return false }
+            if usesContainer {
+                guard releaseResults(results, in: search), results.moveIntoSearchContainer(search) else { return false }
+            } else {
+                guard results.leaveSearchContainer(search) else { return false }
+            }
+        }
+        results.update(search)
+        return true
+    }
     #endif
     var paired: Bool {
         #if os(iOS)
@@ -176,16 +248,25 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         searchState.children = children
     }
 
-    func stageExpansion(_ stack: [RouteController], awaitingCommit: Bool = false) {
-        let routes = Array(stack.dropFirst())
-        let next: [UIViewController] = routes.isEmpty ? [empty] : routes
+    func stageExpansion(_ stack: [RouteController], mode: UISplitViewController.DisplayMode = .oneBesideSecondary, awaitingCommit: Bool = false) {
+        stageDetail(stack, expanded: true, beside: Self.beside(mode), awaitingCommit: awaitingCommit)
+    }
+
+    private func stageDetail(_ stack: [RouteController], expanded: Bool, beside: Bool, awaitingCommit: Bool) {
+        let next = detailProjection(stack, expanded: expanded, beside: beside)
+        if pairedSearch?.placesResultsInDetail == true {
+            if awaitingCommit || detail.topViewController !== next.last { searchState.concealDetail(in: detail.view) }
+            return
+        }
         if awaitingCommit || writing || list.transitionCoordinator != nil || detail.transitionCoordinator != nil {
             searchState.concealDetail(in: detail.view)
-        } else if !Self.same(detail.viewControllers, next) {
-            writing = true
-            defer { writing = false }
-            keepTransition(routes)
-            if !write(next, detail, false) { searchState.concealDetail(in: detail.view) }
+            return
+        }
+        writing = true
+        defer { writing = false }
+        if !Self.same(detail.viewControllers, next) {
+            keepTransition(next.compactMap { $0 as? RouteController })
+            if !write(next, detail, false) { searchState.concealDetail(in: detail.view); return }
         }
     }
 
@@ -379,7 +460,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// N1 only while N1 holds just one route: with more, it would take them
     /// all, bypassing a refused Back on the top one.
     func popDepth(_ nav: UINavigationController) -> Int? {
-        if nav === detail { return showsDetail ? detailRoutes.count : 0 }
+        if nav === detail { return showsDetail ? detail.viewControllers.count : 0 }
         guard nav === list else { return nil }
         return nested && detailRoutes.count == 1 ? 2 : 0
     }
@@ -388,7 +469,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// routes that Back goes through: collapsed, N0's over the whole stack;
     /// expanded, N1's over its own routes.
     var backBar: (nav: UINavigationController, depth: Int) {
-        controller.isCollapsed && !moving ? (list, shown.count) : (detail, detailRoutes.count)
+        controller.isCollapsed && !moving ? (list, shown.count) : (detail, detail.viewControllers.count)
     }
 
     /// How UIKit shows the columns against the stack's top while nothing is
@@ -429,6 +510,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         // set from the split's state before the move, and UIKit, finding
         // them changed, pushed the detail twice and asserted.
         if laysOutItself { return false }
+        #if os(iOS)
+        if pairedSearch?.placesResultsInDetail == true, searchInTransition { return false }
+        #endif
         writing = true
         defer { writing = false }
         guard let root = stack.first else {
@@ -441,8 +525,6 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         // Compare with the installed columns so a request kept during a move still reveals its detail
         let moved = relocated || list.stackRoutes.first !== root || !current.elementsEqual(rest, by: ===)
         let hadDetail = !current.isEmpty
-        let within = !current.isEmpty && !rest.isEmpty
-            && NavigationRules.isPushOrPop(from: current.map(ObjectIdentifier.init), to: rest.map(ObjectIdentifier.init))
         let column: [UIViewController] = [root] + (nested ? [detail] : [])
         if !Self.same(list.viewControllers, column), !write(column, list, false) { return false }
         let collapsed = controller.isCollapsed
@@ -457,22 +539,56 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         if collapsed, nested, showsPrimary {
             // Let UIKit pop nested N1 with its routes and zoom still in place
             reveal(.primary, animated: animated)
+            #if os(iOS)
+            if needsResultsProjection { return false }
+            #endif
             return true
         }
+        #if os(iOS)
+        let next = detailProjection(stack, expanded: !collapsed, beside: resultsBesidePrimary)
+        guard prepareResults(for: next) else { return false }
+        #else
         let next: [UIViewController] = rest.isEmpty ? [empty] : rest
+        #endif
+        let projected = next.compactMap { $0 as? RouteController }
         let writingDetail = !Self.same(detail.viewControllers, next)
-        if !collapsed || !rest.isEmpty || writingDetail { keepTransition(rest) }
+        if !collapsed || !projected.isEmpty || writingDetail { keepTransition(projected) }
         if writingDetail {
             // Animate within N1 when it is nested or expanded. Expanded, a replacement over the
             // same base arrives as a push and a replacement of the base swaps in place.
-            let arrives = !current.isEmpty && !current.contains { $0 === rest.last }
+            let arrives = !current.isEmpty && !current.contains { $0 === projected.last }
+            let within = !current.isEmpty && !projected.isEmpty
+                && NavigationRules.isPushOrPop(from: current.map(ObjectIdentifier.init), to: projected.map(ObjectIdentifier.init))
+            #if os(iOS)
+            let choosingResult = detail.topViewController is HeaderSearchResults && next.count > 1
+            #else
+            let choosingResult = false
+            #endif
             let movesWithinDetail = collapsed ? nested && (within || arrives)
-                : within || (arrives && rest.count > 1 && current.first === rest.first)
-            if movesWithinDetail, let top = rest.last, !current.contains(where: { $0 === top }), collapsed || rest.count > 1 {
-                willPush(top, rest.count > 1 ? rest[rest.count - 2] : root)
+                : within || (arrives && projected.count > 1 && current.first === projected.first)
+                    || choosingResult
+            if movesWithinDetail, let top = projected.last, !current.contains(where: { $0 === top }), collapsed || projected.count > 1 {
+                willPush(top, projected.count > 1 ? projected[projected.count - 2] : root)
             }
-            guard write(next, detail, animated && movesWithinDetail) else { return false }
+            #if os(iOS)
+            let departingResults = detail.viewControllers.compactMap { $0 as? HeaderSearchResults }
+                .first { result in !next.contains { $0 === result } }
+            departingResults?.rememberAccessibilityFocus()
+            #endif
+            let installed = write(next, detail, animated && movesWithinDetail)
+            #if os(iOS)
+            if departingResults != nil {
+                // Let the stack write unwind before the projection checks containment again.
+                releasingResults = true
+                DispatchQueue.main.async { [weak self] in self?.releasingResults = false }
+                return false
+            }
+            #endif
+            guard installed else { return false }
         }
+        #if os(iOS)
+        guard placeCompactResults(collapsed || overlaysDetail) else { return false }
+        #endif
         if collapsed {
             // UIKit animates the push of N1 itself when it is outside N0
             if !rest.isEmpty, !nested, !paired || revealDetail { reveal(.secondary, animated: animated) }
@@ -542,8 +658,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         #endif
         #if os(iOS)
         if paired {
+            pairedSearch?.preparePostureMove()
             searchState.beginOwnerMove()
-            searchState.collapseToPrimary = detailRoutes.isEmpty || searchState.primaryForeground
+            searchState.collapseToPrimary = projectedDetailTop == nil || searchState.primaryForeground
+            if pairedSearch?.placesResultsInDetail == true {
+                stageDetail(searchState.committed.isEmpty ? stack : searchState.committed,
+                            expanded: false, beside: false, awaitingCommit: searchState.pop != nil)
+            }
             changed()
             return searchState.collapseToPrimary ? .primary : .secondary
         }
@@ -559,11 +680,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         columnsWillChange()
         #if os(iOS)
         if paired {
+            pairedSearch?.preparePostureMove()
             searchState.collapseToPrimary = false
             searchState.beginOwnerMove()
-            stageForExpansion()
+            let exposePrimary = searchState.primaryForeground || searchState.resultBase != nil
+            let mode: UISplitViewController.DisplayMode = exposePrimary && proposedDisplayMode == .secondaryOnly
+                ? .oneOverSecondary : proposedDisplayMode
+            stageForExpansion(mode)
             changed()
-            if searchState.primaryForeground && proposedDisplayMode == .secondaryOnly { return .oneOverSecondary }
+            return mode
         }
         #endif
         return proposedDisplayMode
@@ -581,7 +706,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     func splitViewControllerDidExpand(_ svc: UISplitViewController) { settle() }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
         #if os(iOS)
-        if paired { searchState.beginOwnerMove() }
+        if paired {
+            pairedSearch?.preparePostureMove()
+            searchState.beginOwnerMove()
+        }
         #endif
         if let coordinator = svc.transitionCoordinator { holdLayout(until: coordinator) }
         DispatchQueue.main.async { [weak self] in self?.changed() }

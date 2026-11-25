@@ -251,7 +251,16 @@ final class SearchLevelsIOSTests: XCTestCase {
 
     func testLastNestedResultClearsTheNativeKeyboardAndBar() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents search and its keyboard in a window scene") }
-        let fixture = try boot(fullScreen: true)
+        try nestedResultsClearKeyboard(regular: false)
+    }
+
+    func testDetailResultsClearTheNativeKeyboardInTheirOwnColumn() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents search and its keyboard in a window scene") }
+        try nestedResultsClearKeyboard(regular: true)
+    }
+
+    private func nestedResultsClearKeyboard(regular: Bool) throws {
+        let fixture = try boot(regular: regular, fullScreen: !regular, detailSearch: regular)
         let window = try XCTUnwrap(window)
         try fixture.navigate("/cover-search")
         try fixture.navigate("/clearance")
@@ -261,6 +270,10 @@ final class SearchLevelsIOSTests: XCTestCase {
         fixture.settle("the real keyboard and search bar are in place")
 
         let results = try XCTUnwrap(fixture.search.results)
+        if regular {
+            XCTAssertTrue(results.parent === fixture.split.detail)
+            XCTAssertFalse(fixture.search.controller.showsSearchResultsController)
+        }
         let outer = try XCTUnwrap(try fixture.node("clearance-outer").scrollView)
         let inner = try XCTUnwrap(try fixture.node("clearance-inner").scrollView)
         let last = try fixture.node("clearance-row-23")
@@ -328,6 +341,206 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertTrue(fixture.search.bindEditor().isFirstResponder)
     }
 
+    func testDetailResultsTransferThroughBrowsingEditingAndChosenPostures() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        let fixture = try boot(regular: true, detailSearch: true)
+        let results = try XCTUnwrap(fixture.search.results)
+        let container = try XCTUnwrap(fixture.search.resultsContainer)
+        let root = try fixture.node("results")
+        let books = try fixture.node("books")
+        try fixture.navigate("/book/b")
+        let retained = try XCTUnwrap(fixture.split.detail.topViewController as? RouteController)
+        try fixture.openQuery("Fuji")
+        try fixture.scrollResults(to: 18)
+        let offset = try fixture.resultsOffset()
+        func browseInDetail() throws {
+            XCTAssertTrue(fixture.split.detail.topViewController === results, fixture.searchFacts)
+            XCTAssertTrue(results.parent === fixture.split.detail)
+            XCTAssertTrue(results.root === root)
+            XCTAssertTrue(results.visible)
+            XCTAssertFalse(fixture.search.controller.showsSearchResultsController)
+            XCTAssertFalse(try fixture.inactive(books))
+            XCTAssertFalse(books.accessibilityElementsHidden)
+            XCTAssertFalse(root.accessibilityElementsHidden)
+            XCTAssertTrue(try fixture.inactive(retained.node))
+            XCTAssertEqual(try fixture.resultsOffset(), offset, accuracy: 1)
+        }
+        try browseInDetail()
+        let editor = fixture.search.bindEditor()
+        if let start = editor.position(from: editor.beginningOfDocument, offset: 1),
+           let end = editor.position(from: start, offset: 2) {
+            editor.selectedTextRange = editor.textRange(from: start, to: end)
+        }
+        func move(regular: Bool) {
+            resize(regular: regular)
+            waitFor("UIKit changes the split's width class") { fixture.split.controller.isCollapsed != regular }
+            fixture.settle("the column handoff completes")
+        }
+
+        move(regular: false)
+        XCTAssertTrue(results.parent === container)
+        XCTAssertTrue(fixture.split.detail.topViewController === retained)
+        let compactEditor = fixture.search.bindEditor()
+        XCTAssertTrue(compactEditor.isFirstResponder)
+        XCTAssertEqual(compactEditor.selectedTextRange.flatMap { compactEditor.text(in: $0) }, "uj")
+        XCTAssertTrue(try fixture.inactive(books))
+        XCTAssertTrue(books.accessibilityElementsHidden)
+        XCTAssertEqual(try fixture.resultsOffset(), offset, accuracy: 1)
+        move(regular: true)
+        try browseInDetail()
+        let movedEditor = fixture.search.bindEditor()
+        XCTAssertTrue(movedEditor.isFirstResponder)
+        XCTAssertEqual(movedEditor.selectedTextRange.flatMap { movedEditor.text(in: $0) }, "uj")
+        XCTAssertEqual(try fixture.value(), "Fuji")
+        XCTAssertEqual(fixture.count("cancelCount"), 0)
+        XCTAssertEqual(fixture.count("emptyEdits"), 0)
+
+        fixture.search.resign()
+        fixture.settle("browsing without a keyboard")
+        move(regular: false)
+        XCTAssertTrue(results.parent === container)
+        XCTAssertFalse(fixture.search.bindEditor().isFirstResponder)
+        move(regular: true)
+        try browseInDetail()
+        XCTAssertFalse(fixture.search.bindEditor().isFirstResponder)
+        try fixture.navigate("/hidden")
+        XCTAssertFalse(results.visible)
+        XCTAssertTrue(fixture.split.detail.topViewController === retained)
+        move(regular: false)
+        XCTAssertFalse(results.visible)
+        XCTAssertTrue(fixture.split.detail.topViewController === retained)
+        move(regular: true)
+        try fixture.navigate("/normal")
+        try browseInDetail()
+
+        try fixture.tap("result-a")
+        fixture.settle("the result covers the results")
+        let chosen = try XCTUnwrap(fixture.split.detail.topViewController as? RouteController)
+        XCTAssertTrue(fixture.split.detail.viewControllers.first === results)
+        XCTAssertFalse(results.visible)
+        XCTAssertTrue(results.view.accessibilityElementsHidden)
+        move(regular: false)
+        XCTAssertTrue(fixture.split.list.topViewController === fixture.split.detail)
+        XCTAssertTrue(fixture.split.detail.topViewController === chosen)
+        XCTAssertTrue(results.parent === container)
+        move(regular: true)
+        XCTAssertTrue(fixture.split.detail.topViewController === chosen)
+        XCTAssertTrue(fixture.split.detail.viewControllers.first === results)
+        XCTAssertFalse(fixture.search.bindEditor().isFirstResponder)
+        XCTAssertEqual(fixture.host.shownKeys, [fixture.list.key, chosen.key])
+        XCTAssertEqual(fixture.count("backs"), 0)
+        XCTAssertEqual(fixture.count("cancelCount"), 0)
+    }
+
+    func testAResultChosenFoldedLiesOverTheResultsOnceTheSplitExpands() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        let fixture = try boot(fullScreen: true, detailSearch: true)
+        let results = try XCTUnwrap(fixture.search.results)
+        try fixture.openQuery("Fuji")
+        try fixture.tap("result-a")
+        fixture.settle("the result is pushed over Home's results")
+        let chosen = try XCTUnwrap(fixture.host.shownKeys.last)
+        resize(regular: true)
+        waitFor("UIKit expands the split") { !fixture.split.controller.isCollapsed }
+        fixture.settle("the column handoff completes")
+        XCTAssertEqual((fixture.split.detail.topViewController as? RouteController)?.key, chosen, fixture.searchFacts)
+        XCTAssertTrue(fixture.split.detail.viewControllers.first === results, fixture.searchFacts)
+        XCTAssertEqual(fixture.split.detail.viewControllers.count, 2, fixture.searchFacts)
+    }
+
+    func testDetailResultsBackUsesTheVisitBeneathTheResultBranch() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        let fixture = try boot(regular: true, detailSearch: true)
+        let results = try XCTUnwrap(fixture.search.results)
+        try fixture.navigate("/book/b")
+        let retained = try XCTUnwrap(fixture.split.detail.topViewController as? RouteController)
+        try fixture.navigate("/push-result")
+        try fixture.openQuery("Fuji")
+        try fixture.tap("result-a")
+        fixture.settle("the result is above its Back landing")
+        let chosen = try XCTUnwrap(fixture.split.detail.topViewController as? RouteController)
+        XCTAssertTrue(fixture.split.detail.viewControllers.first === results)
+        XCTAssertEqual(fixture.host.shownKeys, [fixture.list.key, retained.key, chosen.key])
+
+        try fixture.navigate("/repeat-result")
+        try fixture.openQuery("Fuji")
+        try fixture.tap("result-a")
+        fixture.settle("reselecting the same visit restores its search landing")
+        XCTAssertEqual(fixture.host.shownKeys, [fixture.list.key, retained.key, chosen.key])
+        XCTAssertEqual(fixture.split.detail.viewControllers.count, 2)
+        XCTAssertTrue(fixture.split.detail.topViewController === chosen)
+
+        try fixture.navigate("/back-refuse")
+        XCTAssertEqual(fixture.host.agentBack(), "")
+        fixture.settle("refused Back restores the chosen controller")
+        XCTAssertTrue(fixture.split.detail.topViewController === chosen)
+        XCTAssertTrue(fixture.split.detail.viewControllers.first === results)
+        XCTAssertEqual(fixture.count("backs"), 1)
+        try fixture.navigate("/back-normal")
+        XCTAssertFalse(try fixture.inactive(chosen.node))
+        try fixture.tap("push-chapter", in: chosen.node)
+        fixture.settle("the branch contains the result and its child")
+        XCTAssertEqual(fixture.split.detail.viewControllers.count, 3)
+        XCTAssertEqual(fixture.host.agentBack(), "")
+        fixture.settle("one Back from the child")
+        XCTAssertTrue(fixture.split.detail.topViewController === chosen)
+        XCTAssertEqual(fixture.count("backs"), 2)
+        XCTAssertEqual(fixture.host.agentBack(), "")
+        fixture.settle("one Back from the chosen root")
+        XCTAssertTrue(fixture.split.detail.topViewController === results)
+        XCTAssertEqual(fixture.host.shownKeys, [fixture.list.key, retained.key])
+        XCTAssertEqual(fixture.count("backs"), 3)
+        XCTAssertEqual(fixture.host.agentBack(), "")
+        fixture.settle("Close restores the retained controller")
+        XCTAssertTrue(fixture.split.detail.topViewController === retained)
+        XCTAssertFalse(try fixture.inactive(retained.node))
+        XCTAssertEqual(try fixture.value(), "Fuji")
+        XCTAssertEqual(fixture.count("cancelCount"), 1)
+        XCTAssertEqual(fixture.count("emptyEdits"), 0)
+    }
+
+    func testDetailResultsBackRedirectAndOrdinarySelection() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        let fixture = try boot(regular: true, detailSearch: true)
+        try fixture.openQuery("Fuji")
+        try fixture.tap("row-b")
+        fixture.settle("the sidebar selects Book B and closes search")
+        XCTAssertFalse(fixture.search.open)
+        XCTAssertEqual(fixture.count("cancelCount"), 0)
+        XCTAssertEqual(try fixture.value(), "Fuji")
+        try fixture.openQuery("Fuji")
+        try fixture.tap("result-a")
+        fixture.settle("the result replaces Book B")
+        try fixture.navigate("/back-redirect")
+        XCTAssertEqual(fixture.host.agentBack(), "")
+        fixture.settle("Back projects the redirect")
+        XCTAssertEqual(fixture.split.detailRoutes.last?.node.props["testId"], "chapter-c")
+        XCTAssertFalse(try XCTUnwrap(fixture.search.results).visible)
+        XCTAssertEqual(fixture.count("backs"), 1)
+    }
+
+    func testDetailSearchKeepsItsControllerAsTheResultsReferenceChanges() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        let fixture = try boot(regular: true, detailSearch: true)
+        let search = fixture.search.controller
+        let results = try XCTUnwrap(fixture.search.results)
+        try fixture.openQuery("Fuji")
+        XCTAssertTrue(results.parent === fixture.split.detail)
+        for mode in ["/missing", "/ambiguous", "/ordinary"] {
+            try fixture.navigate(mode)
+            XCTAssertTrue(fixture.list.search?.controller === search, mode)
+            XCTAssertNil(results.root, mode)
+            XCTAssertFalse(results.visible, mode)
+            XCTAssertTrue(fixture.split.detail.topViewController === fixture.split.empty, mode)
+        }
+        try fixture.navigate("/alternate")
+        XCTAssertTrue(fixture.list.search?.results === results)
+        XCTAssertTrue(results.root === (try fixture.node("other-results")))
+        XCTAssertTrue(results.parent === fixture.split.detail)
+        XCTAssertTrue(results.visible)
+        XCTAssertEqual(try fixture.value(), "Fuji")
+    }
+
     func testExpansionStagesTheCommittedEmptyDetailBeforeItsFirstFrame() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
         let fixture = try boot()
@@ -351,8 +564,23 @@ final class SearchLevelsIOSTests: XCTestCase {
 
     func testHeldPopAndFoldLeaveANewerOpenOnTheSameDepth() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
-        let fixture = try boot()
-        try fixture.navigate("/book/a")
+        try heldPopAndFoldLeaveNewerOpen(detailSearch: false)
+    }
+
+    func testHeldResultPopAndFoldLeaveANewerReveal() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        try heldPopAndFoldLeaveNewerOpen(detailSearch: true)
+    }
+
+    private func heldPopAndFoldLeaveNewerOpen(detailSearch: Bool) throws {
+        let fixture = try boot(detailSearch: detailSearch)
+        if detailSearch {
+            try fixture.openQuery("Fuji")
+            try fixture.tap("result-a")
+            fixture.settle("the chosen result covers search")
+        } else {
+            try fixture.navigate("/book/a")
+        }
         let held = Int(try fixture.node("held-contact").id)
         XCTAssertEqual(fixture.agent.tap(["id": held, "phase": "down"])["delivery"] as? String, "recognized")
         let source = try XCTUnwrap(fixture.host.selectedKey)
@@ -385,7 +613,8 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertEqual(fixture.host.selectedKey, newer)
         XCTAssertEqual((fixture.split.detail.topViewController as? RouteController)?.key, newer)
         XCTAssertEqual(fixture.count("backs"), 0)
-        XCTAssertEqual(try fixture.value(), "")
+        XCTAssertEqual(try fixture.value(), detailSearch ? "Fuji" : "")
+        XCTAssertEqual(fixture.count("cancelCount"), 0)
         let before = try XCTUnwrap(fixture.host.selectedKey)
         let startsRoute = Int(try fixture.node("contact-starts-route").id)
         XCTAssertEqual(fixture.agent.tap(["id": startsRoute, "phase": "down"])["delivery"] as? String, "recognized")
@@ -791,7 +1020,7 @@ final class SearchLevelsIOSTests: XCTestCase {
         return pop
     }
 
-    private func boot(regular: Bool = false, fullScreen: Bool = false) throws -> Fixture {
+    private func boot(regular: Bool = false, fullScreen: Bool = false, detailSearch: Bool = false) throws -> Fixture {
         guard !ExactEnv.authoredChrome else { throw XCTSkip("the authored chrome draws results in flow") }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene, "the test method says it needs a scene")
         ExactGroupedLists.install()
@@ -821,6 +1050,12 @@ final class SearchLevelsIOSTests: XCTestCase {
         split.controller.preferredDisplayMode = .oneBesideSecondary
         waitFor("the split has the requested width class") { split.controller.isCollapsed != regular }
         waitFor("the fixture settles") { !agent.nativeInFlight() }
+        if detailSearch {
+            XCTAssertTrue(session.navigate("/detail-search"))
+            waitFor("the header projects the opted-in field") {
+                split.pairedSearch?.placesResultsInDetail == true && !agent.nativeInFlight()
+            }
+        }
         return try Fixture(test: self, session: session, split: split)
     }
 
@@ -866,8 +1101,11 @@ final class SearchLevelsIOSTests: XCTestCase {
             agent = Agent(session: session)
         }
 
-        func node(_ name: String) throws -> NodeView {
-            try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == name }, name)
+        func node(_ name: String, in route: NodeView? = nil) throws -> NodeView {
+            let presenter = session.presenter
+            return try XCTUnwrap(presenter.views.values.first { node in
+                node.props["testId"] == name && (route.map { presenter.authored(node, inside: $0) } ?? true)
+            }, name)
         }
 
         func settle(_ what: String) {
@@ -876,8 +1114,8 @@ final class SearchLevelsIOSTests: XCTestCase {
             }
         }
 
-        @discardableResult func tap(_ name: String) throws -> [String: Any] {
-            let reply = agent.tap(["id": Int(try node(name).id)])
+        @discardableResult func tap(_ name: String, in route: NodeView? = nil) throws -> [String: Any] {
+            let reply = agent.tap(["id": Int(try node(name, in: route).id)])
             _ = try XCTUnwrap(reply["tapped"] as? Int, "\(name): \(reply)")
             return reply
         }
