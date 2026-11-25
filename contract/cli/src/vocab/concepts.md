@@ -1807,6 +1807,7 @@ On a phone, measure none of these. Say what each part is, and the host keeps it 
 - **A floating button** over a scroller that ends the route: placed by the safe area, as `add` is below.
 - **A field:** nothing. The focused one is shown above the keyboard (`contract vocab keyboard-and-focus`).
 - **A list beside its detail:** `contract vocab navigationSplit`.
+- **Two parts that stand together** (lyrics and their player, a map and its list), either side of a fold: `contract vocab arrangement`.
 - **One thing a fold must not cross** (a timer, a dial): a box that starts at the viewport's left edge, padded there as `Timer` is below, whose fallback is its padding with no fold; for a fold across, a box at its top and `env(viewport-segment-top 0 1, 24px)`. Panes on either side: `contract vocab foldables`.
 - **A colour behind the bars:** the route's `background-color`. A picture there: `contract vocab safe-area`.
 

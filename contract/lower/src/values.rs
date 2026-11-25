@@ -1156,6 +1156,8 @@ pub(crate) fn check_prop_value(
         PropId::NavigationHistory => Some((&["back forward", "back", "forward", "none"], "`navigationHistory` takes \"back forward\" (the default: Back and Forward, wherever the router has somewhere to go), \"back\", \"forward\" or \"none\", the ways through history the navigation root offers now")),
         // @ref LLP 1115.000 D7.3 — Return presses a focused pressable under the node, as Chromium's Enter does.
         PropId::ReturnPresses => Some((&["descendants", "none"], "`-exact-return-presses` takes \"descendants\" (Return presses a focused button under this node, as Space does) or \"none\" (the default: Return is the dialog's default button's)")),
+        // @ref LLP 1188 D3 — two parts that stand together, as UIKit arranges them.
+        PropId::Arrangement => Some((crate::routes::arrangement::WORDS, crate::routes::arrangement::TAKES)),
         PropId::FocusGuide => Some((&["auto"], "`focusGuide` takes \"auto\"")),
         PropId::MenuOrder => Some((&["fixed", "priority", "automatic"], "`menuOrder` takes \"fixed\" (the rows as written, wherever the menu opens), \"priority\" (the first row nearest the finger) or \"automatic\" (the default: the platform's order, which on iOS shows a menu that opens upward last row first)")),
         PropId::Wakelock => Some((&["screen", "none"], "`wakelock` takes \"screen\" (the display stays awake while this element is displayed) or \"none\" (the default)")),

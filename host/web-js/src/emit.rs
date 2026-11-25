@@ -1187,6 +1187,7 @@ impl Em<'_> {
                     || b.id == PropId::SystemBarsHidden as u16
                     || b.id == PropId::GlassInteractive as u16
                     || b.id == PropId::MenuOrder as u16
+                    || b.id == PropId::Arrangement as u16
                     || b.id == PropId::Tip as u16
                     || b.id == PropId::TipMessage as u16
                     || b.id == PropId::TipImage as u16

@@ -771,6 +771,12 @@
       "_comment": "@ref LLP 1116.004 D1.2: on a stack's root route, \"none\" keeps a wide window's stack pushed, and a positive width (CSS px, points) is the list column's when the stack splits, splitting a list the host's rule does not find; on iPad, \"split\" on the first route puts a split view in its tab or window at the platform column width, even for a custom primary without a directory list. A tab stays a stack by default. Other hosts keep their own admission and widths. LLP 1127 D19. @ref LLP 1116.006 D2: \"placeholder\" on a box in the root route is the detail pane's while nothing is selected, in place of the platform's; the lowerer makes it `display: none`, which the web shell overrides there."
     },
     {
+      "id": 328,
+      "name": "arrangement",
+      "kind": "str",
+      "_comment": "@ref LLP 1188 D3: a box whose two children are UIKit's primary and secondary panes on iOS 27.1 and later (UIArrangementViewController): split or overlay, each optionally followed by horizontal or vertical; none, or no word, is CSS's layout, as it is on every other host."
+    },
+    {
       "id": 221,
       "name": "accessibilityControls",
       "kind": "str",

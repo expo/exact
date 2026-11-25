@@ -4494,13 +4494,37 @@ test delivers one by posting `ExactHostEvents.deliver` with `{event, payload, se
 
 ### Arranged panes
 
-On iOS and iPadOS 27.1 or later, an element hatch can call
+`arrangement` on a box with two children, the primary and the secondary, makes them
+the panes of a `UIArrangementViewController` on iOS and iPadOS 27.1 or later, and is
+CSS's layout elsewhere, so write that too (LLP 1188 D3):
+
+```text
+row arrangement="split" flex=1 min-height=0
+  scroll height="100%"
+    …
+  column height="100%"
+    …
+```
+
+`"split"` puts the two side by side in a wide box, stacked in a tall one, and either side
+of a fold; `"overlay"` puts the primary over the secondary and, where a fold divides them,
+the primary at the trailing or the bottom. `"horizontal"` or `"vertical"` after either is
+the one axis it may use. A split that may not use the axis it needs, and one on an outer
+display, shows the primary alone, so what a person cannot do without goes in the primary.
+UIKit allocates the box's border box and stacks the panes, so padding goes on the panes,
+and their flex, `order` and `z-index` as the box's items are not read there. A new value updates the same controller, animated on screen;
+`"none"`, the default, is CSS.
+
+A box that scrolls, is in a `scroll`, a `list`, a split view's column or another
+arrangement, holds a stack, or has not two children (neither a dialog nor a popover) is
+CSS's: the build refuses what the source proves, and `logs` names the rest. Keep tabs and
+stacks around an arrangement. A list beside its detail is `navigationSplit`.
+
+For UIKit's dimensions and placement, an element hatch can call
 `element.arrange(using: controller)` with a `UIArrangementViewController` configured
-with `UISplitArrangement` or `UIOverlayArrangement`. Exact places the element's two
-authored children in the controller and lays each out in the space UIKit gives it.
-Give the element a definite size, such as `height="100%"` in a sized route;
-allocated children do not give an auto-height parent its height. Pass `nil` to
-restore CSS layout.
+with `UISplitArrangement` or `UIOverlayArrangement`, which the box keeps until the hatch
+passes `nil`. Give an arranged box a definite size, such as `height="100%"` in a sized route;
+allocated children do not give an auto-height parent its height.
 
 A `true` result accepts the request; UIKit lays it out when the owning container
 is available. `false` means the element is unavailable, it does not have exactly
@@ -4615,9 +4639,8 @@ containers ([Apple's containment guidance](https://developer.apple.com/documenta
 Keep the same children mounted when switching between native and CSS layouts, so
 folds and resizes preserve their controls, bindings and state. Older systems and
 other hosts use the authored CSS layout. Duo Lab's
-[Panes screen](../apps/duo-lab/arrangement.contract) and
-[hatch](../apps/duo-lab/modules/apple/ArrangedPanes.swift) use UIKit split and overlay
-arrangements and responsive CSS elsewhere. Duo Lab's
+[Panes screen](../apps/duo-lab/arrangement.contract) says `arrangement` and lays its panes
+out by the segments in CSS elsewhere. Duo Lab's
 [Arrangement screen](../apps/duo-lab/arrangement-view.contract) sets title display, bar
 minimization, safe-area adjustment and the bar's scroll view through the
 [route hatch](../apps/duo-lab/modules/apple/ArrangementOptions.swift). See Apple's

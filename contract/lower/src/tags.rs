@@ -646,7 +646,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar:
         // `none` for a full-bleed screen.
         "navigationBar" => AttrTarget::Prop(p("navigationBar")),
-        "navigationSource" | "sharedElement" => AttrTarget::Prop(p(name)),
+        "navigationSource" | "sharedElement" | "arrangement" => AttrTarget::Prop(p(name)),
         // @ref LLP 1013.002 D1 — where the element is shown, by a destination's `id`.
         "portal" => AttrTarget::Prop(p("portal")),
         // @ref LLP 1075.003 §3.5 — the route's content scroll view, by HTML id.
