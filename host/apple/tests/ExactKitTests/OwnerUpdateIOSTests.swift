@@ -162,6 +162,32 @@ final class OwnerUpdateIOSTests: XCTestCase {
         ledger.apply()
     }
 
+    /// A controller in a tab controller reads that controller's content guide as `tab-content` (D9): the
+    /// guide's edges' distances from the tab controller's view, which clear its tab bar, under the guide's
+    /// identity and with that view's frame in its window.
+    func testATabControllersContentGuideIsTheTabContentTarget() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("UIKit has the tab content guide from iOS 26") }
+        let scene = hostedWindowScene()
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        let tabs = UITabBarController(), inner = UIViewController()
+        tabs.viewControllers = [UINavigationController(rootViewController: inner)]
+        window.rootViewController = tabs
+        window.makeKeyAndVisible()
+        self.window = window
+        window.layoutIfNeeded()
+        let update = OwnerUpdateIOS.sample(controller: inner, view: inner.view, session: nil)
+        let content = try XCTUnwrap(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.tabContent }?.target)
+        let guide = tabs.contentLayoutGuide
+        XCTAssertEqual(content.id, TargetIds.id(of: guide))
+        XCTAssertEqual(content.frame, window.convert(tabs.view.bounds, from: tabs.view))
+        let insets = try XCTUnwrap(content.insets)
+        let (frame, bounds) = (guide.layoutFrame, tabs.view.bounds)
+        XCTAssertEqual(insets, UIEdgeInsets(top: frame.minY, left: frame.minX, bottom: bounds.maxY - frame.maxY, right: bounds.maxX - frame.maxX))
+        // It clears the tab bar, above the tab view's own safe bottom
+        XCTAssertGreaterThan(insets.bottom, tabs.view.safeAreaInsets.bottom, "guide \(frame), tab bar \(tabs.tabBar.frame)")
+    }
+
     func testATargetsIdentityIsItsViewsForLife() {
         let (a, b) = (UIView(), UIView())
         XCTAssertEqual(TargetIds.id(of: a), TargetIds.id(of: a))
@@ -189,6 +215,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let kind = OwnerUpdateIOS.Kind.self
         XCTAssertEqual(update.chain.map(\.kinds), [0, kind.navigation | kind.column, kind.split])
         XCTAssertEqual(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.root }?.target.id, TargetIds.id(of: split.view))
+        XCTAssertNil(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.tabContent }, "no tab controller contains it")
         // A controller presented from it: a chain of one, and the presenter a relation
         let presented = UIViewController()
         split.present(presented, animated: false)

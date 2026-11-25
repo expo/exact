@@ -59,6 +59,7 @@ package struct OwnerUpdateIOS: Equatable {
         package static let session: UInt8 = 1
         package static let root: UInt8 = 2
         package static let window: UInt8 = 3
+        package static let tabContent: UInt8 = 4
     }
 
     /// The owner view's raw `safeAreaInsets`; `nil` while it is out of a window (D3, D9).
@@ -130,6 +131,11 @@ package struct OwnerUpdateIOS: Equatable {
             (Relation.window, view.window),
         ]
         update.relations = related.compactMap { r, v in v.map { Related(relation: r, target: target($0)) } }
+        // The tab controller containing the owner, whose guide clears its tab bar or sidebar
+        let tabs = sequence(first: controller, next: \.parent).lazy.compactMap { $0 as? UITabBarController }.first
+        if #available(iOS 26.0, *), let tabs {
+            update.relations.append(Related(relation: Relation.tabContent, target: target(tabs.contentLayoutGuide)))
+        }
         // Out of a window the guides were never laid out: no margins, as there is no band
         guard view.window != nil else { return update }
         let minimum = controller.systemMinimumLayoutMargins
@@ -168,6 +174,16 @@ package struct OwnerUpdateIOS: Equatable {
             default: return BarRegion(distance: i.left, sides: (i.top, i.bottom))
             }
         }
+    }
+
+    /// `guide` as a target (D9's `tab-content`): its edges' distances from its owning view's
+    /// bounds, in that view's coordinates, with that view's frame in its window; unavailable while
+    /// that view is out of a window.
+    static func target(_ guide: UILayoutGuide) -> Target {
+        guard let view = guide.owningView, view.window != nil else { return Target(id: TargetIds.id(of: guide), insets: nil) }
+        let (b, g) = (view.bounds, guide.layoutFrame)
+        let insets = UIEdgeInsets(top: g.minY - b.minY, left: g.minX - b.minX, bottom: b.maxY - g.maxY, right: b.maxX - g.maxX)
+        return Target(id: TargetIds.id(of: guide), insets: insets, frame: view.convert(b, to: nil))
     }
 
     /// `view` as a target, unavailable while it is out of a window; a window is in itself,
@@ -291,17 +307,17 @@ enum ReadableWidthIOS {
     }
 }
 
-/// The host's identities for native targets: one per view for its life, never reused, so a
-/// new view at a freed view's address is a new target (D9).
+/// The host's identities for native targets: one per view or layout guide for its life, never
+/// reused, so a new one at a freed one's address is a new target (D9).
 package enum TargetIds {
     nonisolated(unsafe) private static var next: UInt64 = 1
     nonisolated(unsafe) private static var key: UInt8 = 0
 
-    package static func id(of view: UIView) -> UInt64 {
-        if let id = objc_getAssociatedObject(view, &key) as? NSNumber { return id.uint64Value }
+    package static func id(of object: NSObject) -> UInt64 {
+        if let id = objc_getAssociatedObject(object, &key) as? NSNumber { return id.uint64Value }
         let id = next
         next += 1
-        objc_setAssociatedObject(view, &key, NSNumber(value: id), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        objc_setAssociatedObject(object, &key, NSNumber(value: id), .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         return id
     }
 }
