@@ -49,12 +49,101 @@ struct Delim {
 }
 
 impl Delim {
+    fn family(ch: char) -> Option<usize> {
+        match ch {
+            '*' => Some(0),
+            '_' => Some(1),
+            '~' => Some(2),
+            _ => None,
+        }
+    }
+
+    fn shape(&self) -> usize {
+        usize::from(self.close) * 3 + self.total % 3
+    }
+
     /// Whether the run `c` can close this one.
     fn pairs(&self, c: &Delim) -> bool {
         let thirds = (self.open && self.close || c.open && c.close)
             && (self.total + c.total).is_multiple_of(3)
             && !(self.total.is_multiple_of(3) && c.total.is_multiple_of(3));
         self.ch == c.ch && self.open && c.close && !thirds
+    }
+}
+
+struct Opener {
+    delim: Delim,
+    previous: Option<usize>,
+}
+
+#[derive(Default)]
+struct Delimiters {
+    openers: Vec<Opener>,
+    // An opener's right flanking and original length modulo three determine
+    // whether it can pair, so only the latest of each shape needs checking.
+    latest: [[Option<usize>; 6]; 3],
+    emphasis: Vec<(u8, B, B)>,
+}
+
+impl Delimiters {
+    fn matching_opener(&self, closer: &Delim) -> Option<usize> {
+        if !closer.close {
+            return None;
+        }
+        self.latest[Delim::family(closer.ch).unwrap()]
+            .iter()
+            .flatten()
+            .copied()
+            .filter(|&i| self.openers[i].delim.pairs(closer))
+            .max()
+    }
+
+    fn pop(&mut self) {
+        let Opener { delim, previous } = self.openers.pop().unwrap();
+        self.latest[Delim::family(delim.ch).unwrap()][delim.shape()] = previous;
+    }
+
+    fn record(&mut self, mut closer: Delim) {
+        while closer.len > 0 {
+            let Some(i) = self.matching_opener(&closer) else {
+                break;
+            };
+            while self.openers.len() > i + 1 {
+                self.pop();
+            }
+            let opener = &mut self.openers[i].delim;
+            let take = if opener.len >= 2 && closer.len >= 2 {
+                2
+            } else {
+                1
+            };
+            let kind = match (closer.ch, take) {
+                ('~', _) => STRIKE,
+                (_, 2) => BOLD,
+                _ => ITALIC,
+            };
+            let open_end = opener.start + opener.len;
+            let close_start = closer.start;
+            self.emphasis.push((
+                kind,
+                open_end - take..close_start + take,
+                open_end..close_start,
+            ));
+            opener.len -= take;
+            closer.start += take;
+            closer.len -= take;
+            if opener.len == 0 {
+                self.pop();
+            }
+        }
+        if closer.open && closer.len > 0 {
+            let latest = &mut self.latest[Delim::family(closer.ch).unwrap()][closer.shape()];
+            let previous = latest.replace(self.openers.len());
+            self.openers.push(Opener {
+                delim: closer,
+                previous,
+            });
+        }
     }
 }
 
@@ -341,7 +430,7 @@ impl Scanner<'_> {
         if depth >= MAX_LABEL_DEPTH {
             return;
         }
-        let mut delims: Vec<Delim> = Vec::new();
+        let mut delims = Delimiters::default();
         let mut autolink_end = AutolinkEnd::default();
         let mut i = lo;
         while i < hi {
@@ -363,19 +452,28 @@ impl Scanner<'_> {
                         || self.ch(i - 1).is_whitespace()
                         || matches!(self.ch(i - 1), '(' | '*' | '_' | '~')) =>
                 {
-                    let opener = delims.last().filter(|d| d.start + d.len == i).copied();
-                    self.bare_url(i, lo, hi, opener)
+                    let after_delimiter = i > lo && Delim::family(self.ch(i - 1)).is_some();
+                    self.bare_url(i, lo, hi, after_delimiter.then_some(&delims))
                 }
                 '*' | '_' | '~' => {
                     let len = self.run(i, hi);
-                    delims.extend(self.delimiter(i, len, lo, hi));
+                    if let Some(delim) = self.delimiter(i, len, lo, hi) {
+                        delims.record(delim);
+                    }
                     Some(i + len)
                 }
                 _ => None,
             };
             i = next.unwrap_or(i + 1);
         }
-        self.emphasis(delims);
+        for (kind, outer, inner) in delims.emphasis {
+            self.construct(
+                kind,
+                self.pos(outer.start)..self.pos(outer.end),
+                self.pos(inner.start)..self.pos(inner.end),
+                None,
+            );
+        }
     }
 
     fn code(&mut self, i: usize, hi: usize) -> Option<usize> {
@@ -454,9 +552,14 @@ impl Scanner<'_> {
         Some(close + 1)
     }
 
-    /// The URL at `i`, up to white space or the closer of `opener`, the
-    /// delimiter run just before it.
-    fn bare_url(&mut self, i: usize, lo: usize, hi: usize, opener: Option<Delim>) -> Option<usize> {
+    /// The URL at `i`. After a delimiter, a matching closer also ends it.
+    fn bare_url(
+        &mut self,
+        i: usize,
+        lo: usize,
+        hi: usize,
+        delims: Option<&Delimiters>,
+    ) -> Option<usize> {
         let tail = &self.source[self.pos(i)..];
         let scheme = if tail.starts_with("https://") {
             8
@@ -466,19 +569,32 @@ impl Scanner<'_> {
             return None;
         };
         let mut j = i;
+        let mut escaped_end = i;
         while j < hi && !self.ch(j).is_whitespace() && !matches!(self.ch(j), '<' | '>') {
             let mut len = 1;
-            if let Some(o) = opener.filter(|o| o.ch == self.ch(j)) {
-                len = self.run(j, hi);
-                if self.delimiter(j, len, lo, hi).is_some_and(|c| o.pairs(&c)) {
-                    break;
+            if let Some(delims) = delims {
+                if self.ch(j) == '\\' && j + 1 < hi && Delim::family(self.ch(j + 1)).is_some() {
+                    j += 2;
+                    escaped_end = j;
+                    continue;
+                }
+                if Delim::family(self.ch(j)).is_some() {
+                    len = self.run(j, hi);
+                    if self
+                        .delimiter(j, len, lo, hi)
+                        .is_some_and(|c| delims.matching_opener(&c).is_some())
+                    {
+                        break;
+                    }
                 }
             }
             j += len;
         }
         let mut open = self.cs[i..j].iter().filter(|c| c.1 == '(').count();
         let mut shut = self.cs[i..j].iter().filter(|c| c.1 == ')').count();
-        while j > i + scheme {
+        // Trimming an escaped delimiter would hand it back to the inline scan
+        // without its backslash, where it could close emphasis.
+        while j > (i + scheme).max(escaped_end) {
             let last = self.ch(j - 1);
             if matches!(
                 last,
@@ -621,65 +737,5 @@ impl Scanner<'_> {
             open,
             close,
         })
-    }
-
-    /// CommonMark's delimiter algorithm: each closer takes its nearest opener.
-    /// CommonMark's `openers_bottom`: once a closer of this shape finds no
-    /// opener, no later closer of the same shape searches below it.
-    fn emphasis(&mut self, mut d: Vec<Delim>) {
-        let mut active = 0;
-        let shape = |c: &Delim| {
-            (match c.ch {
-                '*' => 0,
-                '_' => 1,
-                _ => 2,
-            }) * 6
-                + usize::from(c.open) * 3
-                + c.total % 3
-        };
-        let mut bottoms = [0usize; 18];
-        // Processed delimiters occupy a compact prefix. The unread tail stays
-        // in place; a match retires intervening entries by shortening the prefix.
-        for read in 0..d.len() {
-            d[active] = d[read];
-            loop {
-                let ci = active;
-                if !d[ci].close || d[ci].len == 0 {
-                    break;
-                }
-                let bottom = bottoms[shape(&d[ci])];
-                let found = (bottom..ci).rev().find(|&oi| {
-                    let (o, c) = (&d[oi], &d[ci]);
-                    o.len > 0 && o.pairs(c)
-                });
-                let Some(oi) = found else {
-                    bottoms[shape(&d[ci])] = ci;
-                    break;
-                };
-                let take = if d[oi].len >= 2 && d[ci].len >= 2 {
-                    2
-                } else {
-                    1
-                };
-                let kind = match (d[ci].ch, take) {
-                    ('~', _) => STRIKE,
-                    (_, 2) => BOLD,
-                    _ => ITALIC,
-                };
-                let open_end = d[oi].start + d[oi].len;
-                let close_start = d[ci].start;
-                let outer = self.pos(open_end - take)..self.pos(close_start + take);
-                self.construct(kind, outer, self.pos(open_end)..self.pos(close_start), None);
-                d[oi].len -= take;
-                d[ci].start += take;
-                d[ci].len -= take;
-                active = oi + usize::from(d[oi].len != 0);
-                d[active] = d[ci];
-                for b in &mut bottoms {
-                    *b = (*b).min(active);
-                }
-            }
-            active += 1;
-        }
     }
 }

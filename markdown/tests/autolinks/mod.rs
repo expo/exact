@@ -96,16 +96,121 @@ fn a_bare_url_just_inside_emphasis_is_a_link() {
             &[("see ", LINK, "u"), (x, bold, "u")],
         ),
     ] {
-        let styled = style(source, None);
-        let targets: Vec<_> = styled
-            .spans
-            .iter()
-            .map(|s| (utf16(source, s.range), s.style, s.href.as_str()))
-            .collect();
-        let expected: Vec<_> = expected
-            .iter()
-            .map(|(text, style, href)| (text.to_string(), *style, *href))
-            .collect();
-        assert_eq!(targets, expected, "{source}");
+        assert_spans(source, expected);
     }
+}
+
+#[test]
+fn a_url_after_a_delimiter_stops_at_a_closer_of_an_earlier_opener() {
+    let x = "https://x.dev";
+    for (source, prefix, flags) in [
+        ("**foo_https://x.dev**bar", "foo_", BOLD),
+        ("*foo_https://x.dev*bar", "foo_", ITALIC),
+        ("~~foo~https://x.dev~~bar", "foo~", STRIKE),
+        ("**foo*https://x.dev**bar", "foo*", BOLD),
+        ("**_https://x.dev**more_", "_", BOLD),
+    ] {
+        assert_spans(source, &[(prefix, flags, ""), (x, flags | LINK, x)]);
+    }
+}
+
+#[test]
+fn only_unused_openers_can_shorten_a_url() {
+    for (source, text, flags, url) in [
+        (
+            "*before*https://x.dev/a*b",
+            "before",
+            ITALIC,
+            "https://x.dev/a*b",
+        ),
+        (
+            "**foo**https://x.dev/a**b",
+            "foo",
+            BOLD,
+            "https://x.dev/a**b",
+        ),
+        (
+            "**foo**https://x.dev**bar**",
+            "foo",
+            BOLD,
+            "https://x.dev**bar",
+        ),
+        (
+            "**_foo**https://x.dev/a_/b",
+            "_foo",
+            BOLD,
+            "https://x.dev/a_/b",
+        ),
+    ] {
+        assert_spans(source, &[(text, flags, ""), (url, LINK, url)]);
+    }
+    assert_spans(
+        "***before**https://x.dev/a*b",
+        &[
+            ("before", BOLD | ITALIC, ""),
+            ("https://x.dev/a", ITALIC | LINK, "https://x.dev/a"),
+        ],
+    );
+}
+
+#[test]
+fn an_escaped_delimiter_inside_a_url_cannot_close_emphasis() {
+    for (source, url, flags) in [
+        (
+            r"*https://x.dev/a\*/b*",
+            r"https://x.dev/a\*/b",
+            ITALIC | LINK,
+        ),
+        (
+            r"*https://x.dev/a\\*/b*",
+            r"https://x.dev/a\\*/b",
+            ITALIC | LINK,
+        ),
+        (r"*https://x.dev\*", r"https://x.dev\*", LINK),
+    ] {
+        assert_spans(source, &[(url, flags, url)]);
+    }
+}
+
+#[test]
+fn a_url_only_checks_for_closers_after_a_delimiter() {
+    let x = "https://x.dev";
+    for (source, visible, url, flags) in [
+        (
+            "~~https://x.dev~~more",
+            "https://x.devmore",
+            x,
+            STRIKE | LINK,
+        ),
+        ("foo*https://x.dev", "foo*https://x.dev", x, LINK),
+        (
+            "*https://x.dev/c*d*",
+            "https://x.dev/cd*",
+            "https://x.dev/c",
+            ITALIC | LINK,
+        ),
+        (
+            "**see https://x.dev**more",
+            "**see https://x.dev**more",
+            "https://x.dev**more",
+            LINK,
+        ),
+    ] {
+        assert_spans(source, &[(url, flags, url)]);
+        assert_eq!(plain(source), visible, "{source}");
+    }
+}
+
+fn assert_spans(source: &str, expected: &[(&str, u8, &str)]) {
+    let styled = style(source, None);
+    let targets: Vec<_> = styled
+        .spans
+        .iter()
+        .map(|s| (utf16(source, s.range), s.style, s.href.as_str()))
+        .collect();
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|(text, style, href)| (text.to_string(), *style, *href))
+        .collect();
+    assert_eq!(targets, expected, "{source}");
 }
