@@ -488,14 +488,15 @@ impl Input {
             return Ok(());
         }
         presenter.set_pointer_kind(PointerKind::Mouse);
-        presenter.pointer_move(point.0, point.1, now_ms)?;
+        // The cursor follows the point even when a handler of the move fails
+        let moved = presenter.pointer_move(point.0, point.1, now_ms);
         let cursor = presenter
             .cursor_at(point.0, point.1)
             .name()
             .parse::<CursorIcon>()
             .unwrap_or(CursorIcon::Default);
         window.set_cursor(cursor);
-        Ok(())
+        moved.map(|_| ())
     }
 
     /// The pointer left the window; a held button keeps it.
@@ -506,11 +507,12 @@ impl Input {
         now_ms: f64,
     ) -> Result<(), String> {
         self.inside = false;
+        // The cursor resets even when a handler of the loss fails
+        window.set_cursor(CursorIcon::Default);
         if self.buttons == 0 {
             self.pointer = None;
             presenter.pointer_lost(now_ms)?;
         }
-        window.set_cursor(CursorIcon::Default);
         Ok(())
     }
 

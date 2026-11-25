@@ -13,6 +13,7 @@ const APP: &str = r##"component App
   state presses = 0
   state hidden = false
   state blinked = false
+  state folded = false
   action moved(dx: number, dy: number)
     pans = pans + 1
   action swiped
@@ -23,6 +24,8 @@ const APP: &str = r##"component App
     blinked = true
   action unblink
     blinked = false
+  action fold
+    folded = true
   action rename
     label = "Kawaguchi"
   action hide
@@ -45,6 +48,7 @@ const APP: &str = r##"component App
       box testId="hidden-source" draggable=true dataTransfer=DataTransfer(text="hidden") visibility="hidden" width=300 height=40
         box testId="shown-child" visibility="visible" width=300 height=40
       box testId="blink" draggable=true dataTransfer=DataTransfer(text="blink") visibility=(blinked ? "hidden" : "visible") pointerdown=blink pointermove=unblink width=300 height=20
+      box testId="fold" draggable=true dataTransfer=DataTransfer(text="fold") display=(folded ? "none" : "flex") pointerdown=fold width=300 height=20
       box testId="clear" draggable=true dataTransfer=DataTransfer(text="clear") opacity=0 width=300 height=20
       column overflow="hidden" height=0
         box testId="cut" draggable=true dataTransfer=DataTransfer(text="cut") width=300 height=20
@@ -316,6 +320,23 @@ fn a_frame_that_hid_the_source_gives_its_lift_no_icon() {
     let lift = lifts.borrow_mut().pop().expect("it shows at the lift");
     assert_eq!(lift.text, "blink");
     assert!(lift.picture.is_none(), "the frame last shown hid it");
+}
+
+#[test]
+fn a_source_laid_out_away_since_the_frame_shown_keeps_that_frames_icon() {
+    let (mut p, lifts) = boot();
+    show(&mut p);
+    let rect = p.box_of(view(&p, "fold")).unwrap().rect;
+    let (x, y, t) = (rect.0 + 10., rect.1 + 5., p.host().now() + 10.);
+    // It arms, then its pointerdown takes it out of the layout, no frame shown since
+    p.pointer_down(x, y, t).unwrap();
+    p.pointer_move(x + 40., y, t + 16.).unwrap();
+    p.pointer_up(x + 40., y, t + 32.).unwrap();
+    let lift = lifts.borrow_mut().pop().expect("layout rejects nothing");
+    assert_eq!(lift.text, "fold");
+    let picture = lift.picture.expect("the frame shown drew it");
+    assert_eq!((picture.width, picture.height), (600, 40));
+    assert_eq!(lift.hotspot, (10., 5.));
 }
 
 #[test]
