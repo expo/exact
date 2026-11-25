@@ -7894,12 +7894,13 @@ picture under the bar:
   `margin-top="calc(-1 * var(--exact-safe-area-inset-top))"
   padding-top="var(--exact-safe-area-inset-top)"`. Its content starts below the bar
   and the boxes beside it stay where they were.
-- Where a scroller fills the route's width, opt the sides out and inset its content:
-  `-exact-safe-area="left right"` on the route, and
-  `padding-left="var(--exact-safe-area-inset-left)"` and the same on the right on the
-  scroller's content. The scroller's indicator then lies at the display's edge, outside
-  the iPhone Duo's side bar, as UIKit's does; cleared, the scroller ends at the bar and
-  its indicator lies inside it.
+- Where a scroller fills the route's width: on iOS it reaches the display's sides unasked,
+  as UIKit's does, its indicator outside the iPhone Duo's side bar and its content clear of
+  it. Padding around the scroller, a border or rounded corners on it, or a box around it
+  that clips keeps it in its own box. To draw its content's background or picture under
+  the bar, opt the sides out (`-exact-safe-area="left right"` on the route) and inset the
+  rest of the content: `padding-left="var(--exact-safe-area-inset-left)"`, and the same on
+  the right.
 - Where the route's scroller starts at its top (a list under a large title), opt the
   top out and pad the scroller's first box: `-exact-safe-area="top"` on the route,
   `padding-top="var(--exact-safe-area-inset-top)"` on the hero. The scroller then

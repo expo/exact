@@ -147,7 +147,7 @@ package enum RouteGeometry {
         // A native backend owns layout/footer insets, composed with the
         // refresh control and keyboard; zero is only the plain-scroll baseline.
         if s === node.scroll {
-            let expected = node.bandInset.adding(node.presenter?.navigation.clearanceInset(of: s) ?? .zero)
+            let expected = node.bandInset.adding(node.sideInset).adding(node.presenter?.navigation.clearanceInset(of: s) ?? .zero)
             #if os(tvOS)
             if s.contentInset != expected { out.append("contentInset") }
             #else

@@ -234,7 +234,8 @@ final class NodeExtras {
     /// The part of the band its scroll view's `contentInset` holds (LLP 1131 D2).
     package var bandInset = UIEdgeInsets.zero
     /// How far D13's reach outsets its scroll view past its box on each edge, as the kernel's
-    /// terms give it (LLP 1123 D13); D14's writer holds the insets that go with it.
+    /// terms give it (LLP 1123 D13); D14's writer holds the insets that go with it. Until the kernel
+    /// gives one, the side reach the host gives it (`setSideReach`), whose insets are `sideInset`.
     var reach = UIEdgeInsets.zero
     /// Whether the kernel has given its reach (`setReach`), zero included: until then a grouped list reaches by its own
     /// rule (`GroupedListView.sideReach`).
@@ -535,12 +536,19 @@ extension NodeView {
     }
     /// Its page band (`NodeExtras.pageBand`), zero for most.
     package var pageBand: UIEdgeInsets { extras?.pageBand ?? .zero }
-    /// Its reach (`NodeExtras.reach`), zero until activation applies the kernel's.
+    /// Its reach (`NodeExtras.reach`).
     package var reach: UIEdgeInsets { extras?.reach ?? .zero }
     /// Its extension (`setExtension`), nil while its picture is not mirrored.
     package var boxExtension: BoxExtension? { extras?.boxExtension }
     /// Whether the kernel has given its reach (`NodeExtras.reachGiven`).
     package var reachGiven: Bool { extras?.reachGiven ?? false }
+    /// Whether it reaches past its top or bottom.
+    var reachesDown: Bool { reach.top > 0 || reach.bottom > 0 }
+    /// A scroll view that comes or goes reaches no band, and has no reach, until asked (LLP 1130 D3, LLP 1123 D13).
+    func forgetReach() {
+        guard let extras, pageBand != .zero || bandInset != .zero || reach != .zero || reachGiven else { return }
+        (extras.pageBand, extras.bandInset, extras.reach, extras.reachGiven) = (.zero, .zero, .zero, false)
+    }
     /// How far its scroll view lies past its box on each edge: its page band's top and bottom, or
     /// its reach, whichever is larger, the page band reaching no side.
     package var scrollOutset: UIEdgeInsets {
@@ -549,14 +557,15 @@ extension NodeView {
     }
     /// The part of each of `sv`'s insets it draws its content through (LLP 1123 D13, LLP 1130 D3): with reach, the smaller
     /// of how far it lies past its box (`scrollOutset`) and its inset less native content room (`scrollPortInsets`), never
-    /// below zero; with none, the page band, which counts whole as it lands, while the inset holding it may still lag. A
-    /// windowed list counts it as port and as padding before its first row and after its last, and the rest of the inset
-    /// narrows its port.
+    /// below zero; on a top and bottom with none, the page band, which counts whole as it lands, while the inset holding
+    /// it may still lag. A windowed list counts it as port and as padding before its first row and after its last, and the
+    /// rest of the inset narrows its port.
     package func scrollDrawnThrough(_ sv: UIScrollView) -> UIEdgeInsets {
         guard reach != .zero else { return pageBand }
         let o = scrollOutset, a = scrollPortInsets(sv)
         let t = { (o: CGFloat, a: CGFloat) in max(0, min(o, a)) }
-        return UIEdgeInsets(top: t(o.top, a.top), left: t(o.left, a.left), bottom: t(o.bottom, a.bottom), right: t(o.right, a.right))
+        return UIEdgeInsets(top: reachesDown ? t(o.top, a.top) : pageBand.top, left: t(o.left, a.left),
+                            bottom: reachesDown ? t(o.bottom, a.bottom) : pageBand.bottom, right: t(o.right, a.right))
     }
     /// The outset a scroll event counts into CSS's scroll position: all of it but what the scroll view's own layout
     /// consumes of a side reach (`BandConsumer`), across which its content stays put, as a grouped list's cards do.
@@ -570,9 +579,9 @@ extension NodeView {
         return o
     }
     /// Where CSS's `scrollLeft` 0 is in UIKit's offsets: past the scroller's left inset when UIKit
-    /// insets it, or past native content room, as `scrollTopInset` is for `scrollTop`.
+    /// insets it, or past native content room and its side reach, as `scrollTopInset` is for `scrollTop`.
     package func scrollLeftInset(_ sv: UIScrollView) -> CGFloat {
-        sv.contentInsetAdjustmentBehavior != .never ? sv.adjustedContentInset.left : extras?.nativeScrollContentInsets.left ?? 0
+        sv.contentInsetAdjustmentBehavior != .never ? sv.adjustedContentInset.left : (extras?.nativeScrollContentInsets.left ?? 0) + sideInset.left
     }
     package var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
     var bandOver: NodeView? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }

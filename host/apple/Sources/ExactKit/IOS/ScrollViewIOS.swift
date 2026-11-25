@@ -515,6 +515,7 @@ extension NodeView {
         }
         guard extras?.nativeScrollView !== view else { return }
         if pageBand != .zero { setPageBand(.zero) } // the scroll view leaving gives its band back (LLP 1130 D3)
+        setSideReach(.zero)
         if reach != .zero || reachGiven { more.reach = .zero; more.reachGiven = false } // and its reach, which its successor waits for anew (LLP 1123 D13)
         more.nativeScrollView = view
         more.nativeScrollDelegate = view?.delegate

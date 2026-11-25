@@ -111,6 +111,7 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   writeFileSync(eagerList, readFileSync(resolve(root, 'scripts/fixtures/collection-fixed-chat.contract'), 'utf8')
     .replace('virtualized=true', 'virtualized=false').replace(' estimated-item-height=40', '').replace(' scrollFollowEnd=true', ''));
   contract([eagerList, '-o', env[`${prefix}_COLLECTION_FIXED_EAGER_PLAN`] = resolve(dir, 'collection-fixed-eager.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/side-reach.contract'), '-o', env[`${prefix}_SIDE_REACH_PLAN`] = resolve(dir, 'side-reach.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/arrangement-sizing.contract'), '-o', env[`${prefix}_ARRANGEMENT_SIZING_PLAN`] = resolve(dir, 'arrangement-sizing.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/canvas-capture.contract'), '-o', env[`${prefix}_CANVAS_CAPTURE_PLAN`] = resolve(dir, 'canvas-capture.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/range-adjust.contract'), '-o', env[`${prefix}_RANGE_ADJUST_PLAN`] = resolve(dir, 'range-adjust.plan')]);
