@@ -33,6 +33,43 @@ pub struct OwnerUpdate {
     /// UIKit's bar layout region on each edge of its view, top right bottom left (D12), `None`
     /// where its host has none.
     pub bar_regions: [Option<BarRegion>; 4],
+    /// Its chrome (D6's `chrome`), `None` where its host reports none.
+    pub chrome: Option<OwnerChrome>,
+}
+
+/// What an owner's host reports of its chrome (D6's `chrome`, D4, D15), which no layout reads:
+/// each quantity `None` where the host does not have it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OwnerChrome {
+    /// The edge UIKit prefers for the iPhone Duo's vertical bar, the owner view's
+    /// `verticalBarEdge` trait (iOS 27.1), whether or not the bar shows.
+    pub vertical_bar_edge: Option<VerticalBarEdge>,
+    /// Whether the sidebar of the tab controller holding the owner is available
+    /// (`UITabBarController.Sidebar.isAvailable`, iOS 27), which is not whether it shows.
+    pub sidebar_available: Option<bool>,
+}
+
+/// UIKit's `UIVerticalBarEdge`, by its raw value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerticalBarEdge {
+    /// No vertical bar is placed here.
+    Unspecified,
+    Leading,
+    Trailing,
+}
+
+impl VerticalBarEdge {
+    /// Every edge, by its raw value.
+    pub const ALL: [VerticalBarEdge; 3] = [Self::Unspecified, Self::Leading, Self::Trailing];
+
+    /// Its name in D6's `chrome.verticalBarEdge`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::Leading => "leading",
+            Self::Trailing => "trailing",
+        }
+    }
 }
 
 /// UIKit's bar layout region on one edge of an owner's view (D12, "Region"): how far in from
@@ -57,6 +94,7 @@ impl Kernel {
         owed |= self.set_owner_band(view, update.band, &update.contributions)?;
         owed |= self.set_owner_keyboard(view, update.keyboard)?;
         owed |= self.set_owner_bar_regions(view, update.bar_regions)?;
+        self.set_owner_chrome(view, update.chrome)?;
         Ok(owed)
     }
 
@@ -94,6 +132,37 @@ impl Kernel {
     }
 }
 
+impl Kernel {
+    /// Set the chrome of the owner whose root is `view` (D6's `chrome`), which a host reports
+    /// with the owner's other fields through [`Kernel::update_owner`]. No layout reads it.
+    pub fn set_owner_chrome(
+        &mut self,
+        view: ViewId,
+        chrome: Option<OwnerChrome>,
+    ) -> Result<(), KernelError> {
+        let slot = (self.arena.slot_of(view)).ok_or(LayoutError::UnknownView(view))?;
+        let store = &mut self.arena.observations.chrome;
+        match chrome {
+            Some(c) => store.insert(slot, c),
+            None => store.remove(&slot),
+        };
+        Ok(())
+    }
+
+    /// The chrome of the owner holding the box `view` (D6's `chrome`), as its host last
+    /// reported it; `None` outside every owner, which the session reports none of, and where the
+    /// owner's host reported none.
+    pub fn owner_chrome(&self, view: ViewId) -> Option<OwnerChrome> {
+        let slot = self.arena.slot_of(view)?;
+        match super::area::holder(&self.arena, slot) {
+            super::area::Holder::Owner(owner) => {
+                self.arena.observations.chrome.get(&owner).copied()
+            }
+            _ => None,
+        }
+    }
+}
+
 impl OwnerUpdate {
     /// The update `bytes` encode ([`OwnerUpdate::encode`]); why they are
     /// refused, where they are.
@@ -101,7 +170,8 @@ impl OwnerUpdate {
         let mut r = Reader::new(bytes);
         let update = read(&mut r).ok_or(
             "an owner update is truncated, holds a presence byte other than 0 or 1, or names \
-             an unknown relation or operation; encode it as `OwnerUpdate::encode` does",
+             an unknown relation, operation or vertical bar edge; encode it as \
+             `OwnerUpdate::encode` does",
         )?;
         match r.is_empty() {
             true => Ok(update),
@@ -122,7 +192,9 @@ impl OwnerUpdate {
     /// root, plain and minimum insets and the readable width (`f32`); a
     /// keyboard its frame and a docked byte, 0 or 1; segments their columns
     /// and rows (`u8` each) and the `cols × rows` rects, row-major; then each edge's bar region,
-    /// top right bottom left, its distance and its two sides (`f32` each).
+    /// top right bottom left, its distance and its two sides (`f32` each); then the chrome, its
+    /// vertical bar edge's raw value (`u8`) and its sidebar's availability (a byte, 0 or 1), each
+    /// optional.
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         optional(&mut w, self.band.as_ref(), |w, b| floats(w, b));
@@ -166,6 +238,10 @@ impl OwnerUpdate {
                 w.f32(r.sides[1]);
             });
         }
+        optional(&mut w, self.chrome.as_ref(), |w, c| {
+            optional(w, c.vertical_bar_edge.as_ref(), |w, e| w.u8(*e as u8));
+            optional(w, c.sidebar_available.as_ref(), |w, a| w.u8(u8::from(*a)));
+        });
         w.into_vec()
     }
 }
@@ -267,6 +343,19 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
             });
         }
     }
+    let chrome = match present(r)? {
+        true => Some(OwnerChrome {
+            vertical_bar_edge: match present(r)? {
+                true => Some(*VerticalBarEdge::ALL.get(usize::from(r.u8().ok()?))?),
+                false => None,
+            },
+            sidebar_available: match present(r)? {
+                true => Some(present(r)?),
+                false => None,
+            },
+        }),
+        false => None,
+    };
     Some(OwnerUpdate {
         band,
         contributions,
@@ -275,6 +364,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         keyboard,
         segments,
         bar_regions,
+        chrome,
     })
 }
 

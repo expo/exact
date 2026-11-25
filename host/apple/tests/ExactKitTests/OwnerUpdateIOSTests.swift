@@ -144,6 +144,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(update.chain.count, 1)
         XCTAssertNil(update.chain[0].target.insets)
         XCTAssertNil(update.chain[0].target.frame)
+        XCTAssertNil(update.chrome)
     }
 
     func testTheKernelTakesAWindowRootsUpdateUnderANegativeContribution() throws {
@@ -186,6 +187,8 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(insets, UIEdgeInsets(top: frame.minY, left: frame.minX, bottom: bounds.maxY - frame.maxY, right: bounds.maxX - frame.maxX))
         // It clears the tab bar, above the tab view's own safe bottom
         XCTAssertGreaterThan(insets.bottom, tabs.view.safeAreaInsets.bottom, "guide \(frame), tab bar \(tabs.tabBar.frame)")
+        // And the chrome says whether the tab controller's sidebar is available
+        if #available(iOS 27.0, *) { XCTAssertEqual(update.chrome?.sidebarAvailable, tabs.sidebar.isAvailable) }
     }
 
     func testATargetsIdentityIsItsViewsForLife() {
@@ -216,6 +219,14 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(update.chain.map(\.kinds), [0, kind.navigation | kind.column, kind.split])
         XCTAssertEqual(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.root }?.target.id, TargetIds.id(of: split.view))
         XCTAssertNil(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.tabContent }, "no tab controller contains it")
+        // Its chrome: no sidebar outside a tab controller, and the vertical bar's edge from iOS 27.1,
+        // unspecified where the device places none
+        XCTAssertNil(update.chrome?.sidebarAvailable)
+        if #available(iOS 27.1, *) {
+            XCTAssertEqual(update.chrome?.verticalBarEdge == 0, !inner.view.traitCollection.placesVerticalBar)
+        } else {
+            XCTAssertNil(try XCTUnwrap(update.chrome).verticalBarEdge)
+        }
         // A controller presented from it: a chain of one, and the presenter a relation
         let presented = UIViewController()
         split.present(presented, animated: false)
@@ -239,6 +250,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
                                minimum: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16), readableWidth: 672)
         update.keyboard = .init(frame: CGRect(x: 0, y: 538, width: 402, height: 336), docked: true)
         update.barRegions = [nil, nil, .init(distance: 24, sides: (16, 8.5)), nil]
+        update.chrome = .init(verticalBarEdge: 2, sidebarAvailable: false)
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
         func u32(_ v: UInt32) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
@@ -251,6 +263,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         w.append(1); f(0, 538, 402, 336); w.append(1)
         w.append(0)
         w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
+        w += [1, 1, 2, 1, 0]
         XCTAssertEqual([UInt8](update.encode()), w)
         // A registration: the name's length and bytes, then the target after a presence byte
         let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))

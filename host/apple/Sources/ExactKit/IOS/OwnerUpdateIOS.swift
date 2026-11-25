@@ -79,6 +79,17 @@ package struct OwnerUpdateIOS: Equatable {
     /// UIKit's bar layout region on each edge of the owner's view, top, right, bottom, left (D12,
     /// "Region"): `nil` before iOS 27.1, which has none, and out of a window.
     package var barRegions: [BarRegion?] = [nil, nil, nil, nil]
+    /// The owner's chrome (D6), `nil` out of a window.
+    package var chrome: Chrome?
+
+    /// What the owner's chrome is: its view's vertical bar edge, as the kernel's
+    /// `VerticalBarEdge` takes it, `nil` before iOS 27.1; and whether the sidebar of the tab
+    /// controller holding it is available, which is not whether it shows, `nil` before iOS 27 and
+    /// where no tab controller holds it.
+    package struct Chrome: Equatable {
+        package var verticalBarEdge: Int?
+        package var sidebarAvailable: Bool?
+    }
 
     /// A bar layout region on one edge: how far in from that edge it begins, and how far in from
     /// the two edges beside it it runs, left and right for the top or bottom, top and bottom for a side.
@@ -155,6 +166,9 @@ package struct OwnerUpdateIOS: Equatable {
         let fold = Segments.split(viewport: view.bounds.size, dividers: active)
         update.segments = fold.cols * fold.rows > 1 ? fold : nil
         if #available(iOS 27.1, *) { update.barRegions = barRegions(of: view) }
+        var sidebar: Bool?
+        if #available(iOS 27.0, *), let tabs { sidebar = tabs.sidebar.isAvailable }
+        update.chrome = Chrome(verticalBarEdge: view.traitCollection.verticalBarEdgeRaw, sidebarAvailable: sidebar)
         return update
     }
 
@@ -199,7 +213,8 @@ package struct OwnerUpdateIOS: Equatable {
     /// optional one after a presence byte, a list after its `u32` length, little-endian;
     /// insets top, right, bottom, left. A contribution is its node, its operation and its
     /// effect. The keyboard is its frame, x, y, width, height, and a docked byte. Each edge's bar
-    /// region, top, right, bottom, left, follows the segments.
+    /// region, top, right, bottom, left, follows the segments, and the chrome, its vertical bar
+    /// edge and its sidebar's availability each optional, follows them.
     package func encode() -> Data {
         var out = Data()
         func u8(_ v: UInt8) { out.append(v) }
@@ -246,6 +261,10 @@ package struct OwnerUpdateIOS: Equatable {
         }
         for region in barRegions {
             optional(region) { r in [r.distance, r.sides.0, r.sides.1].forEach(f32) }
+        }
+        optional(chrome) { c in
+            optional(c.verticalBarEdge) { u8(UInt8($0)) }
+            optional(c.sidebarAvailable) { u8($0 ? 1 : 0) }
         }
         return out
     }

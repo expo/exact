@@ -1,7 +1,10 @@
 //! The owner update (LLP 1123 D2): one entry per owner, applied whole or refused whole, in
 //! the hosts' shared wire form.
 use super::*;
-use crate::kernel::{BarRegion, Contribution, Keyboard, Operation, OwnerMargins, OwnerUpdate};
+use crate::kernel::{
+    BarRegion, Contribution, Keyboard, Operation, OwnerChrome, OwnerMargins, OwnerUpdate,
+    VerticalBarEdge,
+};
 use crate::style::env::{Rect, SegmentGrid};
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
@@ -15,7 +18,8 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 
 /// An update with every field: a 47-point top band holding a 10-point contribution, a
 /// navigation controller (20) above the owner's own (10) and its window (44, with its frame), margins, a
-/// docked keyboard, two columns and a bottom bar region.
+/// docked keyboard, two columns, a bottom bar region, and chrome with a trailing vertical bar and
+/// no sidebar.
 fn full() -> OwnerUpdate {
     let mut targets = controller(1, 10.0);
     targets.chain.push(entry(2, 20.0, Some(Kind::Navigation)));
@@ -56,6 +60,10 @@ fn full() -> OwnerUpdate {
             }),
             None,
         ],
+        chrome: Some(OwnerChrome {
+            vertical_bar_edge: Some(VerticalBarEdge::Trailing),
+            sidebar_available: Some(false),
+        }),
     }
 }
 
@@ -80,9 +88,9 @@ fn an_owner_update_round_trips_and_a_malformed_one_is_refused() {
     let mut presence = bytes.clone();
     presence[0] = 2;
     assert!(OwnerUpdate::decode(&presence).is_err());
-    // An operation past the five, at the contribution's byte 25, and a relation past the seven,
-    // at the first relation's byte 120
-    for (at, unknown) in [(25, 5), (120, 7)] {
+    // An operation past the five, at the contribution's byte 25, a relation past the seven, at the
+    // first relation's byte 120, and a vertical bar edge past the three, at the third byte from the end
+    for (at, unknown) in [(25, 5), (120, 7), (bytes.len() - 3, 3)] {
         let mut bad = bytes.clone();
         bad[at] = unknown;
         assert!(OwnerUpdate::decode(&bad).is_err(), "byte {at}");
@@ -117,6 +125,10 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     assert_eq!(Relation::ALL, relations);
     let kinds = [Kind::Navigation, Kind::Tab, Kind::Split, Kind::Column];
     assert_eq!(kinds.map(Kind::bit), [4, 8, 16, 32]);
+    // UIKit's raw `UIVerticalBarEdge` values
+    use VerticalBarEdge::*;
+    assert_eq!([Unspecified, Leading, Trailing].map(|e| e as u8), [0, 1, 2]);
+    assert_eq!(VerticalBarEdge::ALL, [Unspecified, Leading, Trailing]);
     // Each field in order, as the format says, written out apart from the encoder
     let mut w = Vec::new();
     let f = |w: &mut Vec<u8>, values: &[f32]| values.iter().for_each(|v| w.extend(v.to_le_bytes()));
@@ -158,6 +170,8 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.extend([0, 0, 1]);
     f(&mut w, &[24.0, 16.0, 8.67]);
     w.push(0);
+    // The chrome: a trailing vertical bar, its raw value 2, and a sidebar that is not available
+    w.extend([1, 1, 2, 1, 0]);
     assert_eq!(full().encode(), w);
 }
 
@@ -183,6 +197,11 @@ fn an_owner_update_applies_every_field() {
     assert!(held.margins.contains_key(&slot));
     assert_eq!(held.band(slot), Some([37.0, 0.0, 34.0, 0.0]));
     assert_eq!(crate::kernel::keyboard::occupancy(&k.arena, slot), 344.0);
+    // A box in the owner reads its chrome, and one outside every owner none
+    assert_eq!(
+        (k.owner_chrome(3), k.owner_chrome(1)),
+        (full().chrome, None)
+    );
     // A later update giving the owner's controller an older generation is refused by the check
     assert!(k.check_owner_update(2, &full()).is_ok());
     let mut stale = full();

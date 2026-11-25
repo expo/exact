@@ -11,7 +11,7 @@ use crate::geometry::view_of;
 use crate::DataError;
 use exact_kernel::style::calc::Family;
 use exact_kernel::style::targets::{Kind, NativeTarget};
-use exact_kernel::{Kernel, ViewId};
+use exact_kernel::{Kernel, OwnerChrome, ViewId};
 use exact_plan::{Plan, TypeKind, TypesId, Value};
 
 /// `exactGeometry(id[, space[, node[, regions]]])`, whose `regions` names the query options of
@@ -266,6 +266,7 @@ pub fn geometry(kernel: &Kernel, id: &str, space: &Space, generation: u64) -> Fa
         laid.size,
         frame_in(kernel, &laid, space),
         reading,
+        chrome_fact(kernel.owner_chrome(laid.view)),
     )
 }
 
@@ -343,10 +344,27 @@ fn target_fact(number: Option<u32>, relation: Option<&str>, kinds: u8, t: &Nativ
 pub fn templates(source: &str) -> Vec<Fact> {
     match source {
         GEOMETRY => vec![
-            answer(0, (1.0, 1.0), Some([0.0, 0.0, 1.0, 1.0]), |_| {
-                Some([0.0; 4])
-            }),
-            answer(0, (1.0, 1.0), None, |_| None),
+            answer(
+                0,
+                (1.0, 1.0),
+                Some([0.0, 0.0, 1.0, 1.0]),
+                |_| Some([0.0; 4]),
+                Fact::Record(vec![
+                    ("verticalBarEdge", Fact::Str(String::new())),
+                    ("sidebarAvailable", Fact::Bool(false)),
+                    ("overscan", Fact::Str(String::new())),
+                    ("auxiliaryTopLeftArea", Fact::rect(0.0, 0.0, 0.0, 0.0)),
+                    ("auxiliaryTopRightArea", Fact::rect(0.0, 0.0, 0.0, 0.0)),
+                ]),
+            ),
+            answer(
+                0,
+                (1.0, 1.0),
+                None,
+                |_| None,
+                chrome_fact(Some(Default::default())),
+            ),
+            answer(0, (1.0, 1.0), None, |_| None, Fact::Absent),
             unavailable(0),
         ],
         CHAIN => {
@@ -384,13 +402,14 @@ pub fn templates(source: &str) -> Vec<Fact> {
     }
 }
 
-/// An `exactGeometry` answer for a laid-out box of `size`, `frame` in the space read, and what
-/// it observes of each family.
+/// An `exactGeometry` answer for a laid-out box of `size`, `frame` in the space read, what it
+/// observes of each family, and its owner's `chrome`.
 fn answer(
     generation: u64,
     (width, height): (f64, f64),
     frame: Option<[f64; 4]>,
     reading: impl Fn(Family) -> Option<[f64; 4]>,
+    chrome: Fact,
 ) -> Fact {
     let observations = Family::ALL
         .iter()
@@ -435,7 +454,27 @@ fn answer(
         ("regions", Fact::Absent),
         ("scroll", Fact::Absent),
         ("keyboard", Fact::Absent),
-        ("chrome", Fact::Absent),
+        ("chrome", chrome),
+    ])
+}
+
+/// D6's `chrome`: what the box's owner's host reported of it, `none` where it reported none, as
+/// outside every owner. A quantity the host does not have is `none`, as the tvOS overscan and the
+/// Mac's auxiliary areas are until those hosts report them (stage 4).
+fn chrome_fact(chrome: Option<OwnerChrome>) -> Fact {
+    let Some(c) = chrome else {
+        return Fact::Absent;
+    };
+    let edge = c.vertical_bar_edge.map(|e| Fact::Str(e.name().to_string()));
+    Fact::Record(vec![
+        ("verticalBarEdge", edge.unwrap_or(Fact::Absent)),
+        (
+            "sidebarAvailable",
+            c.sidebar_available.map_or(Fact::Absent, Fact::Bool),
+        ),
+        ("overscan", Fact::Absent),
+        ("auxiliaryTopLeftArea", Fact::Absent),
+        ("auxiliaryTopRightArea", Fact::Absent),
     ])
 }
 
