@@ -49,6 +49,15 @@
 //! ([`Kernel::root_tabs`]). A tablist or a panel inside a route is that
 //! route's, never the root's.
 
+/// Whether a Back history label consists only of Unicode 17.0.0 White_Space,
+/// Default_Ignorable_Code_Point or U+2800 BRAILLE PATTERN BLANK (LLP 1075.003 §9.10).
+pub fn blank_history_label(text: &str) -> bool {
+    text.chars()
+        .all(|scalar| blank_history_scalar(scalar as u32))
+}
+
+include!(concat!(env!("OUT_DIR"), "/blank_history.rs"));
+
 use crate::generated::{
     Appearance, Display, FlexDirection, NodeType, PositionType, PropId, StyleId,
 };

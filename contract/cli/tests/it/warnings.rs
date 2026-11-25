@@ -210,11 +210,12 @@ fn a_header_with_no_heading_or_two_is_named_as_no_bar() {
 
 /// A stack whose root names its Back control `back` (or `root` says
 /// otherwise), with a route pushed over Home: `route` is the pushed route's
-/// attributes and `body` its children, their lines at 16 on.
+/// attributes and `body` its children, their lines at 16 on, before the
+/// route's `head title`, which names it in Back's history.
 fn pushed(root: &str, route: &str, body: &str) -> String {
     let body: String = body.lines().map(|l| format!("            {l}\n")).collect();
     format!(
-        "routes nav\n  home \"/\"\n    detail \"/detail\"\ncomponent App\n  action back\n    nav = back(nav)\n  view\n    main navigationKey=`${{top(nav).id}}` {root}\n      for e in stack(nav) key=e.id\n        if e.name == \"home\"\n          column navigationKey=`${{e.id}}`\n            header\n              text \"Home\" role=\"heading\" aria-level=1\n        if e.name == \"detail\"\n          column navigationKey=`${{e.id}}` {route}\n{body}"
+        "routes nav\n  home \"/\"\n    detail \"/detail\"\ncomponent App\n  action back\n    nav = back(nav)\n  view\n    main navigationKey=`${{top(nav).id}}` {root}\n      for e in stack(nav) key=e.id\n        if e.name == \"home\"\n          column navigationKey=`${{e.id}}`\n            header\n              text \"Home\" role=\"heading\" aria-level=1\n        if e.name == \"detail\"\n          column navigationKey=`${{e.id}}` {route}\n{body}            head title=\"Detail\"\n"
     )
 }
 

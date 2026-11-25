@@ -231,6 +231,7 @@ final class NavigationMoreIOSTests: XCTestCase {
         let deeper = try XCTUnwrap(five.topViewController as? RouteController)
         setSizeClasses(tabs, horizontal: .compact, vertical: .compact)
         let more = try waitForAdoptedMore(navigation, holding: deeper, apart: five)
+        try checkBackHistoryTransfer(session, tabs: tabs, own: five, more: more, deeper: deeper)
         setSizeClasses(tabs, horizontal: .compact, vertical: .regular)
         waitFor("Five's routes are back in its own stack") { deeper.navigationController === five && navigation.primaryNavigation === five && !navigation.changing }
         setSizeClasses(tabs, horizontal: .compact, vertical: .compact)
@@ -407,7 +408,9 @@ final class NavigationMoreIOSTests: XCTestCase {
         XCTAssertTrue(navigation.activeRoute === six.route)
         XCTAssertFalse(more.isNavigationBarHidden, "More's bar")
         XCTAssertEqual(more.navigationBar.topItem?.title, "Six")
-        XCTAssertNotNil(more.navigationBar.backItem, "with UIKit's Back to the list")
+        XCTAssertTrue(more.navigationBar.backItem === more.viewControllers.first?.navigationItem)
+        XCTAssertTrue(more.navigationBar.topItem === six.navigationItem)
+        XCTAssertNil(six.navigationItem.backButtonTitle, "the wrapper keeps UIKit's projection")
         // A route's cover is its safe area past the document's own insets (`routeEdges`)
         let route = try XCTUnwrap(six.route)
         let barBottom = more.navigationBar.convert(more.navigationBar.bounds, to: nil).maxY

@@ -530,7 +530,9 @@ component Crawled
       if top(nav).name == "art"
         head title="Pikachu & \\"co\\"" description="An electric \\"mouse\\"\\u{D}" image="/art/25.png" canonical="/pokemon/25" robots="noindex"
       if top(nav).name == "cafe"
-        head canonical="/café" robots="max-image-preview:none"
+        head title=none description="Book details"
+        column
+          head title="Café" canonical="/café" robots="max-image-preview:none"
       text "page"
 `;
   const crawled = page => [...page.matchAll(/<title>[^<]*<\/title>|<meta (?:name|property)="(?:viewport|description|robots|og:[a-z_]+|twitter:[a-z]+)" content="[^"]*">|<link rel="canonical"[^>]*>/g)].map(m => m[0]);
@@ -552,6 +554,9 @@ component Crawled
     '<meta name="twitter:image" content="https://caltrain.exact.invalid/art/25.png">',
   ]);
   expect(heads.js[0]).toContain('<meta property="og:url" content="https://caltrain.exact.invalid/">');
+  expect(heads.js[0]).toContain('<title>Caltrain</title>');
+  expect(heads.js[2]).toContain('<title>Café</title>');
+  expect(heads.js[2]).toContain('<meta name="description" content="Book details">');
   expect(heads.js[2]).toContain('<link rel="canonical" href="https://caltrain.exact.invalid/café">');
   expect(heads.js[2]).toContain('<meta name="robots" content="max-image-preview:none">');
   expect(files.js).toEqual(files.rust);
@@ -565,31 +570,6 @@ test('both document renderers leave declared crawler paths to request routes', a
     expect(['robots.txt', 'sitemap.xml'].map(f => existsSync(resolve(dist, f)))).toEqual([false, false]),
   {}, { name: 'Caltrain', app: { id: 'test.heads', name: 'Caltrain', origin: 'https://caltrain.exact.invalid' } }, renderer);
 }, 1_800_000);
-
-test('JavaScript-rendered pages exclude a covered route’s deeper head', async () => {
-  await renderedPages(`routes nav
-  tab home "/" render=build
-    detail "/detail" render=build
-    plain "/plain" render=build
-
-component Heads
-  view
-    main navigationKey=\`\${top(nav).id}\` navigationBack="back"
-      head title="Root" description="Root description"
-      for e in stack(nav) key=e.id
-        column navigationKey=\`\${e.id}\`
-          if e.name == "home"
-            column
-              head title="Home" description="Home description"
-          if e.name == "detail"
-            head title="Detail" description="Detail description"
-          text e.name
-`, page => {
-    expect(page('')).toEqual(['Home', 'Home description']);
-    expect(page('detail')).toEqual(['Detail', 'Detail description']);
-    expect(page('plain')).toEqual(['Root', 'Root description']);
-  });
-}, 30000);
 
 test('JavaScript-rendered navigation keeps split facts without browser geometry', async () => {
   await renderedPages(`routes nav

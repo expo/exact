@@ -26,6 +26,7 @@ component App
       for e in stack(nav) key=e.id
         if e.name == "home"
           column navigationKey=`${e.id}` position="absolute" inset=0 padding=16
+            head title="Weather"
             text (units == "C" ? "21 °C" : "70 °F") testId="reading"
         if e.name == "settings"
           column navigationKey=`${e.id}` position="absolute" inset=0 padding=16 gap=12

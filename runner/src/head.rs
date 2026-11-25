@@ -142,6 +142,51 @@ impl<D: DataSource> Runner<D> {
         head_of(self.roots(), |id| kernel_node(kernel, id))
     }
 
+    /// Back history titles for the logical routes, including covered routes
+    /// (LLP 1075.003 §9.10). Each route starts a new head scope.
+    pub fn route_head_titles(&self) -> std::collections::BTreeMap<ViewId, Option<&str>> {
+        let kernel = self.kernel();
+        let mut titles = std::collections::BTreeMap::new();
+        let mut stack: Vec<_> = self
+            .roots()
+            .into_iter()
+            .rev()
+            .map(|id| (id, None, 0))
+            .collect();
+        while let Some((id, mut route, depth)) = stack.pop() {
+            let Some((kind, props, children)) = kernel_node(kernel, id) else {
+                continue;
+            };
+            if props.str(PropId::NavigationKey).is_some()
+                && props.str(PropId::NavigationBack).is_none()
+            {
+                route = Some(id);
+                titles.insert(id, None);
+            } else if props.str(PropId::SemanticTag) == Some("dialog")
+                || matches!(
+                    props.str(PropId::AccessibilityRole),
+                    Some("dialog" | "alertdialog")
+                )
+            {
+                route = None;
+            }
+            if kind == NodeType::Head {
+                if let (Some(route), Some(title)) = (route, props.str(PropId::HeadTitle)) {
+                    let best = titles.get_mut(&route).expect("route scope");
+                    if best.is_none_or(|(at, _)| depth >= at) {
+                        *best = Some((depth, title));
+                    }
+                }
+            } else {
+                stack.extend(children.iter().rev().map(|child| (child, route, depth + 1)));
+            }
+        }
+        titles
+            .into_iter()
+            .map(|(id, best)| (id, best.map(|(_, title)| title)))
+            .collect()
+    }
+
     /// Whether `id` lies under a route its navigation root has not selected:
     /// a screen a stack keeps mounted under its top, or any screen of a tab
     /// that is not the selected one (LLP 1075.003 §3.7; shop F16), which

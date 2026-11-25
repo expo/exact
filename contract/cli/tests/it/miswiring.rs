@@ -7,6 +7,8 @@ use crate::scratch::Scratch;
 
 /// The ids and lines of the warnings `src` earns, after checking that it
 /// still compiles.
+/// The warnings of `src` but Back's history warning, which the fixtures' routes, untitled, all carry
+/// (`back_history_warns_only_for_statically_unnamed_routes`)
 fn warned(src: &str) -> Vec<(String, u32)> {
     let (result, warnings) = contract::compile_warned(src);
     if let Err(e) = result {
@@ -14,6 +16,7 @@ fn warned(src: &str) -> Vec<(String, u32)> {
     }
     warnings
         .iter()
+        .filter(|w| w.id != UNTITLED)
         .map(|w| (w.id.clone(), w.span.line))
         .collect()
 }
@@ -22,9 +25,12 @@ fn messages(src: &str) -> Vec<String> {
     contract::compile_warned(src)
         .1
         .into_iter()
+        .filter(|w| w.id != UNTITLED)
         .map(|w| w.message)
         .collect()
 }
+
+const UNTITLED: &str = "lower-route-untitled";
 
 const SWIPE: &str = "lower-swipe-wiring";
 
@@ -553,6 +559,7 @@ fn warned_file(name: &str, src: &str) -> Vec<(String, u32, String)> {
     }
     warnings
         .into_iter()
+        .filter(|w| w.id != UNTITLED)
         .map(|w| (w.id.clone(), w.span.line, w.message))
         .collect()
 }

@@ -21,7 +21,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// What Exact last projected into the navigation item, and that plus
     /// what the route hatch last saw; whether the hatch has run; the header
     /// lifted into the bar; the content scroll view a hatch was handed.
-    var projectedSource: BarSource?, projected: HatchSource?, backSource: String?
+    var projectedSource: BarSource?, projected: HatchSource?
+    #if os(iOS)
+    var backHistory: BackHistory?
+    #endif
     /// `projectedSource` with every item's enabling left out: an item that is only enabled or disabled changes
     /// in place, on the item kept for it (`NavigationHost.enable`, `barItemsMade`).
     var projectedFaces: BarSource?

@@ -1330,6 +1330,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             // Tree updates during UIKit's transition retain their latest
             // intent. Apply it once the native stack is available again.
             runHeldSync()
+            #if os(iOS)
+            if !syncing { reconcileBackHistory(in: navigationController) }
+            #endif
             let left = leaveToTabsChange {
                 $0.fit = true
                 $0.input = true

@@ -55,6 +55,7 @@ component MoreTabs
             column role="tabpanel" id="panel-six" position="absolute" inset=0
               column navigationKey=(match first(t.stack) { case some(e) => `${e.id}`, case none => "" }) testId="route-six" position="absolute" inset=0
                 text "six" testId="text-six"
+                head title="Six history"
           else if t.name == "four"
             column role="tabpanel" id="panel-four" position="absolute" inset=0
               column navigationKey=(match first(t.stack) { case some(e) => `${e.id}`, case none => "" }) testId="route-four" position="absolute" inset=0 display="flex" flex-direction="column"
@@ -89,6 +90,7 @@ component MoreTabs
                     button press=pick("five") testId="sheet-five"
                       text "Five"
                   if e.name == "five"
+                    head title="Five history"
                     scroll testId="list-five" flex=1 min-height=0
                       button press=open("/five/deeper") testId="open-deeper"
                         text "Deeper"

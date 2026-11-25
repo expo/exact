@@ -231,6 +231,9 @@ extension NavigationHost {
             exhaustedStackWrites.removeValue(forKey: id)
             return true
         }
+        #if os(iOS)
+        reconcileBackHistory(in: nav)
+        #endif
         let exhausted = exhaustedStackWrites[id]?.matches(held: held, wanted: routes) == true
         let label = stacks[id]?.label ?? String(describing: id)
         let difference = "stack \(label) holds \(Self.stackKeys(held)) in UIKit and was asked for \(Self.stackKeys(routes))"

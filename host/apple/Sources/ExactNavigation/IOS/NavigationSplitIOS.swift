@@ -179,7 +179,13 @@ extension NavigationHost {
     /// An inactive tab keeps its columns and its row. Read its rule without replacing the active tab's subscription.
     func syncInactiveSplit(_ columns: SplitIOS, _ routes: [RouteController], sequence: UInt64) {
         let changed = !columns.shown.elementsEqual(routes, by: ===)
-        guard changed || !columns.presses.isEmpty else { return }
+        guard changed || !columns.presses.isEmpty else {
+            #if os(iOS)
+            reconcileBackHistory(in: columns.list)
+            reconcileBackHistory(in: columns.detail)
+            #endif
+            return
+        }
         if let root = routes.first, let runtime = presenter.session?.runtime {
             if let rule = runtime.stackSplitAnswer(root.node.id, retaining: columns.listNode, excluding: candidateSearchResult(in: root)?.id) {
                 columns.rule = rule
@@ -242,6 +248,8 @@ extension NavigationHost {
     func splitChanged() {
         guard let split else { return }
         #if os(iOS)
+        reconcileBackHistory(in: split.list)
+        reconcileBackHistory(in: split.detail)
         if split.paired {
             presenter.groupedLists?.sync(changed: nil)
             scheduleSplitProjection()

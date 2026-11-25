@@ -167,6 +167,9 @@ impl<D: DataSource> Host<D> {
         }
         if !receipts.is_empty() {
             self.emit_title(&mut batch);
+            if self.has_heads {
+                self.emit_route_head_titles(&mut batch);
+            }
         }
         let mut height_target_error = None;
         // Runner receipts retain due-time order. Unobserved motion starts at
@@ -240,6 +243,21 @@ impl<D: DataSource> Host<D> {
         }
         batch.timed(&mut self.runner, false);
         (batch, error.or(layout_error))
+    }
+
+    pub(super) fn emit_route_head_titles(&mut self, batch: &mut Batch) {
+        if cfg!(any(target_os = "ios", test)) {
+            for (id, title) in self.runner.route_head_titles() {
+                if let Some(view) = self.mirror.get_mut(&id) {
+                    view.derived_prop(
+                        id,
+                        PropId::HeadTitle.name(),
+                        title.map(str::to_owned),
+                        batch,
+                    );
+                }
+            }
+        }
     }
 
     /// @ref LLP 1038 D7 — report the final revision even if the selected visit stayed the same.

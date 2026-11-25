@@ -21,6 +21,7 @@ pub fn rank(id: &str, message: &str) -> u8 {
         | "lower-header-nested"
         | "lower-header-routeless"
         | "lower-header-no-bar"
+        | "lower-route-untitled"
         | "lower-env-in-owner"
         | "lower-navigation-key"
         | "lower-navigation-back-id"

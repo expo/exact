@@ -34,7 +34,12 @@ impl Mirror {
         // Cleared here as unauthored, a growing list's `flexGrows` went and
         // came back in every batch that touched the list: each row of a
         // scrolling list of tasks reconfigured its checkbox for it.
-        for key in super::layout::DERIVED_PROPS {
+        let route_title = self.props.contains_key(PropId::NavigationKey.name());
+        let derived = super::layout::DERIVED_PROPS
+            .iter()
+            .copied()
+            .chain(route_title.then_some(PropId::HeadTitle.name()));
+        for key in derived {
             if let (Some(value), false) = (self.props.get(key), props.contains_key(key)) {
                 props.insert(key, value.clone());
             }

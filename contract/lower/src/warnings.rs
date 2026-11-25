@@ -33,6 +33,7 @@ mod nested_header;
 mod owner_env;
 mod parts;
 mod roles;
+mod route_untitled;
 mod routeless_header;
 mod rows;
 mod screens;
@@ -144,6 +145,13 @@ pub(crate) fn with_text_styles(
     let checking = contract_checking::Checking::new(checked);
     let checked_view = checking.expanded();
     let controlled = roles::controlled(&checked_view);
+    let targets = crate::icons::shipped();
+    // Back's history names the routes under the top of a stack, so an app whose stacks never hold two routes has none
+    let names_history = (targets.is_empty() || targets.iter().any(|t| t.name == "ios"))
+        && route_untitled::stacks_grow(checked.file.routes.as_ref());
+    // The unnamed routes, named once the walk has seen two pushed routes: a stack whose other routes are presented over
+    // it never shows Back's history
+    let (mut untitled, mut pushed, mut unnamed) = (BTreeSet::new(), BTreeSet::new(), Vec::new());
     crate::menu_rows::notes(&checked_view, &mut out);
     crate::symbols::tints(&root.view, checked.file, lowered, &mut out);
     let start = (false, None, Vec::new());
@@ -210,6 +218,15 @@ pub(crate) fn with_text_styles(
                 drawn_back(attrs, visit.regions()[0], name, &mut out);
             }
             if route {
+                // The not-found screen the compiler writes (LLP 1116.009 D2), at the routes' own span, shows for a
+                // visit no author pushes
+                let written = checked.file.routes.as_ref().is_some_and(|r| r.span == span);
+                if names_history && !written && !route_untitled::presented(attrs) {
+                    pushed.insert(span);
+                    if route_untitled::check(visit, no_bar) && untitled.insert(span) {
+                        unnamed.push(route_untitled::warning(span));
+                    }
+                }
                 owner_env::env_in_owner(visit, &checked.file.styles, &mut owned, &mut out);
             }
             if literal(attrs, "role") == Some("tablist") {
@@ -217,6 +234,9 @@ pub(crate) fn with_text_styles(
                 tabs::search_tab(visit, &mut out);
             }
         }
+    }
+    if pushed.len() > 1 {
+        out.extend(unnamed);
     }
     (checked.file.styles.iter()).for_each(|s| line_height::multiplier(&s.attrs, &mut out));
     out.extend(screens::screen_by_state(checked));

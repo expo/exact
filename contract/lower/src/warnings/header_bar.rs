@@ -333,6 +333,40 @@ pub(super) fn route_header(children: Structure<'_>, out: &mut Vec<LowerError>) {
     }
 }
 
+/// A statically blank projected heading, or a route with no projected heading.
+pub(super) fn blank_heading(route: Structure<'_>) -> bool {
+    let Some(first) = route.roots().next() else {
+        return true;
+    };
+    let Some((tag, _, attrs)) = first.element() else {
+        return false;
+    };
+    if tag != "header" || nested_header::no_bar(attrs) {
+        return true;
+    }
+    if computed(attrs, "display") || computed(attrs, "appearance") || has(attrs, "class") {
+        return false;
+    }
+    let mut bar = Bar::default();
+    walk(first, &mut bar);
+    if bar.doubt {
+        return false;
+    }
+    match bar.title.filter(|_| bar.headings == (1, 1)) {
+        Some(heading) => heading.element().is_some_and(|(_, words, attrs)| {
+            !attrs
+                .iter()
+                .any(|a| matches!(a.name.as_str(), "text" | "class"))
+                && match words.first() {
+                    None => heading.children().next().is_none(),
+                    Some(Expr::Str(text, _)) => exact_kernel::bars::blank_history_label(text),
+                    _ => false,
+                }
+        }),
+        None => true,
+    }
+}
+
 /// Each `header` that is a route's first child, wherever an `if` or a
 /// `match` puts it, with what follows it, unless it says it is no bar.
 fn route_headers(children: Structure<'_>) -> Vec<(Visit<'_>, Rc<[Visit<'_>]>)> {

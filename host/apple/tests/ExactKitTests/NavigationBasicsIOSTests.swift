@@ -1447,10 +1447,14 @@ final class NavigationBasicsIOSTests: XCTestCase {
         pop.interaction.update(0.4)
         spin(0.1)
         XCTAssertFalse(nav.isNavigationBarHidden, "the bar comes in with Chat, mid-pop")
+        try setCoveredBackHistoryTitle(session, route: chat)
         pop.interaction.cancel()
         until("the cancelled pop returns") { nav.transitionCoordinator == nil && nav.viewControllers.count == 3 }
         spin(0.2)
         XCTAssertTrue(nav.isNavigationBarHidden, "and leaves with the cancel")
+        XCTAssertEqual(chat.navigationItem.title, "")
+        XCTAssertEqual(chat.navigationItem.backButtonTitle, "Conversation")
+        XCTAssertEqual(chat.navigationItem.backButtonDisplayMode, .generic)
         pop.interactive = false
         nav.popViewController(animated: true)
         until("the pop lands") { nav.transitionCoordinator == nil && nav.viewControllers.count == 2 }

@@ -368,6 +368,8 @@ component DuoLab
                 ArrangementView(routeKey=`${entry.id}`, depth=(match parseNumber(entry.params.depth) { case some(n) => n, case none => i + 1 }), native=paneSupport.available, seed=arrangementSeed, openNext=openArrangement)
               if entry.name != "images" and entry.name != "reflow" and t.name != "keyboard" and t.name != "panes" and t.name != "arrangement"
                 column navigationKey=`${entry.id}` navigationBar="none" -exact-safe-area="none" class=Screen testId=`screen-${entry.name}`
+                  // Back's history names each screen by its tab's label, or the note's
+                  head title=(entry.name == "fold" ? "Fold" : entry.name == "note" ? "Note" : "Combos")
                   if entry.name == "fold"
                     // Two segments across: the list on the first, the detail on the
                     // second, each inset on its own side by the safe area kept clear

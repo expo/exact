@@ -67,7 +67,11 @@ routes nav
     rows "/rows"
     wrapped "/wrapped"
 
+shape ViewerPlace
+  locale: string
+
 component NavigationBars
+  resource place = exactTime() as shape ViewerPlace
   state backs = 0
   state stays = 0
   state prefix = false
@@ -163,6 +167,16 @@ component NavigationBars
                 for l in ["detail", "plain", "twin", "own", "viewer", "sheet", "titled", "form", "glass", "clear", "veil", "solid", "full", "tall", "pair", "named", "bare", "rows", "wrapped"] key=l
                   button press=open(l) testId=`${e.name}-open-${l}`
                     text l
+              if e.name == "start" and place.locale == "fr-FR"
+                head title="Sections en français"
+              if e.name == "detail"
+                button "Show history dialog" testId="open-history-dialog" command="show-modal" commandfor="history-dialog"
+                dialog id="history-dialog" navigationDetent="300 large"
+                  ::backdrop
+                    background-color="transparent"
+                  column
+                    head title="Dialog title"
+                    button "Close" testId="close-history-dialog" command="close" commandfor="history-dialog"
       for e in stack(nav).filter(x => x.name == "glass") key=e.id
         column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="medium large" testId="route-glass" position="absolute" inset=0
           header testId="header-glass" display="flex" align-items="center" padding="8px 16px"
