@@ -360,7 +360,7 @@ impl Kernel {
         };
         let f = self.arena.frame(slot);
         let (x, y) = (f.x + space.origin.0, f.y + space.origin.1);
-        let guide = space.placed().then(|| match keyboard {
+        let guide = space.placed().then_some(match keyboard {
             Some(k) => k.frame,
             None => [x, y + f.height, f.width, 0.0],
         });

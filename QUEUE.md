@@ -12,7 +12,6 @@
 - `bun test ./host/web/tests/hold.test.mjs` fails before the held-state assertion because the fixture’s `drag-in.js` has no `receive` export.
 - A multi-file Bun run leaves a CDP browser profile behind. Run `bun test ./host/web/collection-wait.test.mjs ./host/web/documents-copy.test.mjs` with an empty `TMPDIR`. All 35 tests pass and an `exact-cdp-*/Default` directory remains.
 - A clipped table row registered as the content-region owner loses the outer grid in its derived layout. Put a 160-point-wide relative `tr` at top 11.3 with a `td` content branch. On c718a4b67 its paragraph projects to y=14.3 where ordinary layout places it at 132.5.
-- `cargo clippy -p exact-kernel --lib -- -D warnings` fails on main at f007d990e. The public `distance` and `sides` fields in `kernel/src/kernel/owner_update.rs` lack documentation.
 - In a parallel `cargo test -p exact-kernel --test it` on the shared Mac, `svg_scene::bounds::a_use_box_stops_at_the_expansion_limit` took 6.93 s against its five-second bound. The same binary passed alone in 2.19 s and in the full suite with four test threads.
 - Consider optional types for direct imports of a development package from `app.json`. In a production build, `manifest.development.packages.swatch?.web?.label` checks against an empty package map. Packages read the selected key through `context.config` (#1608).
 
