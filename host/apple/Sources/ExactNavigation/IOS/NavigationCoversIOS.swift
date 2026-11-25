@@ -206,6 +206,11 @@ extension NavigationHost {
     /// page that did not ask to cover it — and the header a bar replaces,
     /// reported when they change, after the batch being applied.
     func reportCovers() {
+        // Report what UIKit settles, once it has changed its tabs (`whileTabsChange`)
+        if let tabs = tabController as? TabController {
+            tabs.left.covers = tabs.changes > 0 || tabs.layingOut > 0
+            guard !tabs.left.covers else { return }
+        }
         projectSidebarFooter(sidebarFooter())
         #if os(iOS)
         projectTabAccessory()

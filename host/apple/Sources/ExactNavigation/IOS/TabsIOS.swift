@@ -28,8 +28,20 @@ import ExactKit
 /// A hidden tab bar's UIKit wrappers can remain visible to accessibility.
 /// Hide only its branch, stopping before any child controller's content.
 final class TabController: UITabBarController {
+    weak var host: NavigationHost?
+    /// How many of UIKit's changes of these tabs are under way, one within another, how many of their ends are doing what
+    /// they left, and how many of those the layout, and what is left (`NavigationHost.whileTabsChange`).
+    var changes = 0, ends = 0, layingOut = 0, left = LeftToTabsChange()
     private weak var barGroup: UIView?
     private var hidGroup = false
+
+    #if os(iOS)
+    /// UIKit changes which tabs its bar and More hold within a trait change (LLP 1075.003 §9.16).
+    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+        guard let host, host.tabController === self else { return super.traitCollectionDidChange(previous) }
+        host.whileTabsChange(self) { super.traitCollectionDidChange(previous) }
+    }
+    #endif
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()

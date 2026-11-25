@@ -106,6 +106,7 @@ extension NavigationHost {
         tabContainerAsked = presenter.session?.natives.hatchesConnected == true
         let holder: UIViewController = owned ?? {
             let container = TabController()
+            container.host = self
             if #available(iOS 18.0, tvOS 18.0, *), buildsTabs(tabs) {
                 buildTabs(container, navs, tabs, unsaid: kernel?.unsaid ?? false, selected: p.at)
             } else {
