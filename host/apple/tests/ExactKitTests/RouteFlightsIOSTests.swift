@@ -61,12 +61,17 @@ final class RouteFlightsIOSTests: XCTestCase {
         let lifted = Date().addingTimeInterval(1)
         while !(arriver.superview is FlightClip), nav.transitionCoordinator != nil, Date() < lifted { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
         XCTAssertTrue(arriver.superview is FlightClip, "the arriver flies above both routes")
+        XCTAssertTrue(p.flights[6]?.fade?.view.superview === arriver.superview, "the leaver's picture dissolves into it in its clip")
         XCTAssertTrue(arriver.window != nil && !arriver.isDescendant(of: detail.view))
         let deadline = Date().addingTimeInterval(3)
         while nav.transitionCoordinator != nil || !p.flights.isEmpty, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(arriver.superview === place, "it lands in its place")
         XCTAssertEqual(arriver.convert(arriver.bounds, to: nil).minY, detail.view.convert(CGRect(x: 0, y: 0, width: 1, height: 1), to: nil).minY, accuracy: 0.5)
         XCTAssertEqual(leaver.alpha, 1, "and the leaver shows again")
+        XCTAssertEqual(arriver.alpha, 1, "the arriver, faded in, at its own opacity")
+        // A zoom holds nothing: its names ride its card.
+        p.holdFlights(leaving: detail.view, arriving: list.view, zoom: "photo")
+        XCTAssertEqual((p.flightHost as? BuiltInFlights)?.holds.count, 0)
         // An app's Back: its batch destroys the detail before UIKit's pop starts, and the hold keeps its name.
         p.holdFlights(leaving: detail.view, arriving: list.view, zoom: nil)
         p.views.removeValue(forKey: 6)

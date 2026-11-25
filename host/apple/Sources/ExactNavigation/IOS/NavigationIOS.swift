@@ -1075,7 +1075,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             transitionEnded(navigationController, swipe: swipe, cancelled: context.isCancelled)
         }
         #if os(iOS)
-        // The names both routes hold fly alongside, a zoom's source aside (LLP 1013.004 D3).
+        // The names both routes hold fly alongside, unless it zooms (LLP 1013.004 D3).
         if let from = transition.viewController(forKey: .from) as? RouteController, let to = viewController as? RouteController {
             let zoomed = navigationController.viewControllers.contains(from) ? to : from
             // A route the app removed was frozen with what now flies: its picture again, without it.

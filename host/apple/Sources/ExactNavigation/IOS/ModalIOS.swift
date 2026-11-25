@@ -209,7 +209,7 @@ private final class ModalController: UIViewController, UIGestureRecognizerDelega
         return route?.props["navigationSource"]
     }
     /// A full-screen route and the screen beneath fly the names both hold, alongside the presentation or the
-    /// dismissal, a drag's included (LLP 1013.004 D3). A sheet slides alone.
+    /// dismissal, unless it zooms (LLP 1013.004 D3). A sheet slides alone.
     private func cross(opening: Bool) {
         guard modalPresentationStyle == .overFullScreen, let coordinator = transitionCoordinator, let presenter = host?.presenter,
               let beneath = presentingViewController?.view else { return }

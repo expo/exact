@@ -42,11 +42,14 @@ final class Flight {
     /// its radius and its clip (D4.4).
     var clip: UIView?
     var geometry: BatchOp?
-    var saved: (interaction: Bool, hidden: Bool)?
-    /// A route change's (LLP 1013.004 D3): its transition lifts it, and a text scales by its shown box's
+    var saved: (interaction: Bool, hidden: Bool, alpha: CGFloat)?
+    /// A route change's (LLP 1013.004 D3): its transition lifts it, and a text scales by its content box's
     /// height, not its width, since a paragraph's box can be the row's width at one end and its words'
-    /// at the other while its height is its font's.
+    /// at the other while its content's height is its font's.
     var crossing = false
+    /// A route change's picture of the leaver and its content box in it, which dissolves into the arriver in
+    /// the clip (LLP 1013.004 D3 step 4).
+    var fade: (view: UIView, content: CGRect)?
     init(id: UInt32, source: FlightSource) { self.id = id; self.source = source }
 }
 
@@ -60,8 +63,9 @@ final class FlightLayer: UIView {
 final class BuiltInFlights: FlightHosting {
     weak var presenter: Presenter?
     var flights: [UInt32: Flight] = [:]
-    /// Leavers of a route the batch destroys, kept for the transition that starts with it (`holdFlights`).
-    var holds: [ObjectIdentifier: NodeView] = [:]
+    /// Leavers of a route the batch destroys, kept for the transition that starts with it (`holdFlights`), with
+    /// where each showed then: the destroy takes an image's raster.
+    var holds: [ObjectIdentifier: (view: NodeView, source: FlightSource)] = [:]
     init(_ presenter: Presenter) { self.presenter = presenter }
     var isEmpty: Bool { flights.isEmpty }
     func begin(_ op: BatchOp) { presenter?.beginFlight(op) }
@@ -224,6 +228,7 @@ extension Presenter {
         if let s = f.saved {
             view.isUserInteractionEnabled = s.interaction
             view.accessibilityElementsHidden = s.hidden
+            view.alpha = s.alpha
         }
         // Its clip and corners are its style's as it lands, not as they were
         // at lift. An image flew clipped by its own layer, and a style in
@@ -311,7 +316,7 @@ extension Presenter {
             l.setPaintForeground()
             return l
         }()
-        f.saved = (view.isUserInteractionEnabled, view.storedAccessibilityElementsHidden)
+        f.saved = (view.isUserInteractionEnabled, view.storedAccessibilityElementsHidden, view.alpha)
         f.view = view
         f.slot = slot
         f.container = layer
@@ -331,6 +336,7 @@ extension Presenter {
             clip.layer.masksToBounds = true
             layer.addSubview(clip)
             clip.addSubview(view)
+            if let fade = f.fade { clip.addSubview(fade.view) }
             f.clip = clip
             view.flightLook = FlightLook(image: CGRect(origin: .zero, size: size), scale: 1)
         }
@@ -353,17 +359,46 @@ extension Presenter {
             // is the shown box; the radius is the clip's, in the shown box's
             // units, as the leaver's was captured (D4.4).
             let layout = slot.bounds.size
-            var s = FlightScale.of(shown: shown.size, layout: layout) ?? 1
-            if f.crossing, view.kind == "text", layout.height > 0 { s = shown.height / layout.height }
+            let s = FlightScale.of(shown: shown.size, layout: layout) ?? 1
             let ratio = to.width / max(layout.width, 1)
             clip.frame = shown
             clip.layer.cornerRadius = mix(f.source.radius, (view.cornerRadii(in: CGRect(origin: .zero, size: layout)).max() ?? 0) * ratio)
             view.transform = .identity
             view.bounds = CGRect(origin: .zero, size: layout)
-            let a = view.layer.anchorPoint
-            view.layer.position = CGPoint(x: a.x * layout.width * s, y: a.y * layout.height * s)
-            view.transform = CGAffineTransform(scaleX: s, y: s)
-            view.flightLook = FlightLook(image: CGRect(origin: .zero, size: layout), scale: s)
+            func place(_ v: UIView, scale: CGFloat, at origin: CGPoint) {
+                let a = v.layer.anchorPoint
+                v.transform = .identity
+                v.layer.position = CGPoint(x: origin.x + a.x * v.bounds.width * scale, y: origin.y + a.y * v.bounds.height * scale)
+                v.transform = CGAffineTransform(scaleX: scale, y: scale)
+            }
+            guard let fade = f.fade else {
+                place(view, scale: s, at: .zero)
+                view.flightLook = FlightLook(image: CGRect(origin: .zero, size: layout), scale: s)
+                CATransaction.commit()
+                return
+            }
+            let size = fade.view.bounds.size
+            if view.kind == "text" {
+                // Each end's text by its content box's height, as a font's size goes, the two content boxes
+                // aligned, so neither padding moves the words.
+                let mine = view.contentBox(), r = from.width / max(size.width, 1)
+                let c = CGRect(x: mix(from.minX + fade.content.minX * r, to.minX + mine.minX * ratio),
+                               y: mix(from.minY + fade.content.minY * r, to.minY + mine.minY * ratio),
+                               width: 0, height: mix(fade.content.height * r, mine.height * ratio))
+                let sa = c.height / max(mine.height, 1), sf = c.height / max(fade.content.height, 1)
+                place(view, scale: sa, at: CGPoint(x: c.minX - shown.minX - mine.minX * sa, y: c.minY - shown.minY - mine.minY * sa))
+                place(fade.view, scale: sf, at: CGPoint(x: c.minX - shown.minX - fade.content.minX * sf, y: c.minY - shown.minY - fade.content.minY * sf))
+                view.flightLook = FlightLook(image: CGRect(origin: .zero, size: layout), scale: sa)
+            } else {
+                place(view, scale: s, at: .zero)
+                place(fade.view, scale: FlightScale.of(shown: shown.size, layout: size) ?? 1, at: .zero)
+                view.flightLook = FlightLook(image: CGRect(origin: .zero, size: layout), scale: s)
+            }
+            // Early in the flight, each end at full strength half that time, as the Android reader dissolves,
+            // so content alike at both ends does not dim.
+            let t = min(max((p - 0.2) / 0.4, 0), 1)
+            fade.view.alpha = min(1, 2 * (1 - t))
+            view.alpha = min(1, 2 * t) * (f.saved?.alpha ?? 1)
             CATransaction.commit()
             return
         }

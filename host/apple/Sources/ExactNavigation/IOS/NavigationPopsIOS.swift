@@ -176,7 +176,9 @@ extension NavigationHost {
             #if os(iOS)
             // The names the pop will fly to the route it reveals, kept before the batch removes them (LLP 1013.004 D3).
             let kept = c.navigationController?.viewControllers.last { ($0 as? RouteController).map { !destroyed.contains($0.node.id) } ?? true }
-            if c.navigationController?.viewControllers.last === c, let beneath = kept?.viewIfLoaded {
+            // On top, or popping already: UIKit's Back button reaches the router as its pop begins.
+            let nav = c.navigationController
+            if nav?.viewControllers.last === c || nav?.transitionCoordinator?.viewController(forKey: .from) === c, let beneath = kept?.viewIfLoaded {
                 presenter.flightHost.hold(leaving: c.view, arriving: beneath, zoom: c.zoomSource)
             }
             #endif
