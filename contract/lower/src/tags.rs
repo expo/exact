@@ -638,7 +638,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "navigationInitialDetent" | "navigationGrabber" => AttrTarget::Prop(p(name)),
         "navigationSelectedDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
         "navigationEdgeAttachedInCompactHeight" => AttrTarget::Prop(p(name)),
-        "navigationScrollExpands" => AttrTarget::Prop(p(name)),
+        "navigationScrollExpands" | "navigationUndimmedDetent" => AttrTarget::Prop(p(name)),
         // @ref LLP 1125 D11 — the Screen Wake Lock API's one type, on any element.
         "wakelock" => AttrTarget::Prop(p("wakelock")),
         // @ref LLP 1133.029 D1 — the Screen Orientation API's lock types, on any element.

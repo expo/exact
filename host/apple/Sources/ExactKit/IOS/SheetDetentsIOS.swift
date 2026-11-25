@@ -25,13 +25,23 @@ package enum SheetDetents {
     /// The route holds the sheet at `word`, one of its detents (`navigationSelectedDetent`, LLP 1123 D7). A word that
     /// names none of them is journaled, and the sheet stays where it is.
     @MainActor package static func hold(_ sheet: UISheetPresentationController, at word: String, node: NodeView, owner: String) {
-        let value = node.props["navigationDetent"]
-        let words = keptDetents(value, refused: nil).isEmpty ? "large" : value
-        guard let held = identifier(of: word, in: words) else {
-            node.presenter?.session?.log("navigationSelectedDetent \"\(word)\" on \(owner) names none of the detents the sheet kept from navigationDetent \"\(value ?? "")\"; the sheet stays where it is")
-            return
-        }
+        guard let held = named(word, by: "navigationSelectedDetent", node: node, owner: owner, else: "the sheet stays where it is") else { return }
         if sheet.selectedDetentIdentifier != held { sheet.selectedDetentIdentifier = held }
+    }
+
+    /// The tallest detent at which the sheet dims nothing (`navigationUndimmedDetent`, LLP 1123 D7), nil unsaid. A
+    /// word that names none of them is journaled, and every detent dims.
+    @MainActor package static func undimmed(_ word: String?, node: NodeView, owner: String) -> UISheetPresentationController.Detent.Identifier? {
+        word.flatMap { named($0, by: "navigationUndimmedDetent", node: node, owner: owner, else: "every detent dims") }
+    }
+
+    /// The identifier of `word` among the detents the node's sheet keeps, its `attribute`'s; a word naming none is
+    /// journaled with what follows.
+    @MainActor private static func named(_ word: String, by attribute: String, node: NodeView, owner: String, else follows: String) -> UISheetPresentationController.Detent.Identifier? {
+        let value = node.props["navigationDetent"]
+        if let found = identifier(of: word, in: keptDetents(value, refused: nil).isEmpty ? "large" : value) { return found }
+        node.presenter?.session?.log("\(attribute) \"\(word)\" on \(owner) names none of the detents the sheet kept from navigationDetent \"\(value ?? "")\"; \(follows)")
+        return nil
     }
 
     @MainActor package static func updateGrabber(_ value: String?, on sheet: UISheetPresentationController) {

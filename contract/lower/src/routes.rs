@@ -436,6 +436,11 @@ impl NavPlace {
                 "the height its sheet is at",
                 false,
             ),
+            (
+                "navigationUndimmedDetent",
+                "the tallest height at which its sheet leaves the screen under it live",
+                false,
+            ),
         ] {
             let Some(a) = attrs.iter().rev().find(|a| a.name == name) else {
                 continue;

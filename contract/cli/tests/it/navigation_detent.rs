@@ -242,3 +242,17 @@ fn the_sheet_choices_take_their_words() {
         }
     }
 }
+
+/// An undimmed detent is one of the sheet's heights, on a route (LLP 1123 D7).
+#[test]
+fn the_undimmed_detent_is_one_of_the_sheets_heights() {
+    let compile = |route: &str| contract::compile(&sheet(route, ""));
+    compile("navigationDetent=\"medium large\" navigationUndimmedDetent=\"medium\"").unwrap();
+    let error = compile("navigationDetent=\"medium large\" navigationUndimmedDetent=\"300\"")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("`navigationUndimmedDetent=\"300\"` is not one of this sheet's heights"),
+        "{error}"
+    );
+}

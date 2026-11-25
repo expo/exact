@@ -55,6 +55,19 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
     }
     /// Presented as a sheet, at whichever of its sizings
     private var isSheet: Bool { modalPresentationStyle != .overFullScreen }
+    /// The sheet rests at or below its undimmed detent, so it dims nothing and is no modal dialog: the screen under it
+    /// stays live (LLP 1123 D7). Its detents ascend, as Exact keeps them.
+    var restsUndimmed: Bool {
+        #if os(tvOS)
+        return false
+        #else
+        guard isSheet, let sheet = sheetPresentationController, let undimmed = sheet.largestUndimmedDetentIdentifier else { return false }
+        let detents = sheet.detents.map(\.identifier)
+        guard let top = detents.firstIndex(of: undimmed),
+              let at = (sheet.selectedDetentIdentifier ?? detents.first).flatMap(detents.firstIndex(of:)) else { return false }
+        return at <= top
+        #endif
+    }
     /// A sheet route's authored `border-radius`, its top-left corner's: the
     /// sheet's corner radius. Nil leaves UIKit's, which on iOS 26 and later
     /// follows the display's corners and insets a large sheet from the bottom edge.
@@ -67,9 +80,10 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
     /// attachment in a compact height and its scroll expansion.
     private var choices = SheetChoices()
     private struct SheetChoices: Equatable {
-        var selected: String?, edgeAttached: String?, scrollExpands: String?
+        var selected: String?, undimmed: String?, edgeAttached: String?, scrollExpands: String?
         init(_ props: [String: String]? = nil) {
             selected = props?["navigationSelectedDetent"].flatMap { $0.isEmpty ? nil : $0 }
+            undimmed = props?["navigationUndimmedDetent"].flatMap { $0.isEmpty ? nil : $0 }
             edgeAttached = props?["navigationEdgeAttachedInCompactHeight"]
             scrollExpands = props?["navigationScrollExpands"]
         }
@@ -98,6 +112,7 @@ final class ModalController: UIViewController, UIGestureRecognizerDelegate {
                 let owner = "route \"\(route.props["navigationKey"] ?? "")\""
                 if newDetents || released { SheetDetents.select(on: sheet, node: route, owner: owner) }
                 if let held { SheetDetents.hold(sheet, at: held, node: route, owner: owner) }
+                sheet.largestUndimmedDetentIdentifier = SheetDetents.undimmed(next.undimmed, node: route, owner: owner)
             }
             SheetDetents.updateGrabber(grabber, on: sheet)
             if let expands = next.scrollExpands { sheet.prefersScrollingExpandsWhenScrolledToEdge = expands == "true" }
@@ -339,19 +354,22 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
     var closedby: String? { layers.last?.route.props["closedby"] }
     var presentation: String? { layers.last?.kind }
     var coordinateView: UIView? { layers.last?.controller.viewIfLoaded }
-    /// Whether the top presentation, modal as every one is (LLP 1123 D2),
-    /// makes `view` inert: it is neither in it nor in a `dialog`'s sheet or
-    /// confirmation, which UIKit presents over it (HTML modal dialogs).
+    /// The top modal presentation: every presentation is modal (LLP 1123 D2) but a sheet resting at or below its
+    /// undimmed detent (D7), which leaves what is under it live. It and what is above it are live, the rest inert.
+    private var boundary: Int? { layers.lastIndex { !$0.controller.restsUndimmed } }
+    /// Whether the top modal presentation makes `view` inert: it is in neither that presentation nor one above it,
+    /// nor in a `dialog`'s sheet or confirmation, which UIKit presents over it (HTML modal dialogs).
     func inertBehind(_ view: UIView) -> Bool {
-        guard let top = coordinateView else { return false }
-        return !view.isDescendant(of: top) && !presenter.dialogs.shows(view) && !presenter.menus.confirmationShows(view)
+        guard let boundary else { return false }
+        let live = layers[boundary...].contains { $0.controller.viewIfLoaded.map(view.isDescendant(of:)) ?? false }
+        return !live && !presenter.dialogs.shows(view) && !presenter.menus.confirmationShows(view)
     }
     var owner: UIViewController? { layers.last?.controller }
     /// The presentations' navigations, live and retiring, bottom to top.
     var navigations: [UINavigationController] { (layers + retiring).compactMap { $0.navigation as? UINavigationController } }
-    /// The top live presentation's navigation, the one nothing is dismissing:
-    /// UIKit's presentation makes what is under it inert.
-    var topNavigation: UINavigationController? { layers.last?.navigation as? UINavigationController }
+    /// The top modal presentation's navigation, of those nothing is dismissing: UIKit's presentation makes what is
+    /// under it inert (`boundary`).
+    var topNavigation: UINavigationController? { boundary.flatMap { layers[$0].navigation as? UINavigationController } }
     func mounts(_ view: UIView) -> Bool { surfaces(includingRetiring: true).contains { view.isDescendant(of: $0.view) } }
     var routes: [(node: NodeView, kind: String)] { layers.map { ($0.route, $0.kind) } }
     /// Each live presentation UIKit draws at another size than it lays it
@@ -444,6 +462,15 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         }
     }
 
+    /// A presentation's background is inert while the presentation is modal and as it was before it while it rests
+    /// undimmed (LLP 1123 D7), as UIKit passes touches through an undimmed sheet's dimming.
+    private func syncBackground(_ layer: Presentation) {
+        let modal = !layer.controller.restsUndimmed, view = layer.background.view!
+        let interaction = !modal && layer.backgroundInteraction, hidden = modal || layer.backgroundAccessibility
+        if view.isUserInteractionEnabled != interaction { view.isUserInteractionEnabled = interaction }
+        if view.accessibilityElementsHidden != hidden { view.accessibilityElementsHidden = hidden }
+    }
+
     private func releaseBackground(_ layer: Presentation) {
         let background = layer.background
         background.view.isUserInteractionEnabled = layer.backgroundInteraction
@@ -454,6 +481,7 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         for layer in layers {
             layer.controller.isModalInPresentation = refusesDismissal(of: layer.route)
             layer.controller.updateSheet(detent: layer.route.props["navigationDetent"], cornerRadius: ModalController.cornerRadius(of: layer.route), grabber: layer.route.props["navigationGrabber"])
+            syncBackground(layer)
             #if os(iOS)
             layer.controller.paintSurface()
             #endif
@@ -556,9 +584,8 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
         // The press that opened the sheet may hand its control's focus to the
         // route's first autofocus until the route goes (PressHandoffIOS).
         presenter.pressShows(route)
-        // The presenting screen stays where it is, inert (HTML modal dialogs)
-        background.view.isUserInteractionEnabled = false
-        background.view.accessibilityElementsHidden = true
+        // The presenting screen stays where it is, inert while the sheet is modal (HTML modal dialogs)
+        syncBackground(layer)
         let controller = layer.controller
         if #available(iOS 18.0, tvOS 18.0, *), layer.kind == "fullscreen", route.props["navigationSource"] != nil {
             let options = UIViewController.Transition.ZoomOptions()
@@ -810,7 +837,10 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
 extension ModalHost: UISheetPresentationControllerDelegate {
     func sheetPresentationControllerDidChangeSelectedDetentIdentifier(_ sheetPresentationController: UISheetPresentationController) {
         presenter.resolveStatusBar()
-        layers.first { $0.controller.sheetPresentationController === sheetPresentationController }?.controller.paintSurface()
+        guard let layer = layers.first(where: { $0.controller.sheetPresentationController === sheetPresentationController }) else { return }
+        layer.controller.paintSurface()
+        // Dragged past its undimmed detent, the sheet begins or ends its modality
+        syncBackground(layer)
     }
 }
 #endif

@@ -17,6 +17,7 @@ pub(super) fn note(name: &str) -> Option<&'static str> {
         "navigationEdgeAttachedInCompactHeight" => "on a sheet route (LLP 1123 D7). \"true\": in a short window, as an iPhone's in landscape, the sheet rests on the screen's bottom edge, as it does in a tall one; \"false\", the default, is the platform's: the sheet covers the short window's height. iOS",
         "navigationScrollExpands" => "on a sheet route (LLP 1123 D7). \"true\": scrolling the sheet's content at its top grows the sheet to its next height; \"false\": the content scrolls and the sheet keeps its height. Unsaid, the platform's: it grows on a sheet with several detents. iOS",
         "navigationSizing" => "on a sheet route (LLP 1123 D7), read as it is presented. \"page\", the default, a page sheet; \"form\", a form sheet, centred at a standard size in a regular-width window (an iPad, an open iPhone Duo); \"automatic\", the platform's choice. On an iPhone in portrait all three are the same sheet. iOS",
+        "navigationUndimmedDetent" => "on a sheet route (LLP 1123 D7), the tallest word of its `navigationDetent` at which the sheet dims nothing: resting there or lower, the screen under it stays live, taking touches as a map under a search sheet does, and the sheet is no modal dialog. `navigationDetent=\"medium large\" navigationUndimmedDetent=\"medium\"` is modal only at `large`. Unsaid, every height dims. iOS",
         _ => return None,
     })
 }
