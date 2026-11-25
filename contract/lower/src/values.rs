@@ -30,15 +30,17 @@ fn literal_text(e: &Expr) -> String {
         _ => "…".into(),
     }
 }
-/// `navigationSplit`'s column width written as a number: its text, as the
-/// prop carries it (LLP 1116.004 D1.2).
-pub(crate) fn split_width(prop: PropId, e: &Expr) -> Option<Expr> {
-    match e {
-        Expr::Number(n, span) if prop == PropId::NavigationSplit => {
-            Some(Expr::Str(n.to_string(), *span))
-        }
-        _ => None,
+/// `navigationSplit` as the prop carries it where the compiler knows its text (`routes::split_text`): that text, one
+/// string literal, so every reader of the plan, the runner's scan of a tab's ask included, reads the value the compiler
+/// judged (LLP 1127 D1, D19). A switch stays itself, for its own refusal.
+pub(crate) fn split_literal(prop: PropId, e: &Expr) -> Option<Expr> {
+    if prop != PropId::NavigationSplit || matches!(e, Expr::Str(..)) {
+        return None;
     }
+    if matches!(crate::routes::untyped(e), Expr::Bool(..)) {
+        return None;
+    }
+    crate::routes::split_text(e).map(|text| Expr::Str(text, e.span()))
 }
 /// `glassGroup`'s value to compile (LLP 1053.000.000 D1, 1053.000.000.000
 /// D1): each literal spacing, at the top and in every arm of a choice, is 0 to
@@ -1130,16 +1132,32 @@ pub(crate) fn check_prop_value(
             }
         }
     }
-    // @ref LLP 1116.004 D1.2, LLP 1116.006 D2 — a stack's split on a wide window: off, or the list column's
-    // width; or, on a box in the root route, the detail pane's placeholder.
-    if prop == PropId::NavigationSplit
-        && matches!(value, Expr::Str(s, _) if s != "none" && s != "split" && s != "placeholder" && !s.parse::<f64>().is_ok_and(|w| w.is_finite() && w > 0.0))
-    {
-        return err(
-            "lower-attr-value",
-            "`navigationSplit` takes \"split\" (a split view in an iPad tab or window), \"none\" (the stack pushes on a wide window too) or the list column's width, a positive number, on the root route; or \"placeholder\" on a box in it, which the detail pane shows while nothing is selected",
-            span,
-        );
+    // @ref LLP 1127 D1 — a stack's split, asked on its root route: "split", or the list column's width;
+    // "none" pushes on every host; or, on a box in the root route, the detail pane's placeholder, which asks too.
+    // Only a value as written is judged: a computed one is the app's at run time, where every host
+    // reads the words it knows and takes any other as saying nothing
+    if prop == PropId::NavigationSplit {
+        let refusal = match (crate::routes::split_text(value), crate::routes::untyped(value)) {
+            (_, Expr::Bool(b, _)) => Some(format!(
+                "`navigationSplit={b}` is not a value: the attribute says how the stack splits and is no switch. Write \"split\" for a list beside its detail, or \"none\" for no split"
+            )),
+            (Some(s), _) if s == "auto" => Some(
+                "`navigationSplit=\"auto\"` is not a value: leave the attribute out for each host's own default, or write \"split\" for a list beside its detail, a width in px, or \"none\" to push on every host".to_string(),
+            ),
+            (Some(s), _)
+                if ["split", "none", "placeholder"].contains(&s.as_str())
+                    || exact_kernel::props::split_width(&s).is_some() =>
+            {
+                None
+            }
+            (Some(s), _) => Some(format!(
+                "`navigationSplit=\"{s}\"` is not a value: a stack's root route takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\", and a plain box that is its own child \"placeholder\""
+            )),
+            (None, _) => None,
+        };
+        if let Some(message) = refusal {
+            return err("lower-attr-value", message, span);
+        }
     }
     // A prop that takes one of a few words, and what its refusal says.
     let words: Option<(&[&str], &str)> = match prop {

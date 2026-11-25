@@ -9,6 +9,7 @@
 
 use crate::source::{boxed, NoData};
 use exact_kernel::{Display, Kernel, PropId};
+use exact_plan::{BindingKind, Opcode, StrId};
 use exact_runner::Runner;
 
 /// A stack of two routes; `route` and `inner` are attributes of each route
@@ -64,15 +65,132 @@ fn on_a_route_the_placeholder_is_refused() {
     let error = contract::compile(&stack("navigationSplit=\"placeholder\"", "")).unwrap_err();
     assert_eq!(error.id, "lower-attr-value", "{error}");
     assert!(
-        error.message.contains("on a route it would hide the route"),
+        error
+            .message
+            .contains("on a route, or on the navigation root, it would hide it"),
         "{error}"
     );
-    // Any other word is refused as before, naming the new one.
+    // Each placeholder refusal ends with the whole rule, so a repair that follows it compiles
+    assert!(
+        error.message.contains("A placeholder is a plain box"),
+        "{error}"
+    );
+    // Any other word is refused, naming the values.
     let error = contract::compile(&stack("", "navigationSplit=\"empty\"")).unwrap_err();
     assert!(
-        error.message.contains("\"placeholder\" on a box in it"),
+        error
+            .message
+            .contains("and a plain box that is its own child \"placeholder\""),
         "{error}"
     );
+}
+
+#[test]
+fn the_likely_guesses_are_refused_with_why_and_split_asks() {
+    // LLP 1127 D1: "auto" is each platform's default, and the value says how the stack splits, not a switch.
+    for (attribute, says) in [
+        (
+            "navigationSplit=\"auto\"",
+            "leave the attribute out for each host's own default",
+        ),
+        // A template with nothing computed in it says what its text says.
+        (
+            "navigationSplit=`auto`",
+            "leave the attribute out for each host's own default",
+        ),
+        ("navigationSplit=true", "is no switch"),
+        // An empty value says nothing; leave the attribute out instead.
+        (
+            "navigationSplit=\"\"",
+            "takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\"",
+        ),
+        (
+            "navigationSplit=\"columns\"",
+            "takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\"",
+        ),
+        // A width is a whole number of px, as every host reads it.
+        (
+            "navigationSplit=\"0280\"",
+            "in digits with no leading zero",
+        ),
+        (
+            "navigationSplit=\"0x100\"",
+            "takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\"",
+        ),
+        (
+            "navigationSplit=280.5",
+            "takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\"",
+        ),
+        // A template the compiler folds to a constant is that constant, as every attribute's is.
+        (
+            "navigationSplit=`${180 + 100.5}`",
+            "takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\"",
+        ),
+        // So is one of literals, a switch's word included.
+        (
+            "navigationSplit=`${true}`",
+            "takes \"split\", a width (a whole number of px, 1 to 999999, in digits with no leading zero) or \"none\"",
+        ),
+    ] {
+        let error = contract::compile(&stack(attribute, "")).unwrap_err();
+        assert_eq!(error.id, "lower-attr-value", "{error}");
+        assert!(error.message.contains(says), "{attribute}: {error}");
+    }
+    // Each ask compiles: "split", a placeholder box, folded or not, and a computed value, read at run time.
+    for (route, inner) in [
+        ("navigationSplit=\"split\"", ""),
+        ("", "navigationSplit=\"placeholder\""),
+        ("", "navigationSplit=`placeholder`"),
+        ("navigationSplit=`${200 + 100}`", ""),
+        ("navigationSplit=(e.name == \"home\" ? \"300\" : \"\")", ""),
+        ("navigationSplit=(e.name == \"home\" ? \"auto\" : \"\")", ""),
+    ] {
+        contract::compile(&stack(route, inner)).unwrap();
+    }
+}
+
+#[test]
+fn a_placeholder_in_a_route_the_compiler_cannot_place_is_its_own_child() {
+    // A keyed stack outside every root the compiler places, whose Back a host installs (as the painted tests' does), is
+    // still a stack a host reads (LLP 1127 D1): a route's own placeholder there compiles, and one deeper is still refused.
+    let wrap = |src: String| {
+        let (head, body) = src.split_once("  view\n").unwrap();
+        let body: String = body.lines().map(|line| format!("  {line}\n")).collect();
+        format!("{head}  view\n    column\n      text \"Wrapper\"\n{body}")
+            .replace(" navigationBack=\"back\"", "")
+    };
+    contract::compile(&wrap(stack("", "navigationSplit=\"placeholder\""))).unwrap();
+    let deeper = wrap(stack("", "")).replace(
+        "            text \"Pick one\"\n",
+        "            column navigationSplit=\"placeholder\"\n              text \"Pick one\"\n",
+    );
+    assert_eq!(
+        contract::compile(&deeper).unwrap_err().id,
+        "lower-navigation-split"
+    );
+    // And one a `for` repeats there is refused for that
+    let repeated = wrap(stack("", "")).replace(
+        "\n            text e.name\n",
+        "\n            text e.name\n            for n in [1] key=n\n              column navigationSplit=\"placeholder\"\n                text \"Pick\"\n",
+    );
+    let error = contract::compile(&repeated).unwrap_err();
+    assert!(
+        error.message.contains("a `for` inside the route repeats"),
+        "{error}"
+    );
+    // Each placeholder refusal ends with the whole rule, so a repair that follows it compiles
+    assert!(
+        error.message.contains("A placeholder is a plain box"),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_placeholder_a_components_typed_prop_names_is_the_placeholder() {
+    // A literal a typed prop passes keeps its type's wrapper, and is still the literal it is (LLP 1127 D1): a placeholder,
+    // and a `none` popover, which makes none.
+    let source = "routes nav\n  home \"/\"\n    item \"/item\"\ncomponent App\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${e.id}` testId=`route-${e.name}` position=\"absolute\" inset=0\n          text e.name\n          Pane(mode=\"placeholder\", layer=none)\ncomponent Pane\n  props\n    mode: enum<\"placeholder\", \"none\">\n    layer: option<string>\n  view\n    column navigationSplit=mode popover=layer\n      text \"Pick one\"\n";
+    contract::compile(source).unwrap();
 }
 
 #[test]
@@ -202,6 +320,53 @@ fn a_tab_split_is_literal_and_an_untabbed_stack_can_still_bind_it() {
                 && error.message.contains("two tabs or two routes")
         );
     }
+    // A placeholder written on the tab's route is told where the box goes
+    let error = contract::compile(&tab.replace(
+        r#"navigationSplit="split""#,
+        r#"navigationSplit="placeholder""#,
+    ))
+    .unwrap_err();
+    assert_eq!(error.id, "lower-tab-split", "{error}");
+    assert!(
+        error.message.contains("A placeholder is a plain box"),
+        "{error}"
+    );
+    // A literal a typed prop passes is still that literal, and a computed one is still refused
+    let (head, tail) = tab.split_once("              else\n").unwrap();
+    let tail = &tail[tail.find("      row role=\"tablist\"").unwrap()..];
+    let typed = |mode: &str| {
+        format!("{head}              else\n                Pane(route=`${{e.id}}`, mode={mode})\n{tail}component Pane\n  props\n    route: string\n    mode: enum<\"split\", \"none\">\n  view\n    column navigationKey=route navigationSplit=mode position=\"absolute\" inset=0\n      header\n        text \"Pane\" role=\"heading\" aria-level=1\n")
+    };
+    contract::compile(&typed("\"split\"")).unwrap();
+    // And so is one a second component forwards into a template with text of its own
+    let forwarded = typed("\"t\"")
+        .replace("Pane(route=", "Outer(route=")
+        .replace("mode: enum<\"split\", \"none\">", "mode: enum<\"t\", \"ce\">")
+        .replace("navigationSplit=mode", "navigationSplit=`spli${mode}`")
+        + "component Outer\n  props\n    route: string\n    mode: enum<\"t\", \"ce\">\n  view\n    Pane(route=route, mode=mode)\n";
+    // Each is the literal the runner's scan of a tab's ask reads, not a text the app builds (LLP 1127 D19)
+    let plan = contract::compile(&forwarded).unwrap();
+    let splits = plan
+        .bindings
+        .iter()
+        .filter(|b| b.kind == BindingKind::Prop && b.id == PropId::NavigationSplit as u16)
+        .map(|b| match plan.read_code(plan.code(b.expr)).0 {
+            [op, a, b, c, d, ret] if *op == Opcode::Str as u8 && *ret == Opcode::Return as u8 => {
+                Some(
+                    plan.str(StrId(u32::from_le_bytes([*a, *b, *c, *d])))
+                        .to_owned(),
+                )
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        !splits.is_empty() && splits.iter().all(|s| s.as_deref() == Some("split")),
+        "{splits:?}"
+    );
+    let error =
+        contract::compile(&typed("(e.name == \"item\" ? \"split\" : \"none\")")).unwrap_err();
+    assert_eq!(error.id, "lower-tab-split", "{error}");
     let bound = r#"navigationSplit=(e.name == "home" ? "300" : "none")"#;
     assert_eq!(split_of(&stack(bound, "")).as_deref(), Some("300"));
 }

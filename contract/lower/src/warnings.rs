@@ -92,7 +92,7 @@ impl WarningSelection {
 /// Warnings from a checked file when analysis refused it.
 pub fn warnings(checked: &Checked<'_>, selection: &WarningSelection) -> Vec<LowerError> {
     crate::control_roles::unlowered();
-    with_text_styles(checked, &TextStyles::new(), Vec::new(), selection)
+    with_text_styles(checked, &TextStyles::new(), true, Vec::new(), selection)
 }
 
 pub(crate) use text_styles::{TextStyle, TextStyles};
@@ -132,6 +132,7 @@ fn warning_regions<'a>(
 pub(crate) fn with_text_styles(
     checked: &Checked<'_>,
     lowered: &TextStyles,
+    refused: bool,
     mut out: Vec<LowerError>,
     selection: &WarningSelection,
 ) -> Vec<LowerError> {
@@ -185,7 +186,16 @@ pub(crate) fn with_text_styles(
                 let declared = checked.file.routes.as_ref().map(|r| r.span);
                 miswiring::navigation_keys(attrs, visit.regions()[0], declared, fresh, &mut out);
             }
-            miswiring::navigation_split(tag, attrs, keyed, keyed && !in_root, fresh, &mut out);
+            // `navigationSplit` as lowering folded it at this instance, where it recorded a constant
+            let split = visit
+                .instance()
+                .and_then(|i| lowered.get(&(span, i, tag.to_owned())));
+            let split = split.and_then(|style| style.as_ref()?.split.as_deref());
+            // Where a value is read speaks of a build lowering takes: while lowering, which judges the value and its place,
+            // refuses this build, its refusals stand alone
+            if !refused {
+                miswiring::navigation_split(tag, attrs, keyed, keyed && !in_root, split, &mut out);
+            }
             let route = in_root && keyed && !has(attrs, "navigationBack");
             // A route that says it has no bar (LLP 1115.000 D5.2) draws its header as written.
             let no_bar = literal(attrs, "navigationBar") == Some("none");

@@ -8,6 +8,17 @@
 use crate::generated::{PropId, PropKind};
 use smol_str::SmolStr;
 
+/// The list column's width a `navigationSplit` value names, in px: a whole
+/// number from 1 to 999999, digits with no leading zero, and nothing else (LLP
+/// 1127 D1), whose values every float type holds exactly; any other word names
+/// no width. The compiler judges a written width by it.
+pub fn split_width(said: &str) -> Option<f32> {
+    let width = (1..=6).contains(&said.len())
+        && !said.starts_with('0')
+        && said.bytes().all(|b| b.is_ascii_digit());
+    width.then(|| said.parse::<f32>().ok()).flatten()
+}
+
 /// A typed prop value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PropValue {
@@ -257,6 +268,40 @@ impl PropList {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_split_width_is_a_whole_number_of_px_up_to_six_digits_and_nothing_else() {
+        for (said, width) in [
+            ("280", Some(280.0)),
+            ("1", Some(1.0)),
+            ("999999", Some(999999.0)),
+        ] {
+            assert_eq!(split_width(said), width, "{said}");
+        }
+        for said in [
+            "",
+            "0",
+            "0.5",
+            "320.5",
+            "999999.99",
+            "0280",
+            "1000000",
+            " 300",
+            "300 ",
+            "+300",
+            "-300",
+            "300.",
+            ".5",
+            "1.2.3",
+            "1e3",
+            "0x100",
+            "300px",
+            "inf",
+            "NaN",
+        ] {
+            assert_eq!(split_width(said), None, "{said}");
+        }
+    }
 
     #[test]
     fn short_text_is_inline_and_long_text_clones_share_storage() {
