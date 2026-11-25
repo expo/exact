@@ -699,7 +699,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The modifiers held, as a `key` event carries them.
-    pub(crate) fn modifiers(&self) -> exact_runner::KeyModifiers {
+    pub fn modifiers(&self) -> exact_runner::KeyModifiers {
         exact_runner::KeyModifiers {
             shift: self.held & 3 != 0,
             ctrl: self.held & 12 != 0,

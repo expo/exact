@@ -2573,7 +2573,10 @@ declares `drop`, and gives a file to the `drop` above it. Android's apps
 send a link as text, so Android alone makes `url` from text: while a drop
 has no `url` yet, a text item whose whole last line is an `http://` or
 `https://` link gives that link as `url`, and its lines before it, such as
-the title Chrome sends, as `text`. tvOS, Linux and the terminal take no drop. The driver's
+the title Chrome sends, as `text`. Linux's Wayland window takes a drag from another app or
+from the same one as a copy, its files and folders in place, its text, and its link from the
+URI list or the titled link a browser sends; its fields take no drag. tvOS and the terminal
+take no drop. The driver's
 `tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
 folders (not on iOS or Android), text and a link, at least one of them, as a test's
 `tap "zone" drop …` step does.

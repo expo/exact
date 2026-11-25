@@ -164,7 +164,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/edit_menu.rs", "Presenter::edit_menu_action Presenter::edit_menu_at Presenter::edit_menu_key Presenter::edit_menu_valid Presenter::field_menu_default Presenter::open_edit_menu"],
     ["painted:host/painted/src/presenter/events.rs",
       "Presenter::clear_removed_focus Presenter::cursor_at Presenter::focus_place Presenter::follow_pointer Presenter::hold_modifier Presenter::hover " +
-      "Presenter::hover_at Presenter::memory_warning Presenter::move_focus_serviced Presenter::restore_focus Presenter::set_window_active Presenter::submit_event"],
+      "Presenter::hover_at Presenter::memory_warning Presenter::modifiers Presenter::move_focus_serviced Presenter::restore_focus Presenter::set_window_active Presenter::submit_event"],
     ["painted:host/painted/src/presenter/field.rs", "Presenter::apply_field_edit Presenter::before_input Presenter::drain_field_select_tasks Presenter::field_select Presenter::set_range_text"],
     ["painted:host/painted/src/presenter/hatch.rs", "Presenter::hatch_act"],
     ["painted:host/painted/src/presenter/hosted.rs",

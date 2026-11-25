@@ -43,8 +43,9 @@ fn the_clipboard_events_reach_the_nearest_handler() {
         &format!(r#"{{"op":"type","id":{log},"clipboard":"cut"}}"#),
     );
     assert!(reply.contains("no cut handler"), "{reply}");
-    // This host pastes text only and takes no drag from outside: both
-    // are refused by name, and neither presses nor pastes.
+    // This host pastes text only, refused by name, and takes a drag from
+    // outside: one over a cell that hears no drag reaches the presenter,
+    // and neither presses nor pastes.
     let reply = handle(
         &mut p,
         &format!(
@@ -63,10 +64,7 @@ fn the_clipboard_events_reach_the_nearest_handler() {
         r#""dragleave":true"#,
     ] {
         let reply = handle(&mut p, &format!(r#"{{"op":"tap","id":{cell},{form}}}"#));
-        assert!(
-            reply.contains(&format!("unsupported: the {HOST_NAME} host takes no drag")),
-            "{reply}"
-        );
+        assert!(!reply.contains("unsupported"), "{reply}");
     }
     let k = p.host().kernel();
     assert_eq!(

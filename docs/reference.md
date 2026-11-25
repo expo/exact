@@ -6259,7 +6259,8 @@ column dragenter=entered dragleave=left drop=took
 | tvOS | none | empty: tvOS has no pasteboard |
 | Windows | yes, files and folders in Explorer selection order, `CF_UNICODETEXT` and the shell's URL, including over an editable field | empty (text only) |
 | Android | yes: files, text and links from another app or this one, each file a copy of a `content:` item, no folders and no `file:` paths. Another app's files are copied under the read permission Android grants for the drop; without one, that drop brings its text and link alone. While a drop has no `url`, a text item whose whole last line is an `http://` or `https://` link gives that link as the `url`, and its lines before it, such as the title Chrome sends, as the `text`; a field keeps text, links and text files, as Android's text views do, unless it declares `drop`, and gives a file to the `drop` above it | empty (text only) |
-| Linux, terminal | none | empty (text only) |
+| Linux | yes, in the Wayland window: files and folders in the source's order, plain text, and a link from the URI list or a browser's titled link (`text/x-moz-url`), taken as a copy; a picture offered only as data arrives as its link, as on Windows; fields take no drag, so a text drag over one goes to the nearest `drop` | empty (text only) |
+| terminal | none | empty (text only) |
 
 The driver: `tap <target> drop [<path…>] [--text "…"] [--url "…"]` (files,
 folders except on iOS and Android, text and a link), `tap <target> dragenter …` and `tap <target>

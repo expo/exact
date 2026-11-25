@@ -3,6 +3,7 @@
 
 mod accessibility;
 mod caret;
+mod drop;
 mod input;
 
 use crate::event_loop::LocalPlan;
@@ -58,6 +59,7 @@ enum Event {
     Wake,
     Settings(WindowSettings),
     Access(accesskit_winit::Event),
+    Drag(drop::Heard),
 }
 
 struct App<'a, D: DataSource> {
@@ -77,6 +79,7 @@ struct Live<D: DataSource> {
     surface: softbuffer::Surface<Rc<Window>, Rc<Window>>,
     window: Rc<Window>,
     presenter: Presenter<D>,
+    drops: Option<drop::Drops>,
     input: input::Input,
     extent: (u32, u32, f32),
     presented: bool,
@@ -167,6 +170,7 @@ impl<D: DataSource + Default> App<'_, D> {
             access,
             output_surface,
             surface,
+            drops: drop::Drops::new(&window, self.proxy.clone()),
             window,
             presenter,
             input: input::Input::default(),
@@ -252,6 +256,17 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
                 }
                 return;
             }
+            Event::Drag(heard) => {
+                if let Some(live) = self.live.as_mut() {
+                    if let Some(drops) = live.drops.as_mut() {
+                        drops.heard(&mut live.presenter, heard, &self.proxy);
+                    }
+                    if live.presenter.dirty() {
+                        live.window.request_redraw();
+                    }
+                }
+                return;
+            }
             Event::Settings(settings) => settings,
             Event::Wake => return,
         };
@@ -272,6 +287,13 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
             live.presenter.set_system_scheme(preferences.dark);
             warn(live.presenter.set_preferences(preferences));
             live.window.request_redraw();
+        }
+    }
+
+    fn exiting(&mut self, _: &ActiveEventLoop) {
+        // The drag thread reads the display, which the event loop disconnects as it ends
+        if let Some(live) = self.live.as_mut() {
+            live.drops = None;
         }
     }
 
