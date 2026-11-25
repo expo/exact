@@ -17,7 +17,7 @@ const TESTING_DEVICES = resolve(homedir(), 'Library/Developer/XCTestDevices');
 export async function packageViewFixture(root, fixtureDir, triple, appId, env, runApple) {
   const { packageCompiler, composedModule, moduleLibraryLinkArgs, moduleSeam } = await import('./compose.mjs');
   const dir = resolve(fixtureDir, 'package-screen'), fixtures = resolve(root, 'host/apple/tests/fixtures');
-  const tags = ['probe-table', 'probe-plain'];
+  const tags = ['probe-table', 'probe-plain', 'probe-cleared'];
   const packages = [{ extension: 'screen-probe', module: 'ScreenProbe', className: 'ScreenPackage', views: tags }];
   packageCompiler({ packages, packageDir: dir, packagesRoot: dir, packageTargets: new Map([[dir, ['iphonesimulator', ['-target', triple]]]]),
     seam: resolve(root, 'host/apple/modules/ExactPackage.swift'), packageCopies: [[resolve(fixtures, 'ScreenPackage.swift'), resolve(fixtures, 'AppearanceTable.swift')]],
@@ -33,7 +33,7 @@ export async function packageViewFixture(root, fixtureDir, triple, appId, env, r
   writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ name, version: '1.0.0', kind: 'interface', names: [], views: Object.fromEntries(tags.map(tag => [tag, {}])) }));
   writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name, version: '1.0.0', exports: './exact.json' }));
   writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { [name]: '1.0.0' } }));
-  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: appId, name: 'Package screen' }, modules: ['app-table', 'reusable-table', 'clearing-table'] }));
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: appId, name: 'Package screen' }, modules: ['app-table', 'reusable-table', 'clearing-table', 'reusable-cleared'] }));
   for (const [file, key] of [['package-screen', 'PACKAGE_SCREEN'], ['package-screen-split', 'PACKAGE_SCREEN_SPLIT']]) {
     cpSync(resolve(fixtures, `${file}.contract`), resolve(dir, `${file}.contract`));
     const plan = env[`TEST_RUNNER_EXACT_${key}_PLAN`] = resolve(dir, `${file}.plan`);

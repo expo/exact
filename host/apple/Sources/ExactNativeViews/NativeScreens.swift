@@ -1,4 +1,5 @@
-// Containment for app and package screens (LLP 1075.003 §3.6).
+// Containment for app and package screens (LLP 1075.003 §3.6), and for a view with no controller that
+// lets the host clear its safe area (LLP 1123 D15).
 #if os(iOS) || os(tvOS)
 import ExactKit
 import UIKit
@@ -12,10 +13,16 @@ extension NativeViews {
             NativeSafeArea(Unmanaged<NSDictionary>.fromOpaque($0).takeRetainedValue())
         }
         entry.lent = entry.safeArea?.scrollViews.map { LentScrollIOS(view: $0.view, layout: $0.layout) } ?? []
-        guard let handle = entry.handle, let raw = table.platformController?(handle) else {
+        if let handle = entry.handle, let raw = table.platformController?(handle) {
+            entry.screen = Unmanaged<UIViewController>.fromOpaque(raw).takeUnretainedValue()
+        } else if let made = entry.made ?? (entry.safeArea?.adjustsAdditionalSafeAreaInsets == true ? Self.controller(holding: view) : nil) {
+            // Contain a view with no controller that lets the host clear its safe area in a real child
+            // controller, as a screen's (LLP 1123 D15)
+            entry.made = made
+            entry.screen = made
+        } else {
             return owner.addSubview(view)
         }
-        entry.screen = Unmanaged<UIViewController>.fromOpaque(raw).takeUnretainedValue()
         screens.setObject(entry, forKey: owner)
         contain(entry)
         if entry.screen?.parent == nil {
@@ -24,6 +31,19 @@ extension NativeViews {
                 contain(entry)
             }
         }
+    }
+
+    /// A plain controller whose own view holds `view` and fills the node's box, so `view` stays a
+    /// plain subview there, its frame, margins and responder chain as outside a controller, and only
+    /// its safe area takes what the controller adds. A controller's root view would take other
+    /// margins: UIKit's system minimum, 16 points at each side on an iPhone, inside which a map fits
+    /// its camera, or none of a plain view's 8.
+    private static func controller(holding view: UIView) -> UIViewController {
+        let controller = UIViewController(), box = ContainedBox()
+        box.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        box.addSubview(view)
+        controller.view = box
+        return controller
     }
 
     private func contain(_ entry: NativeEntry) {
@@ -42,9 +62,13 @@ extension NativeViews {
             }
             parent.addChild(screen)
         }
-        if view.superview !== owner {
+        if let attached = entry.attached, attached.superview !== owner {
+            if let box = entry.made?.viewIfLoaded {
+                box.frame = owner.bounds
+                if view.superview !== box { box.addSubview(view) }
+            }
             if !entry.sizing { view.frame = owner.contentBox() }
-            owner.addSubview(view)
+            owner.addSubview(attached)
         }
         if adopting {
             screen.didMove(toParent: parent)
@@ -89,7 +113,7 @@ extension NativeViews {
     func prepareScreenMove(_ subtree: UIView, into container: UIView) -> (() -> Void)? {
         // A dialog explicitly releases its controller while keeping the root view
         // in its box. Its sheet calls moved after the entire dialog is in place.
-        let moving = screens(in: subtree).filter { $0.screen?.parent != nil || $0.view?.superview == nil }
+        let moving = screens(in: subtree).filter { $0.screen?.parent != nil || $0.attached?.superview == nil }
         guard !moving.isEmpty else { return nil }
         for entry in moving where entries[entry.id] === entry && entry.screen?.parent !== entry.owner?.screenParent(moving: subtree, into: container) {
             detach(entry)
@@ -123,8 +147,18 @@ extension NativeViews {
         let visible = moving && entry.view?.window != nil && entry.screen?.parent != nil ? entry.screen : nil
         visible?.beginAppearanceTransition(false, animated: false)
         if let screen = entry.screen { leaveParent(screen) }
-        entry.view?.removeFromSuperview()
+        entry.attached?.removeFromSuperview()
         visible?.endAppearanceTransition()
+    }
+}
+
+/// The view of the controller the host makes for a native view with none (LLP 1123 D15): it fills the
+/// node's box and holds the native view, and a touch that lands on it and not on the native view goes
+/// to the node, as it does beside a native view outside a controller.
+final class ContainedBox: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
     }
 }
 #endif

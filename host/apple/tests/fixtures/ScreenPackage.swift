@@ -8,6 +8,7 @@ final class ScreenPackage: ExactPackage {
     }
     func view(_ tag: String, id: String, props: [String: String], events: ExactPackageEvents) throws -> ExactPackageView {
         if tag == "probe-plain" { return PlainView() }
+        if tag == "probe-cleared" { return ClearedView() }
         return TableScreen()
     }
 }
@@ -24,6 +25,13 @@ private final class PlainView: ExactPackageView {
             scrollViews: [.init(scroll, anchor: "list") { allowed in UIEdgeInsets(top: 0, left: min(allowed.left, 20), bottom: 0, right: min(allowed.right, 20)) }],
             safeAreaRegions: 1, release: { scroll.accessibilityHint = "released" })
     }
+    func setProps(_ props: [String: String]) {}
+}
+
+/// A view with no controller that lets the host clear its safe area (LLP 1123 D15).
+private final class ClearedView: ExactPackageView {
+    let view = UIView()
+    var safeArea: ExactPackageSafeArea? { ExactPackageSafeArea(adjustsAdditionalSafeAreaInsets: true) }
     func setProps(_ props: [String: String]) {}
 }
 
