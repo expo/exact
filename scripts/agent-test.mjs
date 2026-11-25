@@ -188,8 +188,15 @@ export function nodeNamed(nodes, target) {
     for (const o of open) ends.set(o.n, [o.i, nodes.length]);
   };
   const passes = [true, false].flatMap((live) => [(n) => n.props.accessibilityLabel, (n) => textOf(nodes, n, live)].map((read) => [live, read]));
+  // A node under a closed popover or a hidden box is drawn nowhere, so the live passes leave it out
+  let byId = null;
+  const unshown = (n) => {
+    byId ??= new Map(nodes.map((m) => [m.id, m]));
+    for (let m = n; m; m = byId.get(m.parent)) if (m.hidden || m.open === false) return true;
+    return false;
+  };
   for (const [live, read] of passes) {
-    let found = nodes.filter((n) => { if (live && n.inactive) return false; const v = read(n); return v != null && String(v).trim() === target; });
+    let found = nodes.filter((n) => { if (live && (n.inactive || unshown(n))) return false; const v = read(n); return v != null && String(v).trim() === target; });
     if (!found.length) continue;
     const top = found.reduce((t, n) => Math.max(t, tier(n)), 0);
     found = found.filter((n) => tier(n) === top);
