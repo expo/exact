@@ -24,6 +24,9 @@ pub(super) struct DragIn {
     /// The nodes under the drag that hear `dragenter` or `dragleave`,
     /// innermost first.
     chain: Vec<Member>,
+    /// Whether a drag is over the window at `point`, even where no node
+    /// hears drags.
+    over: bool,
     point: (f32, f32),
     held: KeyModifiers,
     /// The drops released whose items have yet to arrive (`drop_released`).
@@ -129,6 +132,7 @@ impl<D: DataSource> Presenter<D> {
     /// Cancel the drag, including when it leaves the window: the nodes under
     /// it hear their leave, and the enters it waited for are not sent.
     pub fn drag_left(&mut self) {
+        self.drag_in.over = false;
         self.drag_crossings(Vec::new());
         self.drag_flush();
     }
@@ -163,19 +167,27 @@ impl<D: DataSource> Presenter<D> {
     /// heard. All of it is decided before any handler runs. The drop's
     /// number, or None, and the drag ends, when nothing takes it.
     pub fn drop_released(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<u32> {
-        let found = self.drag_at(point, held).and_then(|t| {
+        let found = self.drop_target(point).and_then(|t| {
             let key = self.host.kernel().node(t)?.key;
             let record = self.pointer_record(t, point.0, point.1, -1, 0)?;
             Some((key, (record.offset_x, record.offset_y)))
         });
+        self.drag_at(point, held);
         let Some((target, offsets)) = found else {
             self.drag_ended();
             self.drag_flush();
             return None;
         };
+        self.drag_in.over = false;
         let mut chain = std::mem::take(&mut self.drag_in.chain);
         self.drag_in.last += 1;
         let id = self.drag_in.last;
+        // The release's own enters are this drop's now, as its chain is
+        for sent in self.drag_in.outbox.iter_mut() {
+            if sent.drop.is_none() && chain.iter().any(|m| m.key == sent.key) {
+                sent.drop = Some(id);
+            }
+        }
         for m in chain.iter_mut().filter(|m| !m.entered) {
             m.entered = true;
             self.drag_in
@@ -239,7 +251,7 @@ impl<D: DataSource> Presenter<D> {
         // The failed drop's leaves go first: they can change what the drag
         // still under way is over
         self.drag_flush();
-        if !self.drag_in.chain.is_empty() {
+        if self.drag_in.over {
             let chain = self.drag_chain(self.drag_in.point);
             self.drag_crossings(chain);
         }
@@ -391,15 +403,13 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// The drag is at `point`: its chain there is recorded and its enters
-    /// and leaves queued, and the innermost node that takes a drop there,
-    /// found before any of them is sent.
-    fn drag_at(&mut self, point: (f32, f32), held: KeyModifiers) -> Option<ViewId> {
+    /// and leaves queued.
+    fn drag_at(&mut self, point: (f32, f32), held: KeyModifiers) {
+        self.drag_in.over = true;
         self.drag_in.point = point;
         self.drag_in.held = held;
-        let target = self.drop_target(point);
         let chain = self.drag_chain(point);
         self.drag_crossings(chain);
-        target
     }
 
     /// The innermost node that takes a drop at `point`.
@@ -447,6 +457,7 @@ impl<D: DataSource> Presenter<D> {
     /// The drag dropped where no node took it: the nodes under it that
     /// waited for a pending drop hear their enter, then every one its leave.
     fn drag_ended(&mut self) {
+        self.drag_in.over = false;
         let (point, held) = (self.drag_in.point, self.drag_in.held);
         let chain = std::mem::take(&mut self.drag_in.chain);
         for m in chain.iter().filter(|m| !m.entered) {
@@ -556,17 +567,7 @@ mod tests {
       column width=220 height=120 drop=received dragenter=entered dragleave=left
         textarea testId="editor" value="original text" width=180 height=80
 "#;
-        let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan(source),
-            (),
-            (300., 200.),
-            1.,
-            PathBuf::new(),
-            PainterChoice::Cpu,
-        )
-        .unwrap();
-        assert!(error.is_none(), "{error:?}");
-        p.frame();
+        let mut p = booted(source);
         let kernel = p.host.kernel();
         let field = kernel
             .node_by_key(kernel.find_by_test_id("editor")[0])
@@ -620,17 +621,7 @@ mod tests {
     column width=300 height=200 drop=received
       textarea testId="editor" value="original text" width=180 height=80
 "#;
-        let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan(source),
-            (),
-            (300., 200.),
-            1.,
-            PathBuf::new(),
-            PainterChoice::Cpu,
-        )
-        .unwrap();
-        assert!(error.is_none(), "{error:?}");
-        p.frame();
+        let mut p = booted(source);
         let kernel = p.host.kernel();
         let field = kernel
             .node_by_key(kernel.find_by_test_id("editor")[0])
@@ -669,17 +660,7 @@ mod tests {
       textarea testId="editor" value="original text" width=180 height=80
       textarea testId="off" value="off" disabled=true width=180 height=40
 "#;
-        let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan(source),
-            (),
-            (300., 200.),
-            1.,
-            PathBuf::new(),
-            PainterChoice::Cpu,
-        )
-        .unwrap();
-        assert!(error.is_none(), "{error:?}");
-        p.frame();
+        let p = booted(source);
         let kernel = p.host.kernel();
         let field = kernel
             .node_by_key(kernel.find_by_test_id("editor")[0])
@@ -844,6 +825,22 @@ mod tests {
         );
     }
 
+    /// The app `source`, its first frame painted.
+    fn booted(source: &str) -> Presenter<()> {
+        let (mut p, error) = Presenter::boot_with_fixture_fonts(
+            &crate::test_plan(source),
+            (),
+            (300., 200.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        p
+    }
+
     /// A zone that logs each event it hears: its kind, whether Shift was
     /// held, and a drop's offsets and text.
     fn logging_zone() -> (Presenter<()>, (f32, f32)) {
@@ -858,18 +855,7 @@ mod tests {
   view
     column width=300 height=200 testId="zone" drop=received dragenter=entered dragleave=left
 "#;
-        let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan(source),
-            (),
-            (300., 200.),
-            1.,
-            PathBuf::new(),
-            PainterChoice::Cpu,
-        )
-        .unwrap();
-        assert!(error.is_none(), "{error:?}");
-        p.frame();
-        (p, (100., 50.))
+        (booted(source), (100., 50.))
     }
 
     fn log(p: &Presenter<()>) -> String {
@@ -979,17 +965,7 @@ mod tests {
     column width=300 height=200 testId="outer" drop=toOuter
       button "Zone" testId="inner" width=200 height=100 disabled=off drop=toInner dragenter=entered
 "#;
-        let (mut p, error) = Presenter::boot_with_fixture_fonts(
-            &crate::test_plan(source),
-            (),
-            (300., 200.),
-            1.,
-            PathBuf::new(),
-            PainterChoice::Cpu,
-        )
-        .unwrap();
-        assert!(error.is_none(), "{error:?}");
-        p.frame();
+        let p = booted(source);
         let kernel = p.host.kernel();
         let outer = kernel
             .node_by_key(kernel.find_by_test_id("outer")[0])
@@ -1028,6 +1004,79 @@ mod tests {
             p.drag_over((100., 50.), KeyModifiers::default()),
             Some(outer),
             "the zone disabled itself as the drag came over it, so the column above takes the drop there"
+        );
+    }
+
+    #[test]
+    fn an_enter_skipped_at_the_release_owes_no_leave_when_the_drop_fails() {
+        let mut p = booted(
+            r#"component App
+  state off = false
+  state log = ""
+  action innerIn(e: DragEvent)
+    off = true
+    log = `${log}enter inner;`
+  action innerOut(e: DragEvent)
+    log = `${log}leave inner;`
+  action outerIn(e: DragEvent)
+    log = `${log}enter outer;`
+  action outerOut(e: DragEvent)
+    log = `${log}leave outer;`
+  action received(e: DragEvent)
+    log = `${log}drop;`
+  view
+    column width=300 height=200 disabled=off dragenter=outerIn dragleave=outerOut
+      button "Zone" width=200 height=100 drop=received dragenter=innerIn dragleave=innerOut
+"#,
+        );
+        let id = p
+            .drop_released((100., 50.), KeyModifiers::default())
+            .unwrap();
+        assert_eq!(
+            p.drop_landed(id, &Dropped::default()),
+            None,
+            "nothing arrived"
+        );
+        assert_eq!(
+            log(&p),
+            "enter inner;leave inner;",
+            "the column was disabled before its enter, so it hears neither"
+        );
+    }
+
+    #[test]
+    fn a_failed_drop_whose_leave_enables_a_zone_enters_the_drag_over_it() {
+        let mut p = booted(
+            r#"component App
+  state off = true
+  state log = ""
+  action received(e: DragEvent)
+    log = `${log}drop;`
+  action left(e: DragEvent)
+    off = false
+    log = `${log}leave A;`
+  action entered(e: DragEvent)
+    log = `${log}enter B;`
+  view
+    column width=300 height=200
+      button "A" width=200 height=100 drop=received dragleave=left
+      button "B" width=200 height=100 disabled=off dragenter=entered
+"#,
+        );
+        let id = p
+            .drop_released((100., 50.), KeyModifiers::default())
+            .unwrap();
+        p.drag_over((100., 150.), KeyModifiers::default());
+        assert_eq!(log(&p), "", "B is disabled, and A waits for its drop");
+        assert_eq!(
+            p.drop_landed(id, &Dropped::default()),
+            None,
+            "nothing arrived"
+        );
+        assert_eq!(
+            log(&p),
+            "leave A;enter B;",
+            "A's leave enabled B, under the drag still over the window"
         );
     }
 }

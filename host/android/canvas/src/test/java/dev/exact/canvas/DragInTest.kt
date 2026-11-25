@@ -28,7 +28,7 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [29, 33], manifest = Config.NONE, shadows = [DragInTest.Journal::class])
 class DragInTest {
-    @Before fun begin() { Journal.lines.clear(); Journal.drags.clear(); Journal.release = 0; Journal.owner = 2 }
+    @Before fun begin() { Journal.lines.clear(); Journal.drags.clear(); Journal.release = 0; Journal.owner = 2; Journal.asked = 0 }
 
     /** exact2's journal, as the reader writes to it with no owner. */
     @Implements(Native::class, isInAndroidSdk = false)
@@ -49,7 +49,9 @@ class DragInTest {
             var owner = 2
             @JvmStatic @Implementation fun dropReleased(x: Float, y: Float): Int { drags += "released ${x.toInt()} ${y.toInt()}"; return release }
             @JvmStatic @Implementation fun dropLanded(id: Int, items: String) { drags += "landed $id $items" }
-            @JvmStatic @Implementation fun fieldDrop(id: Int, x: Float, y: Float): Int = owner
+            /** How often exact2 was asked who takes a drop on a field. */
+            var asked = 0
+            @JvmStatic @Implementation fun fieldDrop(id: Int, x: Float, y: Float): Int { asked++; return owner }
         }
     }
 
@@ -173,11 +175,11 @@ class DragInTest {
         return Two(root, fields, texts.first { it.text.toString() == "1" }, texts.first { it.text.toString() == "2" })
     }
 
-    /** A drag of [clip] started, over ([x], [y]) once [hovered] ran, then dropped there. */
+    /** A drag of [clip] started, over ([x], [y]), then, once [hovered] ran, dropped there. */
     private fun drag(root: Root, x: Float, y: Float, clip: ClipData = ClipData.newPlainText("drag", "Fuji"), local: Any? = null, hovered: () -> Unit = {}): Boolean {
         root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_STARTED, description = clip.description, local = local))
-        hovered()
         root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_LOCATION, x, y, description = clip.description, local = local))
+        hovered()
         val took = root.dispatchDragEvent(event(DragEvent.ACTION_DROP, x, y, clip, local = local))
         root.dispatchDragEvent(event(DragEvent.ACTION_DRAG_ENDED, description = clip.description, local = local))
         return took
@@ -203,16 +205,17 @@ class DragInTest {
 
     @Test fun aFieldDecidesAtTheDropByWhatExact2AnswersThenNotByTheFramesState() {
         val two = twoFields(state = 1)
-        Journal.owner = 1
-        drag(two.root, 170f, 230f)
+        Journal.owner = 2
+        drag(two.root, 170f, 230f) { Journal.owner = 1 }
         assertEquals("its node takes drops as the drop lands", "2", two.second.text.toString())
         assertEquals(listOf("over 170 230", "released 170 230"), Journal.drags)
         Journal.drags.clear()
         val owned = twoFields(state = 1 or 4)
-        Journal.owner = 2
-        drag(owned.root, 170f, 230f)
+        Journal.owner = 1
+        drag(owned.root, 170f, 230f) { Journal.owner = 2 }
         assertTrue("its node took drops at the start and no longer does", owned.second.text.toString().contains("Fuji"))
         assertEquals(listOf("over 170 230", "dropped 170 230"), Journal.drags)
+        assertEquals("exact2 is asked once a drop, as it lands", 2, Journal.asked)
     }
 
     @Test fun aNodePaintedOverTheFieldTakesTheDropThere() {
@@ -235,28 +238,39 @@ class DragInTest {
         assertTrue(resolver.getType(Uri.parse("content://typed/photo.png")) == "image/png")
     }
 
+    /** An item's bytes that the test hands out: the read waits, once it has begun, until [release]. */
+    private class Held : java.io.InputStream() {
+        val reading = java.util.concurrent.CountDownLatch(1)
+        val released = java.util.concurrent.CountDownLatch(1)
+        private val bytes = "pixels".byteInputStream()
+        fun release() = released.countDown()
+        override fun read(): Int { reading.countDown(); released.await(); return bytes.read() }
+        override fun read(b: ByteArray, off: Int, len: Int): Int { reading.countDown(); released.await(); return bytes.read(b, off, len) }
+    }
+
     @Test fun aDropTheWindowTakesLandsOnceWhenItsCopiesEnd() {
         val resolver = RuntimeEnvironment.getApplication().contentResolver
         org.robolectric.shadows.ShadowContentResolver.registerProviderInternal("names", FilePickerTest.PhotoProvider())
         val photo = Uri.parse("content://names/a")
-        val writer = java.io.PipedOutputStream()
-        shadowOf(resolver).registerInputStream(photo, java.io.PipedInputStream(writer))
+        val held = Held()
+        shadowOf(resolver).registerInputStream(photo, held)
         val landed = { Journal.drags.filter { it.startsWith("landed") } }
         fun idle() = shadowOf(android.os.Looper.getMainLooper()).idle()
-        fun until(ms: Long, done: () -> Boolean) { val end = System.currentTimeMillis() + ms; while (!done() && System.currentTimeMillis() < end) { idle(); Thread.sleep(10) } }
-        val copiers = { Thread.getAllStackTraces().keys.filter { it.name == "exact-drop" && it.isAlive } }
+        var copier: Thread? = null
         try {
             val two = twoFields(state = 1 or 4)
             Journal.release = 7
             val clip = ClipData("photo", arrayOf("image/png"), ClipData.Item(photo)).apply { addItem(ClipData.Item("Glasshouse")) }
             assertTrue(drag(two.root, 200f, 330f, clip, local = DragOut.OWN))
-            until(200) { false }
+            assertTrue("the copy began reading", held.reading.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            copier = Thread.getAllStackTraces().keys.single { it.name == "exact-drop" && it.isAlive }
+            idle()
             assertEquals("the drag ended, and its copy is still reading", emptyList<String>(), landed())
         } finally {
-            writer.write("pixels".toByteArray()); writer.close()
+            held.release()
         }
-        until(5000) { copiers().isEmpty() }
-        copiers().forEach { it.join(5000) }
+        copier!!.join(5000)
+        assertFalse("the copy ended", copier.isAlive)
         idle()
         assertEquals("one landing, once the copy ended", 1, landed().size)
         val items = JSONObject(landed().single().removePrefix("landed 7 "))
