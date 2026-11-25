@@ -58,17 +58,39 @@ fn the_clipboard_events_reach_the_nearest_handler() {
         )),
         "{reply}"
     );
-    for (form, said) in [
-        (
-            r#""drop":["/tmp/a.png"]"#,
-            "took no drop: nothing under it declares `drop`",
-        ),
-        (r#""dragenter":["/tmp/a.png"]"#, r#""dragenter":"#),
-        (r#""dragleave":true"#, r#""dragleave":true"#),
-    ] {
+    let mut tap = |form: &str| -> serde_json::Value {
         let reply = handle(&mut p, &format!(r#"{{"op":"tap","id":{cell},{form}}}"#));
-        assert!(reply.contains(said), "{form}: {reply}");
-    }
+        serde_json::from_str(&reply).unwrap()
+    };
+    let fields = |reply: &serde_json::Value, keys: &[&str]| -> Vec<serde_json::Value> {
+        keys.iter().map(|k| reply[*k].clone()).collect()
+    };
+    let refused = tap(r#""drop":["/tmp/a.png"]"#);
+    assert_eq!(
+        refused["error"],
+        format!("view {cell} took no drop: nothing under it declares `drop`, or none of its files could be opened"),
+        "{refused}"
+    );
+    let entered = tap(r#""dragenter":["/tmp/a.png"]"#);
+    assert_eq!(
+        fields(&entered, &["tapped", "dragenter", "delivery"]),
+        [
+            serde_json::json!(cell),
+            serde_json::json!(1),
+            serde_json::json!("presenter")
+        ],
+        "{entered}"
+    );
+    let left = tap(r#""dragleave":true"#);
+    assert_eq!(
+        fields(&left, &["tapped", "dragleave", "delivery"]),
+        [
+            serde_json::json!(cell),
+            serde_json::json!(true),
+            serde_json::json!("presenter")
+        ],
+        "{left}"
+    );
     let k = p.host().kernel();
     assert_eq!(
         k.node(log).unwrap().props.str(exact_kernel::PropId::Text),

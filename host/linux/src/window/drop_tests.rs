@@ -1,5 +1,6 @@
 use super::*;
 use std::io::Write;
+use std::time::{Duration, Instant};
 
 fn types(list: &[&str]) -> Vec<String> {
     list.iter().map(|t| t.to_string()).collect()
@@ -30,6 +31,26 @@ fn a_malformed_entry_is_neither_the_link_nor_a_path() {
     let dropped = items(list, b"", b"");
     assert_eq!(dropped.url, "https://example.com/valid");
     assert!(dropped.paths.is_empty(), "{:?}", dropped.paths);
+    for bad in [
+        "https://[broken",
+        "https://example.com/%ZZ",
+        "https://exa mple.com/",
+        "https://example.com/]",
+    ] {
+        assert_eq!(web_link(bad), None, "{bad}");
+    }
+    for good in [
+        "http://[::1]:8080/a",
+        "mailto:a@example.com",
+        "https://example.com/a%20b?q=1#f",
+    ] {
+        assert_eq!(web_link(good), Some(good));
+    }
+    assert_eq!(
+        file_path(b"///tmp/%+1"),
+        None,
+        "an escape is two hex digits"
+    );
     let junk = items(
         b"no scheme here\r\n",
         &utf16("https://example.com/titled\nTitle"),
@@ -142,31 +163,86 @@ fn an_offer_is_read_for_its_types_as_it_spells_them() {
     );
 }
 
+/// A reading of three pipes, their write ends handed back.
+fn reading(deadline: Instant) -> (Reading, [PipeWriter; 3]) {
+    let ends = [(); 3].map(|_| std::io::pipe().unwrap());
+    let writers = ends.each_ref().map(|(_, w)| w.try_clone().unwrap());
+    let pipes = ends.map(|(r, _)| {
+        assert!(nonblocking(&r));
+        Some(r)
+    });
+    let reading = Reading {
+        id: 7,
+        pipes,
+        bytes: Default::default(),
+        deadline,
+    };
+    (reading, writers)
+}
+
 #[test]
-fn a_drop_is_read_whole_and_a_stalled_or_oversized_type_is_dropped() {
-    let quiet = Duration::from_millis(200);
-    let (whole, mut source) = std::io::pipe().unwrap();
-    let (stalled, mut silent) = std::io::pipe().unwrap();
-    let (large, mut flood) = std::io::pipe().unwrap();
-    source.write_all(b"file:///tmp/a\r\n").unwrap();
-    drop(source);
-    silent.write_all(b"partial").unwrap();
-    flood.write_all(&[b'x'; 64]).unwrap();
-    drop(flood);
-    let started = std::time::Instant::now();
-    let [whole, stalled, large] = drain([Some(whole), Some(stalled), Some(large)], quiet, 32);
-    assert_eq!(whole, b"file:///tmp/a\r\n");
+fn a_drop_lands_once_each_type_arrived_or_with_what_had_by_the_deadline() {
+    let soon = Instant::now() + Duration::from_secs(60);
+    let (mut whole, [mut uris, link, mut text]) = reading(soon);
+    uris.write_all(b"file:///tmp/a\r\n").unwrap();
+    text.write_all(b"Mount Fuji").unwrap();
+    drop((uris, link, text));
+    for k in 0..3 {
+        whole.read(k);
+    }
+    assert!(whole.done(Instant::now()), "every type arrived");
+    let (id, dropped) = whole.items();
+    assert_eq!(
+        (id, dropped.paths, dropped.text.as_str()),
+        (7, vec![PathBuf::from("/tmp/a")], "Mount Fuji")
+    );
+
+    let past = Instant::now();
+    let (mut stalled, [mut uris, link, mut text]) = reading(past + Duration::from_secs(60));
+    uris.write_all(b"file:///tmp/a\r\n").unwrap();
+    drop((uris, link));
+    text.write_all(b"partial").unwrap();
+    for k in 0..3 {
+        stalled.read(k);
+    }
+    assert!(!stalled.done(past), "the text is still arriving");
     assert!(
-        stalled.is_empty(),
+        stalled.done(past + Duration::from_secs(60)),
+        "the deadline passed"
+    );
+    let (_, dropped) = stalled.items();
+    assert_eq!(dropped.paths, [PathBuf::from("/tmp/a")]);
+    assert_eq!(
+        dropped.text, "",
         "a type its source never finished is not delivered"
     );
-    assert!(
-        large.is_empty(),
-        "a type larger than the limit is not delivered"
+    drop(text);
+}
+
+#[test]
+fn a_type_larger_than_the_limit_is_not_delivered() {
+    let (mut large, [uris, link, text]) = reading(Instant::now() + Duration::from_secs(60));
+    drop((uris, link));
+    let writer = std::thread::spawn(move || {
+        let mut text = text;
+        let chunk = vec![b'x'; 1 << 20];
+        for _ in 0..=LARGEST >> 20 {
+            if text.write_all(&chunk).is_err() {
+                return;
+            }
+        }
+    });
+    while large.pipes[2].is_some() {
+        large.read(0);
+        large.read(1);
+        large.read(2);
+        std::thread::yield_now();
+    }
+    writer.join().unwrap();
+    assert!(large.done(Instant::now()));
+    assert_eq!(
+        large.items().1.text,
+        "",
+        "past the limit the text is dropped"
     );
-    assert!(
-        started.elapsed() < quiet * 10,
-        "the read ends once its sources are quiet"
-    );
-    drop(silent);
 }
