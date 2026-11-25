@@ -23,6 +23,14 @@ pub(crate) struct ResourceRow {
     pub(super) reads_known: bool,
     /// Topics watched by this answer; an announcement asks this row again.
     pub(super) watching: Vec<String>,
+    /// The data answer actually requested globalPointer while this row was live.
+    pub(super) reading_pointer: bool,
+    /// A refresh of the same live read keeps the previous subscription until the answer settles.
+    pub(super) refreshing_pointer: bool,
+    /// An answer from a session-owned subscription must be asked again in a replacement.
+    pub(super) session_subscription: bool,
+    /// Confirmable shortcut registrations requested by the current resource read.
+    pub(super) pointer_chords: Vec<u64>,
     /// A stand-in waiting for its source to become ready.
     pub(super) stale: bool,
     /// No answer yet because the source is not ready: the resource reads pending.

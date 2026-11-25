@@ -416,9 +416,14 @@ impl<D: DataSource> Runner<D> {
 
     /// `request`, about to be handed out, numbered when it is data code's
     /// call of one of this plan's module sends that has no number yet.
-    pub(in crate::runner) fn number_data_call(&mut self, request: &mut Request) {
+    pub(in crate::runner) fn number_data_call(
+        &mut self,
+        target: crate::runner::Target,
+        ticket: u64,
+        request: &mut Request,
+    ) {
         let m = self.seams.modules;
-        m.number_data_call(self, request)
+        m.number_data_call(self, target, ticket, request)
     }
 
     /// The schemes the plan's interfaces serve pictures by, each once: the

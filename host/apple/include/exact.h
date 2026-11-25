@@ -503,6 +503,8 @@ void exact_app_changed(ExactRuntime rt, const uint8_t *topic, size_t len);
  * (LLP 1030.004 D2); this session's watching answers are asked again. */
 void exact_peer_changed(ExactRuntime rt, const uint8_t *topic, size_t len);
 void exact_app_reply(void *reply, uint32_t status, const uint8_t *bytes, size_t len);
+/* Does this outstanding call still belong to the runner's outside button observation? */
+uint8_t exact_app_owns_pointer_observation(const void *reply);
 
 /* A document the app kept was forgotten by the app (LLP 1069.010.000 D5):
  * called on a storage worker's thread with the object's device and inode;

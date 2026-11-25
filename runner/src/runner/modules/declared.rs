@@ -45,7 +45,7 @@ use std::sync::{Arc, Mutex};
 
 mod app_icon;
 mod app_list;
-mod desktop;
+pub(super) mod desktop;
 mod handed;
 mod reach;
 mod region_list;
@@ -62,6 +62,8 @@ pub(in crate::runner) struct Declared {
     /// The shortcut installations each compiled read could have made. A
     /// native event can identify its registrar only where these agree.
     shortcut_sites: Vec<Option<Box<desktop::Registration>>>,
+    pub(super) pointer_chords: BTreeMap<(String, String), desktop::PointerChord>,
+    pub(super) pointer: Option<std::sync::Arc<desktop::PointerObservation>>,
     held_shortcuts: std::collections::BTreeSet<u64>,
     /// Each keyed list, by its state name, oldest first.
     lists: BTreeMap<String, Vec<Listed>>,
@@ -794,9 +796,14 @@ impl<D: DataSource> Runner<D> {
     }
 
     fn emit_list_show(&mut self, extension: &str, event: &str, args: Vec<Json>) {
-        if let Err(why) =
-            self.queue_module_event(extension, event, args, CallOrigin::Device, true, None)
-        {
+        if let Err(why) = self.queue_module_event(
+            extension,
+            event,
+            args,
+            CallOrigin::Device,
+            true,
+            (None, None),
+        ) {
             self.log(why);
         }
     }
@@ -1050,13 +1057,16 @@ impl<D: DataSource> Runner<D> {
         };
         let args = keyed_args(&self.substitute(row)["list"], &tap, entry.clone());
         let extension = self.plan.str(row.extension).to_owned();
+        let registration = (event == "globalshortcut" && self.tracks_pointer_chord(row))
+            .then(|| self.listed_pointer_press(&entry, reference))
+            .flatten();
         self.queue_module_event(
             &extension,
             event,
             args,
             CallOrigin::App,
             false,
-            registered_by,
+            (registered_by, registration),
         )?;
         Ok(json!({ "ref": reference, "event": event, "delivery": "substituted" }).to_string())
     }

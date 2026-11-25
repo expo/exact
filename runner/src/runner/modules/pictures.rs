@@ -152,6 +152,7 @@ impl<D: DataSource> Runner<D> {
     /// (`Runner::substitute`), and every module's readers ask again.
     pub(super) fn retarget_linked(&mut self) {
         self.extensions.substitutes.get_mut().clear();
+        self.pointer_route_changed();
         let keys: Vec<String> = (self.plan.modules.iter()).map(|m| self.key(m)).collect();
         for key in keys {
             self.announce(&key);

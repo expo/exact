@@ -130,6 +130,12 @@ impl PartialEq<CallOrigin> for Folded<'_> {
     }
 }
 
+/// Identifies an attributed native reader when its request is dispatched after the commit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReaderTicket {
+    pub(in crate::runner) ticket: u64,
+}
+
 /// Who caused a piece of work (LLP 1133.023 D7a): captured when it is
 /// scheduled and installed when it runs.
 ///
@@ -161,6 +167,8 @@ pub struct Cause {
     data: bool,
     /// Every contributor began at an activation-triggering input in the app.
     input: bool,
+    /// A registered shortcut press, or evidence bound to the pointer read a visible input opened (LLP 1133.025 D3a).
+    pointer_start: bool,
 }
 
 impl Cause {
@@ -275,6 +283,7 @@ impl Cause {
             owner: id,
             data: false,
             input: false,
+            pointer_start: false,
         }
     }
 
@@ -303,9 +312,28 @@ impl Cause {
         self.input && self.only(CallOrigin::App)
     }
 
+    pub(in crate::runner) fn with_pointer_start(self) -> Cause {
+        Cause {
+            pointer_start: true,
+            ..self
+        }
+    }
+
+    pub(in crate::runner) fn without_pointer_start(self) -> Self {
+        Self {
+            pointer_start: false,
+            ..self
+        }
+    }
+
+    pub(in crate::runner) fn starts_pointer(self) -> bool {
+        self.pointer_start
+    }
+
     pub(in crate::runner) fn ordinary_app(self) -> bool {
         Cause {
             input: false,
+            pointer_start: false,
             ..self
         } == Cause::person()
     }
@@ -313,6 +341,7 @@ impl Cause {
     pub(in crate::runner) fn with_input_from(self, ticket: Cause) -> Cause {
         Cause {
             input: ticket.input_started(),
+            pointer_start: self.pointer_start && ticket.pointer_start,
             ..self
         }
     }
@@ -382,6 +411,8 @@ impl Cause {
 pub(in crate::runner) struct Origins {
     /// The cause of the commit being made, or of the work running.
     current: Option<Cause>,
+    /// The commit opening a live reader, only during its synchronous query.
+    reader_opener: Option<Cause>,
     /// Each request in flight's cause, by ticket.
     tickets: BTreeMap<u64, Cause>,
     /// Each resource's last ask's cause, by resource.
@@ -657,6 +688,27 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
+    pub(super) fn as_resource_query<T>(
+        &mut self,
+        i: usize,
+        query: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let cause = self.cause_for(Target::Resource(i));
+        let opener = self.fresh_reader_cause();
+        let previous = std::mem::replace(&mut self.origins.reader_opener, opener);
+        let result = self.as_cause(cause, query);
+        self.origins.reader_opener = previous;
+        result
+    }
+
+    pub(in crate::runner) fn fresh_reader_cause(&self) -> Option<Cause> {
+        (!self.origins.reasking).then_some(self.cause())
+    }
+
+    pub(in crate::runner) fn reader_opener(&self) -> Option<Cause> {
+        self.origins.reader_opener
+    }
+
     /// The cause a request of `target` asked now carries: the commit's, or,
     /// for a resource asked by the device's re-ask or by a commit with no
     /// cause (a clock's, a reconciliation's), the join of its last ask's and
@@ -680,6 +732,7 @@ impl<D: DataSource> Runner<D> {
                 }
             }
             cause.input = false;
+            cause.pointer_start = false;
         }
         cause
     }
@@ -704,6 +757,7 @@ impl<D: DataSource> Runner<D> {
             background_action: a.background_action || b.background_action,
             data: a.data || b.data,
             input: a.input && b.input,
+            pointer_start: a.pointer_start && b.pointer_start,
             owner: if a.owner == b.owner { a.owner } else { 0 },
             ..least
         }

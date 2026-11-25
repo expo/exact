@@ -244,6 +244,7 @@ impl<D: DataSource> Runner<D> {
                 },
             );
             self.devices_preferred(key);
+            self.pointer_fixture(key, value);
             self.log(format!("prefer extension {key}"));
             self.announce(key);
             for dependent in self.network_dependents(key) {

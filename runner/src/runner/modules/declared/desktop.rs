@@ -25,6 +25,10 @@ use super::super::{Json, ModulesRow};
 use super::Listed;
 use crate::CallOrigin;
 use serde_json::json;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
+};
 
 /// ARIA's modifier names (`aria-keyshortcuts`).
 const MODIFIERS: &[&str] = &["Alt", "Control", "Shift", "Meta"];
@@ -69,6 +73,72 @@ pub(super) struct Registration {
     cause: Option<Cause>,
 }
 
+#[derive(Clone, Copy)]
+pub(in crate::runner::modules) enum ShortcutPress {
+    Native(u64),
+    Listed(u64, u64),
+}
+
+pub(in crate::runner::modules) struct PointerChord {
+    generation: u64,
+    confirmed: Arc<AtomicBool>,
+    stamp: u64,
+    restricted: bool,
+    registrars: std::collections::BTreeMap<usize, bool>,
+}
+
+fn next_generation() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+impl Default for PointerChord {
+    fn default() -> Self {
+        Self {
+            generation: next_generation(),
+            stamp: next_generation(),
+            restricted: false,
+            confirmed: Arc::default(),
+            registrars: Default::default(),
+        }
+    }
+}
+
+pub(in crate::runner::modules) fn pointer_event(package: &str, name: &str) -> bool {
+    package == "@exact/global-shortcuts" && matches!(name, "globalpointerdown" | "globalpointerup")
+}
+
+/// A release identifies the same observation as the read, even when a
+/// replacement runner uses the same native package instance.
+pub(in crate::runner::modules) struct PointerObservation {
+    generation: u64,
+    listening: AtomicBool,
+    native: Option<crate::runner::source::NativeHandler>,
+}
+
+fn confirmed(outcome: &crate::Outcome, field: &str) -> bool {
+    matches!(outcome, crate::Outcome::Response(r) if serde_json::from_slice::<Json>(&r.body)
+        .is_ok_and(|v| v[field] == true))
+}
+
+impl crate::Reply {
+    /// Only a runner-owned pointer read or its release may reach the OS package.
+    pub fn owns_pointer_observation(&self) -> bool {
+        self.pointer_owner.as_ref().is_some_and(|live| live())
+    }
+}
+
+impl Drop for PointerObservation {
+    fn drop(&mut self) {
+        if let Some(handler) = &self.native {
+            let release = json!({"extension":"global-shortcuts", "release":"globalPointer", "args":{"observation":self.generation}});
+            let mut reply = crate::Reply::new(|_| {});
+            reply.pointer_owner = Some(Box::new(|| true));
+            handler(release.to_string().into_bytes(), reply);
+        }
+    }
+}
+
 impl<D: DataSource> Runner<D> {
     /// Where the app's login item registration is kept: in the app's
     /// state, which every session reads.
@@ -106,7 +176,7 @@ impl<D: DataSource> Runner<D> {
         let sub = self.substitute(row);
         let form = matches!(sub["login"].as_str(), Some("register" | "unregister"))
             || matches!(sub["shortcut"].as_str(), Some("register" | "check"));
-        form && !self.unsupported_here(row)
+        (form || self.pointer_source(row)) && !self.unsupported_here(row)
     }
 
     /// A call of a desktop form: its answer, and what it changes.
@@ -117,6 +187,11 @@ impl<D: DataSource> Runner<D> {
         cause: Cause,
     ) -> Json {
         let sub = self.substitute(row);
+        if self.pointer_source(row) {
+            self.note_registration_reader(row, args);
+            self.pointer_generation(false);
+            return json!({ "listening": true });
+        }
         match (sub["login"].as_str(), sub["shortcut"].as_str()) {
             (Some(op), _) => self.login_change(row, op == "register", args),
             (_, Some("register")) => self.shortcut_register(row, args, cause),
@@ -153,6 +228,252 @@ impl<D: DataSource> Runner<D> {
         ));
         self.announce(&self.key(&status));
         answer
+    }
+
+    pub(in crate::runner) fn pointer_source(&self, row: &ModulesRow) -> bool {
+        self.plan.str(row.package) == "@exact/global-shortcuts"
+            && self.plan.str(row.declared) == "globalPointer"
+    }
+
+    pub(in crate::runner::modules) fn unowned_pointer_release(&self, call: &Json) -> bool {
+        call["extension"] == "global-shortcuts"
+            && call["release"] == "globalPointer"
+            && self.plan.modules.iter().any(|row| self.pointer_source(row))
+    }
+
+    fn live_pointer_resource(&self, i: usize) -> bool {
+        self.resources.get(i).is_some_and(|r| {
+            r.state.as_ref().is_some_and(|s| !s.asleep)
+                && (r.reading_pointer || r.pending && r.refreshing_pointer)
+        }) && !self.settles_to_nothing(i)
+    }
+
+    pub(in crate::runner::modules) fn refused_pointer_reader(&mut self, resource: Option<usize>) {
+        if let Some(i) = resource {
+            if let Some(readers) = self
+                .extensions
+                .readers
+                .get_mut("global-shortcuts.globalPointer")
+            {
+                readers.remove(&i);
+            }
+            self.prune_pointer_readers();
+        }
+    }
+
+    pub(in crate::runner::modules) fn prune_pointer_readers(&mut self) {
+        const KEY: &str = "global-shortcuts.globalPointer";
+        if self.extensions.declared.pointer.is_none() {
+            return;
+        }
+        let mut readers = self.extensions.readers.remove(KEY).unwrap_or_default();
+        readers.retain(|&i, _| self.live_pointer_resource(i));
+        if readers.is_empty() {
+            self.extensions.declared.pointer.take();
+        } else {
+            self.extensions.readers.insert(KEY.into(), readers);
+        }
+    }
+
+    /// Only the read that opens observation needs its opener. A re-read of
+    /// the same live resource can refresh its answer while the window is hidden.
+    pub(in crate::runner::modules) fn pointer_reader(&self, row: &ModulesRow) -> bool {
+        let Some((super::super::samples::Reader::Resource(i), _)) = &self.extensions.samples.asking
+        else {
+            return false;
+        };
+        self.extensions
+            .declared
+            .pointer
+            .as_ref()
+            .is_some_and(|p| p.listening.load(Ordering::Acquire))
+            && self
+                .extensions
+                .readers
+                .get(&self.key(row))
+                .is_some_and(|r| r.contains_key(i))
+    }
+
+    pub(in crate::runner::modules) fn pointer_generation(&mut self, native: bool) -> u64 {
+        let handler = native
+            .then(|| self.native_slot().extension_handler())
+            .flatten();
+        let old = self
+            .extensions
+            .declared
+            .pointer
+            .as_ref()
+            .and_then(|p| p.native.as_ref());
+        let same_handler = match (old, &handler) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_handler {
+            self.extensions.declared.pointer.take();
+        }
+        if native && handler.is_none() {
+            return 0;
+        }
+        self.extensions
+            .declared
+            .pointer
+            .get_or_insert_with(|| {
+                Arc::new(PointerObservation {
+                    generation: next_generation(),
+                    listening: AtomicBool::new(handler.is_none()),
+                    native: handler,
+                })
+            })
+            .generation
+    }
+
+    /// A controlled drive can take over a running recorder. Retire the physical
+    /// monitor before the first fixture edge and re-ask on the new route.
+    pub(in crate::runner) fn pointer_route_changed(&mut self) {
+        let Some(old) = self.extensions.declared.pointer.as_ref() else {
+            return;
+        };
+        let Some(row) = self
+            .plan
+            .modules
+            .iter()
+            .find(|row| self.pointer_source(row))
+        else {
+            return;
+        };
+        let key = self.key(row);
+        let substitute = self.route(row) == super::super::Route::Substitute;
+        if self.unsupported_here(row)
+            || (!substitute && old.native.is_none())
+            || (substitute && old.native.is_some() && !old.listening.load(Ordering::Acquire))
+        {
+            self.extensions.declared.pointer.take();
+        } else if substitute && old.native.is_some() {
+            self.pointer_generation(false);
+        }
+        self.announce(&key);
+    }
+
+    /// Contract admitted its read in the commit. A data resource is admitted here,
+    /// under that same commit, and only while its exact request remains pending.
+    pub(in crate::runner::modules) fn module_request_cause(
+        &mut self,
+        row: &ModulesRow,
+        request: &crate::Request,
+    ) -> Result<(Cause, Option<usize>), crate::Dispatch> {
+        if self.tracks_pointer_chord(row) {
+            if let Some(pending) = request.reader_ticket.and_then(|reader| {
+                self.pending
+                    .iter()
+                    .find(|p| p.ticket == reader.ticket && p.keepable.as_ref() == Some(request))
+            }) {
+                if let crate::runner::Target::Resource(i) = pending.target {
+                    return Ok((self.ticket_cause(pending.ticket), Some(i)));
+                }
+            }
+        }
+        if !self.pointer_source(row) {
+            let cause = self.arriving_data_cause().with_input_from(
+                request
+                    .mutation_ticket
+                    .map(|t| self.ticket_cause(t))
+                    .unwrap_or(Cause::none()),
+            );
+            return Ok((cause, None));
+        }
+        let owner = request.reader_ticket.and_then(|reader| {
+            let pending = self
+                .pending
+                .iter()
+                .find(|p| p.ticket == reader.ticket && p.keepable.as_ref() == Some(request))?;
+            let crate::runner::Target::Resource(i) = pending.target else {
+                return None;
+            };
+            self.live_pointer_resource(i).then_some((
+                i,
+                pending.pointer_opener.unwrap_or(Cause::none()),
+                &pending.source,
+            ))
+        });
+        if let Some((i, opener, source)) = owner {
+            return if self.plan.module_named(source).is_some() {
+                Err(self.pointer_work(request.body.clone()))
+            } else {
+                Ok((opener, Some(i)))
+            };
+        }
+        Err(crate::Dispatch::Run(crate::Work::Now(Box::new(|| {
+            crate::Outcome::module_refusal(
+                "NotAllowedError",
+                Some("globalPointer needs a live reader"),
+            )
+        }))))
+    }
+
+    /// A cancelled read may still be waiting on the executor. Hold the
+    /// observation only while handing a live read to the package, so its
+    /// release follows that handoff even if the runner ends concurrently.
+    pub(in crate::runner::modules) fn pointer_work(&self, body: Vec<u8>) -> crate::Dispatch {
+        let args: Json = serde_json::from_slice(&body).unwrap_or_default();
+        let observation = self
+            .extensions
+            .declared
+            .pointer
+            .as_ref()
+            .filter(|p| args["args"]["observation"].as_u64() == Some(p.generation))
+            .map(Arc::downgrade);
+        crate::Dispatch::Run(crate::Work::Later(Box::new(move |reply| {
+            let Some(live) = observation.and_then(|p| p.upgrade()) else {
+                return reply.send(crate::Outcome::module_refusal("AbortError", None));
+            };
+            let observation = Arc::downgrade(&live);
+            match &live.native {
+                Some(handler) => {
+                    let owner = observation.clone();
+                    let mut package_reply = crate::Reply::new(move |outcome| {
+                        if let Some(p) = observation.upgrade() {
+                            p.listening
+                                .store(confirmed(&outcome, "listening"), Ordering::Release);
+                        }
+                        reply.send(outcome);
+                    });
+                    package_reply.pointer_owner = Some(Box::new(move || owner.strong_count() != 0));
+                    handler(body, package_reply);
+                }
+                None => reply.send(crate::Outcome::module_refusal("NotSupportedError", None)),
+            }
+        })))
+    }
+
+    pub(in crate::runner::modules) fn pointer_observes(&self, args: &[Json]) -> bool {
+        self.extensions
+            .declared
+            .pointer
+            .as_ref()
+            .is_some_and(|p| args.get(1).and_then(Json::as_u64) == Some(p.generation))
+    }
+
+    /// The drive submits a button edge to the session currently listening.
+    pub(in crate::runner::modules) fn pointer_fixture(&mut self, key: &str, value: &Json) {
+        let Some(("global-shortcuts", event @ ("globalpointerdown" | "globalpointerup"))) =
+            key.split_once('.')
+        else {
+            return;
+        };
+        let Some(p) = &self.extensions.declared.pointer else {
+            return;
+        };
+        if p.native.is_none() && value.is_object() {
+            if let Err(why) = self.raise_module_event(
+                "global-shortcuts",
+                event,
+                &json!([value, p.generation]).to_string(),
+                CallOrigin::Device,
+            ) {
+                self.log(why);
+            }
+        }
     }
 
     /// `--login`: this launch is the login item's (LLP 1133.025 §11), and
@@ -258,6 +579,9 @@ impl<D: DataSource> Runner<D> {
         if registered && previous.is_none() {
             self.note_shortcut_site(row, args, cause);
         }
+        if registered {
+            self.admitted_pointer_chord(row, args, cause);
+        }
         let entry = Listed {
             registered_by,
             reference,
@@ -293,7 +617,7 @@ impl<D: DataSource> Runner<D> {
             Some((super::super::samples::Reader::Resource(i), _)) => self.resource_site(*i),
             _ => self.plan.resources.len(),
         };
-        let by = by.unowned();
+        let by = by.unowned().without_pointer_start();
         let sites = &mut self.extensions.declared.shortcut_sites;
         if sites.is_empty() {
             sites.resize_with(self.plan.resources.len() + 1, || None);
@@ -383,6 +707,212 @@ impl<D: DataSource> Runner<D> {
             }
         }
         registrar.filter(|_| confirmed)
+    }
+
+    pub(in crate::runner::modules) fn tracks_pointer_chord(&self, row: &ModulesRow) -> bool {
+        self.plan.str(row.package) == "@exact/global-shortcuts"
+            && self.plan.str(row.declared) == "globalShortcut"
+            && self.plan.modules.iter().any(|r| self.pointer_source(r))
+    }
+
+    pub(in crate::runner::modules) fn admitted_pointer_chord(
+        &mut self,
+        row: &ModulesRow,
+        args: &Json,
+        cause: Cause,
+    ) {
+        if !self.tracks_pointer_chord(row) {
+            return;
+        }
+        let Some((super::super::samples::Reader::Resource(i), _)) = self.extensions.samples.asking
+        else {
+            return;
+        };
+        let (Some(id), Some(keys)) = (args["id"].as_str(), args["keys"].as_str()) else {
+            return;
+        };
+        let chord = self
+            .extensions
+            .declared
+            .pointer_chords
+            .entry((id.into(), keys.into()))
+            .or_default();
+        // A re-ask polls the same registrar.
+        chord
+            .registrars
+            .entry(i)
+            .or_insert(cause.only(CallOrigin::App));
+        let reader = &mut self.resources[i];
+        reader.session_subscription = true;
+        if !reader.pointer_chords.contains(&chord.generation) {
+            reader.pointer_chords.push(chord.generation);
+        }
+    }
+
+    pub(in crate::runner::modules) fn listed_pointer_press(
+        &self,
+        entry: &Json,
+        reference: u64,
+    ) -> Option<ShortcutPress> {
+        let key = (entry["id"].as_str()?.into(), entry["keys"].as_str()?.into());
+        self.extensions
+            .declared
+            .pointer_chords
+            .get(&key)
+            .map(|chord| ShortcutPress::Listed(reference, chord.stamp))
+    }
+
+    pub(in crate::runner::modules) fn prune_pointer_chords(&mut self) {
+        if self.extensions.declared.pointer_chords.is_empty() {
+            return;
+        }
+        let current: std::collections::BTreeSet<_> = self
+            .resources
+            .iter()
+            .enumerate()
+            .filter(|(i, r)| {
+                r.state.as_ref().is_some_and(|s| !s.asleep) && !self.settles_to_nothing(*i)
+            })
+            .flat_map(|(i, r)| r.pointer_chords.iter().map(move |g| (*g, i)))
+            .collect();
+        let native = self.plan.modules.iter().any(|row| {
+            self.tracks_pointer_chord(row) && self.route(row) != super::super::Route::Substitute
+        });
+        let handler = native
+            .then(|| self.native_slot().extension_handler())
+            .flatten();
+        let chords = &mut self.extensions.declared.pointer_chords;
+        chords.retain(|_, chord| {
+            chord
+                .registrars
+                .retain(|i, _| current.contains(&(chord.generation, *i)));
+            !chord.registrars.is_empty()
+        });
+        let restricted: std::collections::BTreeSet<_> = chords
+            .iter()
+            .filter(|(_, c)| c.registrars.values().any(|app| !app))
+            .map(|((_, keys), _)| keys.clone())
+            .collect();
+        for ((id, keys), chord) in chords {
+            let mixed = restricted.contains(keys);
+            if chord.restricted && !mixed {
+                // A press queued while the chord was shared cannot acquire the remaining registrar's authority.
+                chord.stamp = next_generation();
+                chord.confirmed = Arc::default();
+                if let Some(handler) = &handler {
+                    let result = chord.confirmed.clone();
+                    let read = json!({"extension":"global-shortcuts","source":"globalShortcut",
+                        "args":{"id":id,"keys":keys,"registration":chord.stamp}});
+                    handler(
+                        read.to_string().into_bytes(),
+                        crate::Reply::new(move |v| {
+                            result.store(confirmed(&v, "registered"), Ordering::Release)
+                        }),
+                    );
+                }
+            }
+            chord.restricted = mixed;
+        }
+    }
+
+    pub(in crate::runner::modules) fn pointer_chord_work(
+        &self,
+        native: &crate::Request,
+        args: &Json,
+        body: Vec<u8>,
+    ) -> crate::Dispatch {
+        use crate::{Dispatch, Reply, Work};
+        let key = (
+            args["id"].as_str().unwrap_or_default().into(),
+            args["keys"].as_str().unwrap_or_default().into(),
+        );
+        let mut envelope: Json = serde_json::from_slice(&body).expect("forwarded module call");
+        // Only the runner can attach a registration to a package call.
+        if let Some(args) = envelope["args"].as_object_mut() {
+            args.remove("registration");
+        }
+        let reader = native.reader_ticket.and_then(|t| {
+            self.pending
+                .iter()
+                .find(|p| p.ticket == t.ticket && p.keepable.as_ref() == Some(native))
+        });
+        let chord = self
+            .extensions
+            .declared
+            .pointer_chords
+            .get(&key)
+            .filter(|chord| {
+                reader.is_some_and(|p| match p.target {
+                    crate::runner::Target::Resource(i) => {
+                        self.resources[i].pointer_chords.contains(&chord.generation)
+                    }
+                    _ => false,
+                })
+            });
+        let Some(chord) = chord else {
+            return self.to_implementation(envelope.to_string().into_bytes());
+        };
+        envelope["args"]["registration"] = json!(chord.stamp);
+        let result = chord.confirmed.clone();
+        let handler = self.native_slot().extension_handler();
+        Dispatch::Run(Work::Later(Box::new(move |reply| match handler {
+            Some(handler) => handler(
+                envelope.to_string().into_bytes(),
+                Reply::new(move |outcome| {
+                    result.store(confirmed(&outcome, "registered"), Ordering::Release);
+                    reply.send(outcome);
+                }),
+            ),
+            None => reply.send(crate::Outcome::module_refusal("NotSupportedError", None)),
+        })))
+    }
+
+    pub(in crate::runner::modules) fn shortcut_opens_pointer(
+        &self,
+        press: ShortcutPress,
+        args: &[Json],
+    ) -> bool {
+        let [id, shortcut] = args else { return false };
+        let (Some(id), Some(keys)) = (id.as_str(), shortcut["keys"].as_str()) else {
+            return false;
+        };
+        if shortcut["id"] != id {
+            return false;
+        }
+        let Some(chord) = self
+            .extensions
+            .declared
+            .pointer_chords
+            .get(&(id.into(), keys.into()))
+        else {
+            return false;
+        };
+        if chord.restricted {
+            return false;
+        }
+        match press {
+            ShortcutPress::Native(generation) => {
+                chord.stamp == generation
+                    && chord.confirmed.load(Ordering::Acquire)
+                    && self.read_by_any("global-shortcuts.globalShortcut")
+            }
+            ShortcutPress::Listed(reference, stamp) => {
+                chord.stamp == stamp
+                    && self.plan.modules.iter().any(|row| {
+                        self.tracks_pointer_chord(row)
+                            && self.route(row) == super::super::Route::Substitute
+                    })
+                    && self
+                        .entries("global-shortcuts", "globalShortcuts")
+                        .iter()
+                        .any(|e| {
+                            e.reference == reference
+                                && e.fields["registered"] == true
+                                && e.fields["id"] == id
+                                && e.fields["keys"] == keys
+                        })
+            }
+        }
     }
 
     fn shortcut_registered(&self, reader: usize, id: &str, keys: &str) -> bool {
@@ -516,7 +1046,7 @@ impl<D: DataSource> Runner<D> {
                 super::entry_args(tap, &fields),
                 CallOrigin::App,
                 false,
-                entry.registered_by,
+                (entry.registered_by, None),
             )?;
             if edge == Some("up") {
                 self.extensions.declared.held_shortcuts.remove(&reference);

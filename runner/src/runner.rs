@@ -164,7 +164,7 @@ mod seams;
 pub use audio_seam::{Audio, LinkedAudio, NoAudio};
 pub use list_seam::Lists;
 pub(crate) use processes::held as process_held;
-pub use provenance::CallOrigin;
+pub use provenance::{CallOrigin, ReaderTicket};
 pub use seams::{ModuleLinks, PresenceSecrets, TextAxes, Tools};
 mod wakes;
 pub use wakes::WakeHow;
@@ -265,6 +265,8 @@ enum Seed<'a> {
 #[derive(Clone)]
 #[cfg_attr(test, derive(Debug))]
 struct PendingReq {
+    /// Only a continuation of this resource read can use its original pointer opener.
+    pointer_opener: Option<provenance::Cause>,
     completion: Option<CompletionReply>,
     module: Option<ModuleInstance>,
     inspection_generation: u64,

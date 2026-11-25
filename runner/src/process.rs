@@ -110,6 +110,7 @@ impl Request {
             held: false,
             listen: None,
             mutation_ticket: None,
+            reader_ticket: None,
             reach: Default::default(),
             due_ms: None,
             wake_ms: None,

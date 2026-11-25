@@ -42,3 +42,21 @@ export function grantAdvice(grants, table) {
   const all = grantLines(grants, table).map(one);
   return all.length > 1 ? `one of ${all.join('; ')}` : all[0];
 }
+
+/** Where an interface has separate per-name grants, tell the author which calls each line admits. */
+export function packageGrantAdvice(declaration) {
+  const grants = declaration?.grants;
+  if (!grants?.length) return '';
+  const names = (declaration.names ?? []).filter(entry => Array.isArray(entry.grants) && entry.grants.length);
+  if (!names.some(entry => entry.grants.some(grant => !grants.includes(grant)))) {
+    return `grant ${grantAdvice(grants)} (bun exact.mjs docs a capability that asks permission)`;
+  }
+  const byGrant = new Map();
+  for (const entry of names) {
+    const line = grantAdvice(entry.grants);
+    const calls = byGrant.get(line) ?? [];
+    calls.push(entry.source ?? entry.send);
+    byGrant.set(line, calls);
+  }
+  return [...byGrant].map(([line, calls]) => `grant ${line} for ${calls.join(' or ')}`).join(', and ');
+}

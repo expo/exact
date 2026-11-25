@@ -184,7 +184,7 @@
     },
     "packages/global-shortcuts": {
       "name": "@exact/global-shortcuts",
-      "version": "1.0.0",
+      "version": "1.1.0",
     },
     "packages/health": {
       "name": "@exact/health",

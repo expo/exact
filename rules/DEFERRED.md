@@ -560,6 +560,15 @@ clone's Carbon registration. Still refused: helper daemons, jump lists
 can fade its window on a chord and restore it on `globalshortcutup`.
 The ruling admits release from Carbon and the desktop Linux GlobalShortcuts portal.
 Windows registers presses only.
+**Expanded (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel";
+panel 4–0 on the second pass, LLP 1133.025 D3a).** The separate
+`device.global-pointer` grant admits listen-only outside button presses and
+releases on macOS and Windows. The app's in-window input or an app-registered
+shortcut press opens the reader. A chord shared with a background registrar cannot
+open it. Closing the last gate stops observation and retains its last answer.
+The events are device-caused. Moves, wheel
+events and system-wide key observation remain out. macOS implements the
+reader. Windows awaits Raw Input verification on a mixed-DPI desktop.
 **Expanded (Daehyeon Mun, 2026-10-28, waived; LLP 1021 §5.3.3; built
 2026-10-28):** File ▸ Close Window's chord, `-exact-menu-keys="close-window=…"`
 on the root, for the T3 Code clone, whose original leaves Close Window without

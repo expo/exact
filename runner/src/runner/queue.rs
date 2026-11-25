@@ -161,7 +161,7 @@ impl<D: DataSource> Runner<D> {
         source: &str,
         args: &[Value],
     ) -> Result<(), RunnerError> {
-        let cause = self.cause();
+        let mut cause = self.cause();
         // Only the application data source can opt in, and an unasked
         // tail must belong to the same foreground cause. A queue with
         // `then` owes one action per reply (LLP 1092 D4).
@@ -172,10 +172,11 @@ impl<D: DataSource> Runner<D> {
             && !Self::activity_send(source)
             && self.plan.module_named(source).is_none()
             && self.plan.fetch_named(source).is_none()
-            && self.queues.waiting[m]
-                .back()
-                .is_some_and(|tail| !tail.attempted && tail.cause == cause && tail.source == source)
-        {
+            && self.queues.waiting[m].back().is_some_and(|tail| {
+                !tail.attempted
+                    && tail.cause.without_pointer_start() == cause.without_pointer_start()
+                    && tail.source == source
+            }) {
             self.data
                 .queued_send_replacer(Some(source))
                 .and_then(|merge| {
@@ -219,6 +220,7 @@ impl<D: DataSource> Runner<D> {
             let tail = self.queues.waiting[m]
                 .pop_back()
                 .expect("replacement has a tail");
+            cause = self.join_causes(tail.cause, cause);
             self.end_waiting(m, tail);
         }
         self.queues.waiting[m].push_back(Waiting {

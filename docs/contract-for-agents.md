@@ -2643,6 +2643,30 @@ means the permission gate passed and the system accepted the monitor. It is
 not proof of delivery. Modifier triggers depend on the system delivering
 modifier-flag changes to a global monitor, as measured on macOS 27.2.
 
+### Outside pointer buttons on macOS
+
+Declare `device.global-pointer` and read `@exact/global-shortcuts`'s live source
+with `resource listener = globalPointer() when recording as shape GlobalPointer`.
+Set `recording = true` from the same in-window input that opens other input-gated
+calls, or from a `globalshortcut` press for a chord the app registered. The chord
+works while hidden if every registrar of the current registration acted as the app.
+A registration shared with a background control cannot start recording. Closing the
+gate or unmounting the component releases the reader. The last reader stops the
+monitor. A closed gate retains its last answer, so show `recording and listener.listening`.
+After a reload the listener reads false until the person starts it again.
+
+The root hears `globalpointerdown` and `globalpointerup` for other apps' button
+edges. The other app receives the click. In a `GlobalPointerEvent`, `screenX` and
+`screenY` match `getPointerPosition()`, `button` is 0 for primary, 1 for middle
+and 2 for secondary, and `timeStamp` is milliseconds since system startup. Modifiers
+are `altKey`, `ctrlKey`, `metaKey` and `shiftKey`. The handler runs with the
+device's cause. Save the point there. From a separate in-window capture button,
+use `getWindowAtPoint` and `captureScreens` with their own grants.
+
+On macOS 27.2 (26B123), all three buttons arrived with Accessibility and Input
+Monitoring trust both off. There is no pointer permission status or request call.
+Windows answers `NotSupportedError`.
+
 ## Views, layout, and interaction
 
 For an attachment of any type, use `input type="file"` with no `accept` (or

@@ -50,7 +50,7 @@ const { freeSpace, ROOM_GB } = await import('./filesystem.mjs');
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { webCompilesRust } from './app-shells.mjs';
-import { grantAdvice } from './grant-advice.mjs';
+import { packageGrantAdvice } from './grant-advice.mjs';
 import { checkoutPath, linkCheckout } from './paths.mjs';
 import { installedFileDependencies } from './file-dependencies.mjs';
 import { addOutside, installIn, outsideSpecifier } from './package-manager.mjs';
@@ -908,8 +908,8 @@ export function add(args, say = console.log) {
   if (manifest.dependencies?.[key] !== spec) writeFileSync(at, JSON.stringify({ ...manifest, dependencies: { ...manifest.dependencies, [key]: spec } }, null, 2) + '\n');
   const { manager, installed } = installIn(app.dir, `add: ${key} is in its package.json`, !args.includes('--no-install'));
   if (retargeted && installed) installedFileDependencies(app.dir);
-  const grants = read(resolve(ROOT, 'packages', short, 'exact.json'))?.grants ?? [];
-  say(`add: ${key} is ${spec}${installed ? '' : `, not installed: run ${manager} install`}. Name what you use: use … from "${key}" in app.contract, or import from it in app.ts${grants.length ? `; and in app.ts grant ${grantAdvice(grants)} (bun exact.mjs docs a capability that asks permission)` : ''}.`);
+  const advice = packageGrantAdvice(read(resolve(ROOT, 'packages', short, 'exact.json')));
+  say(`add: ${key} is ${spec}${installed ? '' : `, not installed: run ${manager} install`}. Name what you use: use … from "${key}" in app.contract, or import from it in app.ts${advice ? `; and in app.ts ${advice}` : ''}.`);
   const maven = read(resolve(ROOT, 'packages', short, 'android/exact.json'))?.maven ?? [];
   if (maven.length) say(`For Android, after importing the package, run: ${androidLockCommand(app)}`);
 }

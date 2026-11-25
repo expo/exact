@@ -736,6 +736,14 @@ final class NativeViews: NativeModuleHosting {
         case .failure(let f): return refuse(f.message)
         case .success(let t): table = t
         }
+        // The app's own long calls and admitted package calls arrive here together.
+        // Check the runner's reply slot, independent of how Foundation decoded the body.
+        if table.extensions.contains("global-shortcuts"), exact_app_owns_pointer_observation(reply) == 0,
+           let request = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           request["extension"] as? String == "global-shortcuts",
+           ["source", "send", "release"].contains(where: { request[$0] as? String == "globalPointer" }) {
+            return refuse("globalPointer needs a live reader")
+        }
         switch module(table) {
         case .failure(let f): refuse(f.message)
         case .success(let m):

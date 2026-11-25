@@ -328,9 +328,11 @@ impl<D: DataSource> Runner<D> {
         args: &[Value],
     ) -> Result<Answer, RunnerError> {
         let resource = self.plan.str(self.resource_row(i).name).to_string();
-        let key = self.key(&self.module_row(source));
-        // The readers of a module's source are asked again when what it
-        // answers changes (`announce`, or the bound module's own topic).
+        let row = self.module_row(source);
+        let key = self.key(&row);
+        self.resources[i].reading_pointer = self.pointer_source(&row);
+        self.resources[i].session_subscription |=
+            self.pointer_source(&row) || self.tracks_pointer_chord(&row);
         self.store.observe_topic(&key);
         let ty = self.resource_row(i).ty;
         self.module_target(Target::Resource(i), source, args, ty)
@@ -1028,15 +1030,6 @@ impl<D: DataSource> Runner<D> {
             .collect()
     }
 
-    /// `body` for the bound implementation, through the native slot.
-    fn to_implementation(&self, body: Vec<u8>) -> Dispatch {
-        let handler = self.native_slot().extension_handler();
-        Dispatch::Run(Work::Later(Box::new(move |reply| match handler {
-            Some(handler) => handler(body, reply),
-            None => reply.send(Outcome::module_refusal("NotSupportedError", None)),
-        })))
-    }
-
     fn release(&mut self, token: u64, answer: Json) {
         let Some(at) = self.extensions.held.iter().position(|h| h.token == token) else {
             return;
@@ -1086,6 +1079,9 @@ impl<D: DataSource> Runner<D> {
         let body = &native.body;
         let v: Json = serde_json::from_slice(body).ok()?;
         let extension = v.get("extension")?.as_str()?;
+        if self.unowned_pointer_release(&v) {
+            return Some(super::module_seam::unsupported_call());
+        }
         let (declared, send) = super::module_seam::declared_call(&v)?;
         let owner = v["owner"]
             .as_str()
@@ -1109,13 +1105,14 @@ impl<D: DataSource> Runner<D> {
         let mut args = v.get("args").cloned().unwrap_or(json!({}));
         self.clamp_bounds(&row, &mut args);
         self.resolve_of(&row, &mut args);
-        let cause = self.arriving_data_cause().with_input_from(
-            native
-                .mutation_ticket
-                .map(|t| self.ticket_cause(t))
-                .unwrap_or(Cause::none()),
-        );
+        let (cause, resource) = match self.module_request_cause(&row, native) {
+            Ok(owner) => owner,
+            Err(dispatch) => return Some(dispatch),
+        };
         if let Some(refused) = self.scoped_input_refusal(&row, cause, native.grants.as_deref()) {
+            if self.pointer_source(&row) {
+                self.refused_pointer_reader(resource);
+            }
             return Some(now(refused));
         }
         // A send that answers nothing (LLP 1133.004 D5) settles once done,
@@ -1126,7 +1123,9 @@ impl<D: DataSource> Runner<D> {
         let held_args = args.clone();
         let timeout = self.timeout(&row, &args);
         let route = self.route(&row);
-        let reader = self.data_reader(&row, &args);
+        let reader = resource
+            .map(samples::Reader::Resource)
+            .unwrap_or_else(|| self.data_reader(&row, &args));
         self.extensions.samples.asking = Some((reader.clone(), cause));
         self.sampled_ask(&row, &args);
         // The call's request, when its reply carries handles (`handles.rs`).
@@ -1140,7 +1139,7 @@ impl<D: DataSource> Runner<D> {
                 let sampled = self.samples_of(&row);
                 // The implementation hears the origin admission read, and a
                 // Contract send keeps the number it went out with (`bound.rs`).
-                let mut body = self.as_cause(cause, |r| r.forward_body(&row, args, None));
+                let mut body = self.as_cause(cause, |r| r.forward_body(&row, args, resource));
                 // A send starts work that may outlive the call, so it names
                 // the grants it was admitted under: the scope of a mixed
                 // app's source, else the app's.
@@ -1167,6 +1166,10 @@ impl<D: DataSource> Runner<D> {
                 // listed (`invoke.rs`); a watched one's `watched` grants them.
                 let work = match request {
                     Some(ticket) => self.watched(body, ticket, cause),
+                    None if self.pointer_source(&row) => self.pointer_work(body),
+                    None if self.tracks_pointer_chord(&row) => {
+                        self.pointer_chord_work(native, &held_args, body)
+                    }
                     None => {
                         let work = self.to_implementation(body.clone());
                         self.granting(&row, &body, cause, work)

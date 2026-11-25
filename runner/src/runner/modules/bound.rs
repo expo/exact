@@ -19,7 +19,7 @@
 
 use super::super::{DataSource, Runner};
 use super::{Decision, Json, ModulesRow, Route};
-use crate::request::{Reply, Request};
+use crate::request::{Dispatch, Outcome, Reply, Request, Work};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -43,6 +43,7 @@ impl<D: DataSource> Runner<D> {
             .collect();
         self.publish_view_bindings();
         self.presence_rebound();
+        self.pointer_route_changed();
         if real.is_empty() && agent.is_empty() {
             return;
         }
@@ -144,6 +145,15 @@ impl<D: DataSource> Runner<D> {
             table.insert(key, answer);
         }
         self.native_slot().sync(table);
+    }
+
+    /// `body` for the bound implementation, through the native slot.
+    pub(super) fn to_implementation(&self, body: Vec<u8>) -> Dispatch {
+        let handler = self.native_slot().extension_handler();
+        Dispatch::Run(Work::Later(Box::new(move |reply| match handler {
+            Some(handler) => handler(body, reply),
+            None => reply.send(Outcome::module_refusal("NotSupportedError", None)),
+        })))
     }
 
     /// A bound name's read or send, for the native slot.
@@ -293,6 +303,9 @@ impl<D: DataSource> Runner<D> {
                     .insert(group);
             }
             self.extensions.live.insert(key);
+        }
+        if self.pointer_source(row) {
+            body["args"] = json!({"observation": self.pointer_generation(true)});
         }
         // A sampled source's reader carries its cursor (LLP 1133.013 D5),
         // outside the group its arguments make.
@@ -466,6 +479,8 @@ impl<D: DataSource> Runner<D> {
     /// reader's new arguments before it hears the old ones are gone. A
     /// group data code asks for is released only with the whole name.
     pub(in crate::runner) fn release_idle(&mut self) {
+        self.prune_pointer_readers();
+        self.prune_pointer_chords();
         let mut live: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for key in &self.extensions.live {
             let row = self.plan.modules.iter().find(|m| self.key(m) == *key);
@@ -543,7 +558,18 @@ impl<D: DataSource> Runner<D> {
                 .cloned();
             // A registration the substitute answers is unlisted rather than
             // told (`declared/desktop.rs`).
+            if key == "global-shortcuts.globalShortcut" {
+                let chords = &mut self.extensions.declared.pointer_chords;
+                if let Some(args) = body.get("args") {
+                    if let (Some(id), Some(keys)) = (args["id"].as_str(), args["keys"].as_str()) {
+                        chords.remove(&(id.to_owned(), keys.to_owned()));
+                    }
+                } else {
+                    chords.clear();
+                }
+            }
             match row {
+                Some(row) if self.pointer_source(&row) => (),
                 Some(row) if self.route(&row) == Route::Substitute => {
                     self.shortcut_released(&row, body.get("args"));
                 }
@@ -580,11 +606,18 @@ impl<D: DataSource> Runner<D> {
     /// request lands (`settlement.rs`), so that request is a reader too. A
     /// resource whose gate closed is idle and reads nothing; it keeps its
     /// value, not its source (LLP 1161.002 D2).
-    fn read_by_any(&self, key: &str) -> bool {
+    pub(super) fn read_by_any(&self, key: &str) -> bool {
         let Some(row) = self.plan.modules.iter().find(|m| self.key(m) == key) else {
             return false;
         };
         let source = self.plan.sources[row.source.0 as usize].name;
+        if self.pointer_source(row) {
+            return self
+                .extensions
+                .readers
+                .get(key)
+                .is_some_and(|r| !r.is_empty());
+        }
         // A child's declared row and a destroyed instance's read nothing
         // (LLP 1035.005.004 D4).
         (0..self.resources.len()).any(|i| {

@@ -57,12 +57,20 @@ impl<D: DataSource> Runner<D> {
     /// [`Self::query`] under the cause resource `i` is asked with (LLP
     /// 1133.023 D7a), which its device's re-asks reuse.
     pub(super) fn query_caused(&mut self, i: usize, args: &[Value]) -> Result<Answer, RunnerError> {
-        let cause = self.cause_for(super::Target::Resource(i));
-        self.as_cause(cause, |r| r.query(i, args))
+        self.as_resource_query(i, |r| r.query(i, args))
     }
 
     pub(super) fn query(&mut self, i: usize, args: &[Value]) -> Result<Answer, RunnerError> {
         self.resources[i].render_urls.clear();
+        let reader = &mut self.resources[i];
+        reader.refreshing_pointer = (reader.reading_pointer
+            || reader.pending && reader.refreshing_pointer)
+            && reader
+                .state
+                .as_ref()
+                .is_some_and(|s| !s.asleep && s.args == args);
+        reader.reading_pointer = false;
+        self.resources[i].pointer_chords.clear();
         let row = self.resource_row(i);
         let source = self.plan.str(row.source).to_string();
         let resource = self.plan.str(row.name).to_string();

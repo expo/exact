@@ -495,7 +495,7 @@ impl<D: DataSource> Runner<D> {
         if !surface && !waits_for_module(&self.plan, self.plan.str(self.resource_row(i).source)) {
             return;
         }
-        if !surface && self.identity_reads_declared(i) {
+        if self.resources[i].session_subscription || (!surface && self.identity_reads_declared(i)) {
             self.answered_waiting(i, args, true);
             self.store
                 .forget_kept(&kept_name(self.plan.str(self.resource_row(i).name)));

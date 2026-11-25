@@ -134,6 +134,7 @@ impl<D: DataSource> Runner<D> {
     /// callback cancelled stays cancelled and one it rekeyed starts from that
     /// completion (D3). Virtual frames restart from the completion too.
     pub fn set_live_clock(&mut self, sample: Option<Box<dyn FnMut() -> f64>>) {
+        let changed = sample.is_some() != self.clock_live();
         if sample.is_none() && self.clock_live() {
             self.sample();
             self.clock.takeover = Some(self.now_ms);
@@ -143,6 +144,9 @@ impl<D: DataSource> Runner<D> {
         self.clock.admission = None;
         self.clock.frame_turn = None;
         self.clock.sample = sample;
+        if changed {
+            self.seams.modules.clock_route_changed(self);
+        }
     }
 
     /// Whether a host's live clock owns the runner's (none is a seek clock).

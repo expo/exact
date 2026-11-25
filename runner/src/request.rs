@@ -97,6 +97,8 @@ pub struct Request {
     /// Runner ticket for a native call from a mutation. The runner assigns it when the
     /// request leaves the source so admission can consult the originating action.
     pub mutation_ticket: Option<u64>,
+    /// Assigned by the runner when a live module read needs its owning resource at dispatch.
+    pub reader_ticket: Option<crate::runner::ReaderTicket>,
     /// Native HTTP scheduling; storage and continuations must remain ordered.
     pub http: HttpScheduling,
     /// Executor-local continuation token, not an HTTP request. The browser
@@ -326,6 +328,7 @@ impl Request {
             held: false,
             reach: Default::default(),
             mutation_ticket: None,
+            reader_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -430,6 +433,7 @@ impl Request {
             held: false,
             reach: Default::default(),
             mutation_ticket: None,
+            reader_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -478,6 +482,7 @@ impl Request {
             held: false,
             reach: Default::default(),
             mutation_ticket: None,
+            reader_ticket: None,
             listen: None,
             due_ms: None,
             wake_ms: None,
@@ -1224,7 +1229,10 @@ impl Placement {
 /// mid-turn, or never took the job — it reports `Aborted`, so the ticket
 /// still ends and a queue behind it can move. A stream's reply
 /// ([`Reply::stream`]) takes any number of `message`s before its `send`.
-pub struct Reply(Option<Deliver>);
+pub struct Reply {
+    deliver: Option<Deliver>,
+    pub(crate) pointer_owner: Option<Box<dyn Fn() -> bool + Send>>,
+}
 
 enum Deliver {
     Once(Box<dyn FnOnce(Outcome) + Send>),
@@ -1234,22 +1242,28 @@ enum Deliver {
 impl Reply {
     /// A reply that delivers through `deliver`, once.
     pub fn new(deliver: impl FnOnce(Outcome) + Send + 'static) -> Reply {
-        Reply(Some(Deliver::Once(Box::new(deliver))))
+        Self {
+            deliver: Some(Deliver::Once(Box::new(deliver))),
+            pointer_owner: None,
+        }
     }
 
     /// A stream's reply (LLP 1016.000 D1): each `message` goes through
     /// `deliver` and leaves it open; `send`, or a drop, ends it.
     pub fn stream(deliver: impl FnMut(Outcome) + Send + 'static) -> Reply {
-        Reply(Some(Deliver::Many(Box::new(deliver))))
+        Self {
+            deliver: Some(Deliver::Many(Box::new(deliver))),
+            pointer_owner: None,
+        }
     }
 
     /// Deliver one message. The reply stays open unless it answers once
     /// ([`Reply::new`]): then the message is its one answer.
     pub fn message(&mut self, message: Message) {
-        match self.0.take() {
+        match self.deliver.take() {
             Some(Deliver::Many(mut deliver)) => {
                 deliver(Outcome::Message(message));
-                self.0 = Some(Deliver::Many(deliver));
+                self.deliver = Some(Deliver::Many(deliver));
             }
             Some(Deliver::Once(deliver)) => deliver(Outcome::Message(message)),
             None => {}
@@ -1258,7 +1272,7 @@ impl Reply {
 
     /// Deliver the outcome; for a stream, the last one.
     pub fn send(mut self, outcome: Outcome) {
-        match self.0.take() {
+        match self.deliver.take() {
             Some(Deliver::Once(deliver)) => deliver(outcome),
             Some(Deliver::Many(mut deliver)) => deliver(outcome),
             None => {}
@@ -1268,7 +1282,7 @@ impl Reply {
 
 impl Drop for Reply {
     fn drop(&mut self) {
-        if let Some(deliver) = self.0.take() {
+        if let Some(deliver) = self.deliver.take() {
             let aborted = Outcome::Failed {
                 kind: FailureKind::Aborted,
                 message: "the owner ended without a reply".into(),

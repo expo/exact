@@ -326,8 +326,14 @@ impl<D: DataSource> Modules<D> for LinkedModules {
         r.note_send_linked(ticket, body)
     }
 
-    fn number_data_call(&self, r: &mut Runner<D>, request: &mut Request) {
-        r.number_data_call_linked(request)
+    fn number_data_call(
+        &self,
+        r: &mut Runner<D>,
+        target: crate::runner::Target,
+        ticket: u64,
+        request: &mut Request,
+    ) {
+        r.number_data_call_linked(target, ticket, request)
     }
 
     fn picture_schemes(&self, r: &Runner<D>) -> Vec<String> {
@@ -525,6 +531,11 @@ impl<D: DataSource> Modules<D> for LinkedModules {
 
     fn readers_restore(&self, r: &mut Runner<D>, saved: Readers) {
         r.extensions.readers = saved;
+        r.prune_pointer_readers();
+    }
+
+    fn clock_route_changed(&self, r: &mut Runner<D>) {
+        r.pointer_route_changed()
     }
 
     fn retarget(&self, r: &mut Runner<D>) {

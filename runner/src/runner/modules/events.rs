@@ -14,6 +14,7 @@
 
 use super::super::provenance::Cause;
 use super::super::{CommitReceipt, DataSource, Runner, RunnerError};
+use super::declared::desktop::ShortcutPress;
 use super::{CallOrigin, Json, ModulesRow};
 use std::collections::VecDeque;
 
@@ -30,6 +31,7 @@ pub(in crate::runner) struct Events {
 
 struct Raised {
     presentation: bool,
+    shortcut: Option<ShortcutPress>,
     row: usize,
     args: Vec<Json>,
     origin: CallOrigin,
@@ -49,10 +51,37 @@ impl<D: DataSource> Runner<D> {
         args: &str,
         origin: CallOrigin,
     ) -> Result<(), String> {
-        let args: Vec<Json> = serde_json::from_str(args)
+        let mut args: Vec<Json> = serde_json::from_str(args)
             .map_err(|_| format!("{extension}.{name}: the arguments are a JSON array"))?;
+        // AppKit attaches the registration to its callback. The app hears the two declared arguments.
+        let registration = if extension == "global-shortcuts"
+            && name == "globalshortcut"
+            && args.len() == 3
+            && args[2].is_u64()
+            && self
+                .plan
+                .module_events
+                .iter()
+                .find(|e| {
+                    self.plan.str(e.extension) == extension && self.plan.str(e.declared) == name
+                })
+                .is_some_and(|e| self.plan.str(e.package) == "@exact/global-shortcuts")
+        {
+            args.pop()
+                .and_then(|v| v.as_u64())
+                .map(ShortcutPress::Native)
+        } else {
+            None
+        };
         let registrar = self.native_shortcut_cause(extension, name, &args);
-        self.queue_module_event(extension, name, args, origin, false, registrar)
+        self.queue_module_event(
+            extension,
+            name,
+            args,
+            origin,
+            false,
+            (registrar, registration),
+        )
     }
 
     pub(super) fn queue_module_event(
@@ -62,7 +91,7 @@ impl<D: DataSource> Runner<D> {
         args: Vec<Json>,
         origin: CallOrigin,
         presentation: bool,
-        registered_by: Option<Cause>,
+        (registered_by, registration): (Option<Cause>, Option<ShortcutPress>),
     ) -> Result<(), String> {
         let key = format!("{extension}.{name}");
         let Some(row) = (self.plan.module_events.iter()).position(|e| {
@@ -72,6 +101,11 @@ impl<D: DataSource> Runner<D> {
             return Ok(());
         };
         let declared = &self.plan.module_events[row];
+        if super::declared::desktop::pointer_event(self.plan.str(declared.package), name)
+            && !self.pointer_observes(&args)
+        {
+            return Ok(());
+        }
         if self.plan.str(declared.raised) == "wake" {
             return Err(format!(
                 "{key}: a wake raises it, at the platform's call (`raise_wake`)"
@@ -86,6 +120,7 @@ impl<D: DataSource> Runner<D> {
         // Each event's own bound: past it, its own oldest is dropped.
         let hold = declared.hold.max(1) as usize;
         let raised = Cause::raised(origin);
+        let shortcut = registration.filter(|press| self.shortcut_opens_pointer(*press, &args));
         let cause = registered_by
             .filter(|c| c.hidden_show_reason().is_some())
             .map_or(raised, |c| self.join_causes(raised, c));
@@ -95,6 +130,7 @@ impl<D: DataSource> Runner<D> {
             args,
             origin,
             presentation,
+            shortcut,
             cause,
         });
         let mut dropped = Vec::new();
@@ -173,6 +209,13 @@ impl<D: DataSource> Runner<D> {
             self.plan.str(row.extension),
             self.plan.str(row.declared)
         );
+        if super::declared::desktop::pointer_event(
+            self.plan.str(row.package),
+            self.plan.str(row.declared),
+        ) && !self.pointer_observes(&raised.args)
+        {
+            return Ok(None);
+        }
         let action = self.plan.action(row.action).clone();
         let mut args = Vec::new();
         let mut refused = None;
@@ -194,7 +237,15 @@ impl<D: DataSource> Runner<D> {
         if raised.origin == CallOrigin::App {
             self.note_activation();
         }
-        self.as_cause(raised.cause, |r| r.run_action(row.action, args, &[]))
+        let cause = if raised
+            .shortcut
+            .is_some_and(|press| self.shortcut_opens_pointer(press, &raised.args))
+        {
+            raised.cause.with_pointer_start()
+        } else {
+            raised.cause
+        };
+        self.as_cause(cause, |r| r.run_action(row.action, args, &[]))
             .map(Some)
     }
 

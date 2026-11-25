@@ -125,6 +125,13 @@ pub fn reply(reply: *mut c_void, status: u32, bytes: *const u8, len: usize) {
     }));
 }
 
+/// The owning read must still be live when AppKit receives its work.
+pub fn owns_pointer_observation(reply: *const c_void) -> bool {
+    // SAFETY: the host borrows the box from `handler` before completing the call once.
+    unsafe { reply.cast::<exact_runner::Reply>().as_ref() }
+        .is_some_and(|r| r.owns_pointer_observation())
+}
+
 /// A topic's UTF-8 from the C seam: `bytes` is null or valid for `len` bytes.
 pub fn text(bytes: *const u8, len: usize) -> String {
     if bytes.is_null() {
@@ -138,6 +145,14 @@ pub fn text(bytes: *const u8, len: usize) -> String {
 #[macro_export]
 macro_rules! app_module_exports {
     () => {
+        /// Whether the runner owns the pending global pointer operation.
+        #[no_mangle]
+        pub extern "C" fn exact_app_owns_pointer_observation(
+            reply: *const ::std::ffi::c_void,
+        ) -> u8 {
+            $crate::app_module::owns_pointer_observation(reply) as u8
+        }
+
         /// Answer one long native call, once (`include/exact.h`).
         #[no_mangle]
         pub extern "C" fn exact_app_reply(

@@ -128,6 +128,7 @@ pub(crate) fn request_from_json(text: &str, body: Option<&[u8]>) -> Result<Reque
         },
         held: j.get("held").and_then(Json::as_bool).unwrap_or(false),
         mutation_ticket: None,
+        reader_ticket: None,
         reach: Default::default(),
         // `exactListen`'s options (LLP 1133.005 D1); the defaults where unsaid.
         listen: match j.get("listen") {

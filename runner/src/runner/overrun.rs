@@ -102,6 +102,7 @@ impl<D: DataSource> Runner<D> {
         self.next_ticket += 1;
         self.note_asked(target, ticket);
         self.pending.push(PendingReq {
+            pointer_opener: None,
             completion: None,
             module: self.data.module_identity(&source).map(|m| m.instance()),
             inspection_generation: self.inspected_request(i),

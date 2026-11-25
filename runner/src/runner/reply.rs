@@ -455,6 +455,11 @@ impl<D: DataSource> Runner<D> {
                 for next in
                     (self.pending.iter_mut()).filter(|n| n.ticket >= ticket && n.target == p.target)
                 {
+                    next.pointer_opener = if message || turn {
+                        None
+                    } else {
+                        p.pointer_opener
+                    };
                     next.launch = launch;
                     if p.upload {
                         self.uploads

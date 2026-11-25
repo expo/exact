@@ -19,6 +19,10 @@ import IOKit.hidsystem
 
 public final class GlobalShortcutsModule: ExactPackage {
     private let context: ExactPackageContext
+    private var pointerMonitor: Any?
+    private var pointerGeneration: UInt64?
+    private var latestPointerGeneration: UInt64 = 0
+    private var ended = false
     /// The chords this session reads, each with its `id`: a reader that
     /// moves to new keys reads both until the runner releases the old ones.
     private var reading: Set<Reading> = []
@@ -27,12 +31,18 @@ public final class GlobalShortcutsModule: ExactPackage {
     public init(context: ExactPackageContext) { self.context = context }
 
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
+        if name == "globalPointer", Thread.isMainThread {
+            guard !ended, let generation = args["observation"] as? UInt64 else { return reply(["error": "InvalidStateError"]) }
+            return reply(readPointer(generation))
+        }
         DispatchQueue.main.async { [self] in
             let keys = args["keys"] as? String ?? ""
             switch name {
+            case "globalPointer":
+                later(name, args, preferred: preferred, reply: reply)
             case "globalShortcut":
                 let id = args["id"] as? String ?? ""
-                let (registered, reason) = HotKeys.shared.read(keys, id: id, by: self)
+                let (registered, reason) = HotKeys.shared.read(keys, id: id, by: self, registration: args["registration"] as? UInt64)
                 if registered { reading.insert(Reading(id: id, keys: keys)) }
                 context.log("global-shortcuts: \(keys) for \(id): \(registered ? "registered" : "not registered (\(reason ?? ""))")")
                 reply(["id": id, "keys": keys, "registered": registered, "reason": reason ?? NSNull()])
@@ -46,6 +56,42 @@ public final class GlobalShortcutsModule: ExactPackage {
         }
     }
 
+    private func readPointer(_ generation: UInt64) -> [String: Any] {
+        // A release may arrive before the read it cancelled reaches the main queue.
+        if pointerGeneration == generation, pointerMonitor != nil { return ["listening": true] }
+        guard generation > latestPointerGeneration || (generation == latestPointerGeneration && pointerGeneration == generation) else { return ["error": "InvalidStateError"] }
+        stopPointer()
+        latestPointerGeneration = generation
+        pointerGeneration = generation
+
+        let buttons: NSEvent.EventTypeMask = [.leftMouseDown, .leftMouseUp, .rightMouseDown,
+            .rightMouseUp, .otherMouseDown, .otherMouseUp]
+        pointerMonitor = NSEvent.addGlobalMonitorForEvents(matching: buttons) { [weak self] event in
+            guard let self, pointerGeneration == generation, pointerMonitor != nil, let point = event.cgEvent?.location else { return }
+            let down = [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type)
+            let button: Int
+            switch event.type {
+            case .leftMouseDown, .leftMouseUp: button = 0
+            case .rightMouseDown, .rightMouseUp: button = 2
+            default: button = event.buttonNumber == 2 ? 1 : event.buttonNumber
+            }
+            let flags = event.modifierFlags
+            let detail: [String: Any] = ["screenX": point.x, "screenY": point.y,
+                "button": button,
+                "altKey": flags.contains(.option), "ctrlKey": flags.contains(.control),
+                "metaKey": flags.contains(.command), "shiftKey": flags.contains(.shift),
+                "timeStamp": event.timestamp * 1000]
+            context.emit(down ? "globalpointerdown" : "globalpointerup", [detail, generation])
+        }
+        return pointerMonitor != nil ? ["listening": true] : ["error": "NotSupportedError"]
+    }
+
+    private func stopPointer() {
+        if let pointerMonitor { NSEvent.removeMonitor(pointerMonitor) }
+        pointerMonitor = nil
+        pointerGeneration = nil
+    }
+
     public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] {
         name == "globalShortcutStatusSync" ? status() : ["error": "NotSupportedError"]
     }
@@ -57,6 +103,13 @@ public final class GlobalShortcutsModule: ExactPackage {
     /// No reader asks with these arguments any longer: this session's
     /// reading of that chord for that id ends.
     public func release(_ name: String, args: [String: Any]) {
+        if name == "globalPointer", let generation = args["observation"] as? UInt64 {
+            DispatchQueue.main.async { [self] in
+                latestPointerGeneration = max(latestPointerGeneration, generation)
+                if pointerGeneration == generation { stopPointer() }
+            }
+            return
+        }
         guard name == "globalShortcut", let id = args["id"] as? String, let keys = args["keys"] as? String else { return }
         DispatchQueue.main.async { [self] in
             guard reading.remove(Reading(id: id, keys: keys)) != nil else { return }
@@ -78,13 +131,17 @@ public final class GlobalShortcutsModule: ExactPackage {
 
     public func destroy(_ done: @escaping () -> Void) {
         DispatchQueue.main.async { [self] in
+            ended = true
+            stopPointer()
             releaseAll()
             done()
         }
     }
 
-    fileprivate func shortcut(_ event: String, keys: String, id: String) {
-        context.emit(event, [id, ["id": id, "keys": keys]])
+    fileprivate func shortcut(_ event: String, keys: String, id: String, registration: UInt64? = nil) {
+        var args: [Any] = [id, ["id": id, "keys": keys]]
+        if let registration { args.append(registration) }
+        context.emit(event, args)
     }
 
     /// Whether this session's window is the key window.
@@ -96,7 +153,7 @@ public final class GlobalShortcutsModule: ExactPackage {
 private final class HotKeys {
     static let shared = HotKeys()
 
-    private struct Reader { weak var module: GlobalShortcutsModule?; let id: String }
+    private struct Reader { weak var module: GlobalShortcutsModule?; let id: String; var registration: UInt64? }
     private final class Chord {
         var ref: EventHotKeyRef?
         let number: UInt32
@@ -113,9 +170,9 @@ private final class HotKeys {
     private static let signature: OSType = 0x4558_4354 // 'EXCT'
 
     /// `keys` read for `id` by `module`: registered, or why not.
-    func read(_ keys: String, id: String, by module: GlobalShortcutsModule) -> (Bool, String?) {
+    func read(_ keys: String, id: String, by module: GlobalShortcutsModule, registration: UInt64?) -> (Bool, String?) {
         if let chord = chords[keys] {
-            if !chord.readers.contains(where: { $0.module === module && $0.id == id }) { add(chord, id: id, by: module) }
+            add(chord, id: id, by: module, registration: registration)
             return (true, nil)
         }
         let number = next
@@ -134,12 +191,18 @@ private final class HotKeys {
             chord.ref = ref
         }
         chords[keys] = chord
-        add(chord, id: id, by: module)
+        add(chord, id: id, by: module, registration: registration)
         return (true, nil)
     }
 
-    private func add(_ chord: Chord, id: String, by module: GlobalShortcutsModule) {
-        chord.readers.append(Reader(module: module, id: id))
+    private func add(_ chord: Chord, id: String, by module: GlobalShortcutsModule, registration: UInt64? = nil) {
+        if let index = chord.readers.firstIndex(where: { $0.module === module && $0.id == id }) {
+            if let registration, registration > (chord.readers[index].registration ?? 0) {
+                chord.readers[index].registration = registration
+            }
+        } else {
+            chord.readers.append(Reader(module: module, id: id, registration: registration))
+        }
     }
 
     /// Whether `keys` could be registered now, keeping nothing.
@@ -173,7 +236,7 @@ private final class HotKeys {
         if !chords.keys.contains(where: { Self.modifier($0) != nil }) { removeMonitors() }
     }
 
-    private func press(_ keys: String, _ chord: Chord) {
+    private func press(_ keys: String, _ chord: Chord, atPress: [Reader]? = nil) {
         // Carbon reports distinct presses. Either input path can miss a lift across sleep.
         lift(keys, chord)
         chord.readers.removeAll { $0.module == nil }
@@ -181,7 +244,10 @@ private final class HotKeys {
                 ?? chord.readers.first?.module else { return }
         let recipients = chord.readers.filter { $0.module === target }
         chord.pressed = recipients
-        for reader in recipients { target.shortcut("globalshortcut", keys: keys, id: reader.id) }
+        for reader in recipients {
+            let stillRegistered = atPress?.contains { $0.module === target && $0.id == reader.id && $0.registration == reader.registration } ?? true
+            target.shortcut("globalshortcut", keys: keys, id: reader.id, registration: stillRegistered ? reader.registration : nil)
+        }
     }
 
     private func lift(_ keys: String, _ chord: Chord) {
@@ -219,13 +285,14 @@ private final class HotKeys {
                   key.signature == HotKeys.signature else { return OSStatus(eventNotHandledErr) }
             let number = key.id
             let isRelease = GetEventKind(event) == UInt32(kEventHotKeyReleased)
+            let atPress = isRelease || !Thread.isMainThread ? [] : HotKeys.shared.chords.values.first { $0.number == number }?.readers ?? []
             DispatchQueue.main.async {
                 let shared = HotKeys.shared
                 guard let (keys, chord) = shared.chords.first(where: { $0.value.number == number }) else { return }
                 if isRelease {
                     shared.lift(keys, chord)
                 } else {
-                    shared.press(keys, chord)
+                    shared.press(keys, chord, atPress: atPress)
                 }
             }
             return noErr

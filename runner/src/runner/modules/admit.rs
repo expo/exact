@@ -85,6 +85,13 @@ impl<D: DataSource> Runner<D> {
     /// Resource row `i` is a new member's: its last poll answer no longer
     /// stands.
     pub(super) fn forget_module_row_linked(&mut self, i: usize) {
+        if let Some(readers) = self
+            .extensions
+            .readers
+            .get_mut("global-shortcuts.globalPointer")
+        {
+            readers.remove(&i);
+        }
         for within in self.extensions.within.values_mut() {
             within.remove(&i);
         }
@@ -104,7 +111,9 @@ impl<D: DataSource> Runner<D> {
     /// What answers `row` now (module doc).
     pub(in crate::runner) fn route(&self, row: &ModulesRow) -> Route {
         let extension = self.plan.str(row.extension);
-        if !self.implementation_here(row) {
+        if !self.implementation_here(row)
+            || (self.pointer_source(row) && (!self.clock_live() || self.host_target() != "macos"))
+        {
             return Route::Substitute;
         }
         if self.extensions.bound.contains(extension) && !self.kept_by_runner(row) {
@@ -180,6 +189,7 @@ impl<D: DataSource> Runner<D> {
         }
         if self.route(row) != Route::Substitute && self.substitute(row)["shortcut"] == "register" {
             self.note_shortcut_site(row, args, cause);
+            self.admitted_pointer_chord(row, args, cause);
         }
         let decision = match self.route(row) {
             Route::Real => return Decision::Forward,
@@ -483,7 +493,9 @@ impl<D: DataSource> Runner<D> {
     ) -> Option<Json> {
         let scope = scope?;
         let sub = self.substitute(row);
-        if sub["origin"] != "input" || !cause.input_started() || self.page.hidden {
+        if sub["origin"] != "input"
+            || (!self.pointer_source(row) && (!cause.input_started() || self.page.hidden))
+        {
             return None;
         }
         let names = sub["nameGrants"].as_array()?;
@@ -498,8 +510,21 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn admit(&self, row: &ModulesRow, args: &Json, cause: Cause) -> Result<(), String> {
         let origin = cause.origin();
         let sub = self.substitute(row);
-        if sub["origin"] == "input" && (!cause.input_started() || self.page.hidden) {
-            return Err(format!("person-required ({} origin)", origin.word()));
+        if sub["origin"] == "input" {
+            let pointer = self.pointer_source(row);
+            let opener = if pointer && !cause.is_data() {
+                self.reader_opener().unwrap_or(cause)
+            } else {
+                cause
+            };
+            if (!opener.input_started() || self.page.hidden)
+                && !(pointer && (opener.starts_pointer() || self.pointer_reader(row)))
+            {
+                return Err(format!(
+                    "person-required ({} origin)",
+                    opener.origin().word()
+                ));
+            }
         }
         let lines: Vec<&str> = (self.data.grants().lines())
             .filter_map(|l| l.split_whitespace().next())

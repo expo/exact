@@ -189,7 +189,10 @@ impl<D: super::DataSource> super::Runner<D> {
                 // source is ready is not an answer to carry, nor one a
                 // write affects: the replacement runner asks it.
                 .filter(|(i, _)| {
-                    !self.resources[*i].pending && !self.resources[*i].stale && !self.written(*i)
+                    !self.resources[*i].session_subscription
+                        && !self.resources[*i].pending
+                        && !self.resources[*i].stale
+                        && !self.written(*i)
                 })
                 // Nor is a kept answer no fresh one has replaced (D5): the
                 // replacement shows it from the store and asks again.

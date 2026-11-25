@@ -578,7 +578,14 @@ pub trait Modules<D: DataSource> {
 
     /// `request`, about to be handed out, numbered when it is data code's
     /// call of one of this plan's module sends that has no number yet.
-    fn number_data_call(&self, r: &mut Runner<D>, request: &mut Request) {}
+    fn number_data_call(
+        &self,
+        r: &mut Runner<D>,
+        target: crate::runner::Target,
+        ticket: u64,
+        request: &mut Request,
+    ) {
+    }
 
     /// The schemes the plan's interfaces serve pictures by, each once: the
     /// `img` sources a host's raster loader gives [`Runner::admit_picture`]
@@ -836,6 +843,9 @@ pub trait Modules<D: DataSource> {
 
     /// A refused commit's: the module readers as it found them.
     fn readers_restore(&self, r: &mut Runner<D>, saved: Readers) {}
+
+    /// A clock takeover changes which executor may observe physical input.
+    fn clock_route_changed(&self, _r: &mut Runner<D>) {}
 
     /// The host's target changed: the substitutes read for the old one go
     /// (`Runner::substitute`), and every module's readers ask again.

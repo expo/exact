@@ -547,6 +547,13 @@ pub const DEVICES: &[Device] = &[
         tvos: false,
         ..ROW
     },
+    Device {
+        name: "global-pointer",
+        sandbox: Some(sandbox::NONE),
+        purpose: false,
+        tvos: false,
+        ..ROW
+    },
     // @ref LLP 1178 D4 — the displays and the pointer. Only the web asks:
     // the browser's own prompt, which shows no purpose, behind the
     // `window-management` policy feature. Natively nothing asks, and the line

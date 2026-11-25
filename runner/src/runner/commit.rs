@@ -984,6 +984,8 @@ impl<D: DataSource> Runner<D> {
                             }
                     })
             }) {
+                // The kept request now serves different arguments.
+                p.pointer_opener = None;
                 p.args = args;
                 // (new arguments: a new streak after a turn over its budget)
                 p.reasks = 0;
@@ -1064,7 +1066,7 @@ impl<D: DataSource> Runner<D> {
         crate::canvas_capture::from_fetch(&mut request);
         request.mutation_ticket =
             (request.is_native() && !matches!(target, Target::Resource(_))).then_some(ticket);
-        self.number_data_call(&mut request);
+        self.number_data_call(target, ticket, &mut request);
         request.reach = self.reach_of(self.cause_for(target));
         self.log(super::lines::enqueued(ticket, &name, &request));
         let refusal = self.ask_refusal(target, &args, &request);
@@ -1073,6 +1075,13 @@ impl<D: DataSource> Runner<D> {
         self.note_send(ticket, &request.body);
         self.presence_noted(ticket, &request);
         self.pending.push(PendingReq {
+            pointer_opener: self
+                .fresh_reader_cause()
+                .filter(|c| {
+                    matches!(target, Target::Resource(_))
+                        && (c.starts_pointer() || c.input_started() && !self.page.hidden)
+                })
+                .map(|c| c.with_pointer_start()),
             completion: None,
             module: request
                 .module

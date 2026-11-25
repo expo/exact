@@ -23,13 +23,38 @@ pub(in crate::runner) struct LetGo {
 impl<D: DataSource> Runner<D> {
     /// `request`, about to be handed out, numbered when it is data code's
     /// call of one of this plan's module sends that has no number yet.
-    pub(super) fn number_data_call_linked(&mut self, request: &mut Request) {
+    pub(super) fn number_data_call_linked(
+        &mut self,
+        target: crate::runner::Target,
+        ticket: u64,
+        request: &mut Request,
+    ) {
+        request.reader_ticket = None;
         if !request.is_native() {
             return;
         }
         let Ok(mut v) = serde_json::from_slice::<Json>(&request.body) else {
             return;
         };
+        if v["extension"] == "global-shortcuts"
+            && matches!(
+                v["source"].as_str(),
+                Some("globalPointer" | "globalShortcut")
+            )
+        {
+            if let (crate::runner::Target::Resource(i), Some(row)) =
+                (target, self.called(&request.body))
+            {
+                if self.pointer_source(&row) {
+                    self.resources[i].reading_pointer = true;
+                } else if !self.tracks_pointer_chord(&row) {
+                    return;
+                }
+                self.resources[i].session_subscription = true;
+                request.reader_ticket = Some(crate::runner::ReaderTicket { ticket });
+                return;
+            }
+        }
         if v["send"].as_str().is_none() || !v["request"].is_null() {
             return;
         }

@@ -535,6 +535,10 @@ export const classifications = [
     ["painted:host/painted/src/canvas/jni_extensions.rs", "Java_dev_exact_canvas_Native_moduleAfter"],
     ["painted:host/painted/src/canvas/requests.rs", "CanvasHost::module_after"],
   ]),
+  group("desktop input registrations", ["subscription"], "last live reader of this registration or observation", "UI-owned",
+    "AppKit and the runner carry a process-unique generation across the event queue. A replacement runner retires the previous generation.", [
+    ["runner:runner/src/runner/modules/declared/desktop.rs", "next_generation#NEXT.fetch_add:1"],
+  ]),
   group("module announcements", ["subscription"], "bound source/module and its active readers in this session", "UI-owned",
     "runner/src/runner/time.rs changed/apply_announced settle source watches; modules/events.rs raises events into the live module bindings. No durable outcome record is provided.", [
     ["apple:host/apple/src/abi/exports.rs", "exact_app_changed exact_module_event"],

@@ -1,9 +1,16 @@
 {
   "kind": "interface",
   "name": "@exact/global-shortcuts",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "grants": ["device.global-shortcuts"],
+  "agent": { "globalpointerdown": "GlobalPointerEvent", "globalpointerup": "GlobalPointerEvent" },
   "shapes": {
+    "GlobalPointer": { "listening": "bool" },
+    "GlobalPointerEvent": {
+      "screenX": "number", "screenY": "number", "button": "number",
+      "altKey": "bool", "ctrlKey": "bool", "metaKey": "bool", "shiftKey": "bool",
+      "timeStamp": "number"
+    },
     "GlobalShortcut": {
       "id": "string",
       "keys": "string",
@@ -67,6 +74,18 @@
         "unsupported": ["web", "linux", "ios", "android", "tvos", "terminal"]
       }
     },
+    {
+      "source": "globalPointer",
+      "live": true,
+      "origin": "input",
+      "grants": ["device.global-pointer"],
+      "answers": "GlobalPointer",
+      "substitute": {
+        "unsupported": ["windows", "linux", "web", "ios", "android", "tvos", "watchos", "visionos", "terminal"]
+      }
+    },
+    { "event": "globalpointerdown", "on": "root", "raised": "emit", "args": ["GlobalPointerEvent"], "hold": 64 },
+    { "event": "globalpointerup", "on": "root", "raised": "emit", "args": ["GlobalPointerEvent"], "hold": 64 },
     { "event": "globalshortcut", "on": "root", "raised": "activation", "args": ["string", "GlobalShortcutEvent"], "hold": 16 },
     { "event": "globalshortcutup", "on": "root", "raised": "activation", "args": ["string", "GlobalShortcutEvent"], "hold": 16 }
   ]
