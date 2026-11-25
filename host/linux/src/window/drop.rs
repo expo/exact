@@ -316,7 +316,7 @@ impl Listener {
         {
             drag.offer.destroy();
         }
-        // A finish the window sent as it closed reaches the compositor even when the socket is full a while
+        // A finish the window sent as it closed is retried for up to a second while the socket is full
         let until = Instant::now() + Duration::from_secs(1);
         while let Err(WaylandError::Io(e)) = connection.flush() {
             let left = until.saturating_duration_since(Instant::now()).as_millis() as i32;
@@ -392,8 +392,11 @@ impl Listener {
             // A drop past its deadline lands before its pipes are read, so nothing arrives after it
             self.land();
             for (fd, &(r, k, _)) in fds[2..].iter().zip(&pipes) {
+                if fd.revents == 0 {
+                    continue;
+                }
                 let released = &mut self.released[r];
-                if let Some(reading) = released.reading.as_mut().filter(|_| fd.revents != 0) {
+                if let Some(reading) = released.reading.as_mut() {
                     reading.read(k, released.deadline);
                 }
             }

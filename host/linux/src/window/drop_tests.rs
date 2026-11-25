@@ -229,7 +229,7 @@ fn a_drop_lands_each_type_it_finished_sending_by_the_deadline() {
     assert_eq!(
         late.items().1.text,
         "",
-        "a type whose end came at the deadline is not delivered"
+        "a type whose end the listener observed at the deadline is not delivered"
     );
 }
 
