@@ -16,7 +16,7 @@ import { equalJson } from '../host/web-js/declared-values.js';
 import { compareBox, samplePoints } from './agent-compare.mjs';
 import { perfDelta } from './agent-inspect.mjs';
 import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
-import { macSandboxed } from './agent-build.mjs';
+import { checkedAppleRun, macSandboxed } from './agent-build.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { onThisMachine, serverUrl } from './app-server.mjs';
 import { backendOrigin, backendOriginSelection, injectBackendOrigin, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
@@ -743,7 +743,8 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * lands: a run's caller says where a long test is and what each test did as it goes, not only at the run's end.
  */
 export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, reader, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, atLine, atResult, port, running, only, testIndex, replayLaunch, replayShots, ax } = {}) {
-  const selected = resolveApp(app);
+  const checked = checkedAppleRun(host, app, { device });
+  const selected = checked?.app ?? resolveApp(app);
   // The APK carrier runs at the phone's size (agent-stdio.mjs reads `reader` the same way).
   const apk = host === 'android' && (reader ?? !!process.env.EXACT_ANDROID_READER);
   if (apk && size) throw new Error('test android: --size does not reach the APK, which runs at the phone\'s size; --headless takes it');
@@ -766,7 +767,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   if (c.status !== 0) throw new Error(c.stderr?.trim() || c.error?.message || 'contract test compiler failed');
   // Native runs use the origin their build selected (LLP 1142 D13), else the scaffold's declared one, else the grants
   // app.ts names as the build evaluates them, when no web admission file exists.
-  const appOrigins = host !== 'web' ? nativeFetchOrigins(selected.dir, { ...process.env, ...(env ?? {}) }) : [];
+  const appOrigins = checked?.backendOrigin ? [checked.backendOrigin]
+    : host !== 'web' ? nativeFetchOrigins(selected.dir, { ...process.env, ...(env ?? {}) }) : [];
   const authored = JSON.parse(c.stdout), properties = authored.properties.filter(p => p.kind === 'always');
   const unchecked = authored.properties.filter(p => p.kind !== 'always').reduce((n, p) => n + Math.max(1, p.lines.length), 0);
   if (unchecked) console.error(`properties on ${host}: ${unchecked} lines not checked (after, its frames and commands, and never refuses); the driver exposes no commit trace`);
@@ -787,7 +789,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   sweepTestStores(base, storage);
   // Where a `request` line's path is (LLP 1116.006 D8): the backend the build selected when it is on this
   // machine (a checkout's fixture port, LLP 1142 D13), else the address app.ts calls.
-  const chosen = backendOrigin(selected.dir, launched);
+  const chosen = checked ? checked.backendOrigin : backendOrigin(selected.dir, launched);
   const server = chosen && onThisMachine(chosen) ? chosen.replace(/\/+$/, '') : serverUrl(selected.dir);
   let done = false;
   const scope = testScope(host), timing = launched.EXACT_AGENT_TIMING;

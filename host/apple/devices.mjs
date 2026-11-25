@@ -410,7 +410,11 @@ export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint
   const used = dir ? resolve(dir, '.exact', tv ? 'simulator-tv' : 'simulator') : null;
   const lastUsed = () => { try { return used && readFileSync(used, 'utf8').trim(); } catch { return null; } };
   const remember = (dev, last) => {
-    if (rememberChoice && used && dev.udid !== last) try { mkdirSync(dirname(used), { recursive: true }); writeFileSync(used, `${dev.udid}\n`); } catch { /* remembered next time, if it can be */ }
+    if (rememberChoice && used && dev.udid !== last) try {
+      mkdirSync(dirname(used), { recursive: true });
+      writeFileSync(used, `${dev.udid}\n`);
+      if (pick) driveSimulators.delete(key(undefined));
+    } catch { /* remembered next time, if it can be */ }
   };
   const kept = cached && driveSimulators.get(key(pick));
   if (kept) {
@@ -459,7 +463,12 @@ function bootSimulator(dev, retryBoot) {
   }
   const s = read('xcrun', ['simctl', 'bootstatus', dev.udid, '-b']);
   // A simulator this call booted is not left running when its boot does not finish.
-  if (s.status !== 0) { if (b.status === 0) read('xcrun', ['simctl', 'shutdown', dev.udid]); throw new Error('simctl bootstatus: ' + s.stderr); }
+  if (s.status !== 0) {
+    if (b.status === 0) read('xcrun', ['simctl', 'shutdown', dev.udid]);
+    const error = new Error('simctl bootstatus: ' + s.stderr);
+    if (retryBoot) error.retrySimulator = true;
+    throw error;
+  }
   return b.status === 0 ? { ...dev, bootedHere: true } : dev;
 }
 
@@ -595,9 +604,10 @@ export async function withSoftwareKeyboard(dev, open, { records = resolve(homedi
       useXcode();
       let out = '';
       const child = spawn('xcrun', keyboardArgs(dev.udid, 'read'), { stdio: ['ignore', 'pipe', 'ignore'] });
-      const bound = setTimeout(() => child.kill('SIGKILL'), 20000);
+      const forget = () => { if (keyboardNotes.get(record) === said) keyboardNotes.delete(record); };
+      const bound = setTimeout(() => { forget(); child.kill('SIGKILL'); }, 20000);
       child.stdout.on('data', (d) => { out += d; });
-      child.on('error', () => { clearTimeout(bound); done(); });
+      child.on('error', () => { clearTimeout(bound); forget(); done(); });
       child.on('close', (status) => {
         clearTimeout(bound);
         if (minimized({ status, stdout: out }) && !saidKeyboard.has(dev.udid)) { saidKeyboard.add(dev.udid); console.error(`note: ${minimizedNote(dev.udid)}`); }

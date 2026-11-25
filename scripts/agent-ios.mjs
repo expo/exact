@@ -1,7 +1,7 @@
 // The iOS simulator carrier (scripts/agent.mjs `open`): the bundle `build.mjs --ios` assembled, installed and launched
 // with the agent socket's path in its environment.
 import { exclusiveIOS, simulatorDisplay, refuseBackendOrigin } from './agent-launch.mjs';
-import { nativeBuild, planOverride, refuseBuild } from './agent-build.mjs';
+import { checkedAppleRun, checkedLaunchPlan, nativeBuild, planOverride, refuseBuild } from './agent-build.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { connect } from 'node:net';
@@ -32,6 +32,10 @@ import { appleExecutableName, resolveApp } from './app.mjs';
 export const simulatorOrientation = name => simulatorTurns.some(turn => turn.scene === name);
 const appContainers = new Map();
 const containerKey = (udid, id) => JSON.stringify([udid, id]);
+function forgetDriveSimulator(udid, retryBoot) {
+  forgetSimulator(udid, { retryBoot });
+  for (const key of appContainers.keys()) if (JSON.parse(key)[0] === udid) appContainers.delete(key);
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 /** The simulator carrier: the bundle `build.mjs --ios` assembled, installed and launched on a simulator with the
  * agent socket's path in its environment (simctl passes SIMCTL_CHILD_*); then the same JSON lines over that socket
@@ -49,7 +53,7 @@ export async function openIOS({
   ax = false,
   onProcess,
 }) {
-  const a = resolveApp(app);
+  const a = checkedAppleRun('ios', app, { sample: hostFixture })?.app ?? resolveApp(app);
   // What the simulator gives the app (openIOSOwned); a marked setting there is the launch's (LLP 1153.002 D2).
   const launched = simulatorLaunch(extra);
   const built = nativeBuild('ios', a, {
@@ -58,13 +62,18 @@ export async function openIOS({
       launch: launched,
     }),
     bundle = built.built;
-  if (!built.missing) refuseBackendOrigin(built, a);
   const id = hostFixture ? `${a.id}.host` : a.id;
   // An app's exact.mjs builds first instead, or bakes a plan-only edit to run on this build (agent-build.mjs,
   // LLP 1116.003).
-  const override = plan || Object.hasOwn(extra, 'EXACT_PLAN') || hostFixture ? null : planOverride('ios', a, built);
-  if (override) plan = override.plan;
-  else refuseBuild('ios', built, a, { sample: hostFixture });
+  if (built.checked) {
+    plan = checkedLaunchPlan('ios', built, a, extra.EXACT_PLAN ?? plan ?? launched.EXACT_PLAN);
+    if (plan) extra = { ...extra, EXACT_PLAN: plan };
+  } else {
+    if (!built.missing) refuseBackendOrigin(built, a);
+    const override = plan || Object.hasOwn(extra, 'EXACT_PLAN') || hostFixture ? null : planOverride('ios', a, built);
+    if (override) plan = override.plan;
+    else refuseBuild('ios', built, a, { sample: hostFixture });
+  }
   const dev = simulator(undefined, { app: id, dir: a.dir, cached: true, hint: '--sim <udid|name> (or EXACT_SIM)' });
   try {
     return await withSoftwareKeyboard(dev, () =>
@@ -83,8 +92,7 @@ export async function openIOS({
       ),
     );
   } catch (error) {
-    forgetSimulator(dev.udid, { retryBoot: error.retrySimulator });
-    for (const key of appContainers.keys()) if (JSON.parse(key)[0] === dev.udid) appContainers.delete(key);
+    forgetDriveSimulator(dev.udid, error.retrySimulator);
     throw error;
   }
 }
@@ -143,7 +151,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
     ...extra,
   };
   const crashName = hostFixture ? 'ExactHostIOS' : appleExecutableName(a, true);
-  let closing = false;
+  let active = false, closing = false;
   const crashes = crashWatch(crashName, bundle, { bundleId: id, udid: dev.udid }),
     // `logs`, a failed launch: this build's crash here (ReportCrash writes it seconds after the exit: LLP 1156.001 D4)
     crashed = (why, died) => new Error([why, ...crashes(died ? 10000 : 0)].join('\n'));
@@ -215,6 +223,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
   const lines = jsonLines(socket, socket, hostLines);
   const exited = new Promise(r =>
     socket.on('close', async () => {
+      if (active && !closing) forgetDriveSimulator(dev.udid, true);
       const exit = closing ? null : await waitAtMost(launch.exited, 1000);
       lines.fail(
         closing
@@ -264,6 +273,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
     });
     if (!ready.ready) throw new Error('unexpected first line: ' + JSON.stringify(ready));
     if (ready.error) throw new Error(bootRefusal(ready.error));
+    active = true;
     pid = ready.pid ?? null;
     // The sample host routes by label, as the macOS one does over stdio.
     const state = { session: session ?? null };

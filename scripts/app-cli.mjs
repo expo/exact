@@ -643,15 +643,17 @@ if (verb === 'contract') {
     const prepared = await prepare();
     if (prepared) return log(prepared);
     // A native test or agent run checks once, including its reloads (LLP 1012.001.000 D1).
-    const checked = checksApple ? resolve(tmpdir(), `exact-build-check-${process.pid}`) : null;
+    const checkDir = checksApple ? mkdtempSync(resolve(tmpdir(), 'exact-native-check-')) : null;
+    const checked = checkDir ? resolve(checkDir, `exact-build-check-${process.pid}`) : null;
     if (checked) {
-      rmSync(checked, { force: true });
+      process.once('exit', () => rmSync(checkDir, { recursive: true, force: true }));
       delete process.env.EXACT_BUILD_CHECKED;
       process.env.EXACT_BUILD_CHECK_OUT = checked;
     }
+    const plan = checked ? rest.lastIndexOf('--plan') : -1;
     // A web build says every compiler warning each time; the drive says the new ones and a count (`warningLines`).
     const built = drivesWeb ? await webBuildQuiet(spawned, [resolve(exact2, verbs['web-build'][0]), ...verbs['web-build'].slice(1)], dir)
-      : await script(['scripts/agent-build.mjs', host, '--app', name], [], [0, 2, 2]);
+      : await script(['scripts/agent-build.mjs', host, '--app', name], plan < 0 ? [] : rest.slice(plan, plan + 2), [0, 2, 2]);
     if (checked) {
       delete process.env.EXACT_BUILD_CHECK_OUT;
       try { process.env.EXACT_BUILD_CHECKED = buildCheck = readFileSync(checked, 'utf8'); rmSync(checked); } catch {}

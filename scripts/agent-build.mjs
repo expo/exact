@@ -14,19 +14,19 @@
 // the bake alone runs (`exact-js-bake`, the web dev loop's producer, about a
 // second), its plan, module and source map are kept beside the build, and the
 // driver launches the build with them as its launch generation (EXACT_PLAN),
-// the first boot a build that baked them would make. A run keeps its selected
-// plan while the checked receipt matches and the plan and module are present.
+// the first boot a build that baked them would make.
 //
 //   bun scripts/agent-build.mjs <ios|macos|windows> --app <name>
 
 import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { closeSync, createWriteStream, existsSync, linkSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, copyFileSync, createWriteStream, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { slashRelative, within } from './paths.mjs';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
+import { simulatorPlanPath } from '../host/apple/assets.mjs';
 import { compilerError, compilerWarnings, warningLines, depInfoInputs, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseBackendOrigin, refuseStale, staleError } from './agent-launch.mjs';
 import { CONFIG_JSON, DECLARATIONS, moduleGraph } from './module-graph.mjs';
 import { bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName, resolveApp, shaderWatchRoots } from './app.mjs';
@@ -42,6 +42,27 @@ const named = (app, paths) => paths.slice(0, 3).map(path => near(app, path)).joi
 /** A file as a line names it: from the current directory when it is below it. */
 const shown = file => relative(process.cwd(), file).startsWith('..') ? file : relative(process.cwd(), file);
 
+function readBuildCheck(checked) {
+  if (!checked) return null;
+  try {
+    const run = JSON.parse(checked);
+    if (run?.app && typeof run.receipt === 'string' && (run.plan === null || typeof run.plan === 'string')) return run;
+  } catch { /* a malformed check requires a full check */ }
+  return null;
+}
+
+/** The app selected by the startup check, before the drive can prepare dependencies or read the manifest again. */
+export function checkedAppleRun(host, selector, { device = false, sample = false } = {}) {
+  if (device || sample) return null;
+  host = host === 'mac' ? 'macos' : host;
+  if (host !== 'ios' && host !== 'macos') return null;
+  const run = readBuildCheck(process.env.EXACT_BUILD_CHECKED);
+  if (run?.host !== host) return null;
+  const { app } = run;
+  if (selector !== app.selector && selector !== app.dir && !(selector == null && process.env.EXACT_APP_DIR === app.dir)) return null;
+  return { ...run, app: { ...app, crate: () => app.appleCrate } };
+}
+
 /** What a drive of `app` on `host` (`ios`, else macOS) launches, by its own
  * record: `missing`, or the inputs `changed` since its receipt ([] when fresh,
  * or when a macOS binary has no receipt), and the receipt's `backendOrigin`.
@@ -51,27 +72,31 @@ const shown = file => relative(process.cwd(), file).startsWith('..') ? file : re
  * `hashed` skips only binary input hashes already compared by a caller.
  * `launch` is the app's launch environment (`pendingBuildInputs`). */
 export function nativeBuild(host, app, { sample = false, checked = null, hashed = null, launch } = {}) {
+  host = host === 'mac' ? 'macos' : host;
   const ios = host === 'ios';
   const built = ios ? appleArtifacts(app, { destination: 'ios-simulator', host: sample }).bundle : appleRunBinary(app, sample);
   if (!existsSync(built)) return { built, missing: true, changed: [] };
   const receipt = receiptPath(host, app, { sample });
-  const backendOrigin = receipt ? JSON.parse(readFileSync(receipt, 'utf8')).build?.backendOrigin : null;
-  let prior = null;
-  try { prior = checked ? JSON.parse(checked) : null; } catch { /* a malformed check requires a full check */ }
-  const digest = receipt && (prior || hashed) ? digestOf(receipt) : null;
-  const same = typeof prior?.receipt === 'string' && prior.receipt === digest
-    && (prior.plan === null || (typeof prior.plan === 'string' && overrideFilesPresent(prior.plan)));
-  const changed = same ? [] : receiptChanges(receipt, app, { hashed: !!hashed && hashed === digest, launch });
+  const bytes = receipt && readFileSync(receipt);
+  const selected = bytes && JSON.parse(bytes);
+  const backendOrigin = selected?.build?.backendOrigin ?? null;
+  const run = readBuildCheck(checked);
+  const prior = !sample && run?.host === host && run.app.dir === app.dir && run.app.id === app.id ? run : null;
+  const digest = bytes ? createHash('sha256').update(bytes).digest('hex') : null;
+  const changed = prior
+    ? [ ...(prior.receipt !== digest ? [receipt ?? built] : []),
+        ...(prior.plan && !(prior.override ? overrideFilesPresent(prior.plan) : isFile(prior.plan)) ? [prior.plan] : []) ]
+    : receiptChanges(receipt, app, { hashed: !!hashed && hashed === digest, launch });
   if (!ios && !sample && receipt) {
     const bundled = resolve(appleArtifacts(app).bundle, 'Contents/Resources/receipt.json');
     try {
-      const selected = JSON.parse(readFileSync(receipt, 'utf8')), actual = JSON.parse(readFileSync(bundled, 'utf8'));
+      const actual = JSON.parse(readFileSync(bundled, 'utf8'));
       const identity = r => [r.built, r.started, r.target, r.composition, r.compatibilityId, r.build?.trust, r.build?.backendOrigin, r.build?.binary?.sha256];
       // The shared .app path can have been replaced by a release in another build namespace.
       if (actual.build?.trust !== 'development' || JSON.stringify(identity(selected)) !== JSON.stringify(identity(actual))) changed.push(bundled);
     } catch { changed.push(bundled); }
   }
-  return { built, receipt, changed, backendOrigin, ...(same ? { checked: true, plan: prior.plan } : {}) };
+  return { built, receipt, digest, changed, backendOrigin, ...(prior ? { checked: true, plan: prior.plan, override: prior.override, requestedPlan: prior.requestedPlan } : {}) };
 }
 
 /** Whether the macOS build a drive of `app` launches signs the App Sandbox (`mac --sandbox`, LLP 1030.005 D4), as
@@ -127,11 +152,20 @@ export function refuseBuild(host, state, app, { sample = false } = {}) {
   const ios = host === 'ios';
   const command = sample ? `bun host/apple/build.mjs${ios ? ' --ios' : ''} ${app.crate('apple')} --host` : rebuildCommand(app, ios ? 'ios' : 'mac');
   if (state.missing) throw new Error(`run ${command} first`);
-  refuseBackendOrigin(state, app, command);
-  if (state.checked && state.plan && !state.changed.length) {
+  if (!state.checked) refuseBackendOrigin(state, app, command);
+  if (state.checked && state.override && !state.changed.length) {
     throw staleError(`${host} build is stale: the checked sources require the baked plan override; run ${command} before supplying another plan`);
   }
   refuseStale(ios ? 'ios' : sample ? 'sample host' : 'macos', state.receipt, state.changed, command);
+}
+
+/** A checked launch can use only the plan selected at startup. */
+export function checkedLaunchPlan(host, state, app, requested) {
+  if (state.changed.length || (state.override && requested)) refuseBuild(host, state, app);
+  if (requested && resolve(requested) !== state.requestedPlan) {
+    throw staleError(`${host} build is stale: the run checked a different plan; start another run to supply this plan`);
+  }
+  return state.plan;
 }
 
 /** host/apple/build.mjs's arguments for the build `bun exact.mjs ios|mac` runs before a drive. An iOS build installs
@@ -260,17 +294,19 @@ export function planSources(app, graph = graphOf(app)) {
 /** Where a plan-only edit's bake is kept: beside the build it runs on. */
 export const overrideDir = (host, app) => resolve(appleArtifacts(app, host === 'ios' ? { destination: 'ios-simulator' } : {}).namespace, 'plan');
 
+const isFile = file => statSync(file, { throwIfNoEntry: false })?.isFile() ?? false;
+
 function overrideFilesPresent(plan) {
   const dir = dirname(plan);
   try {
-    return [plan, resolve(dir, 'app.module.json'), resolve(dir, 'app.hbc')].every(file => statSync(file).isFile());
+    return [plan, resolve(dir, 'app.module.json'), resolve(dir, 'app.hbc')].every(isFile);
   } catch { return false; }
 }
 
 /** The run's checked plan, or, for an unchecked build, an override whose receipt
  * and sources still match a plan-only edit. Returns null without an override. */
 export function planOverride(host, app, state, graph) {
-  if (state.checked && !state.changed.length) return state.plan ? { plan: state.plan, dir: dirname(state.plan) } : null;
+  if (state.checked) return !state.changed.length && state.plan ? { plan: state.plan, dir: dirname(state.plan) } : null;
   graph ??= graphOf(app);
   if (state.missing || !state.receipt || !state.changed.length || !state.changed.every(path => planSource(path, app, graph))) return null;
   const dir = overrideDir(host, app);
@@ -429,7 +465,7 @@ export async function waitForBuild(app, say = line => console.error(line)) {
  * plan-only edit is already baked beside it. A new plan-only edit is baked
  * instead of built, in one line; what its bake refuses fails the command, as
  * the build would have. A build another process claims first is waited for and the check made again. */
-export async function buildFirst(host, app, { say = line => console.error(line), build = appleBuild, wait = waitForBuild, bake = bakePlan, retries = 2 } = {}) {
+export async function buildFirst(host, app, { say = line => console.error(line), build = appleBuild, wait = waitForBuild, bake = bakePlan, retries = 2, plan } = {}) {
   host = host === 'ios' ? 'ios' : 'macos';
   if (host === 'macos' && process.env.EXACT_MAC_BIN) return 0; // the caller's own binary: the driver says it did not check
   await wait(app, say);
@@ -437,8 +473,23 @@ export async function buildFirst(host, app, { say = line => console.error(line),
   const state = nativeBuild(host, app);
   if (!state.missing) refuseBackendOrigin(state, app);
   // Every launch in this run uses the checked build and its selected plan.
-  const checked = (plan = null, receipt = state.receipt) => {
-    if (process.env.EXACT_BUILD_CHECK_OUT && receipt) writeFileSync(process.env.EXACT_BUILD_CHECK_OUT, JSON.stringify({ receipt: digestOf(receipt), plan }));
+  const checked = (overridePlan = null, build = state) => {
+    const out = process.env.EXACT_BUILD_CHECK_OUT;
+    if (!out || !build.receipt) return 0;
+    const requestedPlan = plan ?? driveLaunch(host).EXACT_PLAN;
+    const source = overridePlan ?? requestedPlan;
+    let selected = null;
+    if (source) {
+      const stage = mkdtempSync(resolve(dirname(out), 'plan-'));
+      selected = simulatorPlanPath(source, stage);
+      if (existsSync(source + '.map.json')) copyFileSync(source + '.map.json', selected + '.map.json');
+    }
+    const { dir, name, id, displayName, selector, target, outside, manifest: { deploy } } = app;
+    writeFileSync(out, JSON.stringify({
+      host, receipt: build.digest, backendOrigin: build.backendOrigin, plan: selected,
+      override: !!overridePlan, requestedPlan: requestedPlan ? resolve(requestedPlan) : null,
+      app: { dir, name, id, displayName, selector, target, outside, manifest: { deploy }, appleCrate: app.crate('apple') },
+    }));
     return 0;
   };
   let reason = buildReason(state, app);
@@ -452,13 +503,13 @@ export async function buildFirst(host, app, { say = line => console.error(line),
       const baked = nativeBuild(host, app), override = planOverride(host, app, baked);
       if (!override) {
         refuseBuild(host, baked, app);
-        return checked(null, baked.receipt);
+        return checked(null, baked);
       }
       refuseBackendOrigin(baked, app);
       // The euxy port timed four variants with `simctl launch`, each the installed plan.
       say(`${label(host)}: ${what} changed; running the new plan on the existing build (no native rebuild). Only the agent's drives run it: a launch outside them (\`simctl launch\`, the home screen) runs the installed plan, so \`bun exact.mjs ${host === 'ios' ? 'ios' : 'mac'}\` before timing one`);
       for (const line of warningLines(app.dir, host, compilerWarnings(made.output))) say(line);
-      return checked(override.plan, baked.receipt);
+      return checked(override.plan, baked);
     }
     if (made.failed) {
       say(`${made.failed}\nthe ${label(host)} plan did not bake (${what} changed), so nothing was driven; its whole log: ${shown(log)}`);
@@ -471,14 +522,14 @@ export async function buildFirst(host, app, { say = line => console.error(line),
   say(`building for ${label(host)}: ${reason}; its log: ${shown(log)}`);
   const { code, output } = await build(buildArgs(host, app), log, say, app);
   // Another build took the claim between the check and this one (two started together): wait for it, then decide again.
-  if (code && retries > 0 && /Apple build busy for/.test(output)) return buildFirst(host, app, { say, build, wait, bake, retries: retries - 1 });
+  if (code && retries > 0 && /Apple build busy for/.test(output)) return buildFirst(host, app, { say, build, wait, bake, retries: retries - 1, plan });
   if (code) say(failureSummary(output, { host, code, log: shown(log) }));
   // The compiler's warnings, which Cargo said for the bake's build script (LLP 1116.004 D7): the new ones in full.
   else for (const line of warningLines(app.dir, host, compilerWarnings(output))) say(line);
   if (code || !process.env.EXACT_BUILD_CHECK_OUT) return code;
   const rebuilt = nativeBuild(host, app);
   refuseBuild(host, rebuilt, app);
-  return checked(null, rebuilt.receipt);
+  return checked(null, rebuilt);
 }
 
 /** What a Windows drive of `app` launches, `dist-windows/<name>.exe`, and its changes since the build that packaged it
@@ -567,6 +618,6 @@ if (import.meta.main && process.argv[2] === '--tool') { // the bake tool, after 
     console.error('usage: bun scripts/agent-build.mjs <ios|macos|windows> --app <name>');
     process.exit(2);
   }
-  Promise.resolve().then(() => args[0] === 'windows' ? windowsBuildFirst(resolveApp(value('--app'))) : buildFirst(args[0], resolveApp(value('--app'))))
+  Promise.resolve().then(() => args[0] === 'windows' ? windowsBuildFirst(resolveApp(value('--app'))) : buildFirst(args[0], resolveApp(value('--app')), { plan: value('--plan') }))
     .then(code => process.exit(code), error => { console.error(error.message); process.exit(1); });
 }

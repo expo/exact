@@ -31,7 +31,7 @@ function withPlanBuild(script) {
     import assert from 'node:assert/strict';
     import { mock } from 'bun:test';
     import { createHash } from 'node:crypto';
-    import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+    import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
     import { dirname, resolve } from 'node:path';
     import * as builds from './host/apple/build.mjs';
     import * as devices from './host/apple/devices.mjs';
@@ -40,6 +40,7 @@ function withPlanBuild(script) {
     import { linkedBakeDir } from './scripts/linked-plan.mjs';
     const dir = process.env.EXACT_APP_DIR, app = resolveApp(dir);
     const check = process.env.EXACT_BUILD_CHECK_OUT = resolve(dir, '.exact/checked');
+    mkdirSync(dirname(check), { recursive: true });
     process.env.EXACT_BAKE_OUTPUT = resolve(app.target, 'bake');
     process.env.EXACT_UPDATE_TRUST = 'development';
     const source = resolve(dir, 'source.swift'), contract = resolve(dir, 'app.contract');
@@ -49,7 +50,7 @@ function withPlanBuild(script) {
     const unexpected = () => assert.fail('the drive reached the native build or carrier');
     mock.module('./host/apple/devices.mjs', () => ({ ...devices, simulator: unexpected }));
     mock.module('./host/apple/build.mjs', () => ({ ...builds, assertAppleIdentity: unexpected }));
-    const setup = host => {
+    const setup = (host, { fresh = false, backendOrigin } = {}) => {
       const paths = builds.appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
       const linked = linkedBakeDir(process.env, host, paths.target);
       write(source, 'before');
@@ -57,19 +58,19 @@ function withPlanBuild(script) {
       write(resolve(linked, 'app.module.json'), module);
       if (host === 'macos') write(builds.appleRunBinary(app), 'executable');
       const time = new Date(Date.now() + 60_000);
-      const receipt = { target: paths.target, started: time.toISOString(), build: { trust: 'development',
+      const receipt = { target: paths.target, started: time.toISOString(), build: { trust: 'development', backendOrigin,
         compat: { inputs: { platform: host }, embedded: { plan: { sha256: hash('original plan') } } },
         binary: { inputs: [{ path: source, name: 'source.swift', sha256: hash('before') }], missing: [], directories: [] } } };
       const receiptPath = resolve(paths.bundle, host === 'ios' ? 'receipt.json' : 'Contents/Resources/receipt.json');
       write(receiptPath, JSON.stringify(receipt)); utimesSync(receiptPath, time, time);
-      utimesSync(contract, new Date(time.getTime() + 10_000), new Date(time.getTime() + 10_000));
+      if (!fresh) utimesSync(contract, new Date(time.getTime() + 10_000), new Date(time.getTime() + 10_000));
       const bake = async (app, into) => {
         write(resolve(into, 'app.plan'), 'new plan');
         write(resolve(into, 'app.module.json'), module);
         write(resolve(into, 'app.hbc'), 'bytecode');
         return { code: 0 };
       };
-      return callback => buildFirst(host, app, { wait() {}, say() {}, build: unexpected,
+      return (callback, options) => buildFirst(host, app, { ...options, wait() {}, say() {}, build: unexpected,
         bake: async (...args) => { const result = await bake(...args); callback?.(); return result; } });
     };
     ${script}
@@ -97,6 +98,104 @@ test.each(['ios', 'macos'])('%s refuses an explicit plan that displaces the chec
   }
 `));
 
+test.each([['ios', 'moves'], ['ios', 'changes'], ['macos', 'moves'], ['macos', 'changes']])('%s checked launches keep the startup app when a file dependency %s', (host, edit) => withPlanBuild(`
+  const host = ${JSON.stringify(host)}, edit = ${JSON.stringify(edit)};
+  const processes = await import('node:child_process');
+  const spawnSync = processes.spawnSync;
+  let installs = 0;
+  mock.module('node:child_process', () => ({ ...processes, spawnSync(command, args, options) {
+    if (command === process.execPath && args[0] === 'install' && options.cwd === dir) {
+      installs++;
+      return { status: 1 };
+    }
+    return spawnSync(command, args, options);
+  } }));
+  const pkg = JSON.stringify({ name: 'local-dep', version: '1.0.0' });
+  write(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { 'local-dep': 'file:dep' } }));
+  write(resolve(dir, 'dep/package.json'), pkg);
+  write(resolve(dir, 'node_modules/local-dep/package.json'), pkg);
+  resolveApp(dir);
+  assert.equal(await setup(host, { fresh: true })(), 0);
+  process.env.EXACT_BUILD_CHECKED = readFileSync(check, 'utf8');
+  const open = host === 'ios' ? (await import('./scripts/agent-ios.mjs')).openIOS
+    : (await import('./scripts/agent-stdio.mjs')).openStdio;
+  const launch = () => assert.rejects(open({ host, app: dir }), /the drive reached the native build or carrier/);
+  await launch();
+  if (edit === 'moves') renameSync(resolve(dir, 'dep'), resolve(dir, 'moved'));
+  else write(resolve(dir, 'dep/index.js'), 'export const added = true;');
+  await launch();
+  assert.equal(installs, 0);
+  assert.throws(() => resolveApp(dir), edit === 'moves' ? /the build would read the copy/ : /bun install/);
+  assert.equal(installs, edit === 'moves' ? 0 : 1);
+`));
+
+test.each([['ios', 'backend'], ['ios', 'app ID'], ['macos', 'backend'], ['macos', 'app ID']])('%s checked launches keep the startup %s', (host, edit) => withPlanBuild(`
+  const host = ${JSON.stringify(host)}, edit = ${JSON.stringify(edit)}, backendOrigin = 'http://127.0.0.1:4400';
+  const editOrigin = origin => write(resolve(dir, 'app.ts'), 'export const origin = "' + origin + '";');
+  editOrigin(backendOrigin);
+  const drive = setup(host, { fresh: true, backendOrigin });
+  assert.equal(await drive(), 0);
+  process.env.EXACT_BUILD_CHECKED = readFileSync(check, 'utf8');
+  const open = host === 'ios' ? (await import('./scripts/agent-ios.mjs')).openIOS
+    : (await import('./scripts/agent-stdio.mjs')).openStdio;
+  const launch = () => assert.rejects(open({ host, app: dir }), /the drive reached the native build or carrier/);
+  await launch();
+  if (edit === 'backend') {
+    editOrigin('http://127.0.0.1:4401');
+    await launch();
+    await assert.rejects(drive(), /baked backend .*4400 differs from app.ts origin .*4401/);
+  } else {
+    write(resolve(dir, 'app.json'), JSON.stringify({ name: 'launch-once', app: { id: 'com.exact.next', name: 'Next' } }));
+    await launch();
+    assert.equal(nativeBuild(host, resolveApp(dir)).missing, true);
+  }
+`));
+
+test.each([['ios', 'fixture'], ['macos', 'fixture'], ['ios', 'override'], ['macos', 'override']])('%s checked %s keeps the original plan and companions', (host, kind) => withPlanBuild(`
+  const host = ${JSON.stringify(host)}, fixture = ${JSON.stringify(kind)} === 'fixture';
+  const { overrideDir } = await import('./scripts/agent-build.mjs');
+  const original = fixture ? resolve(dir, 'fixture/specimen.plan') : resolve(overrideDir(host, app), 'app.plan');
+  const output = dirname(original), map = original + '.map.json';
+  if (fixture) {
+    write(original, 'fixture plan');
+    write(resolve(output, 'app.module.json'), module);
+    write(resolve(output, 'app.hbc'), 'bytecode');
+    write(resolve(output, 'rust/replacement'), 'rust bytes');
+    write(map, 'source map');
+  }
+  assert.equal(await setup(host, { fresh: fixture })(undefined, fixture ? { plan: original } : {}), 0);
+  const checked = process.env.EXACT_BUILD_CHECKED = readFileSync(check, 'utf8');
+  const selected = () => nativeBuild(host, app, { checked }).plan;
+  let launch = async () => {};
+  if (host === 'macos') {
+    const paths = builds.appleArtifacts(app);
+    mkdirSync(paths.capture, { recursive: true });
+    mock.module('./host/apple/build.mjs', () => ({ ...builds, assertAppleIdentity() {} }));
+    const processes = await import('node:child_process');
+    mock.module('node:child_process', () => ({ ...processes, spawn(bin, args, { env }) {
+      assert.equal(bin, builds.appleRunBinary(app));
+      assert.equal(readFileSync(env.EXACT_PLAN, 'utf8'), fixture ? 'fixture plan' : 'new plan');
+      throw new Error('launch captured');
+    } }));
+    const { openStdio } = await import('./scripts/agent-stdio.mjs');
+    launch = () => assert.rejects(openStdio({ host, app: dir, ...(fixture ? { plan: original } : {}) }), /launch captured/);
+  }
+  await launch();
+  const first = selected();
+  assert.equal(readFileSync(first ?? original, 'utf8'), fixture ? 'fixture plan' : 'new plan');
+  for (const file of [original, resolve(output, 'app.module.json'), resolve(output, 'app.hbc'), ...(fixture ? [map, resolve(output, 'rust/replacement')] : [])])
+    write(file, 'replacement ' + readFileSync(file, 'utf8'));
+  await launch();
+  const second = selected();
+  assert.equal(readFileSync(second ?? original, 'utf8'), fixture ? 'fixture plan' : 'new plan');
+  assert.equal(readFileSync(resolve(dirname(second), 'app.module.json'), 'utf8'), module);
+  assert.equal(readFileSync(resolve(dirname(second), 'app.hbc'), 'utf8'), 'bytecode');
+  if (fixture) {
+    assert.equal(readFileSync(second + '.map.json', 'utf8'), 'source map');
+    assert.equal(readFileSync(resolve(dirname(second), 'rust/replacement'), 'utf8'), 'rust bytes');
+  }
+`));
+
 test.each(['app.module.json', 'app.hbc', 'app.plan'])('a checked override requires %s as a file', name => withPlanBuild(`
   assert.equal(await setup('ios')(), 0);
   const checked = readFileSync(check, 'utf8'), plan = JSON.parse(checked).plan;
@@ -106,8 +205,8 @@ test.each(['app.module.json', 'app.hbc', 'app.plan'])('a checked override requir
   rmSync(file);
   if (name === 'app.plan') mkdirSync(file);
   const missing = state();
-  assert.equal(missing.checked, undefined);
-  assert.ok(missing.changed.some(path => path.endsWith('app.contract')));
+  assert.equal(missing.checked, true);
+  assert.deepEqual(missing.changed, [plan]);
   assert.equal(planOverride('ios', app, missing), null);
 `));
 
@@ -130,6 +229,7 @@ test('test and agent carry one native startup check to every test file on iOS an
       if (basename(args[0]) === 'agent-build.mjs') {
         checks++;
         assert.ok(options.env.EXACT_BUILD_CHECK_OUT);
+        assert.deepEqual(args.slice(-2), ['--plan', 'fixture.plan']);
         writeFileSync(options.env.EXACT_BUILD_CHECK_OUT, 'checked-' + checks);
       } else if (basename(args[0]) === 'agent.mjs') {
         launches++;
@@ -148,7 +248,7 @@ test('test and agent carry one native startup check to every test file on iOS an
       const before = [checks, launches];
       const windows = platform === 'win32';
       assert.equal(await run({ dir: process.env.EXACT_APP_DIR, name: 'launch-once', exact2: process.cwd(),
-        args: [verb, host, ...(verb === 'agent' ? ['tree'] : [])] }), windows ? 2 : 0);
+        args: [verb, host, '--plan', 'fixture.plan', ...(verb === 'agent' ? ['tree'] : [])] }), windows ? 2 : 0);
       assert.equal(checks - before[0], windows ? 0 : 1);
       assert.equal(launches - before[1], windows ? 0 : verb === 'test' ? 2 : 1);
     }
@@ -308,7 +408,7 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     const counts = { check: 0, list: 0, boot: 0, keyboard: {}, container: {} }, settings = { A: '1', B: '0' }, assets = [];
     const states = { A: 'Shutdown', B: 'Booted' };
     let reinstall = false, failRestore = false, generation = 1, now = Date.now();
-    let failingBoot, transientBoot = false, failInstall = false, replacement = 'A';
+    let failingBoot, transientBoot, failInstall = false, replacement = 'A', activeSocket, pending;
     Date.now = () => now;
     const container = udid => resolve(dir, udid + '-' + generation + '.app');
     for (const udid of ['A', 'B']) mkdirSync(container(udid));
@@ -329,11 +429,12 @@ test('two iOS launches check once and look up each device once; reinstalls refre
         })) } }));
       }
       if (args[1] === failingBoot && args[2] === replacement) return { status: 1, stderr: 'device became unavailable' };
-      if (args[1] === 'boot' && transientBoot) {
-        transientBoot = false; return { status: 1, stderr: 'temporary boot failure' };
+      if (args[1] === transientBoot) {
+        transientBoot = null; return { status: 1, stderr: 'temporary boot failure' };
       }
       if (args[1] === 'boot') { counts.boot++; states[args[2]] = 'Booted'; return result(); }
-      if (args[1] === 'bootstatus' || args[1] === 'shutdown') return result();
+      if (args[1] === 'shutdown') { states[args[2]] = 'Shutdown'; return result(); }
+      if (args[1] === 'bootstatus') return result();
       if (args[1] === 'get_app_container') {
         counts.container[args[2]] = (counts.container[args[2]] ?? 0) + 1;
         return result(container(args[2]));
@@ -370,7 +471,8 @@ test('two iOS launches check once and look up each device once; reinstalls refre
       },
     }));
     mock.module('node:net', () => ({ ...net, connect() {
-      const socket = new EventEmitter(); socket.end = () => socket.emit('close');
+      const socket = activeSocket = new EventEmitter();
+      socket.end = () => { if (!socket.closed) { socket.closed = true; socket.emit('close'); } };
       queueMicrotask(() => socket.emit('connect')); return socket;
     } }));
     const receiptChanges = launch.receiptChanges;
@@ -394,7 +496,14 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     mock.module('./scripts/agent-wire.mjs', () => ({ ...wire,
       simulatorConsole: () => ({ done: states[process.env.EXACT_SIM] !== 'Booted', retry: () => false,
         exited: Promise.resolve(0), process: { kill() {} } }),
-      jsonLines: () => ({ next: async () => ({ ready: true }), ask: async () => ({ mutationRequests: 0 }), fail() {} }),
+      jsonLines: () => {
+        let failure;
+        return { next: async () => ({ ready: true }), ask: async req => {
+          if (failure) throw new Error(failure);
+          if (req.op === 'held') return new Promise((_, reject) => { pending = reject; });
+          return { mutationRequests: 0 };
+        }, fail(why) { failure = why; pending?.(new Error(why)); } };
+      },
     }));
     // The asset root is read at launch, before any fake wire traffic.
     const fsAssets = await import('./host/apple/assets.mjs');
@@ -462,11 +571,22 @@ test('two iOS launches check once and look up each device once; reinstalls refre
     failInstall = reinstall = false;
 
     authored.push({ ...authored[0], name: 'after boot' });
-    const bootRecovery = await runTests({ host: 'ios', app: dir, file, atResult(test) {
-      if (test.name === 'first') { states.A = 'Shutdown'; transientBoot = true; }
-    } });
-    assert.deepEqual(bootRecovery.results.map(test => test.failures.length), [0, 1, 1, 0], JSON.stringify(bootRecovery.results));
-    assert.match(bootRecovery.results[2].failures[0], /simctl boot: temporary boot failure/);
+    for (const command of ['boot', 'bootstatus']) {
+      const bootRecovery = await runTests({ host: 'ios', app: dir, file, atResult(test) {
+        if (test.name === 'first') { states.A = 'Shutdown'; transientBoot = command; }
+      } });
+      assert.deepEqual(bootRecovery.results.map(test => test.failures.length), [0, 1, 1, 0], JSON.stringify(bootRecovery.results));
+      assert.match(bootRecovery.results[2].failures[0], new RegExp('simctl ' + command + ': temporary boot failure'));
+    }
+
+    const disconnected = await openIOS({ app: dir });
+    const interrupted = disconnected.ask({ op: 'held' });
+    states.A = 'Shutdown';
+    activeSocket.end();
+    await assert.rejects(interrupted, /the app ended/);
+    await disconnected.close();
+    const afterDisconnect = await openIOS({ app: dir });
+    await afterDisconnect.close();
 
     const dev = { udid: 'A', bootedHere: true }, record = resolve(records, 'A.json');
     const open = callback => withSoftwareKeyboard(dev, callback, { records });
@@ -504,11 +624,75 @@ test('two iOS launches check once and look up each device once; reinstalls refre
   `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('explicit simulator selection updates the cached default', () => {
+  const dir = fixture();
+  try { run(`
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import * as processes from 'node:child_process';
+    import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+    import { resolve } from 'node:path';
+    const dir = process.env.EXACT_APP_DIR, used = resolve(dir, '.exact/simulator');
+    mkdirSync(resolve(dir, '.exact')); writeFileSync(used, 'A');
+    const devices = ['A', 'B'].map(udid => ({ udid, name: udid, state: 'Booted',
+      deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro' }));
+    mock.module('node:child_process', () => ({ ...processes, spawnSync(command, args) {
+      assert.equal(command, 'xcrun');
+      if (args[1] === 'get_app_container') return { status: 0 };
+      assert.equal(args[1], 'list');
+      return { status: 0, stdout: JSON.stringify({ devices: { 'SimRuntime.iOS-27-0': devices } }) };
+    } }));
+    const { chooseSimulator } = await import('./host/apple/devices.mjs');
+    const options = { dir, app: 'com.exact.launch-once', cached: true };
+    assert.equal(chooseSimulator(undefined, options).udid, 'A');
+    assert.equal(chooseSimulator('B', options).udid, 'B');
+    assert.equal(readFileSync(used, 'utf8').trim(), 'B');
+    assert.equal(chooseSimulator(undefined, options).udid, 'B');
+    assert.equal(chooseSimulator('A', options).udid, 'A');
+    assert.equal(chooseSimulator(undefined, options).udid, 'A');
+  `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test.each(['spawn error', 'timeout'])('a keyboard probe retries after a %s', failure => {
+  const dir = fixture();
+  try { run(`
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import { EventEmitter } from 'node:events';
+    import { PassThrough } from 'node:stream';
+    import * as processes from 'node:child_process';
+    let reads = 0, timeout;
+    const failure = ${JSON.stringify(failure)}, schedule = globalThis.setTimeout;
+    globalThis.setTimeout = (callback, ms, ...args) => {
+      if (ms === 20000) timeout = callback;
+      return schedule(callback, ms, ...args);
+    };
+    mock.module('node:child_process', () => ({ ...processes, spawn(command, args) {
+      assert.equal(command, 'xcrun');
+      assert.deepEqual(args.slice(0, 5), ['simctl', 'spawn', 'sim', 'defaults', 'read']);
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.kill = () => child.emit('close', null, 'SIGKILL');
+      if (++reads > 1) queueMicrotask(() => child.emit('close', 1));
+      else if (failure === 'spawn error') queueMicrotask(() => { child.emit('error', new Error('spawn failed')); child.emit('close', -1); });
+      else queueMicrotask(() => timeout());
+      return child;
+    } }));
+    const { withSoftwareKeyboard } = await import('./host/apple/devices.mjs');
+    for (let i = 0; i < 3; i++) {
+      const carrier = await withSoftwareKeyboard({ udid: 'sim' }, () => ({ close() {} }), { records: process.env.EXACT_APP_DIR });
+      await carrier.close();
+    }
+    assert.equal(reads, 2);
+  `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('macOS freshness checks the full product receipt when the bundle carries a reduced receipt', async () => {
-  const checkOut = process.env.EXACT_BUILD_CHECK_OUT;
+  const checkOut = process.env.EXACT_BUILD_CHECK_OUT, macBin = process.env.EXACT_MAC_BIN;
   const previous = process.env.EXACT_APP_DIR, target = process.env.CARGO_TARGET_DIR, dir = fixture();
   const write = (path, text) => writeFileSync(resolve(dir, path), text);
   delete process.env.CARGO_TARGET_DIR;
+  delete process.env.EXACT_MAC_BIN;
   try {
     process.env.EXACT_APP_DIR = dir;
     const app = resolveApp(dir), source = resolve(dir, 'source.swift');
@@ -541,6 +725,7 @@ test('macOS freshness checks the full product receipt when the bundle carries a 
     assert.deepEqual(nativeBuild('macos', app, { checked }).changed, [bundled]);
     write('source.swift', 'before');
   } finally {
+    if (macBin === undefined) delete process.env.EXACT_MAC_BIN; else process.env.EXACT_MAC_BIN = macBin;
     if (checkOut === undefined) delete process.env.EXACT_BUILD_CHECK_OUT; else process.env.EXACT_BUILD_CHECK_OUT = checkOut;
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
     if (target === undefined) delete process.env.CARGO_TARGET_DIR; else process.env.CARGO_TARGET_DIR = target;

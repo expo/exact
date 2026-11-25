@@ -67,6 +67,7 @@ import {
   launchEntries,
 } from './agent-launch.mjs';
 import { widgetStep } from './agent-widget.mjs';
+import { checkedAppleRun } from './agent-build.mjs';
 import {
   render,
   perfOp,
@@ -150,6 +151,8 @@ export async function main(argv, injected = {}) {
   if (flags.sim) process.env.EXACT_SIM = flags.sim;
   const [host, ...ops] = rest;
   const attached = flags.attach !== undefined;
+  const checked = checkedAppleRun(host, flags.app, flags);
+  const selectedApp = () => checked?.app ?? resolveApp(flags.app);
   // An Apple TV or a watch is no host the driver carries, but `--attach` says why it cannot join one.
   if (attached && ['tvos', 'watchos'].includes(host)) throw new Error(attachUnsupported(host));
   // A host the driver does not carry is refused: `open` falls to the web for any other word, so `iOS` or a typo ran
@@ -209,7 +212,7 @@ export async function main(argv, injected = {}) {
       }, every);
     beat.unref?.();
     return (await import('./app-server.mjs')).withAppServer(
-      resolveApp(flags.app).dir,
+      selectedApp().dir,
       async (running) => {
         const r = await (injected.runTests ?? runTests)({
           atLine,
@@ -377,7 +380,7 @@ export async function main(argv, injected = {}) {
   const named = flags.storage !== undefined;
   if (!attached) {
     flags.storage = defaultStore(host, flags);
-    referenceNote(ops, resolveApp(flags.app).dir);
+    referenceNote(ops, selectedApp().dir);
   }
   // A named store is kept between drives on a native host unless the drive asks it emptied (`--reset-storage`); on the
   // web, Chrome's profile for it starts empty unless the drive keeps it (`--keep-storage`, LLP 1086 EX4). A native host
@@ -402,7 +405,7 @@ export async function main(argv, injected = {}) {
       const server = injected.driveServer ? null : (await import('./verify.mjs')).appServer(resolveApp(flags.app).dir);
       if (server?.url) console.error(`agent: the page at ${flags.url} uses the API its build named; ${server.entry} is not started for this drive`);
     } else if (injected.driveServer) served = await injected.driveServer();
-    else served = await (await import('./verify.mjs')).driveServer(resolveApp(flags.app).dir, flags.storage, undefined, { fresh: fresh && (compares || !!flags.resetStorage) });
+    else served = await (await import('./verify.mjs')).driveServer(selectedApp().dir, flags.storage, undefined, { fresh: fresh && (compares || !!flags.resetStorage) });
     try {
       return await (injected.open ?? open)({
         host,
@@ -446,9 +449,9 @@ export async function main(argv, injected = {}) {
   // A native named store is one drive's at a time, on its device: another drive's reset would empty it under this one.
   // The device is resolved first, and the drive launches that one, so a default and its name are one lock.
   const locking = host !== 'web' && flags.storage !== undefined,
-    appId = locking ? resolveApp(flags.app).id : null;
-  const device = locking ? (injected.resolveDevice ?? resolveDevice)(host, flags, appId) : null;
-  if (locking && !named && !fresh) noteDefaultStore({ host, device, appId, dir: resolveApp(flags.app).dir });
+    appId = locking ? selectedApp().id : null;
+  const device = locking ? (injected.resolveDevice ?? resolveDevice)(host, flags, appId, checked?.app.dir) : null;
+  if (locking && !named && !fresh) noteDefaultStore({ host, device, appId, dir: selectedApp().dir });
   // A miss names a kept store (`find`): the euxy port's `tap play` missed on a mode an earlier drive persisted.
   const s = Object.assign(
     locking
@@ -625,7 +628,7 @@ export async function main(argv, injected = {}) {
       case 'fail':
       case 'pass':
         r = await s.op(
-          faultRequest(op, args, fetchOrigins(resolve(flags.webDist ?? defaultWebDist(resolveApp(flags.app))))),
+          faultRequest(op, args, fetchOrigins(resolve(flags.webDist ?? defaultWebDist(selectedApp())))),
         );
         break;
       case 'perf':
@@ -668,7 +671,7 @@ export async function main(argv, injected = {}) {
   const notes = driveNotes(s, {
     host,
     storage: flags.storage,
-    origins: flags.url || attached ? [] : loopbackOrigins(resolve(flags.webDist ?? defaultWebDist(resolveApp(flags.app)))),
+    origins: flags.url || attached ? [] : loopbackOrigins(resolve(flags.webDist ?? defaultWebDist(selectedApp()))),
   });
   try {
     if (flags.permission) await s.prefer(flags.permission); // `--permission name=state` (agent-launch.mjs)

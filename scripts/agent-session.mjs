@@ -42,6 +42,7 @@ import { bakeOutput, executableName, linuxBinary, resolveApp, webDist as default
 import { androidBinary } from './agent-android.mjs';
 import { VIEWPORT, openWeb } from './agent-web.mjs';
 import { openIOS, simulatorOrientation } from './agent-ios.mjs';
+import { checkedAppleRun } from './agent-build.mjs';
 import { sessionInput } from './agent-input.mjs';
 const CLOCK_STEP_MS = 1000,
   CLOCK_BUDGET_MS = 3000,
@@ -241,15 +242,15 @@ export async function open({
                     port: webPort(port, { ...process.env, ...env }),
                   }));
   const mapLocator =
-    plan ??
     carrier.plan ??
+    plan ??
     (url && /^https?:\/\//i.test(url) ? url : (env?.EXACT_DEV_PLAN ?? process.env.EXACT_DEV_PLAN)) ??
     // The dist the carrier serves — an app outside the repo's own (shop F2), never Caltrain's by default.
     (carrier.host === 'web' ? resolve(webDist ?? defaultWebDist(resolveApp(app)), 'app.plan') : null);
   // Without a plan of the drive's own, a native host runs its bake's: the maps a development bake left
   // (LLP 1012.001.000 D6).
   const baked = () => {
-    const a = resolveApp(app);
+    const a = checkedAppleRun(host, app, { device })?.app ?? resolveApp(app);
     const bin =
       host === 'windows'
         ? (process.env.EXACT_WINDOWS_BIN ?? resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(a.dir, 'dist-windows'), `${executableName(a)}.exe`))

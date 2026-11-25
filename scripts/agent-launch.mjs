@@ -218,10 +218,10 @@ export function netOptions(environment = process.env) {
 /** The device a native drive will open, resolved as its launch resolves it, and pinned so the launch opens that one: a
  * simulator's UDID (`EXACT_SIM`), a phone's (`flags.phone`), an Android device's serial (`ANDROID_SERIAL`), else
  * this machine. The store lock's key (`exclusiveNativeStore`). */
-export function resolveDevice(host, flags, appId) {
+export function resolveDevice(host, flags, appId, appDir) {
   if ((host === 'ios' || host === 'host-ios') && flags.device) { const ph = phone(flags.phone); flags.phone = ph.udid; return `phone ${ph.udid}`; }
   if (host === 'ios' || host === 'host-ios') {
-    const sim = chooseSimulator(undefined, { app: host === 'host-ios' ? `${appId}.host` : appId, dir: resolveApp(flags.app).dir, cached: true, hint: '--sim <udid|name> (or EXACT_SIM)' });
+    const sim = chooseSimulator(undefined, { app: host === 'host-ios' ? `${appId}.host` : appId, dir: appDir ?? resolveApp(flags.app).dir, cached: true, hint: '--sim <udid|name> (or EXACT_SIM)' });
     process.env.EXACT_SIM = sim.udid;
     return `simulator ${sim.udid}`;
   }

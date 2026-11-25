@@ -9,7 +9,7 @@ import { appleRunBinary, appleArtifacts, assertAppleIdentity } from '../host/app
 import { noWindowsHost } from '../host/windows/build.mjs';
 import { phone, phoneBridge, phoneStartupFailure, phoneLaunch, crashReports, displayPictureReply } from '../host/apple/devices.mjs';
 import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from './app.mjs';
-import { linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
+import { checkedAppleRun, checkedLaunchPlan, linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, shown, bakedSettingChanges, watchedNewer } from './agent-launch.mjs';
 import { androidBinary, androidDeploy, apkRecord } from './agent-android.mjs';
 import { iosTouchInput, openTouches } from '../host/apple/touches.mjs';
@@ -96,10 +96,10 @@ export async function phoneScreenshot({ ask, udid, appId, container, path, windo
  * on the Canvas reader (its APK), not the Linux host headless; unsaid, EXACT_ANDROID_READER decides (how a script
  * that opens a drive says it). */
 export async function openStdio({ host, plan, world, size, app, env: extra = {}, session, documents = [], device = false, phone: pick, touch = 'agent', reader = !!process.env.EXACT_ANDROID_READER, onProcess }) {
-  const a = resolveApp(app);
   const linux = host === 'linux', android = host === 'android'; // @ref LLP 1107 — Android: the Linux host on a phone, under adb
   const windows = host === 'windows', portable = linux || windows || android;
   const sample = host === 'host';
+  const a = checkedAppleRun(host, app, { device, sample })?.app ?? resolveApp(app);
   const artifacts = portable ? null : appleArtifacts(a, { destination: device ? 'ios' : 'macos', host: sample });
   const deviceBundle = artifacts?.bundle;
   const bin = windows ? (process.env.EXACT_WINDOWS_BIN ?? resolve(process.env.EXACT_WINDOWS_OUTPUT ?? resolve(a.dir, 'dist-windows'), `${executableName(a)}.exe`))
@@ -108,9 +108,13 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   // What a desktop app is started with, where a launch gives a marked setting (LLP 1153.002 D2): what its freshness reads.
   const childEnv = { ...process.env, ...extra };
   const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED, launch: childEnv }) : null;
-  if (macBuild && !macBuild.missing) refuseBackendOrigin(macBuild, a);
-  const macPlan = macBuild && !plan && !Object.hasOwn(extra, 'EXACT_PLAN') && !sample ? planOverride('macos', a, macBuild) : null;
-  if (macPlan) plan = macPlan.plan; else if (macBuild) refuseBuild('macos', macBuild, a, { sample });
+  if (macBuild?.checked) {
+    plan = checkedLaunchPlan('macos', macBuild, a, extra.EXACT_PLAN ?? plan ?? childEnv.EXACT_PLAN);
+  } else if (macBuild) {
+    if (!macBuild.missing) refuseBackendOrigin(macBuild, a);
+    const macPlan = !plan && !Object.hasOwn(extra, 'EXACT_PLAN') && !sample ? planOverride('macos', a, macBuild) : null;
+    if (macPlan) plan = macPlan.plan; else refuseBuild('macos', macBuild, a, { sample });
+  }
   const windowsRebuild = () => ownVerb(a, 'windows') ?? `bun host/windows/build.mjs ${a.crate('windows')}`;
   if (windows && !process.env.EXACT_WINDOWS_BIN && !ownVerb(a, 'windows') && noWindowsHost(a)) throw new Error(noWindowsHost(a));
   const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, reader) : linux ? linuxRebuild(a) : null;
@@ -168,6 +172,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     if (!android) env.EXACT_FONT ??= 'DejaVu Sans';
   }
   Object.assign(env, extra);
+  if (macBuild?.checked && plan) env.EXACT_PLAN = plan;
   const bridge = device ? await phoneBridge() : null, droid = android ? androidDeploy(a, bin, { ...env, ...extra }) : null;
   let touches = null;
   try {

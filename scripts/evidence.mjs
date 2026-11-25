@@ -16,7 +16,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { pendingBuildInputs, platformCrateKind, resolveApp, webDist as defaultWebDist } from './app.mjs';
-import { nativeBuild, receiptPath } from './agent-build.mjs';
+import { checkedAppleRun, nativeBuild, receiptPath } from './agent-build.mjs';
 import { within } from './paths.mjs';
 import { receiptChanges, webChanges } from './agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
@@ -60,7 +60,8 @@ function retainReceipt(app, host, record) {
 /** Append one run to the app's record. Never throws: a run's result does not depend on its record. */
 export function recordRun(appName, { host, what, result, timing = 'agent', touch, device, sim, target, webDist, kind = 'run' }) {
   try {
-    const app = resolveApp(appName), record = buildRecord(app, host, { webDist, device: device || !!target });
+    const app = checkedAppleRun(host, appName, { device })?.app ?? resolveApp(appName);
+    const record = buildRecord(app, host, { webDist, device: device || !!target });
     const retained = record ? retainReceipt(app, host, record) : { build: null };
     const line = { at: new Date().toISOString(), kind, host, target: target ?? (device ? 'device' : host === 'ios' ? sim ?? process.env.EXACT_SIM ?? 'simulator' : host === 'web' ? process.env.EXACT_WEB_BROWSER ?? 'chrome' : host),
       timing, ...(touch && touch !== 'agent' ? { touch } : {}), what, result, commit: git(['rev-parse', '--short=10', 'HEAD']).trim(), ...retained };

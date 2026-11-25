@@ -874,16 +874,16 @@ test('a plan-only edit runs its bake on the existing build; any other edit, or a
     reset();
     assert.equal(await drive(), 0);
     assert.deepEqual([said, builds, bakes], [[], [], []]);
-    const planCheck = readFileSync(process.env.EXACT_BUILD_CHECK_OUT, 'utf8'), selectedPlan = kept();
+    const planCheck = readFileSync(process.env.EXACT_BUILD_CHECK_OUT, 'utf8'), selectedPlan = JSON.parse(planCheck).plan;
 
     // The TypeScript edited since: what is kept is no longer the bake of these sources; the driver refuses it, test and agent bake again.
     write('app.ts', "export const grants = '';\nexport const more = 1;\n");
     stamp('app.ts', 30);
     assert.equal(kept(), null);
-    assert.deepEqual(planOverride('ios', app, nativeBuild('ios', app, { checked: planCheck })), selectedPlan);
+    assert.equal(planOverride('ios', app, nativeBuild('ios', app, { checked: planCheck }))?.plan, selectedPlan);
     assert.equal(planOverride('ios', app, nativeBuild('ios', app, { checked: freshCheck })), null);
     assert.throws(() => refuseBuild('ios', nativeBuild('ios', app), app), /ios build is stale/);
-    rmSync(overrideDir('ios', app), { recursive: true });
+    rmSync(dirname(selectedPlan), { recursive: true }); rmSync(overrideDir('ios', app), { recursive: true });
     const gone = nativeBuild('ios', app, { checked: planCheck });
     assert.equal(planOverride('ios', app, gone), null);
     assert.throws(() => refuseBuild('ios', gone, app), /ios build is stale/); reset();
