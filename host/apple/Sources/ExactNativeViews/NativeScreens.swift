@@ -35,7 +35,10 @@ extension NativeViews {
         waitingScreens.remove(entry.id)
         let adopting = screen.parent !== parent
         if adopting {
-            if screen.parent != nil { detach(entry) }
+            if screen.parent != nil {
+                releaseSafeArea(entry)
+                detach(entry)
+            }
             parent.addChild(screen)
         }
         if view.superview !== owner {

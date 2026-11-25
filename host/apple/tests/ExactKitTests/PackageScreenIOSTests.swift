@@ -112,6 +112,35 @@ final class PackageScreenIOSTests: XCTestCase {
         XCTAssertNil(natives.safeArea(of: table.id), "a view that declares nothing")
     }
 
+    /// LLP 1123 D15: the host clears what is owed in a consenting native view through the view's own
+    /// controller, beside the app's own additions, writes nothing for a view that does not consent, and
+    /// gives its clearance back when the view goes, the app's additions kept.
+    func testANativeViewsClearanceIsTaggedKeptApartAndGivenBack() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "native screens are contained in a window") }
+        try boot(scene)
+        let natives = try XCTUnwrap(session.nativeViews)
+        let home = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation?.topViewController)
+        func mount(_ tag: String, _ id: UInt32) throws -> UIViewController {
+            let owner = NodeView(id: id, kind: "native", presenter: session.presenter)
+            home.view.addSubview(owner)
+            natives.create(owner: owner)
+            owner.props = ["nativeViewModuleName": tag]
+            natives.update(owner)
+            natives.loadIfNeeded()
+            waitForMainQueue()
+            return try XCTUnwrap(natives.entries[id]?.screen, "\(tag)'s controller")
+        }
+        let clearing = try mount("clearing-table", 100020), plain = try mount("app-table", 100021)
+        defer { natives.destroy(id: 100021) }
+        clearing.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 10, right: 0)
+        XCTAssertTrue(natives.clear(100020, owed: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
+        XCTAssertEqual(clearing.additionalSafeAreaInsets, UIEdgeInsets(top: 30, left: 0, bottom: 10, right: 0), "beside the app's own")
+        XCTAssertFalse(natives.clear(100021, owed: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
+        XCTAssertEqual(plain.additionalSafeAreaInsets, .zero, "nothing for a view that does not consent")
+        natives.destroy(id: 100020)
+        XCTAssertEqual(clearing.additionalSafeAreaInsets, UIEdgeInsets(top: 0, left: 0, bottom: 10, right: 0), "given back, the app's kept")
+    }
+
     func testPushPopTabsRotationAndSheet() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "push/pop, tabs, rotation, and a sheet") }
         try pushPopTabsRotationAndSheet(scene, appScreen: false)
