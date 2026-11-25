@@ -6808,7 +6808,7 @@ Open the four-finger menu and choose **Frame Health**, which in a production bak
 collection, reproduce the hitch, then tap Share on the card; the share sheet takes
 one Markdown text: the card's status, the summary, then a section on the agent reports
 that says how they relate, with each JSON report in a `json` block under a heading that
-names it, such as "The screen's frames (`ui-update`)".
+names it, such as "All screen updates (`ui-update`)".
 Exact creates no report file or automatic upload. A person can send
 that text to an agent. The system share destination controls any storage it creates.
 On iOS 18 and later the card measures the screen, and the text holds two reports, the

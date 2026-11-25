@@ -823,10 +823,10 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.shareText { shared = $0 }
         waitFor("the reports are encoded") { shared != nil }
         let text = try XCTUnwrap(shared)
-        XCTAssertTrue(text.hasPrefix("# Frame health, live\n\nA summary of this app's frames, then the full data for an AI agent.\n\n"
-            + "## What was measured\n\n- Every UI update of this app on its screen, each one a frame."), "the status, then the summary: \(text)")
+        XCTAssertTrue(text.hasPrefix("# Frame health, live\n\nA summary of how smoothly this app is drawing, followed by detailed data for an AI agent.\n\n"
+            + "## What was measured\n\n- Frames: every time the app updated the screen."), "the status, then the summary: \(text)")
         let lines = text.components(separatedBy: "\n")
-        XCTAssertEqual(lines.filter { $0.hasPrefix("### ") }, ["### The screen's frames (`ui-update`)", "### Exact's frames (`\(health.source)`)"])
+        XCTAssertEqual(lines.filter { $0.hasPrefix("### ") }, ["### All screen updates (`ui-update`)", "### Exact's frames (`\(health.source)`)"])
         func report(_ source: String) throws -> [String: Any] {
             let heading = try XCTUnwrap(lines.firstIndex { $0.hasPrefix("### ") && $0.hasSuffix("(`\(source)`)") })
             let fence = try XCTUnwrap(lines[heading...].firstIndex(of: "```json"))
