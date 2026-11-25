@@ -11,6 +11,7 @@ extension NativeViews {
         entry.safeArea = entry.handle.flatMap { table.safeArea?($0) }.flatMap {
             NativeSafeArea(Unmanaged<NSDictionary>.fromOpaque($0).takeRetainedValue())
         }
+        entry.lent = entry.safeArea?.scrollViews.map { LentScrollIOS(view: $0.view, layout: $0.layout) } ?? []
         guard let handle = entry.handle, let raw = table.platformController?(handle) else {
             return owner.addSubview(view)
         }
