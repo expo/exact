@@ -413,6 +413,24 @@ class SharedElementsTest {
         assertFalse(content.hasDisplayList())
     }
 
+    @Test fun aScrollersRowsInANamedBoxAreShiftedOnce() {
+        // A box from 20 points down, its scroller's rows filling the page from 24 to 44.
+        val t = Fixture()
+        t.player.group = { RenderNode("rows") }; t.player.width = 100; t.player.height = 100
+        val rows = intArrayOf(20, 1, 1, f(1f), 0, 0, f(1f), 0, 0, 2, Color.RED) + rect(RectF(0f, 24f, 100f, 44f)) + IntArray(8) + 21
+        t.shared.begin(state(listOf(1)))
+        t.define(definition(1, RectF(0f, 20f, 100f, 100f), content = rows)); t.shared.finish()
+        val canvas = t.page.beginRecording()
+        canvas.drawColor(Color.WHITE); canvas.drawRenderNode(t.shared.node(1))
+        t.page.endRecording()
+        val pixels = HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap",
+            RenderNode::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+            .invoke(null, t.page, 100, 100) as Bitmap
+        assertEquals(Color.RED, pixels.getPixel(50, 30))
+        assertEquals(Color.WHITE, pixels.getPixel(50, 10))
+        pixels.recycle()
+    }
+
     @Test fun aDissolvesBoxEndsWhereItsContentsDo() {
         val t = Fixture()
         t.shared.begin(state(listOf(1))); t.define(definition(1, RectF(0f, 0f, 100f, 96f))); t.shared.finish()

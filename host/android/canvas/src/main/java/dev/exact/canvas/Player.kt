@@ -862,6 +862,9 @@ internal class Player(private val fonts: Map<Int, Font>) {
         var outer: Canvas? = null
         var node: android.graphics.RenderNode? = null
         var grouped = 0
+        // The shift a scroller's rows are drawn with: their node is recorded in the page's own
+        // coordinates and then drawn shifted, so nothing inside it is shifted again.
+        var groupShift = 0f to 0f
         var i = from
         while (i < n) {
             when (b.get(i)) {
@@ -1130,6 +1133,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     } else {
                         g.setPosition(0, 0, width, height)
                         outer = c
+                        groupShift = shiftX to shiftY; shiftX = 0f; shiftY = 0f
                         saveMatrix()
                         c = g.beginRecording()
                         children = origins?.let { ArrayList<PaintedOrigins.Placement>() }
@@ -1144,6 +1148,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
                             children = placements
                             c = outer!!
                             restoreMatrix()
+                            shiftX = groupShift.first; shiftY = groupShift.second
                         }
                         children?.add(PaintedOrigins.Placement(g, -shiftX, -shiftY))
                         c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(holder?.invoke(grouped) ?: g); c.restore()

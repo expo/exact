@@ -92,6 +92,8 @@ internal class SharedElements(
         // A dissolve's source drawing outlives its element only while its flight does.
         val held = next.values.mapNotNullTo(HashSet()) { it.content } + elements.values.map { it.content }
         for (gone in flights.values) gone.content?.takeIf { it !in held }?.discardDisplayList()
+        // Landed: its content is drawn in its slot again, as itself.
+        for (key in flights.keys - next.keys) elements[key]?.content?.setUseCompositingLayer(false, null)
         flights.clear(); flights.putAll(next)
         val live = 4 + b.get(3) * 10
         alive.clear()
@@ -292,6 +294,9 @@ internal class SharedElements(
      * as Material's container transform fits it. The flight's box clips the rest. */
     private fun drawScaled(canvas: Canvas, content: RenderNode, box: RectF, contentBox: RectF, pose: Pose,
         label: Boolean) {
+        // Scaled as a picture, as Compose's scaleToBounds scales a graphics layer: drawn scaled, its text
+        // would be rasterized at a new size every frame of the flight.
+        content.setUseCompositingLayer(true, null)
         val save = canvas.save()
         if (label) {
             val scale = pose.contentBox.width() / contentBox.width().coerceAtLeast(0.001f)

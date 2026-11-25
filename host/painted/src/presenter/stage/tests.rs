@@ -903,32 +903,38 @@ fn predictive_back_flies_a_pops_names_only_when_it_commits() {
 
 #[test]
 fn a_route_flies_as_a_whole_on_back_but_not_after_predictive_backs_preview() {
-    let plan = PAIRED
-        .replace(
-            "box sharedElement=\"photo\" testId=\"thumb\"",
-            "box sharedElement=\"page\" width=80 height=80\n            box sharedElement=\"photo\" testId=\"thumb\"",
-        )
-        .replace(
-            "testId=\"route-detail\"",
-            "sharedElement=\"page\" testId=\"route-detail\"",
-        );
-    for previewed in [false, true] {
-        let mut p = paired_with(&plan);
-        tap(&mut p, "open");
-        after(&mut p, 1000.0);
-        let (route, hero) = (key(&p, "route-detail"), key(&p, "hero"));
-        let now = p.host().now();
-        if previewed {
-            assert!(p.back_progress(0, 0.0, 0, now));
-            assert!(p.back_progress(1, 0.4, 0, now + 50.));
-            after(&mut p, 50.0);
+    let home = PAIRED.replace(
+        "box sharedElement=\"photo\" testId=\"thumb\"",
+        "box sharedElement=\"page\" width=80 height=80\n            box sharedElement=\"photo\" testId=\"thumb\"",
+    );
+    // The route named, or a child that fills it.
+    let named = home.replace(
+        "testId=\"route-detail\"",
+        "sharedElement=\"page\" testId=\"route-detail\"",
+    );
+    let filled = home.replace(
+        "            box sharedElement=\"photo\" testId=\"hero\"",
+        "            column sharedElement=\"page\" testId=\"page\" position=\"absolute\" inset=0\n            box sharedElement=\"photo\" testId=\"hero\"",
+    );
+    for (plan, page) in [(named, "route-detail"), (filled, "page")] {
+        for previewed in [false, true] {
+            let mut p = paired_with(&plan);
+            tap(&mut p, "open");
+            after(&mut p, 1000.0);
+            let (page, hero) = (key(&p, page), key(&p, "hero"));
+            let now = p.host().now();
+            if previewed {
+                assert!(p.back_progress(0, 0.0, 0, now));
+                assert!(p.back_progress(1, 0.4, 0, now + 50.));
+                after(&mut p, 50.0);
+            }
+            assert!(p.system_back(p.host().now()));
+            p.run_commands(|| ());
+            after(&mut p, 0.0);
+            let from: Vec<NodeKey> = p.host().flight_frames().iter().map(|f| f.from).collect();
+            assert!(from.contains(&hero), "{from:?}");
+            assert_eq!(from.contains(&page), !previewed, "{from:?}");
         }
-        assert!(p.system_back(p.host().now()));
-        p.run_commands(|| ());
-        after(&mut p, 0.0);
-        let from: Vec<NodeKey> = p.host().flight_frames().iter().map(|f| f.from).collect();
-        assert!(from.contains(&hero), "{from:?}");
-        assert_eq!(from.contains(&route), !previewed, "{from:?}");
     }
 }
 

@@ -329,8 +329,10 @@ pub(super) struct State {
     zooms: Vec<zoom::Source>,
     /// The pairs a pop of the top route would fly (LLP 1013.004 D1), with
     /// the kernel epoch and the top route they were found at: a pop has
-    /// removed the route by the time its crossing starts.
-    pops: (u64, Option<NodeKey>, Vec<(NodeKey, NodeKey)>),
+    /// removed the route by the time its crossing starts. Last, the names
+    /// among them that fill the route: the route itself, or a child at its
+    /// origin with its size.
+    pops: (u64, Option<NodeKey>, Vec<(NodeKey, NodeKey)>, Vec<NodeKey>),
 }
 
 /// What a sheet's heights are computed from: its `navigationDetent`, the
@@ -468,7 +470,8 @@ impl<D: DataSource> Presenter<D> {
                 }
                 _ => Vec::new(),
             };
-            self.stage.pops = (epoch, keys.last().copied(), pairs);
+            let fills = authored::filling(self.host.kernel(), keys.last(), &pairs);
+            self.stage.pops = (epoch, keys.last().copied(), pairs, fills);
         }
         self.sync_sources();
         self.stage.top = self.top_of(&stack, &kinds);
@@ -855,8 +858,9 @@ impl<D: DataSource> Presenter<D> {
 
     /// Fly the names a push from `old` to `new`, or a pop of `old`, pairs.
     /// After predictive Back's preview the route leaving does not fly as a
-    /// whole: it goes on from where the gesture left it, as Compose's
-    /// `NavHost` crossfades at full size while the names in it fly.
+    /// whole, nor a name that fills it: it goes on from where the gesture
+    /// left it, as Compose's `NavHost` crossfades at full size while the
+    /// names in it fly.
     fn fly_routes(
         &mut self,
         forward: bool,
@@ -869,7 +873,11 @@ impl<D: DataSource> Presenter<D> {
             false if self.stage.pops.1 == Some(old) => self.stage.pops.2.clone(),
             false => Vec::new(),
         };
-        for (from, to) in pairs.into_iter().filter(|p| !previewed || p.0 != old) {
+        let fills = &self.stage.pops.3;
+        let flies: Vec<_> = (pairs.into_iter())
+            .filter(|p| !previewed || p.0 != old && !fills.contains(&p.0))
+            .collect();
+        for (from, to) in flies {
             self.host.fly(from, to, curve, true);
         }
     }
