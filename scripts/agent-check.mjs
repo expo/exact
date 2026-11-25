@@ -246,7 +246,11 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   // or scroller cuts overlaps nothing past that edge, LLP 1116.006 D5). A pressable run of a paragraph that wraps meets
   // others only where its lines are.
   const where = (it) => (it.control && !it.lines ? [shown(it, obs.keyboard)] : drawn(it));
-  for (const { it, kind, detail } of regionFindings(obs)) add(kind, it, { ...detail, unit }, regionHint(kind));
+  for (const { it, kind, detail } of regionFindings(obs)) {
+    const part = kind === 'fold' && host === 'ios' && detail.axis === 'x' && partAfterScroller(it, nodes, items);
+    if (part) add(kind, it, { ...detail, unit, part: part.id, beside: part.with }, `keep it on one side of the fold: a box that holds just ${named(part.id, nodes)}, then ${named(part.with, nodes)}, with \`arrangement="split"\`, stands the two either side of it, and shows ${named(part.id, nodes)}, its primary, alone where both do not fit; the box needs its own size and the route's whole width (contract vocab arrangement)`);
+    else add(kind, it, { ...detail, unit }, regionHint(kind));
+  }
   // A list's section header (`pinned`) lies over the rows passing under it, as UIKit pins it, and an announcement laid
   // over the page that lets taps through (`overlay`, a toast) over what it passes: no overlap.
   for (const a of controls) for (const b of items) {
@@ -279,6 +283,42 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   return kept.sort((p, q) => order.indexOf(p.kind) - order.indexOf(q.kind) || p.box[1] - q.box[1] || p.box[0] - q.box[0]);
 }
 function parseHex(h) { const n = parseInt(String(h).slice(1, 7), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+
+/** The part `it` lies in that stands after a scroller under one parent (LLP 1188 D3, D4), as a player after its score: the
+ *  parent's child that holds `it` and no scroller, with one among the children before it, and whose items (`items`) lie on two
+ *  lines or more, unlike a bar of controls. Not where lowering or the host would refuse an arrangement around the two: under a
+ *  scroller or a route that scrolls, in or around a dialog, a popover, a route or an arrangement. `{ id, with }`, or null. */
+function partAfterScroller(it, nodes, items) {
+  const scrolling = (n) => n.type === 'ScrollView' || n.type === 'List';
+  const apart = (n) => n.props?.semanticTag === 'dialog' || n.props?.popover != null || n.props?.portal != null || (n.props?.arrangement ?? 'none') !== 'none';
+  const route = (n) => n.props?.navigationKey != null;
+  // Whether a branch holds what `test` finds, or more than a malformed tree would let it read, which counts as found
+  const holds = (id, test, seen = new Set()) => {
+    const n = nodes.get(id);
+    if (seen.size > 4000) return true;
+    if (!n || seen.has(id)) return false;
+    seen.add(id);
+    return test(n) || (n.children ?? []).some((c) => holds(c, test, seen));
+  };
+  const blocked = (id) => holds(id, (k) => apart(k) || route(k));
+  for (let at = it.id ?? it.of, n = nodes.get(at), steps = 0; n && n.parent != null && !route(n); at = n.parent, n = nodes.get(at)) {
+    if (++steps > 256 || apart(n) || holds(at, scrolling)) return null;
+    const kids = nodes.get(n.parent)?.children ?? [], i = kids.indexOf(at);
+    if (i < 0) return null;
+    const scroller = kids.slice(0, i).findLast((k) => holds(k, scrolling) && !blocked(k));
+    if (scroller == null) continue;
+    if (blocked(at)) return null;
+    // Nothing above the two scrolls or stands apart, up to the root: a navigation root that scrolls scrolls its routes
+    let up = n.parent, k = 0;
+    for (let u = nodes.get(up); u; up = u.parent, u = nodes.get(up)) if (++k > 256 || scrolling(u) || apart(u)) return null;
+    // Its items on the screen lie on two lines or more
+    const under = (x) => { for (let k = 0; x != null && k < 256; x = nodes.get(x)?.parent, k++) if (x === at) return true; return false; };
+    const held = items.filter((o) => o.cover?.kind !== 'offscreen' && under(o.id ?? o.of));
+    const top = Math.min(...held.map((o) => o.y + o.h)), bottom = Math.max(...held.map((o) => o.y));
+    return bottom >= top - 0.5 ? { id: at, with: scroller } : null;
+  }
+  return null;
+}
 
 /** A node as a builder names it: its testId, else its type and an excerpt of its text, else its id (`tree`'s nodes by id). */
 function named(id, nodes, fallback) {
