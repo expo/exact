@@ -55,149 +55,201 @@ fn a_bare_url_in_a_link_label_opens_the_links_destination() {
 }
 
 #[test]
-fn a_bare_url_just_inside_emphasis_is_a_link() {
-    let (x, bold) = ("https://x.dev", BOLD | LINK);
-    for (source, expected) in [
-        ("**https://x.dev** z", &[(x, bold, x)][..]),
-        ("_https://x.dev_", &[(x, ITALIC | LINK, x)]),
-        ("~~https://x.dev~~", &[(x, STRIKE | LINK, x)]),
-        ("***https://x.dev***", &[(x, BOLD | ITALIC | LINK, x)]),
-        ("(**https://x.dev**)", &[(x, bold, x)]),
-        (r"\*https://x.dev", &[(x, LINK, x)]),
+fn url_suffix_markers_can_close_emphasis() {
+    let x = "https://x.dev";
+    let wiki = "https://en.wikipedia.org/wiki/Rust_(programming_language)";
+    for (source, url, flags) in [
+        ("**https://x.dev** z", x, BOLD),
+        ("_https://x.dev_", x, ITALIC),
+        ("~~https://x.dev~~", x, STRIKE),
+        ("***https://x.dev***", x, BOLD | ITALIC),
+        ("(**https://x.dev**)", x, BOLD),
+        ("~https://x.dev~", x, 0),
+        ("foo*https://x.dev", x, 0),
+        (r"\*https://x.dev", x, 0),
+        ("_https://x.dev/a_b_c~d_", "https://x.dev/a_b_c~d", ITALIC),
+        ("~~https://x.dev/a~/b~~", "https://x.dev/a~/b", STRIKE),
+        ("*https://x.dev/c*d*", "https://x.dev/c*d", ITALIC),
         (
-            "_https://x.dev/a_b_c~d_",
-            &[(
-                "https://x.dev/a_b_c~d",
-                ITALIC | LINK,
-                "https://x.dev/a_b_c~d",
-            )],
+            "_https://en.wikipedia.org/wiki/Rust_(programming_language)_",
+            wiki,
+            ITALIC,
         ),
-        // A URL runs to white space, but not over the closer of the emphasis it starts.
-        ("**https://x.dev**more", &[(x, bold, x)]),
+    ] {
+        assert_spans(source, &[(url, flags | LINK, url)]);
+    }
+    assert_spans(
+        "Call _init then **https://en.wikipedia.org/wiki/Rust_(programming_language)**",
+        &[(wiki, BOLD | LINK, wiki)],
+    );
+    assert_spans(
+        "[see **https://x.dev**](u)",
+        &[("see ", LINK, "u"), (x, BOLD | LINK, "u")],
+    );
+}
+
+#[test]
+fn interior_markers_are_part_of_the_url() {
+    for (source, visible, url, flags) in [
+        (
+            "**https://x.dev**more",
+            "**https://x.dev**more",
+            "https://x.dev**more",
+            0,
+        ),
         (
             "***https://x.dev**more*",
-            &[(x, BOLD | ITALIC | LINK, x), ("more", ITALIC, "")],
+            "**https://x.dev**more",
+            "https://x.dev**more",
+            ITALIC,
         ),
         (
-            "_**https://x.dev**more_",
-            &[(x, BOLD | ITALIC | LINK, x), ("more", ITALIC, "")],
+            "**_https://x.dev**more_",
+            "**https://x.dev**more",
+            "https://x.dev**more",
+            ITALIC,
         ),
         (
-            "~~https://x.dev/a~/b~~",
-            &[("https://x.dev/a~/b", STRIKE | LINK, "https://x.dev/a~/b")],
+            "**foo_https://x.dev**bar",
+            "**foo_https://x.dev**bar",
+            "https://x.dev**bar",
+            0,
+        ),
+        (
+            "*foo_https://x.dev*bar",
+            "*foo_https://x.dev*bar",
+            "https://x.dev*bar",
+            0,
+        ),
+        (
+            "~~foo~https://x.dev~~bar",
+            "~~foo~https://x.dev~~bar",
+            "https://x.dev~~bar",
+            0,
+        ),
+        (
+            "**foo*https://x.dev**bar",
+            "**foo*https://x.dev**bar",
+            "https://x.dev**bar",
+            0,
+        ),
+        (
+            "~~https://x.dev~~more",
+            "~~https://x.dev~~more",
+            "https://x.dev~~more",
+            0,
+        ),
+        (
+            "**see https://x.dev**more",
+            "**see https://x.dev**more",
+            "https://x.dev**more",
+            0,
         ),
         (
             "**https://x.dev/a*b**more",
-            &[("https://x.dev/a*b", bold, "https://x.dev/a*b")],
-        ),
-        // Emphasis adds no link inside a link's label.
-        (
-            "[see **https://x.dev**](u)",
-            &[("see ", LINK, "u"), (x, bold, "u")],
+            "**https://x.dev/a*b**more",
+            "https://x.dev/a*b**more",
+            0,
         ),
     ] {
-        assert_spans(source, expected);
+        assert_spans(source, &[(url, flags | LINK, url)]);
+        assert_eq!(plain(source), visible, "{source}");
     }
 }
 
 #[test]
-fn a_url_after_a_delimiter_stops_at_a_closer_of_an_earlier_opener() {
-    let x = "https://x.dev";
-    for (source, prefix, flags) in [
-        ("**foo_https://x.dev**bar", "foo_", BOLD),
-        ("*foo_https://x.dev*bar", "foo_", ITALIC),
-        ("~~foo~https://x.dev~~bar", "foo~", STRIKE),
-        ("**foo*https://x.dev**bar", "foo*", BOLD),
-        ("**_https://x.dev**more_", "_", BOLD),
-    ] {
-        assert_spans(source, &[(prefix, flags, ""), (x, flags | LINK, x)]);
-    }
-}
-
-#[test]
-fn only_unused_openers_can_shorten_a_url() {
-    for (source, text, flags, url) in [
+fn urls_can_follow_closed_or_partly_closed_emphasis() {
+    for (source, visible, text, flags, url) in [
         (
             "*before*https://x.dev/a*b",
+            "beforehttps://x.dev/a*b",
             "before",
             ITALIC,
             "https://x.dev/a*b",
         ),
         (
+            "***before**https://x.dev/a*b",
+            "*beforehttps://x.dev/a*b",
+            "before",
+            BOLD,
+            "https://x.dev/a*b",
+        ),
+        (
             "**foo**https://x.dev/a**b",
+            "foohttps://x.dev/a**b",
             "foo",
             BOLD,
             "https://x.dev/a**b",
         ),
         (
             "**foo**https://x.dev**bar**",
+            "foohttps://x.dev**bar**",
             "foo",
             BOLD,
             "https://x.dev**bar",
         ),
         (
+            "**one**https://x.dev**two words**",
+            "onehttps://x.dev**two words**",
+            "one",
+            BOLD,
+            "https://x.dev**two",
+        ),
+        (
             "**_foo**https://x.dev/a_/b",
+            "_foohttps://x.dev/a_/b",
             "_foo",
             BOLD,
             "https://x.dev/a_/b",
         ),
     ] {
         assert_spans(source, &[(text, flags, ""), (url, LINK, url)]);
-    }
-    assert_spans(
-        "***before**https://x.dev/a*b",
-        &[
-            ("before", BOLD | ITALIC, ""),
-            ("https://x.dev/a", ITALIC | LINK, "https://x.dev/a"),
-        ],
-    );
-}
-
-#[test]
-fn an_escaped_delimiter_inside_a_url_cannot_close_emphasis() {
-    for (source, url, flags) in [
-        (
-            r"*https://x.dev/a\*/b*",
-            r"https://x.dev/a\*/b",
-            ITALIC | LINK,
-        ),
-        (
-            r"*https://x.dev/a\\*/b*",
-            r"https://x.dev/a\\*/b",
-            ITALIC | LINK,
-        ),
-        (r"*https://x.dev\*", r"https://x.dev\*", LINK),
-    ] {
-        assert_spans(source, &[(url, flags, url)]);
-    }
-}
-
-#[test]
-fn a_url_only_checks_for_closers_after_a_delimiter() {
-    let x = "https://x.dev";
-    for (source, visible, url, flags) in [
-        (
-            "~~https://x.dev~~more",
-            "https://x.devmore",
-            x,
-            STRIKE | LINK,
-        ),
-        ("foo*https://x.dev", "foo*https://x.dev", x, LINK),
-        (
-            "*https://x.dev/c*d*",
-            "https://x.dev/cd*",
-            "https://x.dev/c",
-            ITALIC | LINK,
-        ),
-        (
-            "**see https://x.dev**more",
-            "**see https://x.dev**more",
-            "https://x.dev**more",
-            LINK,
-        ),
-    ] {
-        assert_spans(source, &[(url, flags, url)]);
         assert_eq!(plain(source), visible, "{source}");
+    }
+}
+
+#[test]
+fn url_backslashes_are_literal() {
+    for (source, url, flags) in [
+        (r"*https://x.dev/a\*/b*", r"https://x.dev/a\*/b", ITALIC),
+        (r"*https://x.dev/a\\*/b*", r"https://x.dev/a\\*/b", ITALIC),
+        (r"*https://x.dev/a\\* done", r"https://x.dev/a\\", ITALIC),
+        (r"*https://x.dev\*", r"https://x.dev\", ITALIC),
+        (r"**https://x.dev\\**.", r"https://x.dev\\", BOLD),
+        (r"~~https://x.dev\\~~", r"https://x.dev\\", STRIKE),
+    ] {
+        assert_spans(source, &[(url, flags | LINK, url)]);
+    }
+}
+
+#[test]
+fn extended_urls_use_gfm_boundaries_and_trim() {
+    for (source, url) in [
+        ("https://x.dev/a>?<rest", "https://x.dev/a>"),
+        ("(http://x.dev/a_(b))).!?,:", "http://x.dev/a_(b)"),
+        ("https://x.dev/a)(b)/c", "https://x.dev/a)(b)/c"),
+        ("https://x.dev/a&hl;?!", "https://x.dev/a"),
+        ("https://x.dev/a)&a1;", "https://x.dev/a"),
+        ("https://x.dev/a&;", "https://x.dev/a&;"),
+        ("https://x.dev/a;", "https://x.dev/a;"),
+        ("https://x.dev/a'", "https://x.dev/a'"),
+        ("https://x.dev/a\"", "https://x.dev/a\""),
+        ("https://a_b.x.dev/a", "https://a_b.x.dev/a"),
+        ("https://x.dev_ next", "https://x.dev"),
+        ("https://x.dev_?*https://y.dev/a", "https://y.dev/a"),
+    ] {
+        assert_spans(source, &[(url, LINK, url)]);
+    }
+    for source in [
+        ")https://x.dev",
+        r"x\https://x.dev",
+        "ahttps://x.dev",
+        "https://",
+        "https://x_.dev/a",
+        "https://x.dev_/a",
+        "http://localhost/a",
+    ] {
+        assert_spans(source, &[]);
     }
 }
 
