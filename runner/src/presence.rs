@@ -241,6 +241,8 @@ struct Job {
     checked: Option<Option<Checked>>,
     /// A failed durable deletion waits before trying the same queued job.
     retry_at: Option<f64>,
+    /// Its caller let it go after it began: it runs to its end unanswered.
+    let_go: bool,
 }
 
 struct Entry {
@@ -379,6 +381,7 @@ impl Backend {
                     step: 0,
                     checked: None,
                     retry_at: None,
+                    let_go: false,
                 });
             } else {
                 entry.occupancy = Occupancy::Plain;
@@ -458,6 +461,7 @@ impl Backend {
             step: 0,
             checked: None,
             retry_at: None,
+            let_go: false,
         });
         true
     }
@@ -467,7 +471,10 @@ impl Backend {
         for entry in self.names.values_mut() {
             if let Some(job) = entry.queue.front_mut().filter(|j| j.id == Some(id)) {
                 if job.checked == Some(None) {
-                    job.checked = Some(Some(outcome));
+                    job.checked = Some(Some(match job.let_go {
+                        true => let_go(),
+                        false => outcome,
+                    }));
                 }
                 return;
             }
@@ -476,14 +483,16 @@ impl Backend {
 
     /// Call `id` was let go: it leaves its queue, and a check's late answer
     /// is dropped. A move already begun finishes; only its answer is lost.
+    /// A check already asked keeps its place until the platform answers, as
+    /// it owns its generation until then; the answer reads and moves nothing.
     pub fn cancel(&mut self, id: u64) {
         for entry in self.names.values_mut() {
             for (i, job) in entry.queue.iter_mut().enumerate() {
                 if job.id != Some(id) {
                     continue;
                 }
-                if i == 0 && job.step > 0 {
-                    job.id = None;
+                if i == 0 && (job.step > 0 || job.checked.is_some()) {
+                    job.let_go = true;
                 } else {
                     entry.queue.remove(i);
                 }
@@ -560,6 +569,7 @@ impl Backend {
             step: 0,
             checked: None,
             retry_at: None,
+            let_go: false,
         });
         self.say(format!("presence {name}: the refused write is tried again"));
     }
@@ -603,7 +613,7 @@ impl Backend {
         };
         let entry = self.names.get_mut(name).expect("the entry");
         let job = entry.queue.pop_front().expect("the head");
-        if let (Some(id), Some(done)) = (job.id, done) {
+        if let (Some(id), Some(done), false) = (job.id, done, job.let_go) {
             events.push(Event::Done { id, done });
         }
         true
@@ -807,12 +817,7 @@ impl Backend {
                         op,
                     }),
                     // A call let go before its check: nothing is asked.
-                    None => {
-                        job.checked = Some(Some(Checked::Failed(
-                            "SYSTEM_CANCEL".into(),
-                            "the call was let go".into(),
-                        )))
-                    }
+                    None => job.checked = Some(Some(let_go())),
                 }
                 None
             }
@@ -1004,6 +1009,11 @@ impl Backend {
         self.say(format!("presence {name}: moved to locked"));
         Some(None)
     }
+}
+
+/// The check of a call let go: it ends as the platform's own cancel does.
+fn let_go() -> Checked {
+    Checked::Failed("SYSTEM_CANCEL".into(), "the call was let go".into())
 }
 
 /// A vault in memory: a test's, or a host's with nowhere durable to keep

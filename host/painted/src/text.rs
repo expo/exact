@@ -272,7 +272,7 @@ impl Spec {
         // host does not carry (LLP 1001).
         static AUTO: std::sync::Once = std::sync::Once::new();
         if request.paragraph.hyphens == exact_kernel::Hyphens::Auto {
-            AUTO.call_once(|| eprintln!("[Text] hyphens-auto: Linux has no hyphenation dictionary; `hyphens: auto` breaks only at soft hyphens, as `manual` (LLP 1001)"));
+            AUTO.call_once(|| eprintln!("[Text] hyphens-auto: {} has no hyphenation dictionary; `hyphens: auto` breaks only at soft hyphens, as `manual` (LLP 1001)", crate::agent::HOST_NAME));
         }
         let spec = Spec {
             strut: Run::from_style("", request.paragraph.strut),

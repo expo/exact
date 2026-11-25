@@ -52,7 +52,7 @@ impl<D: DataSource> Presenter<D> {
         self.set_collection_interaction(Some(view));
         self.dirty = true;
         let mut held = Hold {
-            primary,
+            primary: Some(primary),
             velocity: VelocityTracker::new(),
             kind: HeldKind::Transform {
                 time_offset: now_ms - at_ms,

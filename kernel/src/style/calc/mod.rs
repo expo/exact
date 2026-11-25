@@ -846,8 +846,8 @@ fn text_observations(text: &str) -> Components {
 /// Each name a text's `var()`s read, fallbacks included, by CSS's tokens: a
 /// function's name in any case, a property's as written.
 fn text_vars(text: &str, each: &mut dyn FnMut(&str)) {
-    use cssparser::{Parser, ParserInput, Token};
-    fn walk(p: &mut Parser<'_, '_>, each: &mut dyn FnMut(&str)) {
+    use cssparser::{Parser, Token};
+    fn walk(p: &mut Parser<'_>, each: &mut dyn FnMut(&str)) {
         while let Ok(token) = p.next() {
             let var = matches!(token, Token::Function(name) if name.eq_ignore_ascii_case("var"));
             if !matches!(token, Token::Function(_) | Token::ParenthesisBlock) {
@@ -860,12 +860,11 @@ fn text_vars(text: &str, each: &mut dyn FnMut(&str)) {
                     }
                 }
                 walk(p, each);
-                Ok::<_, cssparser::ParseError<'_, ()>>(())
+                Ok::<_, cssparser::ParseError<()>>(())
             });
         }
     }
-    let mut input = ParserInput::new(text);
-    walk(&mut Parser::new(&mut input), each);
+    walk(&mut Parser::new(text), each);
 }
 
 /// A calculation a row holds: a handle to its interned entry.

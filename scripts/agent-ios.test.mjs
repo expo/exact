@@ -1,5 +1,5 @@
 // Native test runs reuse their startup check and simulator lookups (expo/exact#1400).
-import { test } from 'bun:test';
+import { spyOn, test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -8,6 +8,7 @@ import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { appleArtifacts } from '../host/apple/build.mjs';
 import { buildFirst, nativeBuild } from './agent-build.mjs';
+import { rotateSimulator } from './duo/hinge.mjs';
 import { resolveApp } from './app.mjs';
 
 const root = resolve(import.meta.dir, '..');
@@ -545,4 +546,91 @@ test('macOS freshness checks the full product receipt when the bundle carries a 
     if (target === undefined) delete process.env.CARGO_TARGET_DIR; else process.env.CARGO_TARGET_DIR = target;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('rotate issues the turn on the new display and confirms the scene after landing', async () => {
+  const sample = { orientation: 'portrait', device: 3, inner: true, ready: true };
+  const reads = [
+    { ...sample, inner: false, orientation: 'landscapeLeft' },
+    { ...sample, ready: false }, sample,
+    { ...sample, orientation: 'landscapeLeft' }, sample, { ...sample, orientation: 'landscapeLeft' },
+  ];
+  let count = 0, turns = 0, lands = 0;
+  const result = await rotateSimulator({
+    duo: true, fold: 180,
+    ask({ op }) { assert.equal(op, 'layout'); return Promise.resolve(reads[count++]); },
+    issue(turn) {
+      assert.equal(count, 3);
+      assert.equal(turn.helper, 'portrait');
+      turns++;
+      throw new Error('setter timed out');
+    },
+    land(result) { lands++; return Promise.resolve(result); },
+  }, 'landscapeLeft');
+  assert.deepEqual(result, { orientation: 'landscapeLeft' });
+  assert.deepEqual([count, turns, lands], [6, 1, 1]);
+});
+
+test('a lost Duo turn is reissued from the reported pose at most twice', async () => {
+  const turns = [], messages = [];
+  let now = 0;
+  const clock = spyOn(performance, 'now').mockImplementation(() => now);
+  const log = spyOn(console, 'error').mockImplementation(message => messages.push(message));
+  try {
+    await assert.rejects(rotateSimulator({
+      duo: true, fold: 0,
+      async ask() {
+        if (turns.length) now += 3100;
+        return { orientation: 'portrait', device: 1, ready: true, inner: false, allowed: ['landscape-secondary'] };
+      },
+      issue(turn) { turns.push(turn.device); },
+      land() { assert.fail('the scene never turned'); },
+    }, 'landscapeLeft'), /device portrait .*scene stayed portrait on cover display/);
+    assert.deepEqual(turns, ['landscapeRight', 'portrait', 'landscapeRight', 'portrait', 'landscapeRight']);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0], /reissue 1\/2/);
+    assert.match(messages[1], /reissue 2\/2/);
+  } finally {
+    clock.mockRestore();
+    log.mockRestore();
+  }
+});
+
+test('a scene that turns at the deadline gets the same landing as any input', async () => {
+  let issued = false, now = 0;
+  const clock = spyOn(performance, 'now').mockImplementation(() => now);
+  try {
+    const result = await rotateSimulator({
+      duo: false,
+      async ask() {
+        return { orientation: issued ? 'landscapeLeft' : 'portrait', device: 1 };
+      },
+      issue() { issued = true; now = 10000; return 'landscapeRight'; },
+      async land(result) { await Bun.sleep(1050); return result; },
+    }, 'landscapeLeft');
+    assert.deepEqual(result, { orientation: 'landscapeLeft' });
+  } finally { clock.mockRestore(); }
+});
+
+test('a partial fold can report the new hinge angle on the outgoing cover', async () => {
+  const sample = { angle: 127.78, inner: false, ready: true, device: 4, orientation: 'landscapeLeft' };
+  const samples = [sample, sample, sample, { ...sample, inner: true, ready: false }, { ...sample, inner: true, orientation: 'portrait' },
+    { ...sample, inner: true }, { ...sample, inner: true }];
+  let reads = 0;
+  await rotateSimulator({
+    duo: true, fold: 130, display: () => reads === 1 ? {} : { inner: true, angle: 127.8 },
+    async ask() { return samples[reads++]; },
+    issue(turn) { assert.equal(reads, 5); assert.equal(turn.device, 'portrait'); },
+    async land(result) { return result; },
+  }, 'landscapeLeft');
+  assert.equal(reads, samples.length);
+});
+
+test('losing the verification read cannot undo a turn the scene reported', async () => {
+  const replies = [{ orientation: 'portrait' }, { orientation: 'landscapeRight' }, { error: 'connection closed' }];
+  const result = await rotateSimulator({
+    duo: false, async ask() { return replies.shift(); }, issue() {},
+    async land(result) { return { ...result, epoch: 3 }; },
+  }, 'landscapeRight');
+  assert.deepEqual(result, { orientation: 'landscapeRight', epoch: 3 });
 });

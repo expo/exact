@@ -259,6 +259,7 @@ impl<D: DataSource> Presenter<D> {
         });
         self.resolve_back_layer(request);
         if !modal {
+            self.host.runner_mut().kernel_mut().measure_dialog(id, true);
             if let Err(e) = self
                 .host
                 .runner_mut()
@@ -353,6 +354,7 @@ impl<D: DataSource> Presenter<D> {
                     let _ = k.set_alert_prefix(id, false);
                 }
                 if !open.modal {
+                    k.measure_dialog(id, false);
                     let _ = k.set_popover_source_visible(id, false);
                 }
                 let _ = k.set_host_block(id, None);

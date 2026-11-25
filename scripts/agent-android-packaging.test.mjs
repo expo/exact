@@ -4,9 +4,21 @@ import {createHash} from 'node:crypto';
 import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {basename, resolve} from 'node:path';
-import {androidJavaEnv, androidSdk, androidSdkPackages, composeArgs, loadAlignment} from './agent-android.mjs';
+import {androidJavaEnv, androidSdk, androidSdkPackages, extensionArgs, composeArgs, loadAlignment} from './agent-android.mjs';
 import {manifestFragment} from './android-manifest.mjs';
 import {ANDROID_TARGET, androidBakeLibraryName, androidToolchainEnv, stageAndroidBake} from './android-abi.mjs';
+
+test('Gradle receives one permission across the app, a grant and a bound package', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-apk-permission-'));
+  try {
+    const foreground = 'android.permission.FOREGROUND_SERVICE', capture = 'android.permission.DETECT_SCREEN_CAPTURE';
+    const app = { dir, name: 'capture', target: dir, manifest: { host: { android: { permissions: [foreground, capture] } } } };
+    const bound = [{ extension: 'fixture', className: 'fixture.Module', dirs: [dir], manifest: { permissions: [foreground] } }];
+    writeFileSync(resolve(dir, 'compat.json'), JSON.stringify({ reach: { android: [foreground] } }));
+    const args = extensionArgs(app, dir, [], bound, null, true);
+    expect(args.filter(arg => arg.startsWith('-Ppermissions='))).toEqual([`-Ppermissions=${capture},${foreground}`]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test('Compose follows the plan and the Kotlin source directories Gradle compiles', () => {
   const root = mkdtempSync(resolve(tmpdir(), 'exact-compose-'));
@@ -189,7 +201,7 @@ for (const [id, minimumOS, development = false] of [[undefined, '12'], [undefine
       }
     }`);
     const result = spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), ['--no-daemon', '--console=plain', '-I', init,
-      ':app:processReleaseMainManifest', ':app:inspectRelease', ...(development ? ['-PdevelopmentApk=1', '-PexactDevelopment=1'] : []), `-PapplicationId=${packageId}.dev`, '-PappName=CI Dev', '-Papp=ci', `-Ppermissions=${permissions.join(',')}`,
+      ':app:writeReleaseManifestPermissions', ':app:inspectRelease', ...(development ? ['-PdevelopmentApk=1', '-PexactDevelopment=1'] : []), `-PapplicationId=${packageId}.dev`, '-PappName=CI Dev', '-Papp=ci', `-Ppermissions=${permissions.join(',')}`,
       ...(id ? ['-PandroidFeatures=android.hardware.bluetooth_le required=false,android.software.companion_device_setup'] : []), `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`],
     { cwd: resolve(import.meta.dir, '../host/android'), encoding: 'utf8', timeout: 180000,
       env: { ...releaseJavaEnv, ANDROID_HOME: releaseSdk,
@@ -203,6 +215,10 @@ for (const [id, minimumOS, development = false] of [[undefined, '12'], [undefine
       .filter(path => /merged_manifest.*AndroidManifest.xml$/.test(path));
     expect(manifests.length).toBeGreaterThan(0);
     const merged = readFileSync(resolve(dir, 'app/intermediates', manifests[0]), 'utf8');
+    const names = JSON.parse(readFileSync(resolve(dir, 'app/manifest-permissions.json'), 'utf8'));
+    const manifestNames = [...merged.matchAll(/<uses-permission\s[^>]*?android:name="([^"]+)"/g)].map(match => match[1]);
+    expect(names).toEqual([...new Set(manifestNames)].sort());
+    expect(names).toContain('android.permission.INTERNET');
     expect(merged).toContain(`package="${packageId}.dev"`);
     expect(merged).toContain('android:label="CI Dev"');
     expect(merged).not.toContain('android:debuggable="true"');

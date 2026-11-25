@@ -1426,7 +1426,7 @@ final class NavigationMoreIOSTests: XCTestCase {
     /// `wholeScreen`: the window is the device's screen, as an app's is,
     /// which decides how many items UIKit's bar holds (the iPhone Duo's side
     /// bar holds every tab at a regular height); else iPhone 17's size.
-    private func fixture(_ label: String, wholeScreen: Bool = false) throws -> ExactSession {
+    func fixture(_ label: String, wholeScreen: Bool = false) throws -> ExactSession {
         let env = ProcessInfo.processInfo.environment
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env["EXACT_MORE_TABS_PLAN"], "build.mjs --test --ios compiles the more-tabs fixture")))
         let session = ExactApp.shared.makeSession(label: label)

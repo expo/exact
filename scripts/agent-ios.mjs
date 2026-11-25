@@ -7,8 +7,8 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { openTouches, iosTouchInput, springboard, withAccessibilityRuntime } from '../host/apple/touches.mjs';
-import { hasSimulatorHinge, hingeHelper } from './duo/hinge.mjs';
+import { openTouches, iosTouchInput, springboard, withAccessibilityLock, withAccessibilityRuntime } from '../host/apple/touches.mjs';
+import { coreDeviceAvailable, coreDeviceTurn, hasSimulatorHinge, hingeHelper, partialFoldDisplay, rotateSimulator, simulatorTurns } from './duo/hinge.mjs';
 import { nativeKey } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
 import { bundleId, install } from '../host/apple/build.mjs';
@@ -29,6 +29,7 @@ import {
   simulatorAppContainer,
 } from '../host/apple/devices.mjs';
 import { appleExecutableName, resolveApp } from './app.mjs';
+export const simulatorOrientation = name => simulatorTurns.some(turn => turn.scene === name);
 const appContainers = new Map();
 const containerKey = (udid, id) => JSON.stringify([udid, id]);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -276,7 +277,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
           throw new Error(why);
         },
       );
-    let helper;
+    let helper, lastFold, useCoreDevice;
     let canvasContact = false;
     return {
       host: hostFixture ? 'host-ios' : 'ios',
@@ -293,7 +294,54 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
       installNote: kept?.note,
       fold: !hostFixture && hasSimulatorHinge(dev) ? (degrees, land) => simulatorDisplay(dev.udid, () => {
         helper ??= hingeHelper(dev.udid, dir);
-        return land(Number(helper('fold', degrees)));
+        const since = Date.now();
+        const angle = Number(helper('fold', degrees));
+        lastFold = { angle, since };
+        return land(angle);
+      }) : undefined,
+      rotate: !hostFixture ? (orientation, land) => withAccessibilityLock(dev.udid, async () => {
+        const duo = hasSimulatorHinge(dev);
+        const fold = lastFold?.angle;
+        const display = fold > 0 && fold < 180 ? timeout => partialFoldDisplay(dev.udid, lastFold.since, timeout) : undefined;
+        const rotate = async issue => {
+          const result = await rotateSimulator({ duo, fold, display, issue, ask, land }, orientation);
+          lastFold = undefined;
+          return result;
+        };
+        if (duo) {
+          helper ??= hingeHelper(dev.udid, dir);
+          return rotate((turn, timeout, { inner, angle }) => {
+            // On a partly open cover, the picker's two landscape values are reversed.
+            const pose = !inner && angle > 0 && angle < 180 && turn.tiltedCover || turn.helper;
+            helper.orient(pose, timeout);
+          });
+        }
+        useCoreDevice ??= coreDeviceAvailable(dev.udid);
+        let runner = touches;
+        try {
+          if (!useCoreDevice) runner ??= await openTouches({ udid: dev.udid, appId: id, foldable: false });
+          return await rotate(async (turn, timeout) => {
+            const end = performance.now() + timeout;
+            if (useCoreDevice) {
+              try { return coreDeviceTurn(dev.udid, turn.device, timeout); }
+              catch (error) {
+                if (!error.unsupported) throw error;
+                useCoreDevice = false;
+              }
+            }
+            runner ??= await openTouches({ udid: dev.udid, appId: id, foldable: false });
+            const remaining = Math.ceil(end - performance.now());
+            if (remaining <= 0) throw new Error('XCTest started after the turn deadline');
+            const r = await runner.ask({ op: 'orientation', to: turn.device }, remaining);
+            if (r.error) throw new Error(r.error);
+            return r.device;
+          });
+        } finally {
+          if (!touches && runner) {
+            try { await runner.close(); }
+            catch (e) { console.error(`rotate: closing XCTest: ${e.message}`); }
+          }
+        }
       }) : undefined,
       background: ms => backgroundIOS(lines, ms, id, bundle => activateIOS(['simctl', 'launch', dev.udid], bundle)),
       springboard: request =>

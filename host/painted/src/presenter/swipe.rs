@@ -130,7 +130,7 @@ impl<D: DataSource> Presenter<D> {
             return Ok(None);
         };
         let mut held = Hold {
-            primary,
+            primary: Some(primary),
             kind: HeldKind::Swipe {
                 companions: [None, None],
                 ways,
@@ -169,12 +169,12 @@ impl<D: DataSource> Presenter<D> {
         at_ms: f64,
     ) -> Result<bool, String> {
         let value = Value::new(
-            displacement(held.primary.value.x, delta),
-            held.primary.value.y,
+            displacement(held.motion().value.x, delta),
+            held.motion().value.y,
         );
         if !self
             .host
-            .hold_update(held.primary.token, value, now_ms)
+            .hold_update(held.motion().token, value, now_ms)
             .map_err(|e| format!("hold: {e:?}"))?
         {
             return Ok(false);
@@ -185,7 +185,7 @@ impl<D: DataSource> Presenter<D> {
             unreachable!()
         };
         let progress = ways.progress(value.x);
-        let caught = ways.progress(held.primary.value.x);
+        let caught = ways.progress(held.motion().value.x);
         for companion in companions.iter().flatten() {
             let mapped = indicator(companion.value.x, caught, progress);
             let value = Value::new(
@@ -210,9 +210,9 @@ impl<D: DataSource> Presenter<D> {
         end: HoldEnd,
         now_ms: f64,
     ) -> Result<(), String> {
-        let ended = self.host.hold_end(held.primary.token, end, now_ms);
+        let ended = self.host.hold_end(held.motion().token, end, now_ms);
         if matches!(ended, Ok(true)) {
-            self.retained_motion_returned(held.primary.token);
+            self.retained_motion_returned(held.motion().token);
         }
         let mut error = ended.err();
         let HeldKind::Swipe { companions, .. } = &held.kind else {

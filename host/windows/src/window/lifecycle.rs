@@ -204,12 +204,30 @@ impl<D: DataSource + Default + 'static> App<D> {
                 return;
             }
         }
-        // The window is going: its hatch, then the app's, ends.
-        if let Some(p) = &mut self.presenter {
-            p.end_hatches();
-            p.end_packages();
-        }
+        self.end();
         events.exit();
+    }
+
+    /// The app ends in order (LLP 1097 D10, LLP 1146 D2), as the headless
+    /// host's exit does: the window goes at once, then the storage an answer
+    /// started and a request with effects in flight land, five seconds at
+    /// most (a second for an agent's quit), and its hatches and packages end.
+    /// It ends once, and the loop serves it no more (`ended`).
+    pub(super) fn end(&mut self) {
+        if std::mem::replace(&mut self.ended, true) {
+            return;
+        }
+        if let Some(window) = &self.window {
+            window.set_visible(false);
+        }
+        if let Some(p) = &mut self.presenter {
+            let bound = if self.config.agent {
+                exact_painted::teardown::AGENT_EXIT_BOUND
+            } else {
+                exact_painted::teardown::EXIT_BOUND
+            };
+            exact_painted::teardown::finish(p, bound);
+        }
     }
 
     /// The window hidden by the person's close, the session running on.

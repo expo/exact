@@ -207,7 +207,7 @@ impl<D: DataSource> Presenter<D> {
         );
         self.dirty = true;
         Ok(Some(Hold {
-            primary,
+            primary: Some(primary),
             velocity,
             kind: HeldKind::Arrange(token),
             sampled: None,
@@ -256,15 +256,15 @@ impl<D: DataSource> Presenter<D> {
         let b = s.binding;
         let list = self.host.kernel().node_by_key(b.list).unwrap().id;
         let value = Value {
-            x: held.primary.value.x,
-            y: held.primary.value.y + dy + (self.scroll_of(list).1 - s.scroll) as f64,
+            x: held.motion().value.x,
+            y: held.motion().value.y + dy + (self.scroll_of(list).1 - s.scroll) as f64,
             ..Value::ZERO
         };
         if !finite(value) {
             return Err("Arrange position outside finite layout range".into());
         }
         self.host.arrange_clock(now)?;
-        if !self.host.hold_update(held.primary.token, value, now)? {
+        if !self.host.hold_update(held.motion().token, value, now)? {
             return Ok(false);
         }
         // A hold seek may advance a concurrent Height curve. Refine actual layout

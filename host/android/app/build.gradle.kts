@@ -742,6 +742,29 @@ abstract class CheckCarManifest : DefaultTask() {
     }
 }
 
+abstract class ManifestPermissions : DefaultTask() {
+    @get:InputFile @get:PathSensitive(PathSensitivity.NONE) abstract val merged: RegularFileProperty
+    @get:OutputFile abstract val inventory: RegularFileProperty
+
+    @TaskAction fun writePermissions() {
+        val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        factory.isNamespaceAware = true
+        val root = factory.newDocumentBuilder().parse(merged.get().asFile).documentElement
+        val names = (0 until root.childNodes.length).mapNotNull { root.childNodes.item(it) as? org.w3c.dom.Element }
+            .filter { it.tagName == "uses-permission" }
+            .map { it.getAttributeNS("http://schemas.android.com/apk/res/android", "name") }.toSortedSet()
+        inventory.get().asFile.writeText(groovy.json.JsonOutput.toJson(names))
+    }
+}
+
+androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+    tasks.register<ManifestPermissions>(variant.computeTaskName("write", "ManifestPermissions")) {
+        merged.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST))
+        inventory.set(layout.buildDirectory.file("manifest-permissions.json"))
+    }
+}
+
 val mapPermission = "androidx.car.app.MAP_TEMPLATES" in providers.gradleProperty("permissions").orNull.orEmpty().split(',')
 if (carService != null || mapPermission || maven.isNotEmpty() || providers.gradleProperty("manifestFragment").isPresent) {
     androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->

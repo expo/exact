@@ -19,6 +19,7 @@ functions: call -> result
   formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
   formatDecimal(units, digits) -> string  (cents to "12.34"; literal digits)
   formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD"|digits) -> string  (1,234.5; 26%)
+  formatShortcut(chord) -> string  (⇧⌘O or Ctrl+Shift+O; empty on server)
   formatTime(ms, offset, "short"|"2-digit") -> string  ("2:13 PM"; offset: min east of UTC)
   fragment(entry) -> string
   frame(id) -> Geometry  (action)
@@ -93,6 +94,7 @@ test steps (app.test.contract, docs/contract-grammar.md)
   expect tree has "id" (missing) · expect disabled "id" (enabled) · expect focused "id" · expect state draft == ""
   clock data · clock settle · clock +5000 · reload
   tap "intro" drag 0 -170 over 400 hold 200
+  rotate <orientation>
   back
   presence allow (cancel, fail, lockout, invalidated)
   fail fetch, pass fetch, drop stream "<prefix>"
@@ -101,12 +103,12 @@ test steps (app.test.contract, docs/contract-grammar.md)
   size 390x844, at "/item/7#moves", epoch, time-zone, locale, seed, before data
 
 ops:
-  tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · close · back
+  tree [<target>|--ax] · logs · layout|perf [<target>] · resize <w>x<h> · rotate <orientation> (iOS simulator) · close · back
   state [<name>] [--full]  a state, resource or field, dotted: groceries.0.done; >8 KB: sizes
   tap <target> [contextmenu|hover|drag <dx> <dy>|down|…] · tap up (testId, exact text or label)
-  type <target> <text>|key <Name>   (a select, date or checkbox: its value)
-  clock data|settle|held|+<ms> [real]    replies · transitions · push
-  check [dark|both]  what is wrong · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
+  type <target> <text>|key <Name>  (a select, date or checkbox: its value)
+  clock data|settle|held|+<ms> [real]  replies · transitions · push
+  check [dark|both] · screenshot <png> [over <ms> every <ms>] [window]  window: bars · --device captures display
   screenshot <png> compare <ref> · prefer <feature> <value> · fail|pass fetch <prefix>
 
 how (snippets compile)
@@ -178,13 +180,13 @@ a dated record: The write reads the clock, not a ticked `now`; `performanceNow()
   action log
     let at = time.epochAtZero + performanceNow()
     days = days.concat([formatDate(at, time.utcOffset, "iso")])
-a test, and verify: Empty storage per test. `clock data` lands replies, `clock settle` ends transitions; `reload` keeps storage. `bun exact.mjs verify` tests end screens and relaunches; `verify ios` last; `--shots <dir>` keeps shots. Keep its `contract verify` receipt.
+a test, and verify: Fresh store per test. `reload` keeps it. `clock data` lands replies, `clock settle` ends transitions. `bun exact.mjs verify` checks ends and relaunches. Run `verify ios` last. Keep its `contract verify` receipt and `--shots <dir>`.
   test "a pick survives a relaunch"
     tap "pick"
     clock data
     reload
     expect text "n" == "1"
-composing a screen: One focal point. Use a part for emphasis, `buttonStyle="filled"` for the main action and live `input type="search"` in the `header`. Forms use grouped lists (`grouped-form`). If empty, indent the `button` under `EmptyState`.
+composing a screen: One focal point. Use parts, a filled button and live header search. See `grouped-form`. Nest buttons under `EmptyState`.
   use SummaryCard from "exact:content"
   column gap=16 padding=16
     SummaryCard(label="Streak", value="12", detail="days in a row", progress=none, symbol=none)

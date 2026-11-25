@@ -38,13 +38,18 @@ class ScrollTouchTest {
         val touches = ArrayList<Int>()
         /** How far the reader moved each scroller, by id. */
         val moved = HashMap<Int, Float>()
+        var heightRelease: ((IntArray) -> Unit)? = null
         var logicalY = 0f
         var scale = 1f
         var moveSeq = 0
         val answers = ArrayDeque<(IntArray) -> Unit>()
         @Implementation fun __constructor__(hwbuf: Boolean, fast: Boolean, priority: Int, intent: (String) -> String?) {}
         @Implementation fun under(x: Float, y: Float, done: (IntArray) -> Unit) { answers.addLast(done) }
-        @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, waitMs: Long, at: Long, history: MotionEvent?): Boolean { touches.add(action); return false }
+        @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, waitMs: Long, at: Long, history: MotionEvent?, released: ((IntArray) -> Unit)?): Boolean {
+            touches.add(action)
+            if (action == MotionEvent.ACTION_UP) heightRelease = released
+            return false
+        }
         @Implementation fun finger(action: Int, id: Int, x: Float, y: Float, tool: Int, at: Long, primaryX: Float, primaryY: Float, waitMs: Long) = false
         /** What exact2 was told of the touch itself: down, then lifted. */
         val touching = ArrayList<Boolean>()
@@ -694,6 +699,61 @@ class ScrollTouchTest {
         view.scrolling().told(intArrayOf(1f.toBits(), 2, 2, 0, 0, 0, 0, 0, 0, 500f.toBits()))
         assertNull(pull())
         assertFalse("its animator does not run on, holding the view", r.turning)
+    }
+
+    // Material’s ModalBottomSheet hands a flick at full height to its LazyColumn.
+    // Android supplies the deceleration curve, including after the same touch raised the sheet.
+    @Test fun aSharedListReleaseRunsTheAndroidFling() {
+        down(350f)
+        answer(reply(scroller(1, 80f)).also { it[0] = 2 })
+        move(300f)
+        up(250f)
+        assertFalse(view.scrolling().timerActive)
+        assertFalse(Host.told.contains("end 1 flings"))
+        val release = intArrayOf(1, 1200f.toBits(), 0, 1f.toBits())
+        thread.heightRelease!!.invoke(release)
+        assertTrue(view.scrolling().timerActive)
+        assertTrue(Host.told.contains("end 1 flings"))
+        down(320f); answer(reply(scroller(1, 100f)).also { it[0] = 2 })
+        move(350f)
+        assertFalse(view.scrolling().dragging())
+        assertTrue(Host.told.contains("rest 1"))
+    }
+
+    @Test fun aTapCatchingASharedFlingCannotActivateItsRow() {
+        down(350f); answer(reply(scroller(1, 80f)).also { it[0] = 2 })
+        move(300f); up(250f)
+        thread.heightRelease!!(intArrayOf(1, 1200f.toBits(), 0, 1f.toBits()))
+        thread.touches.clear()
+        down(320f); answer(reply(scroller(1, 100f)).also { it[0] = 2 }); up(320f)
+        assertTrue(thread.touches.contains(MotionEvent.ACTION_CANCEL))
+        assertFalse(thread.touches.contains(MotionEvent.ACTION_UP))
+    }
+
+    @Test fun aScaledListsFlingUsesItsLocalVelocity() {
+        fun throwAt(yScale: Float): Float {
+            down(350f); answer(reply(scroller(1, 80f)).also { it[0] = 2 })
+            move(300f); up(250f)
+            thread.heightRelease!!(intArrayOf(1, 1200f.toBits(), 0, yScale.toBits()))
+            val speed = Host.ends.last()[1]
+            view.scrolling().released()
+            return speed
+        }
+        val initial = throwAt(1f)
+        assertTrue(initial > 0)
+        assertEquals(initial / 2, throwAt(0.5f), 1f)
+    }
+
+    @Test fun aDelayedSheetReleaseLeavesTheNextDragAlone() {
+        down(350f); answer(reply(scroller(1, 80f)).also { it[0] = 2 })
+        move(300f); up(250f)
+        val late = thread.heightRelease!!
+        down(350f); answer(reply(scroller(1, 80f)))
+        move(300f)
+        val before = Host.told.toList()
+        late(intArrayOf(1, 1200f.toBits(), 0, 1f.toBits()))
+        assertEquals(before, Host.told)
+        assertTrue(view.scrolling().dragging())
     }
 
     private fun ExactView.scrolling(): Scrolling =

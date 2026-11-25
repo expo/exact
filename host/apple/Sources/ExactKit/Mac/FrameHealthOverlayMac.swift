@@ -11,6 +11,9 @@ final class FrameHealthOverlayMac: NSView {
     private var position = FrameHealthCardFace.Position(y: 1)
     /// Paused, the card shows what it read at the pause, and goes on measuring
     private var paused = false
+    private var sharing = false
+    /// Where the share picker's Copy writes
+    var pasteboard = NSPasteboard.general
     /// While paused, the request and display the reader was read under; the reader takes no samples while the
     /// collector goes on measuring, so the first read after it covers the paused span
     private var frozen: (rates: FrameHealthCardText.Rates, display: FrameHealthCardText.Display)?
@@ -153,41 +156,34 @@ final class FrameHealthOverlayMac: NSView {
         case .details:
             card.showDetails(!card.state.showsDetails)
             render()
-        case .share: chooseShare()
+        case .share: share()
         case .charts, .table:
             card.state.table = control == .table
             render()
         }
     }
 
-    /// What to share, as a menu under the Share button.
-    private func chooseShare() {
-        let menu = NSMenu()
-        for kind in FrameHealthShare.choices(screen: false) {
-            let item = menu.addItem(withTitle: kind.title(screen: false), action: #selector(shareItem(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = kind
+    /// The system's share picker with `shareText`. A click while the text is being made opens no second picker.
+    private func share() {
+        guard !sharing, health != nil else { return }
+        sharing = true
+        shareText { [weak self] text in
+            guard let self else { return }
+            sharing = false
+            guard card.window != nil else { return }
+            let picker = NSSharingServicePicker(items: [text])
+            picker.delegate = self
+            picker.show(relativeTo: card.shareFrame, of: card, preferredEdge: .minY)
         }
-        _ = menu.popUp(positioning: nil, at: CGPoint(x: card.shareFrame.minX, y: card.shareFrame.maxY + 4), in: card)
     }
 
-    @objc private func shareItem(_ item: NSMenuItem) { (item.representedObject as? FrameHealthShare).map(share) }
-
-    /// The system's share picker with one item: the report an agent reads, the summary, or the image.
-    func share(_ kind: FrameHealthShare) {
+    /// The text Share gives: the summary of what the card shows, held while it is paused, then the current report.
+    func shareText(completion: @escaping (String) -> Void) {
         guard let health else { return }
-        let present = { [weak self] (item: Any) in
-            guard let self, card.window != nil else { return }
-            NSSharingServicePicker(items: [item]).show(relativeTo: card.shareFrame, of: card, preferredEdge: .minY)
-        }
-        switch kind {
-        case .report, .clockReport: FrameHealthReport.prepare(health: health.reportSource, session: session) { present(String(decoding: $0, as: UTF8.self)) }
-        case .summary: present(FrameHealthCardText.summary(reader: reader, rates: rates, display: display, paused: paused,
-            health: health).text)
-        case .image:
-            let picture = FrameHealthCardText.picture(reader: reader, chart: card.chart, rates: rates, display: display, paused: paused,
-                health: health, palette: card.palette)
-            if let image = picture.flatMap(NSImage.init(data:)) { present(image) }
+        let summary = FrameHealthCardText.summary(reader: reader, rates: rates, display: display, health: health)
+        let status = card.state.status
+        FrameHealthReport.prepare([(health.reportSource, nil)], session: session) {
+            completion(FrameHealthCardText.shared(summary: summary, status: status, reports: $0))
         }
     }
 
@@ -657,6 +653,21 @@ extension ExactView {
         item.title = session.frameHealth.unavailableExplanation == nil ? "Frame Health" : "Frame Health Disabled"
         item.state = session.frameHealth.hudVisible ? .on : .off
         return session.frameHealth.macContainer != nil
+    }
+}
+
+extension FrameHealthOverlayMac: NSSharingServicePickerDelegate {
+    /// Copy first: for text the picker offers mail, messages and notes but no Copy, and an agent's session takes the text
+    /// by pasting.
+    func sharingServicePicker(_: NSSharingServicePicker, sharingServicesForItems items: [Any],
+                              proposedSharingServices proposed: [NSSharingService]) -> [NSSharingService] {
+        guard let text = items.first as? String else { return proposed }
+        let symbol = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil) ?? NSImage()
+        let copy = NSSharingService(title: "Copy", image: symbol, alternateImage: nil) { [pasteboard] in
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+        }
+        return [copy] + proposed
     }
 }
 #endif

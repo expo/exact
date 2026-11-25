@@ -87,15 +87,26 @@ impl<D: DataSource> Presenter<D> {
         let held = self.modifiers();
         let kernel = self.host.kernel();
         let focus = self.focus.and_then(|id| kernel.node(id));
-        let editing = focus.is_some_and(|n| {
-            n.node_type == NodeType::TextInput
-                || matches!(
-                    n.props.str(PropId::AccessibilityRole),
-                    Some("textbox" | "searchbox" | "combobox")
-                )
-        });
-        if editing && name != "Escape" && !held.meta && !held.ctrl {
-            return false;
+        if name != "Escape" && !held.meta && !held.ctrl {
+            let editing = std::iter::successors(focus, |n| n.parent.and_then(|id| kernel.node(id)))
+                .any(|n| {
+                    let field = match n.node_type {
+                        NodeType::TextInput => true,
+                        NodeType::Control => !matches!(
+                            n.props.str(PropId::Type),
+                            Some("button" | "select" | "progress")
+                        ),
+                        _ => false,
+                    };
+                    (field && n.props.semantic_element().is_none())
+                        || matches!(
+                            n.props.str(PropId::AccessibilityRole),
+                            Some("textbox" | "searchbox" | "combobox")
+                        )
+                });
+            if editing {
+                return false;
+            }
         }
         let declared = self.shortcut_buttons(name);
         // Shown: a box, not hidden or inert by its route or an ancestor.
@@ -129,9 +140,9 @@ impl<D: DataSource> Presenter<D> {
             && matches!(name, "Enter" | " ")
             && self.focus.is_some_and(|id| {
                 kernel.node(id).is_some_and(|n| {
-                    exact_kernel::ControlKind::of(n.node_type, n.props)
-                        == Some(exact_kernel::ControlKind::Button)
-                        || n.props.str(PropId::AccessibilityRole) == Some("button")
+                    n.is_button_element()
+                        || (n.props.link().is_some()
+                            && (n.node_type == NodeType::Pressable || n.is_inline_run()))
                 }) || self
                     .host
                     .runner()
@@ -159,9 +170,7 @@ impl<D: DataSource> Presenter<D> {
                                 .split_whitespace()
                                 .any(|c| chord_matches(c, name, held))
                         })
-                        && (exact_kernel::ControlKind::of(n.node_type, n.props)
-                            == Some(exact_kernel::ControlKind::Button)
-                            || n.props.str(PropId::AccessibilityRole) == Some("button"))
+                        && n.is_button_element()
                 })
             })
             .filter(|&id| !(activates && self.focus != Some(id)))

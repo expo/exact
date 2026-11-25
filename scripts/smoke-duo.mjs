@@ -25,7 +25,8 @@
 // §9): the suite starts it upright, and the rotate, resize and web legs turn it.
 // `--only insets,keyboard-bar,lab,arrangement,reading,navigation,navigation-gestures,host-navigation,host,rotate,resize,web` runs the named legs; the keyboard checks
 // run only when a probe shows a software keyboard on this simulator.
-import { hasSimulatorHinge, hingeHelper } from './duo/hinge.mjs';
+import { runTests } from './agent-test.mjs';
+import { hasSimulatorHinge, hingeHelper, simulatorTurns } from './duo/hinge.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -74,7 +75,7 @@ const STACKED = [[0, 0, 669, 455.5], [0, 495.5, 669, 455.5]];
 // and what UIKit reports at each on either panel (the scene's interface orientation, its screen and
 // safe area, top right bottom left; measured against a plain UIKit app, 2026-10-15, and in duo-lab,
 // 2026-10-16). An iPhone app does not turn upside down: on the cover panel that turn keeps the last.
-const TURNS = [['landscape-right', 'landscapeRight'], ['pud', 'portraitUpsideDown'], ['landscape-left', 'landscapeLeft'], ['portrait', 'portrait']];
+const TURNS = simulatorTurns.map(({ helper, device }) => [helper, device]);
 const TURNED = {
   inner: {
     'landscape-right': ['portraitUpsideDown', 669, 951, [82, 0, 34, 0]], pud: ['landscapeRight', 951, 669, [0, 84, 34, 0]],
@@ -475,6 +476,7 @@ async function suite({ open: openSession, check: record }, reset) {
     const c = spawnSync('cargo', ['run', '-q', '--profile', HOST_DEV, '-p', 'contract', '--', 'build', source, '-o', plan], { cwd: ROOT, encoding: 'utf8' });
     if (check(c.status === 0, `the ${name} fixture did not compile: ${c.stderr}`)) plans[name] = plan;
   };
+  if (leg('rotate')) compile('closed-duo', resolve(ROOT, 'scripts/fixtures/closed-duo.contract'));
   for (const name of [probe ? 'insets' : null, leg('keyboard-bar') ? 'keyboard-bar' : null].filter(Boolean)) compile(name, resolve(ROOT, `contract/corpus/${name}.contract`));
   if (leg('navigation') || leg('navigation-gestures') || leg('host-navigation') || leg('secondary-navigation')) {
     compile('pushed-title', resolve(ROOT, 'scripts/fixtures/pushed-title.contract'));
@@ -687,6 +689,13 @@ async function suite({ open: openSession, check: record }, reset) {
           await retained(tag);
           const a = box(l, 'panes-workspace-pane'), b = box(l, 'panes-activity-pane');
           check(a?.w > 0 && a?.h > 0, `${tag}: the primary pane has space`);
+          // UIKit's panes lie under the side bar, their scroll indicators at the display's edge, and their content ends at the bar
+          if (mode !== 'css') {
+            const edge = Math.max(...[a, b].filter(pane => pane?.w > 0).map(pane => pane.x + pane.w));
+            check(Math.abs(edge - l.viewport.w) <= 1, `${tag}: the panes end at the display's edge: ${edge} of ${l.viewport.w}`);
+            const row = box(l, b?.w > 0 && b.x + b.w > l.viewport.w - 1 ? 'panes-activity-row-1' : 'panes-workspace-row-1');
+            check(row?.x + row?.w <= l.viewport.w - l.env['safe-area-inset-right'] + 1, `${tag}: the content at that edge ends at the bar: ${JSON.stringify(row)}`);
+          }
           // Detect scroll resets while allowing native bar insets to change with the pose
           for (const [i, pane] of [a, b].entries()) {
             if (pane?.w > 0 && pane?.h > 0) { check(pane.sy > 0, `${tag}: pane ${i + 1} stays scrolled`); }
@@ -1288,6 +1297,8 @@ async function suite({ open: openSession, check: record }, reset) {
     await s.tap('tab-fold'); await settle(s);
   };
   if (leg('rotate')) {
+    const drive = await runTests({ host: 'ios', app: 'duo-lab', plan: plans['closed-duo'], file: resolve(ROOT, 'scripts/fixtures/closed-duo.test.contract') });
+    check(drive.passed === 1, `closed Duo authored rotation: ${drive.results.flatMap(t => t.failures).join(', ')}`);
     // SpringBoard's lines about its orientation deferrals and the device's pose, which a turn after closing waits on
     const sb = [];
     const stream = logStream(udid, 'process == "SpringBoard" AND (category == "DeviceOrientationUpdateDeferral" OR category == "DevicePose")', (line) => {

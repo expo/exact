@@ -19,8 +19,7 @@ impl Length {
         }
     }
     fn parse(s: &str) -> Option<Self> {
-        let mut input = cssparser::ParserInput::new(s);
-        let mut parser = cssparser::Parser::new(&mut input);
+        let mut parser = cssparser::Parser::new(s);
         match parser.next().ok()? {
             cssparser::Token::Number { value, .. } if *value == 0. => {}
             cssparser::Token::Dimension { unit, .. } if unit.eq_ignore_ascii_case("px") => {}

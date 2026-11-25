@@ -1,15 +1,15 @@
 //! Computes size using styles and measure functions
 
-#[cfg(feature = "content_size")]
-use crate::geometry::Rect;
 use crate::geometry::Size;
-use crate::style::{AvailableSpace, Overflow, Position};
+#[cfg(feature = "content_size")]
+use crate::geometry::{Point, Rect};
+use crate::style::{AvailableSpace, CalcHandle, Overflow};
 use crate::tree::{Baselines, CollapsibleMarginSet, RequestedAxis, RunMode};
 use crate::tree::{LayoutInput, LayoutOutput, SizingMode};
+use crate::util::MaybeMath;
 use crate::util::debug::debug_log;
 use crate::compute::ratio::{container_sizes_through_ratio, floors_height, Ratio};
 use crate::util::sys::{f32_max, f32_min};
-use crate::util::MaybeMath;
 use crate::util::{MaybeResolve, ResolveOrZero};
 use crate::{BoxSizing, CoreStyle};
 use core::unreachable;
@@ -21,7 +21,7 @@ use core::unreachable;
 pub(crate) fn height_bounds(
     inputs: &LayoutInput,
     style: &impl CoreStyle,
-    resolve_calc_value: impl Fn(*const (), f32) -> f32,
+    resolve_calc_value: impl Fn(CalcHandle, f32) -> f32,
 ) -> (Option<f32>, Option<f32>) {
     let parent_size = inputs.parent_size;
     let padding = style.padding().resolve_or_zero(parent_size.width, &resolve_calc_value);
@@ -34,10 +34,13 @@ pub(crate) fn height_bounds(
 }
 
 /// Compute the size of a leaf node (node with no children)
+///
+/// A definite `inputs.available_space` is treated as the space available to the node's border box:
+/// the caller is expected to have already subtracted the node's margins from it.
 pub fn compute_leaf_layout<MeasureFunction>(
     inputs: LayoutInput,
     style: &impl CoreStyle,
-    resolve_calc_value: impl Fn(*const (), f32) -> f32,
+    resolve_calc_value: impl Fn(CalcHandle, f32) -> f32,
     mut measure_function: MeasureFunction,
 ) -> LayoutOutput
 where
@@ -118,7 +121,7 @@ where
     let has_styles_preventing_being_collapsed_through = !style.is_block()
         || style.overflow().x.is_scroll_container()
         || style.overflow().y.is_scroll_container()
-        || style.position() == Position::Absolute
+        || style.position().is_out_of_flow()
         || style.contain().establishes_independent_formatting_context()
         || padding.top > 0.0
         || padding.bottom > 0.0
@@ -141,7 +144,7 @@ where
             return LayoutOutput {
                 size,
                 #[cfg(feature = "content_size")]
-                scrollable_overflow_rect: Rect::ZERO,
+                scrollable_overflow_rect: crate::tree::ScrollableOverflow::ZERO,
                 baselines: Baselines::NONE,
                 top_margin: CollapsibleMarginSet::ZERO,
                 bottom_margin: CollapsibleMarginSet::ZERO,
@@ -221,18 +224,28 @@ where
         let is_rtl = style.direction().is_rtl();
         let start_padding = if is_rtl { padding.right } else { padding.left };
         let end_padding = if is_rtl { padding.left } else { padding.right };
-        // EXACT PATCH 5: replaced pixels do not enlarge scrollable overflow.
-        // EXACT PATCH 82: nor does a form control's natural size, which its
-        // measure answers even when its box is narrower.
-        if style.is_compressible_replaced() || style.is_form_control() {
+        let rect = if style.is_compressible_replaced() || style.is_form_control() {
+            // EXACT PATCH 5: replaced pixels do not enlarge scrollable overflow.
+            // EXACT PATCH 82: nor does a form control's natural size, which its
+            // measure answers even when its box is narrower.
             let padding_box = size - border.sum_axes();
             Rect { left: 0.0, top: 0.0, right: padding_box.width, bottom: padding_box.height }
-        } else { Rect {
-            left: 0.0,
-            right: start_padding + measured_size.width + if is_scroll_container { end_padding } else { 0.0 },
+        } else {
+            let client_width = (size.width - border.horizontal_axis_sum() - scrollbar_gutter.x).max(0.0);
+            let content_end = start_padding + measured_size.width + if is_scroll_container { end_padding } else { 0.0 };
+            Rect {
+                left: if is_rtl { (client_width - content_end).min(0.0) } else { 0.0 },
+                right: if is_rtl { client_width } else { content_end },
             top: 0.0,
             bottom: padding.top + measured_size.height + if is_scroll_container { padding.bottom } else { 0.0 },
-        } }
+            }
+        };
+        super::common::scrollable_overflow::finalize_scrollable_overflow(
+            rect,
+            size - border.sum_axes() - Size { width: scrollbar_gutter.x, height: scrollbar_gutter.y },
+            Point { x: is_rtl, y: false },
+            is_scroll_container,
+        )
     };
 
     LayoutOutput {

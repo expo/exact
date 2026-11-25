@@ -54,7 +54,14 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// touch then presses nothing when it lifts. `at_ns`: when it happened,
     /// the `MotionEvent`'s time (`CLOCK_MONOTONIC`, `SystemClock`'s
     /// uptime), or -1 for one the reader made itself.
-    pub fn touch(&mut self, action: i32, x: f32, y: f32, tool: i32, at_ns: i64) {
+    pub fn touch(
+        &mut self,
+        action: i32,
+        x: f32,
+        y: f32,
+        tool: i32,
+        at_ns: i64,
+    ) -> Option<[i32; 4]> {
         let _s = Section::begin(c"exact touch");
         self.scroll_hold.touch(action);
         self.p.set_pointer_kind(match tool {
@@ -86,6 +93,17 @@ impl<D: DataSource + Default> CanvasHost<D> {
             }
         });
         self.touched(action, x, y, now, r);
+        if action == 1 {
+            if let Some((id, velocity, [kx, ky])) = self.p.take_height_scroll_release() {
+                return Some([
+                    id as i32,
+                    (velocity * self.scale).to_bits() as i32,
+                    kx.to_bits() as i32,
+                    ky.to_bits() as i32,
+                ]);
+            }
+        }
+        None
     }
 
     /// Whether a touch is down on the reader's view, said where Android
@@ -136,7 +154,9 @@ impl<D: DataSource + Default> CanvasHost<D> {
                 })
         };
         match result {
-            Ok(false) if action == 0 => self.touch(3, x, y, 0, -1),
+            Ok(false) if action == 0 => {
+                self.touch(3, x, y, 0, -1);
+            }
             Err(e) => self.p.host_mut().log(e),
             _ => {}
         }

@@ -58,6 +58,11 @@ impl Targets {
         self.owners.get(&slot).map(|r| &r.seen)
     }
 
+    /// The highest generation the session's reports gave each target.
+    pub(crate) fn session_seen(&self) -> &crate::id::IdMap<u64, u64> {
+        &self.session.seen
+    }
+
     /// What `slot` reads raw insets from, where it reads any.
     pub(crate) fn scope(&self, arena: &NodeArena, slot: u32) -> Option<Scope> {
         if !arena.readers.targets.contains_key(&slot) {

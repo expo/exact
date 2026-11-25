@@ -909,7 +909,10 @@ fn an_aligned_box_moves_without_what_its_containing_block_holds_outside_it() {
 #[test]
 fn an_extended_boxs_content_counts_from_its_start_under_rtl() {
     // Under `rtl`, 3 takes its start, the right band's 44 points; 4, 100
-    // wide at its start, ends its content 100 from the extended box's start
+    // wide at its start, sits at physical x = 290..390 inside the 390-wide
+    // extended box. A non-scroll container reports physical overflow
+    // (right = 390); an RTL scroll container whose child overflows left
+    // counts scrollWidth from its extended start edge.
     let mut ops = create(3..=4);
     ops.push(style(
         3,
@@ -925,7 +928,27 @@ fn an_extended_boxs_content_counts_from_its_start_under_rtl() {
     let k = laid([0.0, 44.0, 0.0, 0.0], &[(StyleId::Direction, "rtl")], ops);
     assert_eq!(frame(&k, 3), (0.0, 0.0, 390.0, 10.0));
     assert_eq!(frame(&k, 4).0, 290.0);
-    assert_eq!(k.arena.content(slot(&k, 3)).0, 100.0);
+    assert_eq!(k.arena.content(slot(&k, 3)).0, 390.0);
+
+    let mut ops = create(3..=4);
+    ops.push(style(
+        3,
+        vec![],
+        &[
+            (StyleId::SafeAreaIgnore, "container start"),
+            (StyleId::OverflowX, "scroll"),
+        ],
+    ));
+    ops.push(style(
+        4,
+        vec![],
+        &[(StyleId::Width, "500"), (StyleId::Height, "10")],
+    ));
+    ops.extend([children(1, &[2]), children(2, &[3]), children(3, &[4])]);
+    let k = laid([0.0, 44.0, 0.0, 0.0], &[(StyleId::Direction, "rtl")], ops);
+    assert_eq!(frame(&k, 3), (0.0, 0.0, 390.0, 10.0));
+    assert_eq!(frame(&k, 4).0, -110.0);
+    assert_eq!(k.arena.content(slot(&k, 3)).0, 500.0);
 }
 
 #[test]

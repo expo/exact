@@ -15,7 +15,7 @@ use crate::compute::compute_grid_layout;
 #[cfg(feature = "detailed_layout_info")]
 use crate::compute::grid::DetailedGridInfo;
 use crate::geometry::Point;
-use crate::style::Style;
+use crate::style::{CalcHandle, Style};
 use crate::sys::DefaultCheapStr;
 use crate::tree::{
     Layout, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree, NodeId, StaticPosition,
@@ -55,7 +55,7 @@ pub(crate) trait GridTree {
     fn get_child_id(&self, node: NodeId, index: usize) -> NodeId;
     /// A container's or an item's style, read as the view reads it.
     fn style(&self, node: NodeId) -> &Style;
-    fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32;
+    fn resolve_calc_value(&self, val: CalcHandle, basis: f32) -> f32;
     fn set_unrounded_layout(&mut self, node: NodeId, layout: &Layout);
     fn invalidate_final_layout(&mut self, node: NodeId);
     fn compute_child_layout(&mut self, node: NodeId, inputs: LayoutInput) -> LayoutOutput;
@@ -102,7 +102,7 @@ impl LayoutPartialTree for GridView<'_> {
         self.0.style(node)
     }
 
-    fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
+    fn resolve_calc_value(&self, val: CalcHandle, basis: f32) -> f32 {
         self.0.resolve_calc_value(val, basis)
     }
 
@@ -183,7 +183,7 @@ where
         self.get_grid_container_style(node)
     }
 
-    fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
+    fn resolve_calc_value(&self, val: CalcHandle, basis: f32) -> f32 {
         LayoutPartialTree::resolve_calc_value(self, val, basis)
     }
 

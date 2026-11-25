@@ -58,7 +58,9 @@ impl<D: DataSource> Host<D> {
         let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
         self.native_retire_removed_owner(&mut batch);
         self.native_note_receipts(receipts);
-        self.route_overflow.dirty |= !receipts.is_empty();
+        // A commit that changed no node cannot move a route's overflow; marking
+        // it would wake a reply pump after every firing of an idle timer.
+        self.route_overflow.dirty |= receipts.iter().any(|t| !unchanged(&t.receipt));
         let bulk_handlers = (receipts
             .iter()
             .map(|t| t.receipt.created.len())

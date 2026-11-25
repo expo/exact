@@ -146,10 +146,10 @@ fn defaults_are_the_css_defaults() {
     assert_eq!(s.flex_direction, taffy::style::FlexDirection::Row);
     assert_eq!(s.flex_shrink, 1.0);
     // `normal`, which each layout mode resolves (flex: stretch).
-    assert_eq!(s.align_items, None);
-    assert_eq!(s.justify_content, None);
-    assert_eq!(s.align_content, None);
-    assert_eq!(s.justify_items, None);
+    assert_eq!(s.align_items, taffy::style::AlignItems::NORMAL);
+    assert_eq!(s.justify_content, taffy::style::JustifyContent::NORMAL);
+    assert_eq!(s.align_content, taffy::style::AlignContent::NORMAL);
+    assert_eq!(s.justify_items, taffy::style::AlignItems::NORMAL);
     assert_eq!(s.position, taffy::style::Position::Static);
     assert_eq!(s.overflow.y, taffy::style::Overflow::Visible);
 }

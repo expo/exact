@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleRunBinary, appleArtifacts, assertAppleIdentity } from '../host/apple/build.mjs';
+import { noWindowsHost } from '../host/windows/build.mjs';
 import { phone, phoneBridge, phoneStartupFailure, phoneLaunch, crashReports, displayPictureReply } from '../host/apple/devices.mjs';
 import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from './app.mjs';
 import { linuxRebuild, macSandboxed, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
@@ -109,6 +110,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const macPlan = macBuild && !plan && !Object.hasOwn(extra, 'EXACT_PLAN') && !sample ? planOverride('macos', a, macBuild) : null;
   if (macPlan) plan = macPlan.plan; else if (macBuild) refuseBuild('macos', macBuild, a, { sample });
   const windowsRebuild = () => ownVerb(a, 'windows') ?? `bun host/windows/build.mjs ${a.crate('windows')}`;
+  if (windows && !process.env.EXACT_WINDOWS_BIN && !ownVerb(a, 'windows') && noWindowsHost(a)) throw new Error(noWindowsHost(a));
   const rebuild = device ? 'bun host/apple/build.mjs --device' : windows ? windowsRebuild() : android ? androidRebuild(a, reader) : linux ? linuxRebuild(a) : null;
   // `missingBuild`: every test of a run would fail on it alike, so a test run stops at the first (LLP 1156.006.000 D8).
   if (!existsSync(device ? deviceBundle : bin)) throw Object.assign(new Error(rebuild ? `run ${rebuild} first` : `EXACT_MAC_BIN names no file: ${bin}`), { missingBuild: !!rebuild });

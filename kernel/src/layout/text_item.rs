@@ -140,7 +140,7 @@ pub(crate) fn from_layout(
         style.overflow_y,
         crate::Overflow::Hidden | crate::Overflow::Scroll | crate::Overflow::Auto
     );
-    let lines = layout.scrollable_overflow_rect.bottom
+    let lines = layout.scrollable_overflow_rect.bottom()
         - layout.padding.top
         - if scrolls { layout.padding.bottom } else { 0.0 };
     offset(&style, layout.size, layout.padding + layout.border, lines)

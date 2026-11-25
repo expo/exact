@@ -127,15 +127,14 @@
 //! ```
 //!
 use super::{Layout, LayoutInput, LayoutOutput, NodeId, RequestedAxis, RunMode, SizingMode, StaticPosition};
-#[cfg(feature = "detailed_layout_info")]
+use crate::CheapCloneStr;
 use crate::debug::debug_log;
 use crate::geometry::{AbsoluteAxis, Line, Point, Size};
-use crate::style::{AvailableSpace, CoreStyle};
+use crate::style::{AvailableSpace, CalcHandle, CoreStyle};
 #[cfg(feature = "flexbox")]
 use crate::style::{FlexboxContainerStyle, FlexboxItemStyle};
 #[cfg(feature = "grid")]
 use crate::style::{GridContainerStyle, GridItemStyle};
-use crate::CheapCloneStr;
 #[cfg(feature = "block_layout")]
 use crate::{BlockContainerStyle, BlockContext, BlockItemStyle};
 
@@ -183,11 +182,15 @@ pub trait LayoutPartialTree: TraversePartialTree {
     type CustomIdent: CheapCloneStr;
 
     /// Get core style
+    ///
+    /// Only called for the node being laid out, never for its children (those go through the
+    /// `get_*_child_style` methods), so it may be expressed in the node's own axes while child
+    /// styles are expressed in the axes of the node laying them out.
     fn get_core_container_style(&self, node_id: NodeId) -> Self::CoreContainerStyle<'_>;
 
-    /// Resolve calc value
+    /// Resolve a `calc()` value (identified by the [`CalcHandle`] it was created with) against a percentage basis
     #[inline(always)]
-    fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
+    fn resolve_calc_value(&self, val: CalcHandle, basis: f32) -> f32 {
         let _ = val;
         let _ = basis;
         0.0
@@ -253,7 +256,7 @@ pub trait LayoutPartialTree: TraversePartialTree {
 /// The `Cache` struct implements a per-node cache that is compatible with this trait.
 pub trait CacheTree {
     /// Try to retrieve a cached result from the cache
-    fn cache_get(&mut self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput>;
+    fn cache_get(&self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput>;
 
     /// Store a computed size in the cache
     fn cache_store(&mut self, node_id: NodeId, input: &LayoutInput, layout_output: LayoutOutput);
@@ -299,6 +302,8 @@ pub trait LayoutFlexboxContainer: LayoutPartialTree {
     fn get_flexbox_container_style(&self, node_id: NodeId) -> Self::FlexboxContainerStyle<'_>;
 
     /// Get the child's styles
+    ///
+    /// Interpreted in the container's axes (see [`LayoutPartialTree::get_core_container_style`]).
     fn get_flexbox_child_style(&self, child_node_id: NodeId) -> Self::FlexboxItemStyle<'_>;
 }
 
@@ -319,6 +324,8 @@ pub trait LayoutGridContainer: LayoutPartialTree {
     fn get_grid_container_style(&self, node_id: NodeId) -> Self::GridContainerStyle<'_>;
 
     /// Get the child's styles
+    ///
+    /// Interpreted in the container's axes (see [`LayoutPartialTree::get_core_container_style`]).
     fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_>;
 
     /// Set the node's detailed grid information
@@ -347,6 +354,8 @@ pub trait LayoutBlockContainer: LayoutPartialTree {
     fn get_block_container_style(&self, node_id: NodeId) -> Self::BlockContainerStyle<'_>;
 
     /// Get the child's styles
+    ///
+    /// Interpreted in the container's axes (see [`LayoutPartialTree::get_core_container_style`]).
     fn get_block_child_style(&self, child_node_id: NodeId) -> Self::BlockItemStyle<'_>;
 
     /// Compute the specified node's size or full layout given the specified constraints
@@ -454,14 +463,14 @@ pub(crate) trait LayoutPartialTreeExt: LayoutPartialTree {
     /// Alias to `resolve_calc_value` with a shorter function name
     #[inline(always)]
     #[cfg(feature = "calc")]
-    fn calc(&self, val: *const (), basis: f32) -> f32 {
+    fn calc(&self, val: CalcHandle, basis: f32) -> f32 {
         self.resolve_calc_value(val, basis)
     }
 
     /// Alias to `resolve_calc_value` with a shorter function name
     #[inline(always)]
     #[cfg(not(feature = "calc"))]
-    fn calc(&self, _val: *const (), _basis: f32) -> f32 {
+    fn calc(&self, _val: CalcHandle, _basis: f32) -> f32 {
         0.0
     }
 }

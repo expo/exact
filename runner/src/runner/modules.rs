@@ -1394,13 +1394,6 @@ impl<D: DataSource> Runner<D> {
         Ok(value)
     }
 
-    fn retire_hold(&mut self, ticket: u64) {
-        if let Some(at) = self.device_holds.iter().position(|h| h.ticket == ticket) {
-            let hold = self.device_holds.remove(at);
-            self.log(format!("device {} {ticket} retired", hold.capability));
-        }
-    }
-
     /// Held module requests whose request is gone (superseded, its reader
     /// released, a refused commit): retired with their tickets (§6).
     fn retire_modules_linked(&mut self) {

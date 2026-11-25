@@ -21,8 +21,12 @@ final class ArrangementPaneController: UIViewController {
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // Tell the pane's block in this layout, as a route's is, so that its content moves in the animation UIKit lays it out in
-        Presenter.inPaneLayout { node.presenter?.owners.publish() }
+        // Tell the pane's inset and block in this layout, as a route's block is, so that its content moves in the animation
+        // UIKit lays it out in
+        Presenter.inPaneLayout { [presenter = node.presenter] in
+            if #available(iOS 27.1, *) { presenter?.arrangements.reportInsets() }
+            presenter?.owners.publish()
+        }
         changed()
     }
     override func viewSafeAreaInsetsDidChange() {
@@ -187,6 +191,8 @@ package final class ArrangementHost {
     /// The panes UIKit hid at the last pass, after its layout, which the covers read: a report can find UIKit's views
     /// partway through a change
     package private(set) var hidden: Set<UInt32> = []
+    /// Each pane's own safe area, which its content reads (LLP 1123 D9), as UIKit gives its controller's view
+    private(set) var insets = LocalInsetsReport()
     /// Those the kernel is told are covered whole
     package var covered: Set<UInt32> { hidden.filter { presenter.views[$0] != nil && !presenter.menus.ownsCover($0) } }
     private var reaches: [UInt32: BottomReach] = [:]
@@ -336,10 +342,22 @@ package final class ArrangementHost {
             if !entries.isEmpty || !insetScrollers.isEmpty {
                 syncInsets()
                 refreshContentSizes()
+                reportInsets()
                 presenter.owners.publish()
             }
             presenter.navigation.coversChanged()
         }
+    }
+
+    /// Tell each pane's own safe area where it changed. One out of a window keeps its last.
+    func reportInsets() {
+        var wanted: [UInt32?: [CGFloat]] = [:]
+        for holder in entries.values.flatMap(\.holders) {
+            let id = holder.node.id, safe = holder.view.safeAreaInsets
+            wanted[id] = holder.view.window == nil ? insets.wanted[id] : [safe.top, safe.right, safe.bottom, safe.left].map { max(0, $0) }
+        }
+        insets.wanted = wanted
+        presenter.session?.localInsets(insets.take { presenter.views[$0] != nil })
     }
 
     /// Panes touching a route edge own its inset; interior panes must already clear that edge.
@@ -525,7 +543,7 @@ package final class ArrangementHost {
 
     func reset() {
         for entry in entries.values { retire(entry) }
-        entries = [:]; requests = [:]; children = [:]; hidden = []
+        entries = [:]; requests = [:]; children = [:]; hidden = []; insets = LocalInsetsReport()
         syncInsets()
     }
 }

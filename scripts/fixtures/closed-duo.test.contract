@@ -1,0 +1,11 @@
+test "the closed Duo lays out the tray in both landscape directions" on ios
+  fold 0
+  rotate landscapeLeft
+  expect text "direction" == "landscape-secondary"
+  expect text "tray" == "one row"
+  expect layout "first" y == layout "second" y
+  rotate landscapeRight
+  expect text "direction" == "landscape-primary"
+  rotate portrait
+  expect text "direction" == "portrait-primary"
+  expect text "tray" == "two rows"

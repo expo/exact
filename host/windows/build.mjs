@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bakeTarget, buildBake, copyShaders, developmentBuildEnv, resolveApp, windowsFile } from '../../scripts/app.mjs';
+import { namesPlatform } from '../../scripts/app-shells.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { unclaimedNote } from '../../scripts/links.mjs';
 import { pickIcon, readPng, WINDOWS_ICON_SIZES, windowsIconRes } from '../../scripts/app-icons.mjs';
@@ -19,6 +20,13 @@ import { syncStaticTree } from '../web/serve.mjs';
 
 const quote = (s) => `'${String(s).replaceAll("'", "''")}'`;
 const powershell = (command) => spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', windowsHide: true });
+
+/** Why `app` has no Windows build, or null. A game builds from the SDK's shells; any other app names its hosts in
+ * app.json, and an `exact new` app's `bun exact.mjs windows` names this one before it builds. */
+export function noWindowsHost(app) {
+  if (app.manifest.game || namesPlatform(app.manifest, 'windows')) return null;
+  return `${app.name}'s app.json names no windows host, so it has no Windows build (apps/shelf/app.json names one)`;
+}
 
 /** Locate the shader compiler before Cargo can bake empty DXBC into an Ink binary. */
 export function prepareShaders(manifest, env = process.env) {
@@ -154,6 +162,8 @@ if (import.meta.main) {
   const outAt = args.indexOf('--out');
   if (outAt >= 0 && !args[outAt + 1]) throw new Error('--out needs a directory');
   const app = resolveApp(args.find((arg, i) => !arg.startsWith('--') && (outAt < 0 || i !== outAt + 1)));
+  const unnamed = noWindowsHost(app);
+  if (unnamed) { console.error(unnamed); process.exit(1); }
   // Every build packages into one directory, with one set of libraries and one compat.json.
   if (app.manifest.variant) throw new Error(`variant ${app.manifest.variant.name}: Windows takes no variant (LLP 1030.008 §6); build without --variant or EXACT_VARIANT`);
   prepareShaders(app.manifest);

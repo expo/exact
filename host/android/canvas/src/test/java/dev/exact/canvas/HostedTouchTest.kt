@@ -73,10 +73,11 @@ class HostedTouchTest {
                 beforeReply?.also { beforeReply = null }?.invoke()
                 return answer
             }
-            @Implementation @JvmStatic fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long) {
+            @Implementation @JvmStatic fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long): IntArray? {
                 touches.add(action)
                 samples.add(y to at)
                 if (action == 4 && takesLongPress) reply[3 + 11 * reply[1] + 7]++
+                return null
             }
             @Implementation @JvmStatic fun finger(action: Int, id: Int, x: Float, y: Float, tool: Int, at: Long, primaryX: Float, primaryY: Float) {
                 fingers.add(action to id); fingerPoints.add(x to y)

@@ -44,6 +44,17 @@ final class ArrangementSizingIOSTests: XCTestCase {
         return (session, controller, pane)
     }
 
+    /// Put the fixture in `scene`'s window, its panes side by side. UIKit hides one in a closed iPhone Duo's scene.
+    @available(iOS 27.1, *)
+    private func showAcross(_ controller: UIArrangementViewController, in scene: UIWindowScene) throws {
+        window?.windowScene = scene
+        controller.updateArrangement(across(.automatic))
+        window?.layoutIfNeeded(); controller.view.layoutIfNeeded()
+        guard controller.viewController(for: .secondary)?.viewIfLoaded?.window != nil else {
+            throw XCTSkip("this scene cannot show two horizontal panes; an open iPhone Duo's can")
+        }
+    }
+
     private func node(_ name: String) throws -> NodeView {
         try XCTUnwrap(session?.presenter.views.values.first { $0.props["testId"] == name }, name)
     }
@@ -385,8 +396,8 @@ final class ArrangementSizingIOSTests: XCTestCase {
         guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
         guard let scene = hostedWindowScene() else { throw missing("scene", "a frame that shows the pane needs a scene") }
         let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
-        window?.windowScene = scene
         let primary = try node("primary")
+        try showAcross(controller, in: scene)
         controller.updateArrangement(across(.absolute(300)))
         waitFor("a frame shows the pane's content 300 points wide", cap: 5, facts: { "pane \(pane.bounds), content \(primary.frame)" }) {
             self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded()
@@ -407,8 +418,8 @@ final class ArrangementSizingIOSTests: XCTestCase {
         guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
         guard let scene = hostedWindowScene() else { throw missing("scene", "a frame that shows the pane needs a scene") }
         let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
-        window?.windowScene = scene
         let primary = try node("primary"), message = try node("message")
+        try showAcross(controller, in: scene)
         controller.updateArrangement(across(.absolute(300)))
         waitFor("a frame shows the pane's content 300 points wide", cap: 5, facts: { "pane \(pane.bounds), content \(primary.frame)" }) {
             self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded()

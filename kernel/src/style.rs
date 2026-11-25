@@ -1004,18 +1004,18 @@ fn flex_wrap(v: FlexWrap) -> taffy::style::FlexWrap {
     }
 }
 
-// CSS `normal` (the initial value of all four rows below) lowers to `None`,
-// which is Taffy's `normal`: each algorithm resolves it for its display type
-// as CSS Box Alignment §5.1/§6.1 does. Flex: `justify-content` is
-// `flex-start`, `align-content` and `align-items` are `stretch`. Grid: auto
-// tracks stretch into the free space on both axes, and an item stretches
-// unless it has a definite size or an aspect ratio on that axis (then it
-// starts). Block: `align-content` is `start` without establishing an
-// independent formatting context, which every other value does.
+// CSS `normal` (the initial value of all four rows below) lowers to `NORMAL`:
+// each algorithm resolves it for its display type as CSS Box Alignment
+// §5.1/§6.1 does. Flex: `justify-content` is `flex-start`, `align-content`
+// and `align-items` are `stretch`. Grid: auto tracks stretch into the free
+// space on both axes, and an item stretches unless it has a definite size or
+// an aspect ratio on that axis (then it starts). Block: `align-content` is
+// `start` without establishing an independent formatting context, which every
+// other value does.
 
-fn justify_content(v: JustifyContent) -> Option<taffy::style::JustifyContent> {
-    Some(match v {
-        JustifyContent::Normal => return None,
+fn justify_content(v: JustifyContent) -> taffy::style::JustifyContent {
+    match v {
+        JustifyContent::Normal => taffy::style::JustifyContent::NORMAL,
         JustifyContent::Start => taffy::style::JustifyContent::START,
         JustifyContent::End => taffy::style::JustifyContent::END,
         JustifyContent::FlexStart => taffy::style::JustifyContent::FLEX_START,
@@ -1024,12 +1024,12 @@ fn justify_content(v: JustifyContent) -> Option<taffy::style::JustifyContent> {
         JustifyContent::SpaceBetween => taffy::style::JustifyContent::SPACE_BETWEEN,
         JustifyContent::SpaceAround => taffy::style::JustifyContent::SPACE_AROUND,
         JustifyContent::SpaceEvenly => taffy::style::JustifyContent::SPACE_EVENLY,
-    })
+    }
 }
 
-fn align_items(v: AlignItems) -> Option<taffy::style::AlignItems> {
-    Some(match v {
-        AlignItems::Normal => return None,
+fn align_items(v: AlignItems) -> taffy::style::AlignItems {
+    match v {
+        AlignItems::Normal => taffy::style::AlignItems::NORMAL,
         AlignItems::Start => taffy::style::AlignItems::START,
         AlignItems::End => taffy::style::AlignItems::END,
         AlignItems::SelfStart => taffy::style::AlignItems::SELF_START,
@@ -1039,13 +1039,13 @@ fn align_items(v: AlignItems) -> Option<taffy::style::AlignItems> {
         AlignItems::Center => taffy::style::AlignItems::CENTER,
         AlignItems::Baseline => taffy::style::AlignItems::BASELINE,
         AlignItems::Stretch => taffy::style::AlignItems::STRETCH,
-    })
+    }
 }
 
-fn justify_items(v: JustifyItems) -> Option<taffy::style::AlignItems> {
+fn justify_items(v: JustifyItems) -> taffy::style::AlignItems {
     use taffy::style::AlignItems as T;
-    Some(match v {
-        JustifyItems::Normal => return None,
+    match v {
+        JustifyItems::Normal => T::NORMAL,
         JustifyItems::Stretch => T::STRETCH,
         JustifyItems::Baseline => T::BASELINE,
         JustifyItems::Center | JustifyItems::UnsafeCenter => T::CENTER,
@@ -1066,7 +1066,7 @@ fn justify_items(v: JustifyItems) -> Option<taffy::style::AlignItems> {
         JustifyItems::SafeFlexEnd => T::SAFE_FLEX_END,
         JustifyItems::SafeLeft => T::SAFE_LEFT,
         JustifyItems::SafeRight => T::SAFE_RIGHT,
-    })
+    }
 }
 
 fn align_self(v: AlignSelf) -> Option<taffy::style::AlignSelf> {
@@ -1084,9 +1084,9 @@ fn align_self(v: AlignSelf) -> Option<taffy::style::AlignSelf> {
     }
 }
 
-fn align_content(v: AlignContent) -> Option<taffy::style::AlignContent> {
-    Some(match v {
-        AlignContent::Normal => return None,
+fn align_content(v: AlignContent) -> taffy::style::AlignContent {
+    match v {
+        AlignContent::Normal => taffy::style::AlignContent::NORMAL,
         AlignContent::Start => taffy::style::AlignContent::START,
         AlignContent::End => taffy::style::AlignContent::END,
         AlignContent::FlexStart => taffy::style::AlignContent::FLEX_START,
@@ -1096,7 +1096,7 @@ fn align_content(v: AlignContent) -> Option<taffy::style::AlignContent> {
         AlignContent::SpaceBetween => taffy::style::AlignContent::SPACE_BETWEEN,
         AlignContent::SpaceAround => taffy::style::AlignContent::SPACE_AROUND,
         AlignContent::SpaceEvenly => taffy::style::AlignContent::SPACE_EVENLY,
-    })
+    }
 }
 
 impl Overflow {
@@ -1360,7 +1360,7 @@ pub(crate) fn style_in_block(
     if arena.is_button(slot) {
         s.item_is_table = true;
         if s.display == taffy::Display::Block {
-            s.align_content = Some(taffy::style::AlignContent::SAFE_CENTER);
+            s.align_content = taffy::style::AlignContent::SAFE_CENTER;
         }
     }
     if let Some(height) = arena.neutral_tab_min_height(slot) {
@@ -1411,7 +1411,7 @@ pub(crate) fn style_in_block(
         s.rare.multicol = Some(multicol);
         // The flow thread starts at the content top: `align-content` moves
         // the columns, once they are cut (`fragment::cut`).
-        s.align_content = None;
+        s.align_content = taffy::style::AlignContent::NORMAL;
     }
     // A replaced element keeps its natural ratio under `aspect-ratio: auto`
     // (with or without a fallback ratio, or a degenerate one): CSS sizes an

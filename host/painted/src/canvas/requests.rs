@@ -80,6 +80,11 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.p.reader_hatch_act(node, kind, text)
     }
 
+    /// Preferred content sizes the reader collected during a display frame (LLP 1024).
+    pub fn module_sizes(&mut self, reports: &str) {
+        self.force |= self.p.reader_module_sizes(reports);
+    }
+
     /// An app module's event, only for the session and allocation whose view the reader still holds.
     pub fn module_event(
         &mut self,

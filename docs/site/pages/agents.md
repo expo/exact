@@ -32,6 +32,10 @@ A path with no page returns a 404 that names `/llms.txt`: as Markdown to a reque
 
 `/sitemap.md` lists the same pages by section, nested as the guides nest. Each line has the page's Markdown URL, its type (Guide, How-to, Reference), the date it last changed, a summary, and its prerequisites: the page to read before it.
 
+## Agent catalog
+
+`/.well-known/ard.json` is a catalog in the format of the [Agentic Resource Discovery](https://agenticresourcediscovery.org/spec/) specification. It lists the files an agent can start from: `/llms.txt`, `/sitemap.md` and this page's Markdown. Each entry has a URL, a media type, a description and sample questions. `/.well-known/ai-catalog.json`, the path of the specification's predecessor, serves the same file.
+
 ## robots.txt
 
 `/robots.txt` allows every crawler, and it states a content signal for all crawlers and for each AI crawler it names: `search=yes, ai-input=yes, ai-train=yes`. Search indexing, use as input for AI answers, and AI training are all permitted.

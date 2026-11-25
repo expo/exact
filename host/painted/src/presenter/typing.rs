@@ -58,7 +58,10 @@ impl<D: DataSource> Presenter<D> {
             return Err(format!("view {id} is readonly"));
         }
         if node.props.bool(PropId::EmojiPicker) == Some(true) {
-            return Err("emoji selection is not supported on the Linux host".into());
+            return Err(format!(
+                "emoji selection is not supported on the {} host",
+                crate::agent::HOST_NAME
+            ));
         }
         let now = self.host.now();
         if let Some(e) = self.set_focus(Some(id), now) {

@@ -868,6 +868,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "authorize" [ "cancel" ] NL           (* the held sign-in, against the app's server (oauth recipe) *)
               | "presence" ( "allow" | "cancel" | "fail" | "lockout" | "invalidated" ) NL
                                                      (* answer the pending user-presence prompt, as tap @presence *)
+              | "rotate" ( "portrait" | "portraitUpsideDown" | "landscapeLeft" | "landscapeRight" ) NL
               | "fold" NUMBER NL        (* hinge angle from 0 through 180 degrees on an iOS simulator with a hinge *)
               | "background" NUMBER NL  (* whole milliseconds on iOS *)
               | "clock" ( "settle" | "data" | "+" NUMBER [ "real" ] | NUMBER ) NL
@@ -1108,9 +1109,21 @@ test "a draft survives a window resize" on web, macos, linux
 ```
 
 The drivers that perform `resize` are web, macOS and Linux; iOS refuses a
-mid-test `resize`. Changing a session's initial size
-does not test rotation or live iPad window resizing. The Android APK runs at
-the device's size and skips tests with `size`; `--headless` accepts it.
+mid-test `resize`. Initial `size` sets the launch viewport. Live iPad window resizing
+requires resizing the running window. Use `rotate landscapeLeft` on an iOS simulator. It waits for
+the app's scene to report that interface orientation in `layout` at `screen.orientation`.
+On a Duo the driver turns the hinge helper's simulated device. Other simulators use
+CoreDevice, or XCTest when CoreDevice is unavailable. If a lock keeps the scene in
+portrait, the step fails and names the observed device and scene orientations.
+The driver logs up to two reissues after a fold. On the iOS 27.1 Duo, one of
+100 turns immediately after closing still missed and all 100 after reopening succeeded.
+The Android APK runs at the device's size and skips tests with `size`. Its
+`--headless` mode accepts an initial size.
+
+To assert that a route stays locked through a turn, use a scripted drive. Catch
+the rejection from `session.rotate("landscapeLeft")`, check that its message
+reports `device turned landscapeRight, scene stayed portrait` on an ordinary
+iPhone, then check `(await session.layout()).screen.orientation === "portrait"`.
 
 Each test is a session of its own, opened with its
 launch lines: `size 1200x800`, `epoch "2026-09-21T12:00:00Z"`, `time-zone
@@ -1460,6 +1473,7 @@ says. Every roster function has a row and an example, and each example written
 | Call | Result / restriction | Example |
 | --- | --- | --- |
 | `performanceNow()` | Milliseconds on the runner's clock since this launch of the app (it restarts at 0 on every launch; the driver's clock under the agent, from 0), as the web's `performance.now()`, not `Date.now()`: the date is `time.epochAtZero + performanceNow()`, with `resource time = exactTime() as shape T` declared, and that sum is what anything stored or sent takes ([timer recipe](recipes/timer-that-survives-relaunch.md)). `now()` is refused (`type-now-renamed`, LLP 1109 D1) with both repairs. A read does not schedule a render, and a derive that reads it is not read again as time passes (when it is depends on the host's clock), so a value that follows the clock comes from a timer: keep the time in state that a `task … every` action writes | `performanceNow() - startedAt`, in a timer's action, is the milliseconds since `startedAt` |
+| `formatShortcut(chord)` | String in the reader’s keyboard notation, empty during server rendering | `formatShortcut("Mod+Shift+O")` gives ⇧⌘O on a Mac |
 | `formatTime(ms, offsetMinutes, "short" or "2-digit")` | String; fixed offset east of UTC, in the [format locale](#formatting-by-locale) (`exactTime().utcOffset` is the zone's offset now, answered again when it changes). `"short"` is `Intl.DateTimeFormat`'s `{ timeStyle: "short" }`; `"2-digit"` is `{ hour: "2-digit", minute: "2-digit" }`, each locale's own pattern for it (`01:02 AM` in en-US, `凌晨01:02` in zh-TW) | `formatTime(1790000000000, 0, "short")` is `"2:13 PM"`; `formatTime(3720000, 0, "2-digit")` is `"01:02 AM"` |
 | `formatDate(msOrDayKey, offsetMinutes, "medium" or "month-year" or "month-day" or "iso")` | String; format is a literal choice, not an expression containing `or`. `"medium"` is `Intl.DateTimeFormat`'s `{ dateStyle: "medium" }`, `"month-year"` `{ month: "long", year: "numeric" }`, `"month-day"` `{ month: "short", day: "numeric" }` (`Sep 21`, `21. Sept.` in de). A number is epoch milliseconds shifted by the offset; `"iso"` is the date at that wall time, `toISOString`'s date part at a whole-minute offset (a fractional offset's sub-millisecond wall time is not clipped again) (LLP 1102 §3.4). A string must be exactly `YYYY-MM-DD` in ASCII digits and a real Gregorian date in years 0001–9999; it keeps its calendar day regardless of the offset. Every style prints `""` for invalid input, years outside 1–9999, or a non-finite offset or one outside ±1080 minutes ([dates recipe](recipes/dates-and-days.md)) | `formatDate("2026-10-16", 0, "medium")` is `"Oct 16, 2026"` in en-US |
 | `formatDay(then, now, offsetMinutes, "day" or "day-time" or "list" or "section")` | String; `then`'s day named from `now`'s, both at the one offset (its calendar days, so a DST change between them is not applied), in the [format locale](#formatting-by-locale) (LLP 1116.020 D8); in en-US: `"day"` is `Today`, `Yesterday`, `Tomorrow`, else `formatDate`'s `"medium"`; `"day-time"` adds ` at ` and `formatTime`'s time (`Today at 4:42 PM`, `Oct 11, 2026 at 4:42 PM`); `"list"` is Mail's and Notes' list label: the time today, `Yesterday`, the weekday two to six days back, else `10/11/26` (a later day too); `"section"` is a chat's day separator (LLP 1168.000 D5): `Today`, `Yesterday`, `Tomorrow`, the weekday two to six days either side, else `Thu, Oct 15`, with the year when it is not `now`'s (`Sun, May 4, 2025`). Pure: `now` is the app's ticked clock ([dates recipe](recipes/dates-and-days.md)); `""` when either instant is outside years 1–9999 | `formatDay(1790000000000, 1790000000000 + 86400000, 0, "day")` is `"Yesterday"` |

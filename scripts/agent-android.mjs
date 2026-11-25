@@ -26,9 +26,9 @@ import { pushDrops, readerReply } from './agent-android-requests.mjs';
 import { within } from './paths.mjs';
 import { parseColour, schemeColours } from './scheme-colours.mjs';
 import { missingDependencies } from './package-libraries.mjs';
-import { HOST_DEV, PINNED_RUST, androidPackageId, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, linuxBuild, mavenProblems, resolveApp } from './app.mjs';
+import { HOST_DEV, PINNED_RUST, androidPackageId, bakeOutput, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, linuxBuild, mavenProblems, resolveApp } from './app.mjs';
 import { ANDROID_MIN_API } from './hermes-android.mjs';
-import { ANDROID_TARGET, ANDROID_ABIS, androidAbis, androidSdk, androidToolchainEnv, androidHermesDir, androidBakeLibraryName, stageAndroidBake } from './android-abi.mjs';
+import { ANDROID_TARGET, ANDROID_ABIS, androidAbis, androidSdk, androidToolchainEnv, androidHermesDir, androidBakeLibraryName, stageAndroidBake, stageSoundLibrary } from './android-abi.mjs';
 export { ANDROID_TARGET, androidSdk, androidToolchainEnv, androidHermesDir } from './android-abi.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
@@ -1036,26 +1036,7 @@ export function stageGpuLibraries(libraries, jniLibs) {
   return libraries.length ? [`-PgpuModules=${libraries.map((library) => basename(library)).join(',')}`] : [];
 }
 
-/** The optional sound arm: a separate ELF, never linked into libexactcanvas. */
-export function soundLibraryCommand(library, env, target = ANDROID_TARGET) {
-  const mixer = resolve(READER, '../apple/soundarm'), arm = resolve(READER, 'soundarm');
-  const cc = env[`CC_${target.replaceAll('-', '_')}`], wrapper = /((?:aarch64|x86_64)-linux-android\d+)-clang\.cmd$/i.exec(cc);
-  // spawnSync cannot execute an NDK .cmd wrapper without a shell.
-  const compiler = wrapper ? [cc.replace(wrapper[0], 'clang.exe'), `--target=${wrapper[1]}`] : [cc];
-  return [...compiler, '-std=gnu11', '-O2', '-fPIC', '-shared', '-Wall', '-Wextra', '-Werror',
-    '-Wl,-z,max-page-size=16384', '-Wl,-soname,libexact_sound.so', '-I', mixer,
-    resolve(mixer, 'sound_mixer.c'), resolve(arm, 'sound_wav.c'), resolve(arm, 'sound_arm.c'),
-    '-laaudio', '-lm', '-o', library];
-}
-
-export function stageSoundLibrary(jniLibs, env, target = ANDROID_TARGET) {
-  const library = resolve(jniLibs, 'libexact_sound.so');
-  mkdirSync(jniLibs, { recursive: true });
-  const [command, ...args] = soundLibraryCommand(library, env, target);
-  const built = spawnSync(command, args, { env, stdio: 'inherit' });
-  if (built.status !== 0) throw new Error('Android sound arm did not build');
-  return library;
-}
+export { soundLibraryCommand, stageSoundLibrary } from './android-abi.mjs';
 
 /** The app on the Canvas reader, as an APK: its `android/` crate (a cdylib over `exact_painted::canvas_jni!`; a game's
  * is generated under `.shells/`) built for the phone's ABI and put, with the app's assets and its icon and banner
@@ -1068,11 +1049,24 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false, 
   const dirs = apkDirs(app);
   mkdirSync(dirname(dirs.app), { recursive: true });
   const release = takeLock(`${dirs.app}.apk.lock`, { waitMs: Infinity });
-  try { return assembleApk(app, env, profile, writeLocks, bundle, abis, dirs); }
-  finally { release(); }
+  try {
+    const inventory = resolve(dirs.app, 'manifest-permissions.json');
+    const readInventory = () => JSON.stringify(JSON.parse(readFileSync(inventory, 'utf8')));
+    let permissions = '[]';
+    try { permissions = readInventory(); } catch { /* Gradle regenerates a missing or interrupted cache. */ }
+    // Gradle selects the release's libraries from the baked plan. If the merge changes,
+    // repeat the whole build so its bindings, native payload and receipt describe one bake.
+    for (const first of [true, false]) {
+      const result = assembleApk(app, env, profile, writeLocks, bundle, abis, dirs, permissions,
+        first && !!env.EXACT_UPDATE_RECEIPT, readInventory);
+      if (result !== undefined) return result;
+      permissions = readInventory();
+    }
+    throw new Error('Android manifest permissions changed again during packaging; rebuild the APK');
+  } finally { release(); }
 }
 
-function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
+function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs, names, analysis, mergedPermissions) {
   env = androidReleaseEnvironment(env, bundle);
   const java = androidJavaEnv(env);
   if (!java) throw new Error(androidJavaFix(env));
@@ -1097,7 +1091,7 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
   let gpuArgs = [];
   const bake = abi => {
     const triple = ANDROID_ABIS[abi], toolchain = androidToolchainEnv(env, process.platform, API, triple);
-    return bakeGpuLibraries(app, {profile, target:triple, env:toolchain, androidPayload,
+    return bakeGpuLibraries(app, {profile, target:triple, env:{...toolchain, EXACT_ANDROID_MANIFEST_PERMISSIONS:names}, androidPayload, record:false, analysis,
       capture: (receipt, image, modules) => {
         bakes.push(receipt);
         // Snapshot the inputs to Gradle while buildBake still owns the Cargo products.
@@ -1121,8 +1115,6 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
         }
       }});
   };
-  // Every ABI is baked (`buildBake`), which writes its own android-<target>.build.json receipt:
-  // a first `push` starts a stream from exactly this APK's cohort (LLP 1030.006 D6).
   let gpu;
   try { gpu = bake(abis[0]); }
   catch (error) { console.error(error.message); return null; }
@@ -1162,10 +1154,15 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
     // Without file watching Gradle reads its inputs to decide what is up to date; a watcher that missed an edit
     // shipped the reader's old classes once (LLP 1159.002 D1). A daemon started in the locks' own Gradle home would
     // outlive the home.
-    assembled = runGradle(['--no-watch-fs', ...(env.CI || graph.env.GRADLE_USER_HOME ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', ...gradleApp(app),
+    const gradle = tasks => runGradle(['--no-watch-fs', ...(env.CI || graph.env.GRADLE_USER_HOME ? ['--no-daemon'] : []), ...tasks, ...gradleApp(app),
       `-Pabis=${abis.join(',')}`, `-PexactDevelopment=${development ? '1' : '0'}`, `-PapplicationId=${androidPackageId(app.manifest)}`, `-PappName=${app.displayName}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PvideoBuildDir=${dirs.video}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
       ...developmentApkArgs(development, profile, bundle), ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...(launch.theme ? [`-PappTheme=${launch.theme}`] : []), `-PwidgetsBuildDir=${dirs.widgets}`, ...librariesArgs, ...extensionArgs(app, out, config, bound, firebase, development), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env), ...graph.env } }, process.platform, { lockAdvice: maven.length && !writeLocks ? `${app.name}: Gradle locks or verification metadata do not match its dependencies; for an intended graph change, run ${androidLockCommand(app)}, then review and commit gradle.lockfile and gradle-verification.xml` : null });
+    const manifestTask = ':app:writeReleaseManifestPermissions';
+    if (!gradle([manifestTask])) return null;
+    if (names !== mergedPermissions() || analysis) return undefined;
+    assembled = gradle([manifestTask, bundle ? ':app:bundleRelease' : ':app:assembleRelease']);
+    if (assembled && (mergedPermissions() !== names || bakes.some(b => JSON.stringify(b.compat.inputs.androidLinked?.permissions) !== names))) throw new Error('Android manifest permissions changed during packaging; rebuild the APK');
     if (assembled) graph.kept();
   } finally {
     graph.done();
@@ -1183,6 +1180,11 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
     sources: [...READER_SOURCES, resolve(app.dir, 'modules/android'), ...icons.files, ...launch.files] }) + '\n');
   // What its bake inlined of each setting (LLP 1153 D4), bound to the APK, for a drive to compare with their sources.
   recordBuiltSettings(apk, app, out);
+  for (const receipt of bakes) {
+    const path = resolve(bakeOutput(app, env), `android-${receipt.compat.target}.build.json`);
+    writeFileSync(`${path}.${process.pid}.tmp`, JSON.stringify(receipt) + '\n');
+    renameSync(`${path}.${process.pid}.tmp`, path);
+  }
   return apk;
 }
 
@@ -1273,7 +1275,7 @@ export function coldGradleHome(env = process.env) {
  * configuration (`config`, `packageConfigs`', which `ExtensionContext.config` reads), and the permissions the app's
  * grant lines derive (the bake's `reach.android`) with those its names derive, and the components its packages'
  * manifest fragments declare with the meta-data the configuration fills, as Gradle properties. */
-function extensionArgs(app, out, config, bound, firebase, development) {
+export function extensionArgs(app, out, config, bound, firebase, development) {
   const generated = resolve(apkDirs(app).app, 'extensions');
   rmSync(generated, { recursive: true, force: true });
   let permissions = [], services = {}, features = [], callbacks = [], reach = null;
@@ -1288,11 +1290,11 @@ function extensionArgs(app, out, config, bound, firebase, development) {
   } catch { /* no bake output: none */ }
   // And what the module names the app calls derive beside their lines (`android_entry`'s `permissions.txt`, LLP 1133.018 D11).
   try { permissions = [...new Set([...permissions, ...readFileSync(resolve(out, 'permissions.txt'), 'utf8').split('\n').filter(Boolean)])].sort(); } catch { /* none */ }
-  // And the normal permissions the packages' manifest fragments declare (LLP 1133.031 D12 item 1).
+  // Install-time permissions declared by the app and its packages (LLP 1133.030 D9).
   // A live activity's notification asks to be promoted (Android 16's Live Updates, LLP 1126 D13): a normal
   // permission, which the person can still turn off in Settings.
   const promoted = reach?.androidActivities?.length ? ['android.permission.POST_PROMOTED_NOTIFICATIONS'] : [];
-  const declared = fragmentPermissions(bound);
+  const declared = fragmentPermissions(bound, app.manifest?.host?.android?.permissions, app.dir);
   permissions = [...new Set([...permissions, ...declared, ...promoted])].sort();
   const car = carAppService(bound), carOwner = car && bound.find(b => b.manifest?.carAppService === car);
   if (bound.length) {

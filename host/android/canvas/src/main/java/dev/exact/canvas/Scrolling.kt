@@ -110,7 +110,7 @@ internal class Scrolling(private val view: ExactView) {
 
     /** A scroller under the touch, the axes it takes part on for a drag from there, whether it zooms and whether a
      * double tap there zooms it ([Zooming]). */
-    private class Link(val s: Scroller, val x: Boolean, val y: Boolean, val zoom: Boolean = false, val taps: Boolean = false)
+    private class Link(val s: Scroller, val x: Boolean, val y: Boolean, val zoom: Boolean = false, val taps: Boolean = false, val startY: Float = s.at(false))
     /** A move sent to exact2's thread: its number, and how far it moved which scroller. */
     private class Sent(val seq: Int, val s: Scroller, val dx: Float, val dy: Float)
 
@@ -136,7 +136,7 @@ internal class Scrolling(private val view: ExactView) {
     private var mode = IDLE
         set(value) {
             // A fling that ends, however it ends (at rest, caught by a finger, stopped by the app), is told.
-            if (field == FLINGING && value != FLINGING) rested()
+            if (field == FLINGING && value != FLINGING) { rested(); sharedFling = false }
             field = value
         }
     val timerActive: Boolean get() = mode != IDLE || zooming.active
@@ -162,6 +162,12 @@ internal class Scrolling(private val view: ExactView) {
     private var flingAt = 0
     /** Where the drag's innermost scroller was when the drag began, along its axis ([snapRest]'s start). */
     private var dragFrom = 0f
+    private var sharedFling = false
+    var caughtSharedFling = false
+        private set
+    private var liftSerial = -1
+    private var liftX = 0f
+    private var liftY = 0f
     /** What came of the touch that is down before exact2's answer for it ([touch]), and its down. */
     private val early = ArrayList<MotionEvent>()
     private var down: MotionEvent? = null
@@ -201,6 +207,7 @@ internal class Scrolling(private val view: ExactView) {
     fun touch(e: MotionEvent, disallowIntercept: Boolean = false): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
             settleSheet(0f)
+            caughtSharedFling = false
             val ended = early.any { it.actionMasked == MotionEvent.ACTION_UP || it.actionMasked == MotionEvent.ACTION_CANCEL }
             val first = down
             if (mode == WATCHING && !answered && ended && first != null) {
@@ -223,7 +230,10 @@ internal class Scrolling(private val view: ExactView) {
                 // A finger on a list that is flinging stops it and has it, as the platform's lists do: no press.
                 halt()
                 // The drag that catches it begins where it was caught ([snapRest]'s start).
-                if (active.any { it.port.contains(e.x, e.y) }) {
+                // A new contact on a shared list can lower its sheet after reaching the start.
+                val caught = active.any { it.port.contains(e.x, e.y) }
+                caughtSharedFling = caught && sharedFling
+                if (caught && !sharedFling) {
                     mode = DRAGGING
                     dragFrom = active.first().at(sideways)
                     keyed = false
@@ -283,9 +293,17 @@ internal class Scrolling(private val view: ExactView) {
                 val lifted = e.actionMasked == MotionEvent.ACTION_UP
                 if (lifted) tracker?.addMovement(e)
                 val was = mode
+                if (was == THEIRS && lifted) tracker?.let {
+                    it.computeCurrentVelocity(1000, maxFling.toFloat())
+                    liftSerial = serial
+                    liftX = -it.getXVelocity(pointer)
+                    liftY = -it.getYVelocity(pointer)
+                }
+                val catchOnly = caughtSharedFling && was == WATCHING && lifted
+                if (catchOnly) view.cancelContact(e.x, e.y, tool)
                 if (was == DRAGGING) release(lifted) else mode = IDLE
                 tracker?.recycle(); tracker = null
-                return was == DRAGGING
+                return was == DRAGGING || catchOnly
             }
         }
     }
@@ -719,11 +737,36 @@ internal class Scrolling(private val view: ExactView) {
         frames.removeFrameCallback(flinger)
     }
 
-    /** The finger lifted ([lifted]) or the system took the touch: a fling at the finger's velocity, or rest. */
-    private fun release(lifted: Boolean) {
-        var v = 0f
+    /** Deliver the owner's shared-list release only to the finger that lifted. */
+    fun onHeightRelease(action: Int): ((IntArray) -> Unit)? {
+        if (action != MotionEvent.ACTION_UP) return null
+        val finger = serial
+        return { words -> heightReleased(finger, words) }
+    }
+
+    fun heightReleased(finger: Int, words: IntArray) {
+        val id = words[0]
+        val list = scrollers[id]
+        // The next down settles the old drag on the owner thread before starting its own.
+        if (finger != serial) return
+        val at = chain.indexOfFirst { it.s === list }
+        if (list == null || at < 0 || mode == DRAGGING || mode == FLINGING) {
+            tell { Native.scrollDrag(id, true, 0f, 0f, false, 0f, 0f, false) }
+            return
+        }
+        sideways = false
+        active = chain.drop(at).filter { it.y }.map { it.s }
+        held.add(list)
+        dragFrom = chain[at].startY
+        val speed = if (finger == liftSerial) liftX * Float.fromBits(words[2]) + liftY * Float.fromBits(words[3]) else Float.fromBits(words[1])
+        release(true, speed.coerceIn(-maxFling.toFloat(), maxFling.toFloat()))
+        sharedFling = mode == FLINGING
+    }
+
+    private fun release(lifted: Boolean, listVelocity: Float? = null) {
+        var v = listVelocity ?: 0f
         val t = tracker
-        if (lifted && t != null) {
+        if (lifted && listVelocity == null && t != null) {
             t.computeCurrentVelocity(1000, maxFling.toFloat())
             v = -(if (sideways) t.getXVelocity(pointer) else t.getYVelocity(pointer))
         }

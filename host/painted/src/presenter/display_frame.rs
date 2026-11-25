@@ -21,6 +21,7 @@ struct Identity {
     activatable: bool,
 }
 struct Witness {
+    epoch: u64,
     origin: Rc<()>,
     /// Each painted node's key, parent and (a box's) scroll bounds: one
     /// table, sized once per paint.
@@ -167,6 +168,10 @@ impl State {
             at = node.parent;
         }
         true
+    }
+    /// A layout fact for a box the picture omitted must belong to that picture.
+    pub(super) fn shows_epoch(&self, epoch: u64) -> bool {
+        !self.active || self.witness().is_some_and(|w| w.epoch == epoch)
     }
     /// The node the acknowledged picture painted at `id`, if it painted one.
     pub(super) fn painted_key(&self, id: ViewId) -> Option<NodeKey> {
@@ -315,6 +320,7 @@ impl<D: DataSource> Presenter<D> {
         let limits = self.collection_scroll_limits();
         let kernel = self.host.kernel();
         let mut witness = Witness {
+            epoch: kernel.epoch(),
             origin: self.display.origin.clone(),
             nodes: IdMap::default(),
             document: self.live_document(),

@@ -2092,10 +2092,10 @@ the app directly with `EXACT_IDENTITY` and `EXACT_PROFILE`.
 
 ### Build Android artifacts without a device
 
-From the app's directory, `bun exact.mjs android --release --no-install --json`
-builds an APK without querying adb. `bun exact.mjs android --bundle --json`
-builds a production App Bundle (`.aab`) without installing. Both report the
+From the app's directory, `bun exact.mjs android --release --no-install --json` builds an APK without querying adb. `bun exact.mjs android --bundle --json` builds a production App Bundle (`.aab`) without installing. Both report the
 artifact's absolute path. An outside app's outputs are `target/android/app/outputs/apk/release/app-release.apk` and `target/android/app/outputs/bundle/release/app-release.aab`.
+
+An app’s Kotlin can call `registerScreenCaptureCallback` on its front activity on Android 14 and later. Declare its install-time permission in `host.android` with `"permissions": ["android.permission.DETECT_SCREEN_CAPTURE"]`. The APK merges the app’s and packages’ allow-listed install-time permissions with grant-derived names, writing each permission once. A runtime permission comes from its grant line. Only a package declaring a POI car service may request `androidx.car.app.MAP_TEMPLATES`.
 
 For Android package visibility, put `"queries": [{"action": "android.intent.action.TTS_SERVICE"}]` in `host.android`. Entries take `{package}`, `{action}` or `{action, scheme}` under the same allow-list as a bound package's `manifest.queries`. The APK merges matching entries once. A package with a Kotlin POI car service declares `manifest.carAppService` in its Android implementation. [Android module implementations](../host/android/README.md#module-implementations-llp-1133001-d5)
 

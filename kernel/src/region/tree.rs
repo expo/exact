@@ -178,15 +178,11 @@ impl Derived {
             let hidden = hidden || arena.style(s).display == crate::Display::None;
             let l = self.tree.layout(node);
             let o = l.scrollable_overflow_rect;
+            let extent = crate::layout::overflow_extent(&l);
             let (position, mut frame, safe_area, content) = if hidden {
                 (RegionPosition::Hidden, Frame::default(), None, (0., 0.))
             } else if arena.is_inline_run(s) {
-                (
-                    RegionPosition::Inline,
-                    Frame::default(),
-                    None,
-                    (o.right, o.bottom),
-                )
+                (RegionPosition::Inline, Frame::default(), None, extent)
             } else {
                 let size = Frame {
                     width: l.size.width,
@@ -194,7 +190,7 @@ impl Derived {
                     ..Frame::default()
                 };
                 let (frame, taken, content) =
-                    crate::kernel::ignore::place(arena, s, size, (o.right, o.bottom));
+                    crate::kernel::ignore::place(arena, s, size, extent, o.is_reversed());
                 (
                     RegionPosition::Box((l.location.x, l.location.y)),
                     frame,
@@ -212,8 +208,10 @@ impl Derived {
             if ![
                 frame.width,
                 frame.height,
-                o.right,
-                o.bottom,
+                o.left(),
+                o.right(),
+                o.top(),
+                o.bottom(),
                 content.0,
                 content.1,
             ]
@@ -340,15 +338,18 @@ pub(super) fn shell(
             height: l.size.height,
         };
         let o = l.scrollable_overflow_rect;
+        let extent = crate::layout::overflow_extent(&l);
         let (frame, _, content) =
-            crate::kernel::ignore::place(arena, s, frame, (o.right, o.bottom));
+            crate::kernel::ignore::place(arena, s, frame, extent, o.is_reversed());
         if ![
             frame.x,
             frame.y,
             frame.width,
             frame.height,
-            l.scrollable_overflow_rect.right,
-            l.scrollable_overflow_rect.bottom,
+            o.left(),
+            o.right(),
+            o.top(),
+            o.bottom(),
         ]
         .into_iter()
         .all(f32::is_finite)

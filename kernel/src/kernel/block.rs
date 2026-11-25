@@ -25,7 +25,7 @@
 //! exactly as before.
 //!
 //! The kernel implies one block itself: the viewport, for each box in
-//! HTML's top layer (a popover; `Kernel::imply_blocks`), fitting its
+//! HTML's top layer that the host measures (`Kernel::imply_blocks`), fitting its
 //! content as the UA sheet's `fit-content` does. A host's block for the
 //! same box wins, and taking it back leaves the viewport.
 
@@ -493,6 +493,12 @@ fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool
     false
 }
 
+pub(crate) fn closed_dialog(arena: &NodeArena, slot: u32) -> bool {
+    !arena.is_root(slot)
+        && !arena.blocks.holds(slot)
+        && arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")
+}
+
 /// Whether an ancestor of `slot` is `display: none`, as authored or as a box
 /// a host replaced (`hidden_by`).
 fn hidden_above(arena: &NodeArena, slot: u32) -> bool {
@@ -550,7 +556,12 @@ pub(crate) fn apply(
     block: Option<HostBlock>,
     s: &mut taffy::style::Style,
 ) {
-    let Some(block) = block else { return };
+    let Some(block) = block else {
+        if closed_dialog(arena, slot) {
+            s.display = taffy::Display::None;
+        }
+        return;
+    };
     if replaced_above(arena, slot) {
         s.display = taffy::style::Display::None;
         return;
@@ -638,7 +649,7 @@ fn cyclic(block: HostBlock, s: &mut taffy::style::Style) {
     let cyclic = |d: taffy::Dimension| {
         let raw = d.into_raw();
         raw.tag() == CompactLength::PERCENT_TAG
-            || (raw.is_calc() && calc_has_percent(raw.calc_value()))
+            || (raw.has_calc() && calc_has_percent(raw.calc_value()))
     };
     let clear =
         |size: &mut taffy::Dimension, min: &mut taffy::Dimension, max: &mut taffy::Dimension| {
@@ -709,6 +720,7 @@ impl Kernel {
         // Measure the readers under a box that gains or gives back a block again, which
         // changes the band they observe; a reader elsewhere that this moves has a frame
         // that moved
+        let was_owner = owns(&self.arena, slot);
         let placed = self.arena.blocks.given(slot).is_some() != block.is_some();
         if placed {
             self.arena.observations.moved(slot);
@@ -727,7 +739,14 @@ impl Kernel {
         // Derive the owner segments' readers below a box whose host starts or stops placing
         // it while its implied block stands
         if placed && before.is_some() && self.arena.blocks.get(slot).is_some() {
-            self.segments_moved(slot);
+            if was_owner != owns(&self.arena, slot) {
+                // A native sheet can take over a measured dialog at the same size.
+                self.restyle_block(slot);
+                self.resize_content_root(slot);
+                self.targets_moved(slot);
+            } else {
+                self.segments_moved(slot);
+            }
         }
         Ok(())
     }
@@ -764,7 +783,8 @@ impl Kernel {
     /// to be another, and each block root to be styled again.
     fn implied_changes(&self) -> (Vec<(u32, Option<HostBlock>)>, Vec<u32>) {
         let arena = &self.arena;
-        if arena.top_layer_slots.is_empty() && !arena.blocks.any() {
+        let dialogs = &arena.alert_state.measured_dialogs;
+        if arena.top_layer_slots.is_empty() && dialogs.is_empty() && !arena.blocks.any() {
             return (Vec::new(), Vec::new());
         }
         let (env, lifted) = (arena.env(), &arena.top_layer_slots);
@@ -774,15 +794,40 @@ impl Kernel {
             width: BlockAxis::Fit(width),
             height: BlockAxis::Fit(height),
         });
+        // A terminal or an intrinsic measurement can leave one viewport axis
+        // indefinite. On that axis the dialog sizes to its content.
+        let dialog_axis = |length| {
+            if length > 0. {
+                BlockAxis::Fit(length)
+            } else {
+                BlockAxis::Content(0.)
+            }
+        };
+        let dialog_block = HostBlock {
+            tactic: Default::default(),
+            width: dialog_axis(width),
+            height: dialog_axis(height),
+        };
         let mut slots = arena.blocks.implied_slots();
         slots.extend(lifted.iter().filter(|s| arena.blocks.implied(*s).is_none()));
+        slots.extend(
+            dialogs
+                .iter()
+                .filter(|s| !lifted.contains(*s) && arena.blocks.implied(*s).is_none()),
+        );
         let wants: Vec<_> = slots
             .into_iter()
             .map(|slot| {
                 let boxed = !arena.is_root(slot)
                     && !arena.in_paragraph(slot)
                     && arena.cover(slot) != Some(super::HostCover::Whole);
-                (slot, viewport.filter(|_| lifted.contains(slot) && boxed))
+                let wanted = if arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")
+                {
+                    (boxed && dialogs.contains(slot)).then_some(dialog_block)
+                } else {
+                    viewport.filter(|_| boxed && lifted.contains(slot))
+                };
+                (slot, wanted)
             })
             .filter(|&(slot, want)| arena.blocks.implied(slot) != want)
             .collect();

@@ -1048,11 +1048,10 @@ pub fn browser_text(text: &str, out: &mut String) {
         out.push_str(text);
         return;
     }
-    let mut input = cssparser::ParserInput::new(text);
-    rename_regions(&mut cssparser::Parser::new(&mut input), out);
+    rename_regions(&mut cssparser::Parser::new(text), out);
 }
 
-fn rename_regions(p: &mut cssparser::Parser<'_, '_>, out: &mut String) {
+fn rename_regions(p: &mut cssparser::Parser<'_>, out: &mut String) {
     use cssparser::Token;
     loop {
         let start = p.position();
@@ -1077,7 +1076,7 @@ fn rename_regions(p: &mut cssparser::Parser<'_, '_>, out: &mut String) {
         out.push_str(p.slice_from(start));
         let _ = p.parse_nested_block(|p| {
             rename_regions(p, out);
-            Ok::<(), cssparser::ParseError<'_, ()>>(())
+            Ok::<(), cssparser::ParseError<()>>(())
         });
         out.push(close);
     }

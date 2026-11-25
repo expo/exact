@@ -21,6 +21,7 @@ import {buildTreeFile, serveBuildTree, listPublicFiles, publicFileCards, readSta
 import {gameShells} from '../game/app/shells.mjs';
 import {formatProofError, proofFailureRow} from '../game/proof.mjs';
 import {pendingBuildInputs, readManifest} from './app.mjs';
+import {noWindowsHost} from '../host/windows/build.mjs';
 
 test('TypeScript captures accept physical path aliases and reject declarations outside them', async () => {
   const {check, configure} = await import('../js/bake/src/typescript.mjs');
@@ -132,6 +133,13 @@ test('ordinary Windows host manifests admit only the empty host settings object'
     write({});
     expect(readManifest(root,'fixture').host.windows).toBeUndefined();
   } finally { rmSync(root,{recursive:true,force:true}); }
+});
+
+test('a Windows build refuses an app whose app.json names no windows host', () => {
+  const app=(name,manifest)=>({name,manifest});
+  expect(noWindowsHost(app('caltrain',{host:{ios:{},linux:{}}}))).toBe("caltrain's app.json names no windows host, so it has no Windows build (apps/shelf/app.json names one)");
+  expect(noWindowsHost(app('shelf',{host:{windows:{}}}))).toBeNull();
+  expect(noWindowsHost(app('greybox',{game:{}}))).toBeNull();
 });
 
 test('storage error numbers retain platform meaning and require an exact typed suffix', () => {

@@ -191,7 +191,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// How many reports changed the covers, and the last of them whose answer the runtime has applied, or that a reset
     /// made moot: while one is owed, a position Exact carries waits for its layout (`writeCarriedScrollsWhenAnswered`)
     var coversReported = 0, coversAnswered = 0
-    var coversAnswerOwed: Bool { coversAnswered < coversReported }
+    var coversAnswerOwed: Bool { coversAnswered < coversReported || (tabController as? TabController)?.left.covers == true }
     /// The report of the last header lifted in a batch (`coverLifted`), and the last report whose lift a delivery has
     /// released, just before the runtime's answer to it (`deliverCovers`): while a lift is unreleased a stack change
     /// waits, and a delivery releases only the lifts it told, so a later one holds until its own delivery's answer
@@ -758,11 +758,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         // A presented navigation fills its sheet; the primary owner the root,
         // which no presentation resizes (LLP 1123 D1)
-        if let top = primaryOwner {
-            fitOwner()
-            placeOwner()
-            top.view.layoutIfNeeded()
-        }
+        let left = leaveToTabsChange { $0.layout = true }
+        if !left { layOutOwner() }
         for (id, c) in controllers where !routeIDs.contains(id) { end(c) }
         controllers = controllers.filter { routeIDs.contains($0.key) }
         presenter.modalHost.updatePermissions()
@@ -772,7 +769,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         reportCovers()
         refitForBars()
         // A route that left every stack gives its block back (LLP 1123 D2)
-        presenter.owners.publish()
+        if !left { presenter.owners.publish() }
         settled = true
     }
 
@@ -1271,13 +1268,19 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             // Tree updates during UIKit's transition retain their latest
             // intent. Apply it once the native stack is available again.
             runHeldSync()
-            presenter.session?.view?.fit()
+            let left = leaveToTabsChange {
+                $0.fit = true
+                $0.input = true
+            }
+            if !left { presenter.session?.view?.fit() }
             presenter.syncModal()
             // What the settled route shows has pixels (the swipe may have
             // left a band of it unpainted, or a cancelled pop the source).
             presenter.paintVisibleText()
-            presenter.flushPendingFocus()
-            presenter.elementScrolls.flush()
+            if !left {
+                presenter.flushPendingFocus()
+                presenter.elementScrolls.flush()
+            }
             #if os(iOS)
             presenter.syncScrollsToTop() // the route now on top owns the status-bar tap
             #endif

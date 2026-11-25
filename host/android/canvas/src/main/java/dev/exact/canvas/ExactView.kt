@@ -361,13 +361,14 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                 o.held(true)
             }
             if (action == 1 || action == 3) holdFrom = 0L
-            val answered = o.touch(action, x, y, tool, if (wait >= 0) wait else if (press) 0L else if (action == 2) 2L else releaseWait, at, history)
+            val answered = o.touch(action, x, y, tool, if (wait >= 0) wait else if (press) 0L else if (action == 2) 2L else releaseWait, at, history, scrolling.onHeightRelease(action))
             if (action == 1 || action == 3) o.held(false)
             if (answered) publish()
             return
         }
         history?.forwardHistory(tool)
-        Native.touch(action, x, y, tool, at)
+        val list = Native.touch(action, x, y, tool, at)
+        if (list != null) scrolling.heightReleased(scrolling.serial, list)
         // A frame only when the touch changed what exact2 draws (a down on a plain row changes nothing).
         if (started) pump()
     }

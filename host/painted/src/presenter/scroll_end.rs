@@ -3,7 +3,7 @@
 use super::*;
 use exact_kernel::NodeKey;
 use exact_runner::ReorderToken;
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::VecDeque;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Completion {
@@ -32,7 +32,7 @@ pub(super) struct State {
     reader_previous: BTreeMap<ViewId, Pending>,
     /// The scrollers a reader's finger is dragging, or its fling is moving
     /// (`scroll_drag.rs`): their samples owe no completion until it is over.
-    held: BTreeSet<ViewId>,
+    held: BTreeMap<ViewId, Option<NodeKey>>,
     command_work: bool,
 }
 
@@ -128,7 +128,7 @@ impl<D: DataSource> Presenter<D> {
             }
             // Deferred wheel input has one scroll event at the final offset,
             // and a reader's drag or fling goes on with the same scroll.
-            let held = completion == Completion::Reader && self.scroll_end.held.contains(&view);
+            let held = completion == Completion::Reader && self.scroll_end.held.contains_key(&view);
             let continuing = self.scroll_end_frame_blocked(view)
                 || (completion == previous.kind
                     && (held
@@ -275,6 +275,11 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(super) fn retire_scroll_ends(&mut self) {
+        // A held scroller may disappear from a release handler even when it has no scrollend listener.
+        let kernel = self.host.kernel();
+        self.scroll_end.held.retain(|view, key| {
+            *view == PAGE || kernel.node(*view).is_some_and(|n| Some(n.key) == *key)
+        });
         let gone: Vec<_> = self
             .scroll_end
             .pending
@@ -316,7 +321,7 @@ impl<D: DataSource> Presenter<D> {
             .iter()
             .filter(|(id, _)| !self.scroll_end_blocked(**id))
             .filter_map(|(id, p)| {
-                if p.kind == Completion::Reader && self.scroll_end.held.contains(id) {
+                if p.kind == Completion::Reader && self.scroll_end.held.contains_key(id) {
                     None
                 } else if matches!(p.kind, Completion::Instant | Completion::Reader) {
                     Some(p.due)
@@ -340,7 +345,7 @@ impl<D: DataSource> Presenter<D> {
         match pending.kind {
             Completion::Edge(token) => !self.scroll_edge_active(view, token),
             Completion::Collection => false,
-            Completion::Reader if self.scroll_end.held.contains(&view) => false,
+            Completion::Reader if self.scroll_end.held.contains_key(&view) => false,
             Completion::Glide => !self.gliding(view) && !self.zoom_animating(view),
             _ => pending.due <= self.host.now(),
         }
@@ -351,18 +356,19 @@ impl<D: DataSource> Presenter<D> {
     /// completion, however long they rest.
     /// Whether the reader holds scroller `view`'s scroll.
     pub(super) fn scroll_held(&self, view: ViewId) -> bool {
-        self.scroll_end.held.contains(&view)
+        self.scroll_end.held.contains_key(&view)
     }
 
     pub(super) fn scroll_end_hold(&mut self, view: ViewId) {
-        self.scroll_end.held.insert(view);
+        let key = self.host.kernel().node(view).map(|n| n.key);
+        self.scroll_end.held.insert(view, key);
     }
 
     /// The reader's scroll of `view` is over (a lift with nothing thrown,
     /// the fling stopped): its completion is due now, as UIKit ends a drag
     /// that does not decelerate and a deceleration when it stops.
     pub(super) fn scroll_end_release(&mut self, view: ViewId) {
-        if !self.scroll_end.held.contains(&view) {
+        if !self.scroll_end.held.contains_key(&view) {
             return;
         }
         // A zoom written while the reader held it moves, as part of the
@@ -384,7 +390,7 @@ impl<D: DataSource> Presenter<D> {
     /// before it but what the touch stopped, so a scroll it did not say the
     /// end of (its view went) is over.
     pub(super) fn scroll_end_release_all(&mut self) {
-        for view in self.scroll_end.held.clone() {
+        for view in self.scroll_end.held.clone().into_keys() {
             self.scroll_end_release(view);
         }
     }

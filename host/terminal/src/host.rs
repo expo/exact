@@ -1231,6 +1231,9 @@ impl<D: DataSource> Host<D> {
     /// descendant focused, the focus it took remembered.
     pub fn open_layer(&mut self, layer: ViewId, modal: bool) {
         self.layers.push((layer, self.focus, modal));
+        if self.runner.kernel_mut().measure_dialog(layer, true) {
+            self.layout_popover_blocks();
+        }
         self.sync_top_layer();
         // Its controls are born now, unseen, even when it was open before:
         // a key read before a frame shows them cannot reach them (LLP
@@ -1294,6 +1297,11 @@ impl<D: DataSource> Host<D> {
             return;
         };
         let (_, restore, _) = self.layers.remove(at);
+        if !self.layers.iter().any(|(id, ..)| *id == layer)
+            && self.runner.kernel_mut().measure_dialog(layer, false)
+        {
+            self.layout_popover_blocks();
+        }
         self.sync_top_layer();
         self.presented.stale = true;
         self.focus = None;

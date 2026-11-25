@@ -703,12 +703,14 @@ try {
       await record('extension route', '/post/photos.zip', n, 2, 0);
       for (const [path, accept, status] of [
         ['/post/photos.zip', 'text/html', 200], ['/post/a%2Fb.zip', 'text/html', 200],
-        ['/post/photos.zip/', 'text/html', 404], ['/post/photos.zip', '*/*', 404],
+        // The JS build's server sends a page's other spelling to the page (LLP 1048.000 D11).
+        ['/post/photos.zip/', 'text/html', js && tree === dist ? 301 : 404], ['/post/photos.zip', '*/*', 404],
         ['/deck/missing.html', 'text/html', 404], ['/missing.pdf', 'text/html', 404],
         ['/manifest.json', 'text/html', 200],
       ]) {
-        const response = await fetch(url + path, {headers: {accept}});
+        const response = await fetch(url + path, {headers: {accept}, redirect: 'manual'});
         assert.equal(response.status, status, path);
+        if (status === 301) assert.equal(response.headers.get('location'), '/post/photos.zip');
         assert.equal(response.headers.get('cache-control'), status === 200 && (!js || tree === published) ? 'no-cache' : 'no-store', path);
         if (status === 200) assert.equal(response.headers.get('content-type'), path === '/manifest.json' ? 'application/manifest+json' : 'text/html');
       }

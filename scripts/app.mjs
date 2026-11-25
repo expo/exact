@@ -183,7 +183,6 @@ export function outsideWorkspaceProblems(workspace) {
   if (PINNED_RUST && channel !== PINNED_RUST) problems.push(`${toolchain}: ${channel ? `pins ${channel}` : 'is missing'}; exact2 builds with ${PINNED_RUST}. Copy ${resolve(ROOT, 'rust-toolchain.toml')} there (\`bun exact.mjs update\` does).`);
   return problems;
 }
-
 /** Resolve a binding lock, fetching its missing sources once without updating it. */
 export function lockedMetadata(workspace, noDeps = false, env = process.env) {
   const args = ['metadata', '--locked', '--offline', ...(noDeps ? ['--no-deps'] : []), '--format-version', '1'];
@@ -572,6 +571,7 @@ export function readManifest(dir, name) {
       : /^((host\.\w+\.)?(splash\w*|windowBackground|backgroundColor|launchColor)): not a known key$/i.test(p) ? `${p.split(':')[0]}: not a known key; what shows before the first frame is background_color in every colour scheme, or color_scheme_light.background_color and color_scheme_dark.background_color in one, on every host (host.ios.launchImage and host.android.launchImage add a picture)`
       : /^host\.ios\.associatedDomains: expected array, got boolean$/.test(p) ? REMOVED_DOMAINS[parsed.host.ios.associatedDomains]
       : appleMetadataProblem(p)).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed), vendorPlistProblems(parsed));
+  if (Array.isArray(parsed.host?.android?.permissions)) problems.push(...permissionProblems(parsed.host.android.permissions, dir));
   if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...linkProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir), ...variantProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
@@ -580,7 +580,7 @@ export function readManifest(dir, name) {
   canonicalizeDocumentExtensions(manifest);
   return packageGpuManifest(manifest, dir);
 }
-
+import { androidHostMetadata, permissionProblems } from './android-manifest.mjs';
 import { DOCUMENT_UTIS, ownDocumentType, documentTypeProblems, canonicalizeDocumentExtensions } from './document-utis.mjs';
 import { launchModules, moduleDirectory } from './launch-modules.mjs';
 export { moduleDirectory } from './launch-modules.mjs';
@@ -640,7 +640,7 @@ export function webAppManifest(manifest, name, notes = [], dir = null) {
   web.lang ??= 'en';
   return web;
 }
-export function nativeManifestMetadata(manifest, platform, target = '', env = process.env, development) { return {...(platform !== 'web' ? nativePackageConfig(manifest, configTarget(platform, target), env, development) : {}),app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(platform === 'ios' && manifest.color_scheme_dark?.icons ? {dark_icons:manifest.color_scheme_dark.icons} : {}),...(platform === 'ios' && manifest.alternate_icons?.length ? {alternate_icons:manifest.alternate_icons} : {}),...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios','android'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {}),...(['macos','ios'].includes(platform) && manifest.categories ? {categories:manifest.categories} : {}),...linkMetadata(manifest, platform)}; }
+export function nativeManifestMetadata(manifest, platform, target = '', env = process.env, development) { return {...(platform !== 'web' ? nativePackageConfig(manifest, configTarget(platform, target), env, development) : {}),app:manifest.app,host:platform === 'android' ? androidHostMetadata(manifest.host?.android) : manifest.host?.[platform]??{},icons:manifest.icons??[],...(platform === 'ios' && manifest.color_scheme_dark?.icons ? {dark_icons:manifest.color_scheme_dark.icons} : {}),...(platform === 'ios' && manifest.alternate_icons?.length ? {alternate_icons:manifest.alternate_icons} : {}),...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios','android'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {}),...(['macos','ios'].includes(platform) && manifest.categories ? {categories:manifest.categories} : {}),...linkMetadata(manifest, platform)}; }
 /** The link claims a binary bakes in (LLP 1038 D8): Apple's derived `applinks:` as signed, so a changed scope alone
  * changes only the origin's file; each Android filter's host and path, so a changed scope is a new APK. */
 const linkMetadata = (manifest, platform) => {
@@ -1210,7 +1210,6 @@ export function awaitBuildOutput(app, path, waiting) {
     }
   }
 }
-
 export function claimLive(text) {
   let claim;
   try { claim = JSON.parse(text); } catch { return true; } // unreadable: never guess
@@ -1332,7 +1331,7 @@ export function buildBake(app, platform, target, options = {}) {
     return {products:messages.filter(m=>m.reason==='compiler-artifact' && bakeSelection(graph,'gpu').some(pkg=>pkg.id===m.package_id)).flatMap(m=>m.filenames).map(f=>preparedProducts.get(f)??f)};
   }
   const receipt=completeBuild(app,platform,target,graph,messages,roots,env,preparedProducts,generatedInputs,privacyManifests);
-  writeFileSync(resolve(env.EXACT_BAKE_OUTPUT,`${platform}-${target}.build.json`),JSON.stringify(receipt)+'\n');
+  if (options.record !== false) writeFileSync(resolve(env.EXACT_BAKE_OUTPUT,`${platform}-${target}.build.json`),JSON.stringify(receipt)+'\n');
   options.capture?.(receipt);
   return receipt;
   } finally { for (const release of releases.reverse()) release(); }

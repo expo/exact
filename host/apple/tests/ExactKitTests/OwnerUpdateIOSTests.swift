@@ -144,6 +144,8 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertEqual(update.chain.count, 1)
         XCTAssertNil(update.chain[0].target.insets)
         XCTAssertNil(update.chain[0].target.frame)
+        XCTAssertNil(update.chrome)
+        XCTAssertEqual(update.keyboard, .unreported)
     }
 
     func testTheKernelTakesAWindowRootsUpdateUnderANegativeContribution() throws {
@@ -160,6 +162,34 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(batch.error, "\(update.margins.map { "margins \($0)" } ?? "no margins")")
         ledger.set(identity, nil, generation: 2)
         ledger.apply()
+    }
+
+    /// A controller in a tab controller reads that controller's content guide as `tab-content` (D9): the
+    /// guide's edges' distances from the tab controller's view, which clear its tab bar, under the guide's
+    /// identity and with that view's frame in its window.
+    func testATabControllersContentGuideIsTheTabContentTarget() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("UIKit has the tab content guide from iOS 26") }
+        let scene = hostedWindowScene()
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        let tabs = UITabBarController(), inner = UIViewController()
+        tabs.viewControllers = [UINavigationController(rootViewController: inner)]
+        window.rootViewController = tabs
+        window.makeKeyAndVisible()
+        self.window = window
+        window.layoutIfNeeded()
+        let update = OwnerUpdateIOS.sample(controller: inner, view: inner.view, session: nil)
+        let content = try XCTUnwrap(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.tabContent }?.target)
+        let guide = tabs.contentLayoutGuide
+        XCTAssertEqual(content.id, TargetIds.id(of: guide))
+        XCTAssertEqual(content.frame, window.convert(tabs.view.bounds, from: tabs.view))
+        let insets = try XCTUnwrap(content.insets)
+        let (frame, bounds) = (guide.layoutFrame, tabs.view.bounds)
+        XCTAssertEqual(insets, UIEdgeInsets(top: frame.minY, left: frame.minX, bottom: bounds.maxY - frame.maxY, right: bounds.maxX - frame.maxX))
+        // It clears the tab bar, above the tab view's own safe bottom
+        XCTAssertGreaterThan(insets.bottom, tabs.view.safeAreaInsets.bottom, "guide \(frame), tab bar \(tabs.tabBar.frame)")
+        // And the chrome says whether the tab controller's sidebar is available
+        if #available(iOS 27.0, *) { XCTAssertEqual(update.chrome?.sidebarAvailable, tabs.sidebar.isAvailable) }
     }
 
     func testATargetsIdentityIsItsViewsForLife() {
@@ -189,6 +219,15 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let kind = OwnerUpdateIOS.Kind.self
         XCTAssertEqual(update.chain.map(\.kinds), [0, kind.navigation | kind.column, kind.split])
         XCTAssertEqual(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.root }?.target.id, TargetIds.id(of: split.view))
+        XCTAssertNil(update.relations.first { $0.relation == OwnerUpdateIOS.Relation.tabContent }, "no tab controller contains it")
+        // Its chrome: no sidebar outside a tab controller, and the vertical bar's edge from iOS 27.1,
+        // unspecified where the device places none
+        XCTAssertNil(update.chrome?.sidebarAvailable)
+        if #available(iOS 27.1, *) {
+            XCTAssertEqual(update.chrome?.verticalBarEdge == 0, !inner.view.traitCollection.placesVerticalBar)
+        } else {
+            XCTAssertNil(try XCTUnwrap(update.chrome).verticalBarEdge)
+        }
         // A controller presented from it: a chain of one, and the presenter a relation
         let presented = UIViewController()
         split.present(presented, animated: false)
@@ -210,8 +249,9 @@ final class OwnerUpdateIOSTests: XCTestCase {
                                                                                        frame: CGRect(x: 0, y: 0, width: 402, height: 874)))]
         update.margins = .init(root: UIEdgeInsets(top: 9, left: 12, bottom: 11, right: 10), plain: UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8),
                                minimum: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16), readableWidth: 672)
-        update.keyboard = .init(frame: CGRect(x: 0, y: 538, width: 402, height: 336), docked: true)
+        update.keyboard = .shown(.init(frame: CGRect(x: 0, y: 538, width: 402, height: 336), docked: true))
         update.barRegions = [nil, nil, .init(distance: 24, sides: (16, 8.5)), nil]
+        update.chrome = .init(verticalBarEdge: 2, sidebarAvailable: false)
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
         func u32(_ v: UInt32) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
@@ -221,10 +261,14 @@ final class OwnerUpdateIOSTests: XCTestCase {
         u32(1); u64(5); u64(6); w.append(0); w.append(0); w.append(1 << 2)
         u32(1); w.append(3); u64(7); u64(1); w.append(1); f(8, 0, 0, 0); w.append(1); f(0, 0, 402, 874)
         w.append(1); f(9, 10, 11, 12); f(8, 8, 8, 8); f(0, 16, 0, 16); f(672)
-        w.append(1); f(0, 538, 402, 336); w.append(1)
+        w.append(2); f(0, 538, 402, 336); w.append(1)
         w.append(0)
         w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
+        w += [1, 1, 2, 1, 0]
         XCTAssertEqual([UInt8](update.encode()), w)
+        // The keyboard's state, after an empty update's band, lists and margins: 0 unreported, 1 dismissed
+        XCTAssertEqual([UInt8](OwnerUpdateIOS().encode())[14], 0)
+        XCTAssertEqual([UInt8](OwnerUpdateIOS(keyboard: .dismissed).encode())[14], 1)
         // A registration: the name's length and bytes, then the target after a presence byte
         let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
         w = [3] + Array("map".utf8) + [1]
@@ -252,12 +296,12 @@ final class OwnerUpdateIOSTests: XCTestCase {
         until("the keyboard shows and is sampled") { shown != nil && KeyboardSampleIOS.existing(in: window)?.sample != nil }
         let keys = window.convert(try XCTUnwrap(shown), from: window.screen.coordinateSpace)
         let origin = view.bounds.origin
-        let keyboard = try XCTUnwrap(OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).keyboard)
+        let keyboard = try XCTUnwrap(OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).keyboard.shown)
         XCTAssertTrue(keyboard.docked)
         XCTAssertEqual(keyboard.frame.minY, view.convert(keys, from: window).minY - origin.y, accuracy: 0.5, "the route holds no editor and is told the keyboard")
         XCTAssertEqual(keyboard.frame.height, keys.height, accuracy: 0.5)
         field.resignFirstResponder()
-        until("the keyboard goes from the update") { OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).keyboard == nil }
+        until("the update says the keyboard is dismissed") { OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).keyboard == .dismissed }
     }
 
     /// A sheet scaled behind the sheet over it reads the window's keyboard converted into its own view, where its own
@@ -288,7 +332,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertTrue(field.becomeFirstResponder())
         until("the keyboard shows and is sampled") { shown != nil && KeyboardSampleIOS.existing(in: window)?.sample != nil }
         let keys = window.convert(try XCTUnwrap(shown), from: window.screen.coordinateSpace)
-        let keyboard = try XCTUnwrap(OwnerUpdateIOS.sample(controller: under, view: under.view, session: nil).keyboard)
+        let keyboard = try XCTUnwrap(OwnerUpdateIOS.sample(controller: under, view: under.view, session: nil).keyboard.shown)
         let expected = under.view.convert(keys, from: window).offsetBy(dx: -under.view.bounds.minX, dy: -under.view.bounds.minY)
         XCTAssertEqual(keyboard.frame.minY, expected.minY, accuracy: 0.5)
         XCTAssertEqual(keyboard.frame.height, expected.height, accuracy: 0.5)
@@ -305,15 +349,15 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         let path = try XCTUnwrap(env["EXACT_FIXTURE_PLAN"], "build.mjs --test --ios compiles EXACT_FIXTURE_PLAN")
         let plan = try Data(contentsOf: URL(fileURLWithPath: path))
-        let size = CGSize(width: 402, height: 874)
         let session = ExactApp.shared.makeSession(label: "owner-update")
         sessions.append(session)
         let view = ExactView(session: session)
         sessionView = view
         let host = UIViewController()
         let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(origin: .zero, size: size))
-        window.frame = CGRect(origin: .zero, size: size)
+        // A scene's window fills its scene, as an app's does, so the keyboard's guides end where the screen does
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let size = window.bounds.size
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.addSubview(view)

@@ -1,6 +1,6 @@
 // Android's APK ABIs and their NDK toolchains. Hermes overrides are target-specific.
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, resolve } from 'node:path';
 import { cargoEnvironment, hermesBundle } from './app.mjs';
@@ -84,5 +84,26 @@ export function stageAndroidBake(out, jniLibs, toolchain, target, widgets, name)
     `-Wl,-soname,${name}`, '-x', 'assembler', '-', '-o', library];
   const built = spawnSync(clang, args, { cwd: out, input: assembly, encoding: 'utf8' });
   if (built.status !== 0) throw new Error(`Android bake data link failed: ${built.error?.message ?? built.stderr.trim()}`);
+  return library;
+}
+
+/** The optional sound arm: a separate ELF, never linked into libexactcanvas. */
+export function soundLibraryCommand(library, env, target = ANDROID_TARGET) {
+  const mixer = resolve(import.meta.dir, '../host/apple/soundarm'), arm = resolve(import.meta.dir, '../host/android/soundarm');
+  const cc = env[`CC_${target.replaceAll('-', '_')}`], wrapper = /((?:aarch64|x86_64)-linux-android\d+)-clang\.cmd$/i.exec(cc);
+  // spawnSync cannot execute an NDK .cmd wrapper without a shell.
+  const compiler = wrapper ? [cc.replace(wrapper[0], 'clang.exe'), `--target=${wrapper[1]}`] : [cc];
+  return [...compiler, '-std=gnu11', '-O2', '-fPIC', '-shared', '-Wall', '-Wextra', '-Werror',
+    '-Wl,-z,max-page-size=16384', '-Wl,-soname,libexact_sound.so', '-I', mixer,
+    resolve(mixer, 'sound_mixer.c'), resolve(arm, 'sound_wav.c'), resolve(arm, 'sound_arm.c'),
+    '-laaudio', '-lm', '-o', library];
+}
+
+export function stageSoundLibrary(jniLibs, env, target = ANDROID_TARGET) {
+  const library = resolve(jniLibs, 'libexact_sound.so');
+  mkdirSync(jniLibs, { recursive: true });
+  const [command, ...args] = soundLibraryCommand(library, env, target);
+  const built = spawnSync(command, args, { env, stdio: 'inherit' });
+  if (built.status !== 0) throw new Error('Android sound arm did not build');
   return library;
 }

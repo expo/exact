@@ -24,7 +24,7 @@ concat: xs.concat(ys) -> T[]
 filter: xs.filter(x => bool) -> T[]
 flat: xs.flat() -> T[]
 first: first(xs) -> option<T>
-formatShortcut(chord: string) -> string  # ⇧⌘O or Ctrl+Shift+O for "Mod+Shift+O"; empty during server rendering
+formatShortcut: formatShortcut(chord) -> string  (⇧⌘O or Ctrl+Shift+O; empty on server)
 formatDate: formatDate(msOrDayKey, offset, "medium"|"month-year"|"month-day"|"iso") -> string
 formatDay: formatDay(then, now, offset, "day"|"day-time"|"list"|"section") -> string  (Today)
 formatDecimal: (cents to "12.34"; literal digits)
@@ -177,7 +177,7 @@ action log
   days = days.concat([formatDate(at, time.utcOffset, "iso")])
 ```
 ### a test, and verify
-Empty storage per test. `clock data` lands replies, `clock settle` ends transitions; `reload` keeps storage. `bun exact.mjs verify` tests end screens and relaunches; `verify ios` last; `--shots <dir>` keeps shots. Keep its `contract verify` receipt.
+Fresh store per test. `reload` keeps it. `clock data` lands replies, `clock settle` ends transitions. `bun exact.mjs verify` checks ends and relaunches. Run `verify ios` last. Keep its `contract verify` receipt and `--shots <dir>`.
 ```contract-test
 test "a pick survives a relaunch"
   tap "pick"
@@ -186,7 +186,7 @@ test "a pick survives a relaunch"
   expect text "n" == "1"
 ```
 ### composing a screen
-One focal point. Use a part for emphasis, `buttonStyle="filled"` for the main action and live `input type="search"` in the `header`. Forms use grouped lists (`grouped-form`). If empty, indent the `button` under `EmptyState`.
+One focal point. Use parts, a filled button and live header search. See `grouped-form`. Nest buttons under `EmptyState`.
 ```contract
 use SummaryCard from "exact:content"
 column gap=16 padding=16

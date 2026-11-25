@@ -368,6 +368,7 @@ fn container_insets_do_not_make_content_growth_a_stretch() {
             }, &[item]).unwrap();
             let root = tree.new_with_children(Style {
                 display: Display::Block,
+                position: Position::Relative,
                 size: Size { width: length(800.0), height: length(600.0) },
                 ..Default::default()
             }, &[row]).unwrap();
@@ -421,7 +422,7 @@ fn wrapping_min_content_width_uses_contents_independently_of_flex_basis() {
             let row = tree.new_with_children(Style {
                 flex_direction: direction,
                 flex_wrap: wrap,
-                align_content: Some(AlignContent::FLEX_START),
+                align_content: AlignContent::FLEX_START,
                 ..Default::default()
             }, &items).unwrap();
             let available = Size { width: AvailableSpace::MinContent, height: AvailableSpace::MaxContent };
@@ -492,7 +493,7 @@ fn min_content_rows_wrap_at_their_resolved_width() {
                 flex_direction: direction,
                 flex_wrap: FlexWrap::Wrap,
                 max_size: Size { width: maximum, height: auto() },
-                align_content: Some(AlignContent::FLEX_START),
+                align_content: AlignContent::FLEX_START,
                 ..Default::default()
             }, &items).unwrap();
             let available = Size { width: AvailableSpace::MinContent, height: AvailableSpace::MaxContent };
@@ -553,7 +554,7 @@ fn min_content_rows_remeasure_content_dependent_bases() {
                 if block {
                     children = vec![tree.new_with_children(Style {
                         flex_wrap: FlexWrap::Wrap,
-                        align_content: Some(AlignContent::FLEX_START),
+                        align_content: AlignContent::FLEX_START,
                         ..Default::default()
                     }, &children).unwrap()];
                 }
@@ -564,14 +565,14 @@ fn min_content_rows_remeasure_content_dependent_bases() {
                     max_size: Size { width: maximum, height: auto() },
                     flex_basis: basis,
                     flex_wrap: FlexWrap::Wrap,
-                    align_content: Some(AlignContent::FLEX_START),
+                    align_content: AlignContent::FLEX_START,
                     ..Default::default()
                 }, &children).unwrap());
             }
             let row = tree.new_with_children(Style {
                 flex_direction: direction,
                 flex_wrap: FlexWrap::Wrap,
-                align_content: Some(AlignContent::FLEX_START),
+                align_content: AlignContent::FLEX_START,
                 ..Default::default()
             }, &items).unwrap();
             let available = Size { width: AvailableSpace::MinContent, height: AvailableSpace::MaxContent };
@@ -636,7 +637,7 @@ fn capped_max_content_rows_measure_their_wrapped_height() {
                 let row = tree.new_with_children(Style {
                     flex_direction: direction,
                     flex_wrap: wrap,
-                    align_content: Some(AlignContent::FLEX_START),
+                    align_content: AlignContent::FLEX_START,
                     max_size: Size { width: length(maximum), height: auto() },
                     gap: Size { width: length(gap), height: length(0.0) },
                     ..Default::default()

@@ -144,6 +144,16 @@ fn an_action_nothing_shows_lays_nothing_out_and_one_shown_does() {
 }
 
 #[test]
+fn an_action_nothing_shows_owes_no_route_overflow_check() {
+    let mut host = boot();
+    host.route_overflow.dirty = false;
+    press(&mut host, "hide");
+    assert!(!host.route_overflow.dirty, "a counter no node reads");
+    press(&mut host, "show");
+    assert!(host.route_overflow.dirty, "the count's text changed");
+}
+
+#[test]
 fn a_scroll_whose_action_nothing_shows_lays_nothing_out() {
     let mut host = boot();
     let list = host.runner.collections()[0].view;

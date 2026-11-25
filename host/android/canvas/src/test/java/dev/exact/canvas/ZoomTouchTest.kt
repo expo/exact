@@ -36,7 +36,7 @@ class ZoomTouchTest {
         val answers = ArrayDeque<(IntArray) -> Unit>()
         @Implementation fun __constructor__(hwbuf: Boolean, fast: Boolean, priority: Int, intent: (String) -> String?) {}
         @Implementation fun under(x: Float, y: Float, done: (IntArray) -> Unit) { answers.addLast(done) }
-        @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, waitMs: Long, at: Long, history: MotionEvent?): Boolean { touches.add(action); return false }
+        @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, waitMs: Long, at: Long, history: MotionEvent?, released: ((IntArray) -> Unit)?): Boolean { touches.add(action); return false }
         @Implementation fun finger(action: Int, id: Int, x: Float, y: Float, tool: Int, at: Long, primaryX: Float, primaryY: Float, waitMs: Long) = false
         @Implementation fun touching(on: Boolean) {}
         @Implementation fun scrolled(id: Int, dx: Float, dy: Float, rev: Int, seq: Int) {

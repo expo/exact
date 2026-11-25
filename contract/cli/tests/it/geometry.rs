@@ -3,7 +3,7 @@
 //! the kernel, as on a native host. Outside an action there is no read at all
 //! (the compiler refuses it: `contract/corpus/rejects.txt`).
 
-use crate::source::{boxed, NoData, Source};
+use crate::source::{boxed, measure_dialogs, NoData, Source};
 use exact_kernel::{Kernel, Offer};
 use exact_runner::{Capability, Runner, Value};
 
@@ -656,6 +656,7 @@ fn open_top_layer_escapes_its_authored_clip() {
         "/",
     )
     .unwrap();
+    measure_dialogs(&mut r);
     lay_out(&mut r);
     let key = r.kernel().find_by_id("dialog")[0];
     r.top_layer(&[r.kernel().arena().local_id(key.index)]);
@@ -694,6 +695,7 @@ fn top_layer_uses_presented_frames_and_stack_order() {
         "/",
     )
     .unwrap();
+    measure_dialogs(&mut r);
     lay_out(&mut r);
     let view = |id| {
         let key = r.kernel().find_by_id(id)[0];

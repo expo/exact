@@ -285,11 +285,10 @@ pub(crate) fn holder(arena: &NodeArena, slot: u32) -> Holder {
 /// What `slot` holds its own subtree as, if it does: a document top-layer
 /// box laid out on its own, or a box its host gave a block.
 pub(crate) fn holds(arena: &NodeArena, slot: u32) -> Option<Holder> {
-    // Check for a top-layer box first: it is no owner, whatever block it has (D2)
-    if arena.top_layer_slots.contains(slot) && arena.blocks.holds(slot) {
-        return Some(Holder::TopLayer(slot));
+    if super::block::owns(arena, slot) {
+        return Some(Holder::Owner(slot));
     }
-    (arena.blocks.given(slot).is_some()).then_some(Holder::Owner(slot))
+    arena.blocks.holds(slot).then_some(Holder::TopLayer(slot))
 }
 
 /// The edges, top right bottom left, on which the band reaches `slot` past

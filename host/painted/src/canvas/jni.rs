@@ -718,22 +718,19 @@ macro_rules! canvas_jni {
             }
 
             /// A touch (0 down, 1 up, 2 move, 3 cancel) at the view's
-            /// pixels, and what touched: Android's tool type (1 a finger,
-            /// 2 a stylus, 3 a mouse, 4 an eraser; LLP 1115.001 D7.4).
-            /// Action 4: the touch that is down was held for the system's
-            /// long-press time (a context menu opens, D10). `at`: the
-            /// event's time in uptime ns, or -1 for a reader action.
+            /// pixels and its Android tool type (LLP 1115.001 D7.4).
+            /// Action 4 is a long press. `at` is uptime ns or -1 for a reader action.
             #[no_mangle]
             pub unsafe extern "system" fn Java_dev_exact_canvas_Native_touch(
-                _env: *mut JNIEnv,
+                env: *mut JNIEnv,
                 _class: jclass,
                 action: jint,
                 x: jfloat,
                 y: jfloat,
                 tool: jint,
                 at: jlong,
-            ) {
-                with(|h| h.touch(action, x, y, tool, at));
+            ) -> jintArray {
+                with(|h| h.touch(action, x, y, tool, at)).flatten().map_or(std::ptr::null_mut(), |words| ints(env, &words))
             }
 
             /// Whether a touch is down on the view, before the reader routes

@@ -44,6 +44,7 @@ mod provenance;
 pub(crate) mod readers;
 mod replacement;
 mod segments;
+mod session_update;
 pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
@@ -62,11 +63,14 @@ pub(crate) use cover::{
 };
 pub use cover::{credited_edges, HostCover};
 pub use edge_bar::BarEdgeEffect;
-pub use keyboard::{Keyboard, KeyboardPolicy};
+pub use keyboard::{Keyboard, KeyboardFacts, KeyboardPolicy, KeyboardReport};
 pub use margins::OwnerMargins;
-pub use owner_update::{decode_registration, encode_registration, BarRegion, OwnerUpdate};
+pub use owner_update::{
+    decode_registration, encode_registration, BarRegion, OwnerChrome, OwnerUpdate, VerticalBarEdge,
+};
 pub use provenance::{Contribution, Operation};
 pub use scroll_terms::ScrollTerms;
+pub use session_update::SessionUpdate;
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;
 

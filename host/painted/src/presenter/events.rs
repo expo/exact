@@ -46,6 +46,37 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
+    /// The reader reports preferred content sizes in dp, once per frame and binding.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_module_sizes(&mut self, json: &str) -> bool {
+        type Row = (ViewId, u32, u32, u64, Option<(f32, f32)>);
+        let Ok(rows) = serde_json::from_str::<Vec<Row>>(json) else {
+            return false;
+        };
+        let kernel = self.host.kernel();
+        let mut changed = Vec::new();
+        for (id, index, generation, session, size) in rows {
+            let key = exact_kernel::NodeKey { index, generation };
+            if session == self.brush.native_session
+                && kernel
+                    .node(id)
+                    .is_some_and(|n| n.key == key && n.node_type == NodeType::NativeView)
+                && size.is_none_or(|(w, h)| w.is_finite() && h.is_finite() && w > 0. && h > 0.)
+                && kernel.arena().intrinsic(index) != size
+            {
+                changed.push((id, size));
+            }
+        }
+        if changed.is_empty() {
+            return false;
+        }
+        if let Some(error) = self.host.set_intrinsics(changed) {
+            self.host.log(error);
+        }
+        self.dirty = true;
+        true
+    }
+
     /// A native module may only answer for the session and allocation its painted view represents.
     #[cfg(any(target_os = "android", test))]
     pub(crate) fn reader_module_event(

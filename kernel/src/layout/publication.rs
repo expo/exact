@@ -3,6 +3,37 @@
 use super::*;
 use std::collections::BTreeSet;
 
+/// Natural scrollable overflow extent `(width, height)` from Taffy's layout.
+/// On a normal axis this is the physical end edge from the client start; on a
+/// reversed scroll-container axis (RTL or `row-reverse`/`column-reverse`),
+/// overflow extends into negative coordinates past the client start, so the
+/// reachable extent is `client_size - start`.
+pub(crate) fn overflow_extent(l: &taffy::tree::Layout) -> (f32, f32) {
+    let o = l.scrollable_overflow_rect;
+    let rev = o.is_reversed();
+    let w = if rev.x {
+        let client = (l.size.width
+            - l.border.left
+            - l.border.right
+            - l.scrollbar_size.width.min(l.size.width))
+        .max(0.0);
+        client - o.left()
+    } else {
+        o.right()
+    };
+    let h = if rev.y {
+        let client = (l.size.height
+            - l.border.top
+            - l.border.bottom
+            - l.scrollbar_size.height.min(l.size.height))
+        .max(0.0);
+        client - o.top()
+    } else {
+        o.bottom()
+    };
+    (w, h)
+}
+
 pub(super) fn publish(
     arena: &mut NodeArena,
     tree: &mut LayoutTree,
@@ -140,6 +171,7 @@ pub(super) fn publish(
         }
         let inset_changed = arena.inset(slot) != inset;
         arena.set_inset(slot, inset);
+        let mut reversed = taffy::geometry::Point { x: false, y: false };
         let frame = if hidden {
             arena.set_content(slot, (0.0, 0.0));
             arena.field_content.remove(&slot);
@@ -162,13 +194,14 @@ pub(super) fn publish(
             }
             // A multi-column container's overflow is its columns' (D7), which
             // a multi-column `text`, a leaf to the engine, never reports.
-            let o = arena
-                .frag
-                .multicol
-                .get(&slot)
-                .and_then(|m| m.overflow)
-                .unwrap_or(l.scrollable_overflow_rect);
-            arena.set_content(slot, (o.right, o.bottom));
+            let content = match arena.frag.multicol.get(&slot).and_then(|m| m.overflow) {
+                Some(o) => (o.right, o.bottom),
+                None => {
+                    reversed = l.scrollable_overflow_rect.is_reversed();
+                    overflow_extent(&l)
+                }
+            };
+            arena.set_content(slot, content);
             let (width, height) = placement
                 .and_then(|p| p.size)
                 .unwrap_or((l.size.width, l.size.height));
@@ -192,7 +225,7 @@ pub(super) fn publish(
             true => {
                 let placed = arena.content(slot);
                 let (frame, (x, y), content) =
-                    crate::kernel::ignore::place(arena, slot, frame, placed);
+                    crate::kernel::ignore::place(arena, slot, frame, placed, reversed);
                 arena.set_content(slot, content);
                 (frame, fx + x, fy + y)
             }

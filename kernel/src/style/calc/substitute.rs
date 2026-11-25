@@ -9,7 +9,7 @@
 
 use super::super::{Dimension, Env};
 use super::parse::env_parts;
-use cssparser::{ParseError, Parser, ParserInput, Token};
+use cssparser::{ParseError, Parser, Token};
 
 /// `text` with every `env()` whose variable `env` does not define and that
 /// has a fallback replaced by the fallback's tokens; `None` when one is
@@ -28,18 +28,17 @@ pub(super) fn substitute(text: &str, env: &Env) -> Option<String> {
 }
 
 fn walk_text(text: &str, env: Option<&Env>, tokens: &mut Vec<String>) -> Option<()> {
-    let mut input = ParserInput::new(text);
-    walk(&mut Parser::new(&mut input), env, tokens).ok()
+    walk(&mut Parser::new(text), env, tokens).ok()
 }
 
 /// Each token's text in order, a block's opener and closer each one, a
 /// comment none (CSS Syntax 3 §4.3.2: it is no token); every `env()`
 /// substituted under `env`, when there is one.
-fn walk<'i>(
-    p: &mut Parser<'i, '_>,
+fn walk(
+    p: &mut Parser<'_>,
     env: Option<&Env>,
     tokens: &mut Vec<String>,
-) -> Result<(), ParseError<'i, ()>> {
+) -> Result<(), ParseError<()>> {
     loop {
         let start = p.position();
         let Ok(token) = p.next_including_whitespace_and_comments() else {
@@ -50,19 +49,19 @@ fn walk<'i>(
             Token::Function(name) if env.is_some() && name.eq_ignore_ascii_case("env") => {
                 let env = env.expect("checked");
                 let (term, fallback) =
-                    p.parse_nested_block(|p| env_parts(p, 0).map_err(|_| p.new_custom_error(())))?;
+                    p.parse_nested_block(|p| env_parts(p, 0).map_err(|_| ParseError::custom(())))?;
                 match fallback {
                     // Defined: the variable itself, its fallback unused
                     _ if term.value(env).is_some() => {
                         let mut text = String::new();
                         super::text::env(term, &mut text);
-                        walk_text(&text, None, tokens).ok_or(p.new_custom_error(()))?
+                        walk_text(&text, None, tokens).ok_or(ParseError::custom(()))?
                     }
                     // The fallback's own `env()` may need substituting too
                     Some(fallback) => {
-                        walk_text(&fallback, Some(env), tokens).ok_or(p.new_custom_error(()))?
+                        walk_text(&fallback, Some(env), tokens).ok_or(ParseError::custom(()))?
                     }
-                    None => return Err(p.new_custom_error(())),
+                    None => return Err(ParseError::custom(())),
                 }
                 continue;
             }
@@ -93,8 +92,7 @@ fn apart(a: &str, b: &str) -> bool {
         return true;
     }
     let joined = format!("{a}{b}");
-    let mut input = ParserInput::new(&joined);
-    let mut p = Parser::new(&mut input);
+    let mut p = Parser::new(&joined);
     p.next_including_whitespace_and_comments().is_ok() && p.position().byte_index() == a.len()
 }
 
@@ -102,7 +100,7 @@ fn apart(a: &str, b: &str) -> bool {
 /// With no environment, validate substitutions and retain the specified value.
 pub(crate) fn position_tokens(text: &str, env: Option<&Env>) -> Option<(String, bool)> {
     fn walk(
-        p: &mut Parser<'_, '_>,
+        p: &mut Parser<'_>,
         env: Option<&Env>,
         tokens: &mut Vec<String>,
         deferred: &mut bool,
@@ -128,7 +126,7 @@ pub(crate) fn position_tokens(text: &str, env: Option<&Env>) -> Option<(String, 
                 Token::Function(name) if name.eq_ignore_ascii_case("env") => {
                     let (term, fallback) = p
                         .parse_nested_block(|p| {
-                            env_parts(p, depth).map_err(|_| p.new_custom_error::<(), ()>(()))
+                            env_parts(p, depth).map_err(|_| ParseError::<()>::custom(()))
                         })
                         .ok()?;
                     *deferred |= fallback.is_some();
@@ -137,9 +135,8 @@ pub(crate) fn position_tokens(text: &str, env: Option<&Env>) -> Option<(String, 
                             if let Some(value) = term.value(env) {
                                 tokens.push(format!("{value}px"));
                             } else {
-                                let mut input = ParserInput::new(fallback.as_deref()?);
                                 walk(
-                                    &mut Parser::new(&mut input),
+                                    &mut Parser::new(fallback.as_deref()?),
                                     Some(env),
                                     tokens,
                                     deferred,
@@ -156,7 +153,7 @@ pub(crate) fn position_tokens(text: &str, env: Option<&Env>) -> Option<(String, 
                     p.parse_nested_block(|p| {
                         let name = p.expect_ident()?.to_string();
                         if !name.starts_with("--") || name.len() <= 2 {
-                            return Err(p.new_custom_error(()));
+                            return Err(ParseError::custom(()));
                         }
                         let fallback = if p.is_exhausted() {
                             None
@@ -166,7 +163,7 @@ pub(crate) fn position_tokens(text: &str, env: Option<&Env>) -> Option<(String, 
                             let mut fallback = Vec::new();
                             // A fallback is validated even when the variable is defined.
                             walk(p, None, &mut fallback, deferred, depth + 1)
-                                .ok_or(p.new_custom_error(()))?;
+                                .ok_or(ParseError::custom(()))?;
                             Some(p.slice_from(start).to_string())
                         };
                         if let Some(env) = env {
@@ -181,19 +178,18 @@ pub(crate) fn position_tokens(text: &str, env: Option<&Env>) -> Option<(String, 
                             } else if let Some(fallback) = fallback {
                                 value = fallback;
                             } else {
-                                return Err(p.new_custom_error(()));
+                                return Err(ParseError::custom(()));
                             }
-                            let mut input = ParserInput::new(&value);
                             walk(
-                                &mut Parser::new(&mut input),
+                                &mut Parser::new(&value),
                                 Some(env),
                                 tokens,
                                 deferred,
                                 depth + 1,
                             )
-                            .ok_or(p.new_custom_error(()))?;
+                            .ok_or(ParseError::custom(()))?;
                         }
-                        Ok::<_, ParseError<'_, ()>>(())
+                        Ok::<_, ParseError<()>>(())
                     })
                     .ok()?;
                     continue;
@@ -212,22 +208,15 @@ pub(crate) fn position_tokens(text: &str, env: Option<&Env>) -> Option<(String, 
             };
             tokens.push(p.slice_from(start).to_string());
             p.parse_nested_block(|p| {
-                walk(p, env, tokens, deferred, depth + 1).ok_or(p.new_custom_error::<(), ()>(()))
+                walk(p, env, tokens, deferred, depth + 1).ok_or(ParseError::<()>::custom(()))
             })
             .ok()?;
             tokens.push(close.into());
         }
     }
-    let mut input = ParserInput::new(text);
     let mut tokens = Vec::new();
     let mut deferred = false;
-    walk(
-        &mut Parser::new(&mut input),
-        env,
-        &mut tokens,
-        &mut deferred,
-        0,
-    )?;
+    walk(&mut Parser::new(text), env, &mut tokens, &mut deferred, 0)?;
     let mut out = String::new();
     for (i, token) in tokens.iter().enumerate() {
         if i > 0 && !apart(&tokens[i - 1], token) {

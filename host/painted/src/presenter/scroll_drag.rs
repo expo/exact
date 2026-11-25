@@ -242,9 +242,14 @@ impl<D: DataSource> Presenter<D> {
     /// throws, is over, the scroller's moves owe no `scrollend`
     /// (`scroll_end.rs`). Errors are the action's.
     pub fn reader_drag_began(&mut self, id: ViewId) -> Option<String> {
-        if self.reader_knows(id) {
-            self.scroll_end_hold(id);
+        if !self.reader_knows(id) {
+            return None;
         }
+        self.list_drag_began(id)
+    }
+
+    pub(super) fn list_drag_began(&mut self, id: ViewId) -> Option<String> {
+        self.scroll_end_hold(id);
         self.scroll_drag(id, Event::Scrolldragstart)
     }
 
@@ -271,6 +276,27 @@ impl<D: DataSource> Presenter<D> {
         {
             return Some(format!("scroll drag {id}: refused, not finite"));
         }
+        let shared = self.reader.pending_height_end.is_some_and(|key| {
+            self.host
+                .kernel()
+                .node_by_key(key)
+                .is_some_and(|n| n.id == id)
+        });
+        if shared {
+            self.reader.pending_height_end = None;
+        } else if !self.reader_knows(id) {
+            return None;
+        }
+        self.list_drag_ended(id, velocity, rest, flings)
+    }
+
+    pub(super) fn list_drag_ended(
+        &mut self,
+        id: ViewId,
+        velocity: (f64, f64),
+        rest: Option<(f32, f32)>,
+        flings: bool,
+    ) -> Option<String> {
         if !flings {
             self.scroll_end_release(id);
         }
@@ -319,15 +345,13 @@ impl<D: DataSource> Presenter<D> {
         error.or(self.after_commit())
     }
 
-    /// Dispatch a drag's event at `id`, a scroller the reader knows that
-    /// hears it and is shown.
+    /// Dispatch a drag's event to a visible scroller with a handler.
     fn scroll_drag(&mut self, id: ViewId, event: Event) -> Option<String> {
         let kind = match event {
             Event::Scrolldragstart => EventKind::Scrolldragstart,
             _ => EventKind::Scrolldragend,
         };
         if id == PAGE
-            || !self.reader_knows(id)
             || self.host.route_visibility(id).1
             || !self.host.runner().handlers_of(id).contains(&kind)
         {

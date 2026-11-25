@@ -91,6 +91,7 @@ test("one package can declare its own POI car service and map templates", () => 
   assert.match(xml, /com\.google\.android\.gms\.car\.application" android:resource="@xml\/automotive_app_desc"/);
   assert.match(xml, /androidx\.car\.app\.minCarApiLevel" android:value="1"/);
   assert.deepEqual(fragmentPermissions(bound), [permission]);
+  assert.throws(() => fragmentPermissions(bound, [permission]), /app.json host\.android\.permissions.*MAP_TEMPLATES.*only the package/i);
   assert.deepEqual(fragmentPermissions([impl({ carAppService })]), []);
   assert.throws(() => fragmentPermissions([impl({ permissions: [permission] }), ...bound]), /MAP_TEMPLATES without its own carAppService/);
   assert.throws(() => manifestFragment([...bound, impl({ carAppService: { ...carAppService, name: name + '2' } })]), /second car service.*VoltaiCarAppService2/);
@@ -228,6 +229,57 @@ test("device's normal permission is declared, and a runtime one refused", () => 
   assert.equal(manifestFragment(bound), '', 'a permission adds no component');
   assert.deepEqual(fragmentPermissions(impl(undefined)), []);
   assert.throws(() => fragmentPermissions(impl({ permissions: ['android.permission.ACCESS_FINE_LOCATION'] })), (e) => e.message.includes('ACCESS_FINE_LOCATION') && e.message.includes('normal permissions only'));
+});
+
+test("an app and its packages declare install-time permissions on one allow-list", () => {
+  const capture = 'android.permission.DETECT_SCREEN_CAPTURE', network = 'android.permission.ACCESS_NETWORK_STATE';
+  const bound = impl({ permissions: [capture, network] });
+  assert.deepEqual(fragmentPermissions(bound, [capture, capture]), [capture, network]);
+  assert.deepEqual(fragmentPermissions([], [capture]), [capture]);
+  assert.deepEqual(fragmentPermissions(bound), [capture, network]);
+  for (const [entry, grant, option] of [
+    ['unlisted', undefined],
+    ['android.permission.RECORD_AUDIO', 'device.microphone'],
+    ['android.permission.ACCESS_COARSE_LOCATION', 'device.geolocation-approximate'],
+    ['android.permission.WRITE_CALENDAR', 'device.calendar-write-only'],
+    ['android.permission.CAMERA', 'device.camera'],
+    ['android.permission.health.READ_HEALTH_DATA_HISTORY', 'device.health-read', 'android.readHealthDataHistory'],
+    ['android.permission.READ_EXTERNAL_STORAGE', 'device.photos'],
+    ['android.permission.SEND_SMS', undefined],
+  ]) {
+    assert.throws(() => fragmentPermissions([], [entry]), error =>
+      [entry, 'app.json host.android.permissions', capture, network, 'grant line'].every(part => error.message.includes(part))
+      && (grant ? error.message.includes(`\`${grant} purpose.<key>\``) : !error.message.includes('Use `'))
+      && (!option || error.message.includes(`using ${option}`)));
+    assert.throws(() => fragmentPermissions(impl({ permissions: [entry] })), {
+      message: `alarms's Android implementation: its manifest fragment asks for "${entry}", which is not on the list (LLP 1133.031 D12 item 1: normal permissions only; a runtime permission comes from a grant line)`,
+    });
+  }
+  assert.throws(() => fragmentPermissions([], ['first-unlisted', 'second-unlisted']), /first-unlisted[\s\S]*second-unlisted/);
+  for (const invalid of [null, capture, {}, [42]]) {
+    assert.throws(() => fragmentPermissions([], invalid), /app.json host\.android\.permissions/);
+  }
+});
+
+test("a permission refusal names the app-local package call and its grant line", () => {
+  const app = mkdtempSync(resolve(tmpdir(), 'exact-permission-grant-'));
+  const pkg = resolve(app, 'node_modules/@fixture/video');
+  const permission = 'android.permission.READ_MEDIA_VIDEO';
+  try {
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: '@fixture/video', exports: './exact.json' }));
+    writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/video', grants: ['device.photos'],
+      names: [{ source: 'videos', derives: { android: [permission] } }] }));
+    assert.throws(() => fragmentPermissions([], [permission], app), /Use `device\.photos purpose\.<key>` with videos from @fixture\/video\.$/);
+    mkdirSync(resolve(pkg, 'android'));
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: '@fixture/video', exports: { '.': './exact.json', './android': './android/exact.json' } }));
+    writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ kind: 'interface', name: '@fixture/video' }));
+    writeFileSync(resolve(pkg, 'android/exact.json'), JSON.stringify({ kind: 'implementation', implements: '@fixture/video@^1.0', targets: ['android'], grants: ['device.photos'],
+      names: [{ source: 'clips', derives: { android: [permission] } }] }));
+    assert.throws(() => fragmentPermissions([], [permission], app), /Use `device\.photos purpose\.<key>` with clips from @fixture\/video\.$/);
+    writeFileSync(resolve(pkg, 'exact.json'), '{');
+    assert.throws(() => fragmentPermissions([], [permission], app), /READ_MEDIA_VIDEO.*allow-list.*DETECT_SCREEN_CAPTURE/);
+  } finally { rmSync(app, { recursive: true, force: true }); }
 });
 
 test('a query with a data scheme: SENDTO mailto: and smsto: only (LLP 1133.024 D22 item 6)', () => {

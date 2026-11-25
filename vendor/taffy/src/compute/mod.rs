@@ -41,7 +41,9 @@ pub(crate) mod grid;
 pub use leaf::compute_leaf_layout;
 
 #[cfg(feature = "block_layout")]
-pub use self::block::{compute_block_layout, BlockContext, BlockFormattingContext};
+pub use self::block::{
+    compute_block_align_content_offset, compute_block_layout, BlockContext, BlockFormattingContext,
+};
 
 #[cfg(feature = "flexbox")]
 pub use self::flexbox::compute_flexbox_layout;
@@ -78,7 +80,8 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
 
     let parent_size = available_space.into_options();
     let style = tree.get_core_container_style(root);
-    let in_flow = style.position() != Position::Absolute;
+    let position = style.position();
+    let in_flow = !position.is_out_of_flow();
     if !in_flow && style.box_generation_mode() != crate::BoxGenerationMode::None {
         if let Size { width: Some(width), height: Some(height) } = parent_size {
             let direction = style.direction();
@@ -91,6 +94,8 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
                 sizing_mode: SizingMode::InherentSize,
                 #[cfg(feature = "content_size")]
                 is_scroll_container: false,
+                #[cfg(feature = "content_size")]
+                reversed: Point { x: direction.is_rtl(), y: false },
             }.place(tree, root, crate::tree::StaticPosition::point(Point::ZERO, false, 0), None, Point::ZERO);
             return;
         }
@@ -172,7 +177,12 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
         .then(|| {
             let stretch = parent_size.width.maybe_sub(non_auto_margin.horizontal_axis_sum());
             let style = tree.get_core_container_style(root);
-            common::sizing_keyword::resolve_sizing_keyword(style.size().width, stretch, parent_size.width)
+            common::sizing_keyword::resolve_sizing_keyword(
+                style.size().width,
+                stretch,
+                parent_size.width,
+                |val, basis| tree.calc(val, basis),
+            )
         })
         .flatten()
     {
@@ -247,7 +257,7 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
         }
         _ => non_auto_margin,
     };
-    let location = if in_flow {
+    let mut location = if in_flow {
         Point {
             x: match parent_size.width {
                 Some(available_width) if is_rtl => available_width - output.size.width - margin.right,
@@ -258,6 +268,20 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
     } else {
         Point::ZERO
     };
+    if position == Position::Relative {
+        let style = tree.get_core_container_style(root);
+        let inset = style.inset();
+        let left = inset.left.maybe_resolve(parent_size.width, |val, basis| tree.calc(val, basis));
+        let right = inset.right.maybe_resolve(parent_size.width, |val, basis| tree.calc(val, basis));
+        let top = inset.top.maybe_resolve(parent_size.height, |val, basis| tree.calc(val, basis));
+        let bottom = inset.bottom.maybe_resolve(parent_size.height, |val, basis| tree.calc(val, basis));
+        location.x += if is_rtl {
+            right.map(|right| -right).or(left).unwrap_or(0.0)
+        } else {
+            left.or(right.map(|right| -right)).unwrap_or(0.0)
+        };
+        location.y += top.or(bottom.map(|bottom| -bottom)).unwrap_or(0.0);
+    }
 
     tree.set_unrounded_layout(
         root,
@@ -332,11 +356,13 @@ pub fn round_layout(tree: &mut impl RoundTree, node_id: NodeId) {
         let unrounded_layout = tree.get_unrounded_layout(node_id);
         let mut layout = unrounded_layout;
 
+        let parent_x = cumulative_x;
+        let parent_y = cumulative_y;
         let cumulative_x = cumulative_x + unrounded_layout.location.x;
         let cumulative_y = cumulative_y + unrounded_layout.location.y;
 
-        layout.location.x = round(unrounded_layout.location.x);
-        layout.location.y = round(unrounded_layout.location.y);
+        layout.location.x = round(cumulative_x) - round(parent_x);
+        layout.location.y = round(cumulative_y) - round(parent_y);
         layout.size.width = round(cumulative_x + unrounded_layout.size.width) - round(cumulative_x);
         layout.size.height = round(cumulative_y + unrounded_layout.size.height) - round(cumulative_y);
         layout.scrollbar_size.width = round(unrounded_layout.scrollbar_size.width);
@@ -377,14 +403,29 @@ pub fn round_layout(tree: &mut impl RoundTree, node_id: NodeId) {
     /// This is split into a separate function to make it easier to feature flag.
     fn round_scrollable_overflow_rect(
         layout: &mut Layout,
-        unrounded_rect: crate::geometry::Rect<f32>,
+        unrounded_overflow: crate::tree::ScrollableOverflow,
         cumulative_x: f32,
         cumulative_y: f32,
     ) {
-        layout.scrollable_overflow_rect.left = round(cumulative_x + unrounded_rect.left) - round(cumulative_x);
-        layout.scrollable_overflow_rect.right = round(cumulative_x + unrounded_rect.right) - round(cumulative_x);
-        layout.scrollable_overflow_rect.top = round(cumulative_y + unrounded_rect.top) - round(cumulative_y);
-        layout.scrollable_overflow_rect.bottom = round(cumulative_y + unrounded_rect.bottom) - round(cumulative_y);
+        let unrounded_rect = unrounded_overflow.rect();
+        let round_edge = |offset: f32, edge: f32| {
+            let rounded = round(offset + edge) - round(offset);
+            if rounded == 0.0 {
+                // Keep left/top -0.0; ScrollableOverflow::new only re-packs right/bottom signs from reversed.
+                rounded.copysign(edge)
+            } else {
+                rounded
+            }
+        };
+        layout.scrollable_overflow_rect = crate::tree::ScrollableOverflow::new(
+            crate::geometry::Rect {
+                left: round_edge(cumulative_x, unrounded_rect.left),
+                right: round_edge(cumulative_x, unrounded_rect.right),
+                top: round_edge(cumulative_y, unrounded_rect.top),
+                bottom: round_edge(cumulative_y, unrounded_rect.bottom),
+            },
+            unrounded_overflow.is_reversed(),
+        );
     }
 }
 

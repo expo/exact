@@ -1,0 +1,22 @@
+test "a cold unknown route hides the retained tablist"
+  at "/does-not-exist"
+  clock settle
+  expect text "url-notfound" == "/does-not-exist"
+  expect tree has "tabs"
+  expect layout "tabs" height == 0
+
+test "a warm protocol link hides the retained tablist"
+  at "/links"
+  clock settle
+  expect text "url-links" == "/links"
+  tap "tab-saved"
+  clock settle
+  expect text "url-saved" == "/saved"
+  tap "tab-labs"
+  clock settle
+  expect text "url-links" == "/links"
+  type "app" "/open?u=web%2Blabs%3A%2Fdoes-not-exist"
+  clock settle
+  expect text "url-notfound" == "/does-not-exist"
+  expect tree has "tabs"
+  expect layout "tabs" height == 0

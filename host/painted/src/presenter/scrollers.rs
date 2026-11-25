@@ -89,6 +89,9 @@ pub struct Under {
 /// revision it knows and where its own moves left the offset.
 #[derive(Default)]
 pub(super) struct Reader {
+    pub(super) lifting_touch: bool,
+    pub(super) pending_height_end: Option<exact_kernel::NodeKey>,
+    pub(super) height_scroll_release: Option<(exact_kernel::NodeKey, f32)>,
     tracked: BTreeMap<ViewId, (u32, (f32, f32))>,
     /// The last statement [`Presenter::reader_scrollers`] returned.
     #[cfg(any(target_os = "android", test))]

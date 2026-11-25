@@ -114,6 +114,8 @@ pub(crate) struct Observations {
     pub(crate) segments: IdMap<u32, std::sync::Arc<crate::style::env::SegmentGrid>>,
     /// The keyboard each owner's host reports, and the policy (D7).
     pub(crate) keyboards: super::keyboard::Keyboards,
+    /// The chrome each owner's host reports (D6).
+    pub(crate) chrome: IdMap<u32, super::owner_update::OwnerChrome>,
 }
 
 impl Observations {
@@ -241,6 +243,7 @@ impl Observations {
         self.margins.remove(&slot);
         self.side_bars.remove(&slot);
         self.segments.remove(&slot);
+        self.chrome.remove(&slot);
         self.stopped_reading(slot);
     }
 

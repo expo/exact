@@ -378,6 +378,43 @@ fn a_check_that_fails_or_finds_the_item_gone_moves_nothing_or_reads_absent() {
     assert!(done(&events, 4).is_some() && done(&events, 5).is_none() && !asked(&events, 5));
 }
 
+#[test]
+fn a_call_let_go_during_its_check_keeps_its_generation_until_the_platform_answers() {
+    for answer in [Checked::Passed, Checked::Read(None)] {
+        let vault = MemoryVault::default();
+        let mut backend = boot(&vault, mandatory());
+        let mut drive = Drive::new();
+        backend.enqueue("a", Op::Write(Some(b"t1".to_vec())), None);
+        drive.pump(&mut backend);
+        backend.enqueue("a", Op::Unlock, Some(1));
+        assert!(asked(&drive.pump(&mut backend), 1));
+        vault.0.lock().unwrap().calls.clear();
+        // The platform is authenticating generation 1 when the call is let
+        // go: neither a queued write nor a refused one's retry replaces it.
+        backend.cancel(1);
+        backend.enqueue("a", Op::Write(Some(b"t2".to_vec())), None);
+        drive.now_ms = 5000.0;
+        assert!(drive.pump(&mut backend).is_empty());
+        assert!(
+            vault.memory().calls.is_empty(),
+            "{:?}",
+            vault.memory().calls
+        );
+        assert!(backend.checking());
+        // Its late answer is dropped: nothing is answered, read or forgotten,
+        // and the write behind it lands.
+        backend.checked(1, answer);
+        let events = drive.pump(&mut backend);
+        assert!(events.is_empty(), "{events:?}");
+        assert_eq!(
+            vault.memory().calls,
+            ["add_locked a#2", "delete_locked a#1"]
+        );
+        assert_eq!(backend.occupancy("a"), Some(Occupancy::Locked));
+        assert!(!backend.checking());
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct UnavailableVault {
     pub(crate) memory: MemoryVault,

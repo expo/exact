@@ -83,6 +83,14 @@ package enum RouteGeometry {
     /// clearance `route` turns off (`-exact-safe-area`).
     package static func clearanceOff(_ route: NodeView) -> Int { Int(route.style["safe_area"]?.number ?? 0) & 0xf }
 
+    /// The clearance layout adds after crediting authored padding that reads this edge's inset.
+    package static func clearancePadding(_ route: NodeView, edge: Int, inset: CGFloat) -> CGFloat {
+        let bit = 1 << edge
+        if clearanceOff(route) & bit != 0 { return 0 }
+        if Int(route.style["inset_credit"]?.number ?? 0) & bit == 0 { return inset }
+        return max(0, inset - ((route.kernelPadding?[edge] ?? nil) ?? 0))
+    }
+
     /// Whether a route asks `navigationBar="transparent"`: its bar shows
     /// with a clear scroll-edge appearance and insets no content.
     package static func transparentBar(_ route: NodeView) -> Bool { route.props["navigationBar"] == "transparent" }

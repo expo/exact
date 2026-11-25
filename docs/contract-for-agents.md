@@ -4531,6 +4531,13 @@ that space and an automatic height is the content's, so a pane scroller without 
 height or a maximum height does not scroll. Give a pane that should fill its
 allocation a height such as `height="100%"`.
 
+UIKit lays an arrangement out under the iPhone Duo's side bar, its halves meeting at the
+fold, and each pane clears the bar itself. A route pads its content clear of the bar, so
+let the arrangement span the display with `-exact-safe-area="left right"` on the route
+and inset each pane's content by `var(--exact-safe-area-inset-left)` and
+`var(--exact-safe-area-inset-right)`, which in a pane are the pane's own. A pane scroller's
+indicator then lies at the display's edge.
+
 Use a bounded scroller in each child for independent scrolling. The first visible
 vertical scroller is the default title and scroll-to-top target; `navigationScroll`
 can name another. UIKit owns bar minimization, safe-area changes, each pane's
@@ -6156,7 +6163,16 @@ answer reads, 0 before the first. `observations` has an inset set (`top`, `right
 `safeAreaCorners`, `layoutMargins`, `layoutMarginsCorners`, `readableContent`,
 `readableContentCorners`, `readableContentGuide`, `systemMinimumLayoutMargins` and `bar`.
 `margins` has the `layoutMargins`, `readableContent` and `readableContentGuide`
-rectangles (`x`, `y`, `width`, `height`). Declare every field but `available` and
+rectangles (`x`, `y`, `width`, `height`). `chrome` is the owner's: `verticalBarEdge`
+(`unspecified`, `leading` or `trailing`, UIKit's preferred edge for the iPhone Duo's
+vertical bar, shown or not), `sidebarAvailable` (whether the tab controller's sidebar is
+available, not whether it shows), `overscan` and the Mac's `auxiliaryTopLeftArea` and
+`auxiliaryTopRightArea`; it is `none` outside every owner. `keyboard` has the box's
+`guide` (the keyboard's rectangle while one shows, docked or undocked, and while it is
+dismissed a rectangle of no height along the box's bottom), the owner's `occupancy` (the
+docked keyboard's overlap with the owner, along its bottom), `docked`, and `near` and `away`,
+`none` until hosts track them; it is `none` where the host has reported nothing of the
+keyboard. Declare every field but `available` and
 `generation` an `option`, and each family and rectangle in them too: each is `none`
 before the node is laid out and wherever the host does not have it, and the bake refuses
 a shape that does not say so. `frame` is the border box as laid out, before the scroll
@@ -6629,9 +6645,9 @@ or Idle; the requested rate and any system limit; frame rate
 and missed frames for the last 0.5 s and 5 s; pacing; and charts of frame rate and
 frame time, or a table of work time, late frames, maximum frame time and pacing
 changes. A tap on a chart expands it; a tap on the title defines each figure; Share,
-at its top right, asks what to share, Agent Report, Summary or Image, and opens the
-system's share sheet with that one item; where the card measures the screen, it offers
-two agent reports, the screen's and Exact's frames'. The card states no pass or fail of its own;
+at its top right, opens the system's share sheet at once with one text: the summary,
+then the agent report (two where the card measures the screen, the screen's and
+Exact's frames'). On the Mac the picker offers Copy first. The card states no pass or fail of its own;
 Details, at the end of the line under the header, swaps the figures and charts for
 `perf frames health`'s three results over the last 5 s with their reasons and the counts
 behind them, in rows that scroll within the card; Done in its place returns. These are timing proxies; actual presentation and
@@ -6701,12 +6717,14 @@ no screen's measurement (a video, `XCTApplicationLaunchMetric`). A simulator's n
 
 Run an Apple app on a connected phone with `bun host/apple/build.mjs --device --run`.
 Open the four-finger menu and choose **Frame Health**, which in a production bake starts
-collection, reproduce the hitch, then tap Share on the card and choose Agent Report; the share sheet takes
-the JSON text. Exact creates no report file or automatic upload. A person can send
+collection, reproduce the hitch, then tap Share on the card; the share sheet takes
+one text: a line saying what it holds, the summary, then each JSON report under a
+heading that names its source, such as `Agent report 1 of 2, the screen's frames (ui-update):`.
+Exact creates no report file or automatic upload. A person can send
 that text to an agent. The system share destination controls any storage it creates.
-On iOS 18 and later the card measures the screen, and Share offers **Agent Report:
-Screen** (`ui-update`) and **Agent Report: Exact's Frames** (`exact-app-display-link`),
-each a report of its own within 4 KB. The screen's has no frame times; an app drawn by
+On iOS 18 and later the card measures the screen, and the text holds two reports, the
+screen's (`ui-update`) and Exact's frames' (`exact-app-display-link`), each within
+4 KB. The screen's has no frame times; an app drawn by
 GPU surfaces, whose canvases Exact's frame clock ticks, has its frame times and their
 work in Exact's, its GPU execution and presentation unobserved.
 
@@ -6779,8 +6797,8 @@ packets. No report is automatically persisted, queued for retry or sent periodic
 A report covers one source. The default selects the source with the most recent
 retained hitch; `report app` or `report scroll` selects explicitly. `source` identifies
 it, `otherSources` names retained evidence in other sources, and `selection` says how
-to get another: an agent's request, or, for a report the card's Share gave, its other
-agent report. Counts and generations
+to get another: an agent's request, or, for a report the card's Share gave, the
+report beside it. Counts and generations
 belong to their named source. Forwarded apply context does not count an app apply or
 its deadline again as a native-scroll event.
 
@@ -7754,10 +7772,10 @@ device's under `viewport-fit="cover"` and 0 under `auto`, even on iOS when a roo
 pads with them stays under the status bar
 ([pitfall](agent-pitfalls.md#native-presentation-and-navigation-ios)).
 `var(--exact-safe-area-inset-top|right|bottom|left)` is the safe area where the box
-is, a term in the same places as `env()` (LLP 1123 D9). Inside a route, a tab or a
-sheet it is that container's own, as UIKit's `safeAreaInsets` has it: the status
-bar, the navigation bar and a large title, the tab bar, the home indicator, a
-sheet's edges. Outside every route it is what the page itself reaches under: on
+is, a term in the same places as `env()` (LLP 1123 D9). Inside a route, a tab, a
+sheet or an arranged pane it is that container's own, as UIKit's `safeAreaInsets` has
+it: the status bar, the navigation bar and a large title, the tab bar, the home
+indicator, a sheet's edges. Outside every route it is what the page itself reaches under: on
 iOS the status bar and the home indicator whenever a root stack or `tablist` takes
 the whole screen, even where `env()` is 0. On the web and a host that draws no bars
 it is `env()`'s, and a web sheet's top is 0. It takes no fallback, and it follows
@@ -7790,6 +7808,12 @@ picture under the bar:
   `margin-top="calc(-1 * var(--exact-safe-area-inset-top))"
   padding-top="var(--exact-safe-area-inset-top)"`. Its content starts below the bar
   and the boxes beside it stay where they were.
+- Where a scroller fills the route's width, opt the sides out and inset its content:
+  `-exact-safe-area="left right"` on the route, and
+  `padding-left="var(--exact-safe-area-inset-left)"` and the same on the right on the
+  scroller's content. The scroller's indicator then lies at the display's edge, outside
+  the iPhone Duo's side bar, as UIKit's does; cleared, the scroller ends at the bar and
+  its indicator lies inside it.
 - Where the route's scroller starts at its top (a list under a large title), opt the
   top out and pad the scroller's first box: `-exact-safe-area="top"` on the route,
   `padding-top="var(--exact-safe-area-inset-top)"` on the hero. The scroller then

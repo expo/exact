@@ -158,6 +158,8 @@ object Native {
      * key said it does: 0 Enter with no action, 2 done, 3 go, 4 next, 5 previous, 6 search, 7 send, 16 Tab, 17
      * Shift+Tab. exact2 does that: Enter's `key` handlers, `change` and `submit`, then the move or the leave. */
     @JvmStatic external fun fieldAction(id: Int, generation: Int, action: Int)
+    /** Preferred content sizes from one reader frame, keyed by session and allocation. */
+    @JvmStatic external fun moduleSizes(reports: String)
     /** A module event, checked against the session and allocation carried by its painted view. */
     @JvmStatic external fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String)
     @JvmStatic external fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long)
@@ -218,8 +220,10 @@ object Native {
      * has been held still for the system's long-press time ([android.view.ViewConfiguration.getLongPressTimeout]).
      * A node with `draggable` nearer than any menu asks for its drag (request kind 23, LLP 1094.000 D7); else what
      * names a context menu there opens it (D10), and a move past the touch slop then lifts the node's drag. That touch
-     * presses nothing when it lifts. [at] is the event time in uptime nanoseconds, or -1 for a reader action. */
-    @JvmStatic external fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long)
+     * presses nothing when it lifts. [at] is the event time in uptime nanoseconds, or -1 for a reader action. A shared list release returns its
+     * id, offset speed in px/s and the x/y coefficients mapping view velocity to list velocity. The last
+     * three words are float bits. Every other touch returns null. */
+    @JvmStatic external fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long): IntArray?
     /** A finger past the touch's first ([Fingers]): 0 down, 1 up, 2 move, 3 cancel, at the view's pixels, by its pointer
      * [id] ([android.view.MotionEvent.getPointerId]). The canvas holding the touch takes it where it lands on that
      * canvas. A transform binding takes both positions from this event while both fingers are down. */

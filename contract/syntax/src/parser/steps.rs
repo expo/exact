@@ -170,6 +170,7 @@ impl Parser {
         for step in &steps {
             let refused = match step {
                 Step::Perf { .. } | Step::ExpectPerf { .. } => Some("a `perf` block measures steps; its `expect perf` lines follow it, and blocks do not nest".to_string()),
+                Step::Rotate { .. } => Some("`rotate` waits for the scene on the wall clock, so it cannot run in a `perf` block".to_string()),
                 Step::Fold { .. } => Some("`fold` waits for the simulator hinge on the wall clock, so it cannot run in a `perf` block".to_string()),
                 Step::Background { .. } => Some("`background` waits on iOS and the wall clock, so it cannot run in a `perf` block".to_string()),
                 // `clock +N real`, `clock held` and `clock until` let real
@@ -545,7 +546,7 @@ impl Parser {
                 return self.err(
                     "syntax-expected-step",
                     format!(
-                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `answer source`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `fold`, `rotate`, `resize`, `reload`, `close`, `back`, `screenshot`, `fail fetch`, `answer fetch`, `answer source`, `pass fetch`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`, `fail fetch`), found {}",
                     describe(&other)
                 ),
                 )
@@ -823,6 +824,13 @@ impl Parser {
                     );
                 }
                 Step::Authorize { cancel, span }
+            }
+            "rotate" => {
+                let (orientation, _) = self.ident()?;
+                if !matches!(orientation.as_str(), "portrait" | "portraitUpsideDown" | "landscapeLeft" | "landscapeRight") {
+                    return self.err("syntax-expected-step", "rotate takes portrait, portraitUpsideDown, landscapeLeft or landscapeRight");
+                }
+                Step::Rotate { orientation, span }
             }
             "fold" => {
                 let degrees = self.step_number("a fold angle from 0 through 180 degrees")?;
@@ -1291,7 +1299,7 @@ impl Parser {
                 return Err(SyntaxError {
                     id: "syntax-expected-step",
                     message: format!(
-                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`), found `{other}`"
+                    "expected `tap`, `scroll`, `type`, `pick`, `authorize`, `presence`, `clock`, `fold`, `rotate`, `resize`, `reload`, `close`, `back`, `screenshot`, `prefer`, `request`, `expect`, or a launch line (`size`, `epoch`, `time-zone`, `locale`, `seed`, `signed-in`, `stored`, `fresh`, `before data`), found `{other}`"
                 ),
                     span,
                 })

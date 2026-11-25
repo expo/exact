@@ -166,3 +166,17 @@ test("a font file has a cache lifetime, so the browser does not request it again
   const font = await fetch(`${origin}/assets/fonts/Inter-Regular.ttf`, { method: 'HEAD' });
   expect([font.status, font.headers.get('Cache-Control')]).toEqual([200, 'public, max-age=604800']);
 });
+
+test.if(existsSync(resolve(site, 'dist.pages/sitemap.xml')))('the agent catalog answers at /.well-known/ard.json and /.well-known/ai-catalog.json with the same entries, each at a URL on the site', async () => {
+  const [ard, catalog] = await Promise.all(['/.well-known/ard.json', '/.well-known/ai-catalog.json'].map(path => fetch(origin + path)));
+  expect([ard.status, ard.headers.get('Content-Type'), catalog.status, catalog.headers.get('Content-Type')]).toEqual([200, 'application/ai-catalog+json', 200, 'application/ai-catalog+json']);
+  const body = await ard.json();
+  expect(await catalog.json()).toEqual(body);
+  expect(body.specVersion).toBe('1.0');
+  expect(body.entries.map((entry: { identifier: string }) => entry.identifier.split(':').at(-1))).toEqual(['llms-txt', 'sitemap', 'agents']);
+  for (const entry of body.entries) {
+    expect(entry.identifier).toMatch(/^urn:air:[a-z0-9.-]+:docs:[a-z0-9-]+$/);
+    expect([typeof entry.displayName, typeof entry.type, typeof entry.description, entry.representativeQueries.length >= 2]).toEqual(['string', 'string', 'string', true]);
+    expect((await fetch(origin + new URL(entry.url).pathname)).status).toBe(200);
+  }
+});

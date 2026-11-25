@@ -2,8 +2,11 @@
 mod inflow;
 
 use inflow::perform_final_layout_on_in_flow_children;
-use crate::geometry::{Line, Point, Rect, Size};
-use crate::style::{AlignItemsKeyword, AlignmentSafety, AvailableSpace, CoreStyle, JustifyItems, JustifySelf, LengthPercentageAuto, Overflow, Position};
+use crate::geometry::{FloatInsets, Line, Point, Rect, Size};
+use crate::style::{
+    AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignmentSafety, AvailableSpace, CoreStyle,
+    JustifyItems, JustifySelf, LengthPercentageAuto, Overflow, Position,
+};
 use crate::style_helpers::TaffyMaxContent;
 use crate::tree::{
     Baselines, CollapsibleMarginSet, Layout, LayoutInput, LayoutOutput, RunMode, SizingMode, StaticAlignment, StaticPosition,
@@ -22,9 +25,21 @@ use crate::{
 };
 
 #[cfg(feature = "float_layout")]
-use super::float::{BfcSlot, ContentSlot, FloatContext, FloatIntrinsicWidthCalculator};
+use super::float::{BfcSlot, ContentSlot, FIT_TOLERANCE, FloatContext, FloatIntrinsicWidthCalculator};
 #[cfg(feature = "float_layout")]
 use crate::{Clear, Float, FloatDirection};
+
+/// Compute the block-axis offset that `align-content` applies to the in-flow content of a block
+/// container, given the free space between the container's content box and its content.
+///
+/// The entire stack of in-flow content is treated as a single alignment subject, so the
+/// distribution keywords (`space-*`, `stretch`) invoke their single-subject fallbacks. This is
+/// used both by block layout and by inline formatting contexts (line boxes) which are laid out
+/// externally to Taffy.
+pub fn compute_block_align_content_offset(align_content: AlignContent, free_space: f32) -> f32 {
+    let keyword = apply_alignment_fallback(free_space, 1, align_content);
+    compute_alignment_offset(free_space, 1, 0.0, keyword, false, true)
+}
 
 /// Context for positioning Block and Float boxes within a Block Formatting Context
 pub struct BlockFormattingContext {
@@ -53,8 +68,8 @@ impl BlockFormattingContext {
         BlockContext {
             bfc: self,
             y_offset: 0.0,
-            insets: [0.0, 0.0],
-            content_box_insets: [0.0, 0.0],
+            insets: FloatInsets::ZERO,
+            content_box_insets: FloatInsets::ZERO,
             float_content_contribution: f32::NEG_INFINITY,
             is_root: true,
             #[cfg(feature = "float_layout")]
@@ -63,6 +78,17 @@ impl BlockFormattingContext {
             top_adjoining_floats: None,
         }
     }
+}
+
+/// A mark of how many floats a Block Formatting Context held when it was taken.
+/// See [`BlockContext::float_mark`].
+#[cfg(feature = "float_layout")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FloatMark {
+    /// The number of left floats
+    left: usize,
+    /// The number of right floats
+    right: usize,
 }
 
 /// Context for each individual Block within a Block Formatting Context
@@ -75,9 +101,9 @@ pub struct BlockContext<'bfc> {
     /// root node of the Block Formatting Context it belongs to.
     y_offset: f32,
     /// The x-inset of the border-box in from each side of the block node, relative to the root node of the Block Formatting Context it belongs to.
-    insets: [f32; 2],
+    insets: FloatInsets,
     /// The x-insets of the content box
-    content_box_insets: [f32; 2],
+    content_box_insets: FloatInsets,
     /// The height that floats take up in the element (`f32::NEG_INFINITY` if the element's
     /// subtree does not contain any floats)
     float_content_contribution: f32,
@@ -98,8 +124,8 @@ pub struct BlockContext<'bfc> {
 
 impl BlockContext<'_> {
     /// Create a sub-`BlockContext` for a child block node
-    pub fn sub_context(&mut self, additional_y_offset: f32, insets: [f32; 2]) -> BlockContext<'_> {
-        let insets = [self.insets[0] + insets[0], self.insets[1] + insets[1]];
+    pub fn sub_context(&mut self, additional_y_offset: f32, insets: FloatInsets) -> BlockContext<'_> {
+        let insets = self.insets + insets;
         BlockContext {
             bfc: self.bfc,
             y_offset: self.y_offset + additional_y_offset,
@@ -135,9 +161,8 @@ impl BlockContext<'_> {
 
     /// Set the x-axis content-box insets of the `BlockContext`. These are the difference between the border-box
     /// and the content-box of the box (padding + border + scrollbar_gutter).
-    pub fn apply_content_box_inset(&mut self, content_box_x_insets: [f32; 2]) {
-        self.content_box_insets[0] = self.insets[0] + content_box_x_insets[0];
-        self.content_box_insets[1] = self.insets[1] + content_box_x_insets[1];
+    pub fn apply_content_box_inset(&mut self, content_box_x_insets: FloatInsets) {
+        self.content_box_insets = self.insets + content_box_x_insets;
     }
 
     /// Whether the float context contains any floats
@@ -152,9 +177,10 @@ impl BlockContext<'_> {
         self.bfc.float_context.has_active_floats(min_y + self.y_offset)
     }
 
-    /// Position a floated box with the context
+    /// Position a floated box with the context. `id` identifies the box in [`Self::floats_placed_since`].
     pub fn place_floated_box(
         &mut self,
+        id: u64,
         floated_box: Size<f32>,
         min_y: f32,
         direction: FloatDirection,
@@ -165,6 +191,7 @@ impl BlockContext<'_> {
             self.adjoining_floats[direction as usize] = true;
         }
         let mut pos = self.bfc.float_context.place_floated_box(
+            id,
             floated_box,
             min_y + self.y_offset,
             self.content_box_insets,
@@ -172,19 +199,43 @@ impl BlockContext<'_> {
             clear,
         );
         pos.y -= self.y_offset;
-        pos.x -= self.insets[0];
+        pos.x -= self.insets.left;
 
         self.float_content_contribution = self.float_content_contribution.max(pos.y + floated_box.height);
 
         pos
     }
 
-    /// Search a space suitable for laying out non-floated content into
-    pub fn find_content_slot(&self, min_y: f32, clear: Clear, after: Option<usize>) -> ContentSlot {
-        let mut slot =
-            self.bfc.float_context.find_content_slot(min_y + self.y_offset, self.content_box_insets, clear, after);
+    /// A mark of the floats placed in the Block Formatting Context so far, for [`Self::floats_placed_since`]
+    pub fn float_mark(&self) -> FloatMark {
+        let float_context = &self.bfc.float_context;
+        FloatMark { left: float_context.left_floats().len(), right: float_context.right_floats().len() }
+    }
+
+    /// The id and position of each floated box placed since `mark` was taken: left floats in the
+    /// order they were placed, then right floats. Positions are relative to this block, as
+    /// returned by [`Self::place_floated_box`].
+    pub fn floats_placed_since(&self, mark: FloatMark) -> impl Iterator<Item = (u64, Point<f32>)> + '_ {
+        let float_context = &self.bfc.float_context;
+        let left = float_context.left_floats()[mark.left..].iter().map(|placed| (placed, FloatDirection::Left));
+        let right = float_context.right_floats()[mark.right..].iter().map(|placed| (placed, FloatDirection::Right));
+        left.chain(right).map(move |(placed, direction)| {
+            let pos = float_context.placed_position(placed, direction);
+            (placed.id, Point { x: pos.x - self.insets.left, y: pos.y - self.y_offset })
+        })
+    }
+
+    /// Search a space suitable for laying out non-floated content of the given height into
+    pub fn find_content_slot(&self, min_y: f32, height: f32, clear: Clear, after: Option<usize>) -> ContentSlot {
+        let mut slot = self.bfc.float_context.find_content_slot(
+            min_y + self.y_offset,
+            height,
+            self.content_box_insets,
+            clear,
+            after,
+        );
         slot.y -= self.y_offset;
-        slot.x -= self.insets[0];
+        slot.x -= self.insets.left;
         slot
     }
 
@@ -193,13 +244,15 @@ impl BlockContext<'_> {
     pub fn find_bfc_slot(
         &self,
         min_y: f32,
-        margins: [f32; 2],
+        min_height: f32,
+        margins: FloatInsets,
         direction: Direction,
         clear: Clear,
         after: Option<usize>,
     ) -> BfcSlot {
         let mut slot = self.bfc.float_context.find_bfc_slot(
             min_y + self.y_offset,
+            min_height,
             self.content_box_insets,
             margins,
             direction,
@@ -207,7 +260,7 @@ impl BlockContext<'_> {
             after,
         );
         slot.y -= self.y_offset;
-        slot.x -= self.insets[0];
+        slot.x -= self.insets.left;
         slot
     }
 
@@ -273,10 +326,10 @@ impl BlockContext<'_> {
 use super::common::alignment::{apply_alignment_fallback, compute_alignment_offset};
 #[cfg(feature = "content_size")]
 use super::common::scrollable_overflow::{
-    compute_scrollable_overflow_contribution, margin_box_contribution, with_end_padding,
+    compute_scrollable_overflow_contribution, finalize_scrollable_overflow, ScrollableOverflowContainer,
 };
 use super::common::sizing_keyword::{
-    keyword_bounds, own_keyword_bounds, resolve_sizing_keyword, SizingKeywordResolution,
+    keyword_bounds, own_keyword_bounds, resolve_sizing_keyword,
 };
 
 /// Per-child data that is accumulated and modified over the course of the layout algorithm
@@ -351,6 +404,9 @@ struct BlockItem {
     /// The relative offset in this item's final layout (EXACT PATCH 67: its margin box counts
     /// toward a scroll container's end padding where it would be without it)
     relative_offset: Point<f32>,
+    /// Collapsed vertical margin sets (EXACT PATCH 67: used for scroll container end padding
+    /// when `align-content` recomputes overflow).
+    collapsed_y_margin: Line<f32>,
     /// Whether margins can be collapsed through this item
     can_be_collapsed_through: bool,
 
@@ -382,7 +438,7 @@ pub fn compute_block_layout(
     // formatting context (CSS Multi-column Layout 1 §2), so it shares no
     // floats with its parent.
     let establishes_new_bfc = is_scroll_container
-        || style.align_content().is_some()
+        || style.align_content().keyword != AlignContentKeyword::Normal
         || contain.establishes_independent_formatting_context()
         || style.multicol().is_some();
     let padding = style.padding().resolve_or_zero(parent_size.width, |val, basis| tree.calc(val, basis));
@@ -505,7 +561,7 @@ fn compute_inner(
 
     // Apply content box inset
     #[cfg(feature = "float_layout")]
-    block_ctx.apply_content_box_inset([content_box_inset.left, content_box_inset.right]);
+    block_ctx.apply_content_box_inset(FloatInsets::new(content_box_inset.left, content_box_inset.right));
 
     let box_sizing_adjustment =
         if style.box_sizing() == BoxSizing::ContentBox { padding_border_size } else { Size::ZERO };
@@ -541,34 +597,38 @@ fn compute_inner(
     // EXACT PATCH 27: and its first child's top margin stays inside it.
     let multicol = style.multicol();
     let establishes_new_bfc = is_scroll_container
-        || style.align_content().is_some()
+        || style.align_content().keyword != AlignContentKeyword::Normal
         || style.contain().establishes_independent_formatting_context()
         || multicol.is_some();
 
     // Determine margin collapsing behaviour
-    let own_margins_collapse_with_children = Line {
+    //
+    // Whether a child's margins could collapse through each of this box's block-axis edges: the
+    // box does not establish a new BFC and has neither border nor padding on that side.
+    let children_margins_adjoin_own_edges = Line {
         start: vertical_margins_are_collapsible.start
             && !establishes_new_bfc
-            && style.position() != Position::Absolute
+            && !style.position().is_out_of_flow()
             && padding.top == 0.0
             && border.top == 0.0,
         end: vertical_margins_are_collapsible.end
             && !establishes_new_bfc
-            && style.position() != Position::Absolute
+            && !style.position().is_out_of_flow()
             && padding.bottom == 0.0
-            && border.bottom == 0.0
-            && size.height.is_none(),
+            && border.bottom == 0.0,
+    };
+    let own_margins_collapse_with_children = Line {
+        start: children_margins_adjoin_own_edges.start,
+        end: children_margins_adjoin_own_edges.end && size.height.is_none(),
     };
     let has_styles_preventing_being_collapsed_through = !style.is_block()
         || block_ctx.is_bfc_root()
         || establishes_new_bfc
-        || style.position() == Position::Absolute
+        || style.position().is_out_of_flow()
         || padding.top > 0.0
         || padding.bottom > 0.0
         || border.top > 0.0
-        || border.bottom > 0.0
-        || matches!(size.height, Some(h) if h > 0.0)
-        || matches!(min_size.height, Some(h) if h > 0.0);
+        || border.bottom > 0.0;
 
     let text_align = style.text_align();
     let justify_items = style.justify_items();
@@ -623,9 +683,13 @@ fn compute_inner(
         return LayoutOutput::from_outer_size(Size { width: container_outer_width, height: 0.0 });
     }
 
+    // Under `SizingMode::ContentSize` the container's own `height`/`min-height` are ignored,
+    // so they cannot serve as the percentage basis for children either.
     let container_percentage_resolution_height = match columns_size_height {
         true => None,
-        false => percentage_basis_dimensions.height.or(size.height.maybe_max(min_size.height)),
+        false => percentage_basis_dimensions.height.or(
+            if inputs.sizing_mode == SizingMode::InherentSize { size.height.maybe_max(min_size.height) } else { None },
+        ),
     };
 
     // 3. Perform final item layout and return content height
@@ -668,18 +732,23 @@ fn compute_inner(
         content_box_inset,
         resolved_content_box_inset,
         resolved_border,
+        #[cfg(feature = "content_size")]
+        resolved_padding,
         text_align,
         direction,
         own_margins_collapse_with_children,
+        children_margins_adjoin_own_edges,
         #[cfg(feature = "content_size")]
         is_scroll_container,
         block_ctx,
     );
 
-    // Root BFCs contain floats
+    // Root BFCs contain floats: the content height extends to the bottom margin edge of any
+    // floated descendant, and the container's bottom padding and border sit below that
     #[cfg(feature = "float_layout")]
     if block_ctx.is_bfc_root() || establishes_new_bfc {
-        intrinsic_outer_height = intrinsic_outer_height.max(block_ctx.floated_content_height_contribution());
+        intrinsic_outer_height = intrinsic_outer_height
+            .max(block_ctx.floated_content_height_contribution() + resolved_content_box_inset.bottom);
     }
 
     // EXACT PATCH 27: once the caller has cut the flow thread, an automatic
@@ -712,18 +781,17 @@ fn compute_inner(
     // `space-evenly`, `stretch`) must invoke the single-subject fallback unconditionally —
     // which is what passing `num_items = 1` to `apply_alignment_fallback` does. The whole
     // group then shifts by one offset, with zero inter-item gap.
-    if let Some(align_content) = align_content {
+    if align_content.keyword != AlignContentKeyword::Normal {
         let container_inner_height = container_outer_height - resolved_content_box_inset.vertical_axis_sum();
         let inflow_content_height = intrinsic_outer_height - resolved_content_box_inset.vertical_axis_sum();
         let free_space = container_inner_height - inflow_content_height;
         let any_in_flow = items.iter().any(|item| item.final_layout.is_some());
-        let keyword = apply_alignment_fallback(free_space, 1, align_content);
-        let group_offset = compute_alignment_offset(free_space, 1, 0.0, keyword, false, true);
+        let group_offset = compute_block_align_content_offset(align_content, free_space);
         // EXACT PATCH 26: an absolutely positioned child's static position
         // moves with the group, which is empty when nothing is in flow
         // (Chrome 154: the static position of a box after a centred 20px
         // child in 100px is 60, and of a lone one 50).
-        for item in items.iter_mut().filter(|item| item.position == Position::Absolute) {
+        for item in items.iter_mut().filter(|item| item.position.is_out_of_flow()) {
             item.static_position.y += group_offset;
         }
         if any_in_flow {
@@ -737,28 +805,36 @@ fn compute_inner(
             #[cfg(feature = "content_size")]
             {
                 inflow_overflow_rect = Rect::ZERO;
+                let overflow_container = ScrollableOverflowContainer {
+                    parent_is_scroll_container: is_scroll_container,
+                    parent_size: final_outer_size - resolved_border.sum_axes() - scrollbar_gutter.sum_axes(),
+                    reversed: Point { x: direction.is_rtl(), y: false },
+                    padding: resolved_padding,
+                };
                 for item in items.iter() {
                     if let Some(layout) = item.final_layout.as_ref() {
-                        let contribution_location = if direction.is_rtl() {
-                            Point {
-                                x: container_outer_width
-                                    - (layout.location.x + layout.size.width)
-                                    - resolved_border.right,
-                                y: layout.location.y - resolved_border.top,
-                            }
-                        } else {
-                            Point {
-                                x: layout.location.x - resolved_border.left,
-                                y: layout.location.y - resolved_border.top,
-                            }
+                        let contribution_location = Point {
+                            x: layout.location.x - resolved_border.left - scrollbar_gutter.left,
+                            y: layout.location.y - resolved_border.top,
+                        };
+                        let unoffset_location = Point {
+                            x: contribution_location.x - item.relative_offset.x,
+                            y: contribution_location.y - item.relative_offset.y,
+                        };
+                        let end_padding_margin = Rect {
+                            top: item.collapsed_y_margin.start,
+                            bottom: item.collapsed_y_margin.end,
+                            ..layout.margin
                         };
                         inflow_overflow_rect = inflow_overflow_rect.union(compute_scrollable_overflow_contribution(
                             contribution_location,
                             layout.size,
-                            layout.scrollable_overflow_rect,
+                            layout.scrollable_overflow_rect.rect(),
+                            layout.border,
                             item.overflow,
                             item.contain,
-                            is_scroll_container,
+                            &overflow_container,
+                            Some((unoffset_location, end_padding_margin)),
                         ));
                     }
                 }
@@ -772,15 +848,18 @@ fn compute_inner(
         if item.float.is_floated() {
             return true;
         }
-        item.position == Position::Absolute || item.can_be_collapsed_through
+        item.position.is_out_of_flow() || item.can_be_collapsed_through
     });
-    let can_be_collapsed_through =
-        !has_styles_preventing_being_collapsed_through && all_in_flow_children_can_be_collapsed_through;
+    // CSS2 §8.3.1: a box's top and bottom margins collapse through it only if its *used* height
+    // is zero, so `height`/`min-height`/`max-height` are judged by the height they resolve to.
+    let can_be_collapsed_through = !has_styles_preventing_being_collapsed_through
+        && container_outer_height == 0.0
+        && all_in_flow_children_can_be_collapsed_through;
 
     let mut output = LayoutOutput {
         size: final_outer_size,
         #[cfg(feature = "content_size")]
-        scrollable_overflow_rect: Rect::ZERO,
+        scrollable_overflow_rect: crate::tree::ScrollableOverflow::ZERO,
         baselines: Baselines::from_first(first_baseline),
         top_margin: if own_margins_collapse_with_children.start {
             first_child_top_margin_set
@@ -830,6 +909,8 @@ fn compute_inner(
             sizing_mode: SizingMode::ContentSize,
             #[cfg(feature = "content_size")]
             is_scroll_container,
+            #[cfg(feature = "content_size")]
+            reversed: Point { x: direction.is_rtl(), y: false },
         },
         Line {
             start: resolved_content_box_inset.left,
@@ -839,40 +920,29 @@ fn compute_inner(
 
     #[cfg(feature = "content_size")]
     {
-        // A scroll container's own padding at the end of its children is part of its scrollable
-        // overflow region. Boxes that are not scroll containers do not extend their overflow
-        // region by their own padding.
-        if is_scroll_container {
-            let mut margin_box_rect = Rect::ZERO;
-            for item in items.iter() {
-                if let Some(layout) = item.final_layout.as_ref() {
-                    let x = layout.location.x - item.relative_offset.x;
-                    let location = Point {
-                        x: if direction.is_rtl() {
-                            container_outer_width - (x + layout.size.width) - resolved_border.right
-                        } else {
-                            x - resolved_border.left
-                        },
-                        y: layout.location.y - item.relative_offset.y - resolved_border.top,
-                    };
-                    margin_box_rect = margin_box_rect.union(margin_box_contribution(
-                        location,
-                        layout.size,
-                        layout.margin,
-                        direction.is_rtl(),
-                    ));
-                }
-            }
-            let end_padding = Size {
-                width: if direction.is_rtl() { resolved_padding.left } else { resolved_padding.right },
-                height: resolved_padding.bottom,
-            };
-            inflow_overflow_rect = with_end_padding(inflow_overflow_rect, margin_box_rect, end_padding);
+        let client_size = final_outer_size - resolved_border.sum_axes() - scrollbar_gutter.sum_axes();
+        let client_width = client_size.width.max(0.0);
+        if direction.is_rtl() {
+            inflow_overflow_rect = inflow_overflow_rect.union(Rect { right: client_width, ..Rect::ZERO });
         }
-        output.scrollable_overflow_rect = inflow_overflow_rect.union(absolute_overflow_rect);
+        if is_scroll_container {
+            inflow_overflow_rect = inflow_overflow_rect.union(Rect {
+                left: if direction.is_rtl() { (client_width - resolved_padding.left).min(0.0) } else { 0.0 },
+                right: if direction.is_rtl() { client_width } else { resolved_padding.right },
+                top: 0.0,
+                bottom: resolved_padding.bottom,
+            });
+        }
+        output.scrollable_overflow_rect = finalize_scrollable_overflow(
+            inflow_overflow_rect.union(absolute_overflow_rect),
+            client_size,
+            Point { x: direction.is_rtl(), y: false },
+            is_scroll_container,
+        );
         // EXACT PATCH 27: the columns' overflow, not the flow thread's.
         if let Some(overflow) = multicol.and_then(|m| m.overflow) {
-            output.scrollable_overflow_rect = overflow;
+            output.scrollable_overflow_rect =
+                crate::tree::ScrollableOverflow::new(overflow, Point { x: false, y: false });
         }
     }
 
@@ -904,9 +974,10 @@ fn generate_item_list(
     tree: &impl LayoutBlockContainer,
     node: NodeId,
     node_inner_size: Size<Option<f32>>,
-    justify_items: Option<JustifyItems>,
+    justify_items: JustifyItems,
     direction: Direction,
 ) -> Vec<BlockItem> {
+    let parent_justify = (justify_items.keyword != AlignItemsKeyword::Normal).then_some(justify_items);
     tree.child_ids(node)
         .map(|child_node_id| (child_node_id, tree.get_block_child_style(child_node_id)))
         .filter(|(_, style)| style.box_generation_mode() != BoxGenerationMode::None)
@@ -951,10 +1022,11 @@ fn generate_item_list(
 
             let is_in_same_bfc: bool = is_block
                 && !is_table
-                && position != Position::Absolute
+                && !position.is_out_of_flow()
                 && is_not_floated
                 && !is_scroll_container
-                && !contain.establishes_independent_formatting_context();
+                && !contain.establishes_independent_formatting_context()
+                && child_style.align_content().keyword == AlignContentKeyword::Normal;
 
             BlockItem {
                 node_id: child_node_id,
@@ -964,17 +1036,21 @@ fn generate_item_list(
                 // (host/web/src/sized_css.rs `aligns`; host/web-js/src/sized.rs, its static CSS
                 // and bound writers): a change to which `justify-items` values align a block
                 // child changes them too.
-                justify_self: child_style.justify_self()
-                    .or_else(|| justify_items.map(|mut alignment| {
-                        // Chrome applies overflow safety only from the absolute child's own alignment.
-                        if position == Position::Absolute {
-                            alignment.safety = AlignmentSafety::Unsafe;
-                        }
-                        alignment
-                    }))
+                justify_self: child_style
+                    .justify_self()
+                    .or_else(|| {
+                        parent_justify.map(|mut alignment| {
+                            // Chrome applies overflow safety only from the absolute child's own alignment.
+                            if position.is_out_of_flow() {
+                                alignment.safety = AlignmentSafety::Unsafe;
+                            }
+                            alignment
+                        })
+                    })
+                    .filter(|alignment| alignment.keyword != AlignItemsKeyword::Normal)
                     .map(|mut alignment| {
                         // Chrome's block static-position path treats left/right as inline start/end.
-                        if position == Position::Absolute {
+                        if position.is_out_of_flow() {
                             alignment.keyword = match alignment.keyword {
                                 AlignItemsKeyword::Left => AlignItemsKeyword::Start,
                                 AlignItemsKeyword::Right => AlignItemsKeyword::End,
@@ -1008,6 +1084,7 @@ fn generate_item_list(
                 computed_size: Size::zero(),
                 static_position: Point::zero(),
                 relative_offset: Point::zero(),
+                collapsed_y_margin: Line { start: 0.0, end: 0.0 },
                 can_be_collapsed_through: false,
                 final_layout: None,
             }
@@ -1019,20 +1096,29 @@ fn generate_item_list(
 /// intrinsic sizing keywords (`min-content`, `max-content`, `fit-content`, `fit-content(...)`)
 /// are all equal to the content size, which is what an auto height already resolves to, so
 /// only `stretch` requires explicit resolution.
+///
+/// Each of the item's block-axis margins is subtracted from the stretch size unless it is
+/// flagged in `margins_treated_as_zero`: when stretching a block-level box, a margin that
+/// could collapse through the corresponding edge of the containing block (which has neither
+/// border nor padding on that side and does not establish a new BFC) is treated as zero.
 #[inline]
 fn resolve_stretch_height(
     height_style: Dimension,
     container_inner_height: Option<f32>,
-    item_y_margin_sum: f32,
+    item_margin: Rect<f32>,
+    margins_treated_as_zero: Line<bool>,
 ) -> Option<f32> {
-    match resolve_sizing_keyword(
-        height_style,
-        container_inner_height.maybe_sub(item_y_margin_sum),
-        container_inner_height,
-    ) {
-        Some(SizingKeywordResolution::Exact(height)) => Some(height),
-        _ => None,
+    if !height_style.is_stretch() {
+        return None;
     }
+    let mut height = container_inner_height?;
+    if !margins_treated_as_zero.start {
+        height -= item_margin.top;
+    }
+    if !margins_treated_as_zero.end {
+        height -= item_margin.bottom;
+    }
+    Some(height)
 }
 
 /// Compute the content-based width in the case that the width of the container is not known
@@ -1047,7 +1133,7 @@ fn determine_content_based_container_width(
     let mut max_child_width = 0.0;
     #[cfg(feature = "float_layout")]
     let mut float_contribution = FloatIntrinsicWidthCalculator::new(available_width);
-    for item in items.iter().filter(|item| item.position != Position::Absolute) {
+    for item in items.iter().filter(|item| !item.position.is_out_of_flow()) {
         let known_dimensions = item.size.maybe_clamp(item.min_size, item.max_size);
 
         let item_x_margin_sum = item
@@ -1073,10 +1159,11 @@ fn determine_content_based_container_width(
             None
         };
         let width = compressed.or(known_dimensions.width).unwrap_or_else(|| {
-            let item_available_width = match resolve_sizing_keyword(item.size_style.width, None, None) {
-                Some(resolution) => resolution.available(),
-                None => available_space.width.maybe_sub(item_x_margin_sum),
-            };
+            let item_available_width =
+                match resolve_sizing_keyword(item.size_style.width, None, None, |val, basis| tree.calc(val, basis)) {
+                    Some(resolution) => resolution.available(),
+                    None => available_space.width.maybe_sub(item_x_margin_sum),
+                };
             tree.measure_child_size(
                 item.node_id,
                 known_dimensions,
@@ -1084,7 +1171,7 @@ fn determine_content_based_container_width(
                 Size { width: item_available_width, height: available_space.height },
                 SizingMode::InherentSize,
                 crate::AbsoluteAxis::Horizontal,
-                Line::TRUE,
+                if item.is_in_same_bfc { Line::TRUE } else { Line::FALSE },
             )
         });
 
@@ -1122,7 +1209,7 @@ fn perform_absolute_layout_on_absolute_children(
 ) -> Rect<f32> {
     let contains = tree.get_core_container_style(node).position() != Position::Static;
     let mut absolute_overflow_rect = Rect::ZERO;
-    for item in items.iter().filter(|item| item.position == Position::Absolute) {
+    for item in items.iter().filter(|item| item.position.is_out_of_flow()) {
         let rtl = pass.direction.is_rtl();
         let mut position = StaticPosition::point(item.static_position, rtl, item.order);
         if let Some(alignment) = item.justify_self {

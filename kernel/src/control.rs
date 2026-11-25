@@ -630,15 +630,7 @@ impl Kernel {
                 .strip_suffix('*')
                 .map_or(role == *member, |prefix| role.starts_with(prefix))
         }) || row.member_tags.iter().any(|tag| match *tag {
-            "button" => {
-                !link
-                    && (node.node_type == NodeType::Pressable
-                        && node
-                            .props
-                            .str(PropId::SemanticTag)
-                            .is_none_or(|t| t == "button")
-                        || ControlKind::of(node.node_type, node.props) == Some(ControlKind::Button))
-            }
+            "button" => node.is_button_element(),
             "a[href]" => link,
             _ => false,
         })

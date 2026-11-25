@@ -319,8 +319,8 @@ package final class OwnerBlocks {
     }
 
     /// UIKit may report several routes while a viewport change lays out its containers.
-    func beginViewChange() { viewChanges += 1 }
-    func endViewChange() {
+    package func beginViewChange() { viewChanges += 1 }
+    package func endViewChange() {
         viewChanges -= 1
         if viewChanges == 0 { publish() }
     }

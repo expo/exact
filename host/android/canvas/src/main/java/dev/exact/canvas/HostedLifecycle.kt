@@ -14,6 +14,8 @@ interface NativeModule {
     fun update(view: View, props: JSONObject)
     /** Bound before the first update. Keep this callback only until the next binding; a retired one is ignored. */
     fun events(view: View, emit: (String, String) -> Unit) {}
+    /** Bind the preferred content size of this allocation before its first update. */
+    fun sizing(view: View, events: NativeViewSizing) {}
     /** Activity callbacks; CREATE receives saved state, SAVE_INSTANCE_STATE fills its private bundle (LLP 1133.021). */
     fun lifecycle(view: View, event: ViewLifecycle, state: android.os.Bundle? = null) {}
     fun reset(view: View): Boolean = false

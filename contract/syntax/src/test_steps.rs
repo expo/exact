@@ -398,6 +398,13 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// Turn an iOS simulator and wait for the scene.
+    Rotate {
+        /// The requested interface orientation, as reported by `layout`.
+        orientation: String,
+        /// Where.
+        span: Span,
+    },
     /// Move the iOS simulator's hinge and wait for its angle.
     Fold {
         /// Hinge angle from closed (0) to fully open (180).

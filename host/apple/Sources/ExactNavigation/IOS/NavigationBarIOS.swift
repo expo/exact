@@ -638,7 +638,7 @@ extension NavigationHost {
             #if os(iOS)
             barHosted.show(shows ? shape?.hosted.map(\.id) ?? [] : [], in: c)
             #endif
-            reachBottom(c, presented: presented)
+            reachBottom(c, in: stack, presented: presented)
             c.paintBackdrop()
             searchField(shows ? shape?.search : nil, in: c, covered: index < routes.count - 1)
             segmentedTitle(shows ? shape?.segments : nil, in: c)
@@ -718,7 +718,7 @@ extension NavigationHost {
         let nav = stack as? UINavigationController
         let (shape, bar) = barShape(of: c, in: nav)
         collapse(c, shape: shape, shows: bar != .hidden, scroller: contentScroller(of: c))
-        reachBottom(c, presented: isPresented(nav))
+        reachBottom(c, in: stack, presented: isPresented(nav))
     }
 
     /// The header a bar stands for takes no room from the turn it is lifted,

@@ -61,8 +61,10 @@ export function refuseStdLockfile(env, cwd, what) {
 /** The environment for a web build, refusing a machine without the toolchain
  * or its std sources (Cargo builds offline, so std's dependencies too). A
  * build that links wasm on a Mac also needs llvm-tools: this nightly's
- * `rust-lld` loads `libLLVM.dylib` from `rustlib/<host>/lib/`. */
-export function webToolchainEnv(env, { linksWasm = false } = {}) {
+ * `rust-lld` loads `libLLVM.dylib` from `rustlib/<host>/lib/`. `recheck`
+ * probes std's sources despite a marker, which outlives them when Cargo's
+ * cache is cleaned or std's lock changes under the same sysroot path. */
+export function webToolchainEnv(env, { linksWasm = false, recheck = false } = {}) {
   const printed = spawnSync('rustc', ['--print', 'sysroot', '--print', 'host-tuple'], { env: { ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }, encoding: 'utf8' });
   const [sysroot, host = ''] = printed.status === 0 ? printed.stdout.trim().split('\n') : [];
   const needs = ['lib/rustlib/src/rust/library/Cargo.lock', ...(linksWasm && host.endsWith('-apple-darwin') ? [`lib/rustlib/${host}/lib/libLLVM.dylib`] : [])];
@@ -76,7 +78,7 @@ export function webToolchainEnv(env, { linksWasm = false } = {}) {
   const home = (process.platform === 'win32' ? env.USERPROFILE : env.HOME) || homedir();
   const cargoHome = resolve(env.CARGO_HOME || resolve(home, '.cargo'));
   const marker = resolve(cargoHome, '.exact', 'web-std', createHash('sha256').update(library).digest('hex'));
-  if (!existsSync(marker)) {
+  if (recheck || !existsSync(marker)) {
     const offline = spawnSync('cargo', ['metadata', '--offline', '--locked', '--format-version', '1', '--manifest-path', resolve(library, 'Cargo.toml')], { env: cargoEnvironment({ ...env, RUSTUP_TOOLCHAIN: WEB_TOOLCHAIN }), encoding: 'utf8', maxBuffer: 1 << 26 });
     let ready = offline.status === 0;
     if (!ready) {

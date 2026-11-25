@@ -49,3 +49,12 @@ impl DataSource for NoData {
         Err(DataError::UnknownSource(source.into()))
     }
 }
+
+/// Measure every dialog as a host does once it is open (`Kernel::measure_dialog`): a dialog no host
+/// measures or presents has no layout box, as the web's closed `dialog` has none.
+pub fn measure_dialogs(r: &mut exact_runner::Runner<Source>) {
+    let rows = r.kernel().rows(None).unwrap_or_default();
+    for row in rows {
+        r.kernel_mut().measure_dialog(row.id, true);
+    }
+}

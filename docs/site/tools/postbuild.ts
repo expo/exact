@@ -164,9 +164,10 @@ function prerequisites(p: Page): string {
 }
 const llms = `# ${site.name}\n\n> ${site.description}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n${bySection(pages, mdUrl, p => `: ${p.description}`)}\n`;
 for (const file of ['llms.txt', 'assets/llms.txt']) writeFileSync(join(DIST, file), llms);
+const SITEMAP_SUMMARY = "A page index for agents: each page's Markdown URL, its type, the date it last changed, a summary, and what to read before it.";
 writeFileSync(
   join(DIST, 'sitemap.md'),
-  `# ${site.name} sitemap\n\nA page index for agents: each page's Markdown URL, its type, the date it last changed, a summary, and what to read before it. [llms.txt](${ORIGIN}/llms.txt) lists the same pages without the extra fields.\n\n${bySection(pages, mdUrl, p => ` | Type: ${TYPES[p.section] ?? 'Reference'} | Lastmod: ${p.updated || 'unknown'} | Summary: ${p.description} | Prerequisites: ${prerequisites(p)}`)}\n`
+  `# ${site.name} sitemap\n\n${SITEMAP_SUMMARY} [llms.txt](${ORIGIN}/llms.txt) lists the same pages without the extra fields.\n\n${bySection(pages, mdUrl, p => ` | Type: ${TYPES[p.section] ?? 'Reference'} | Lastmod: ${p.updated || 'unknown'} | Summary: ${p.description} | Prerequisites: ${prerequisites(p)}`)}\n`
 );
 
 writeFileSync(
@@ -187,6 +188,7 @@ writeFileSync(
     "# A font the browser must revalidate is requested again when the runtime replaces the page's sheet, and the text falls back when that answer is late.",
     '/assets/fonts/*',
     '  Cache-Control: public, max-age=604800',
+    ...(ORIGIN ? ['/.well-known/ard.json', '/.well-known/ai-catalog.json'].flatMap(path => [path, '  Content-Type: application/ai-catalog+json']) : []),
     '# A page by its path only: a pattern matching every path would retype the scripts, styles and fonts too.',
     ...pages.flatMap(p => [p.path, '  Content-Type: text/html; charset=utf-8']),
   ].join('\n') + '\n'
@@ -197,7 +199,23 @@ if (ORIGIN) {
     join(DIST, 'sitemap.xml'),
     `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${pages.map(p => `  <url><loc>${esc(ORIGIN + p.path)}</loc>${p.updated ? `<lastmod>${p.updated}</lastmod>` : ''}</url>`).join('\n')}\n</urlset>\n`
   );
+
+  const host = new URL(ORIGIN).host;
+  const entry = (name: string, displayName: string, type: string, url: string, description: string, representativeQueries: string[]) =>
+    ({ identifier: `urn:air:${host}:docs:${name}`, displayName, type, url, description, representativeQueries });
+  const agents = pages.find(p => p.path === '/agents');
+  const catalog = {
+    specVersion: '1.0',
+    host: { displayName: site.name },
+    entries: [
+      entry('llms-txt', `${site.name} index`, 'text/plain', `${ORIGIN}/llms.txt`, site.description, ['How do I build a website with Exact?', 'What is Contract?', 'Which platforms does Exact run on?']),
+      entry('sitemap', `${site.name} sitemap`, 'text/markdown', `${ORIGIN}/sitemap.md`, SITEMAP_SUMMARY, ['Which page do I read before writing the data module?', 'Which docs pages changed recently?']),
+      ...(agents ? [entry('agents', agents.title, 'text/markdown', mdUrl(agents), agents.description, ['How do I give my coding agent the Exact docs?', 'How can an agent read a docs page as Markdown?'])] : []),
+    ],
+  };
+  mkdirSync(join(DIST, '.well-known'), { recursive: true });
+  for (const file of ['ard.json', 'ai-catalog.json']) writeFileSync(join(DIST, '.well-known', file), `${JSON.stringify(catalog, null, 2)}\n`);
 }
 
-console.log(`${DIST}: head (favicon, stored choices, Markdown link, JSON-LD${ORIGIN ? ', canonical' : ''}) on ${prepainted} pages, _redirects (${rules.filter(rule => !rule.startsWith('#')).length} rules), _headers, ${pages.length} .md pages and 404.md, ${Object.keys(redirects).length} moved-page fallbacks, robots.txt, llms.txt, sitemap.md${ORIGIN ? ', sitemap.xml' : ''}`);
-if (!ORIGIN) console.log('  no origin: set it in constants/site.ts (or SITE_ORIGIN) for sitemap.xml, canonical links and JSON-LD URLs');
+console.log(`${DIST}: head (favicon, stored choices, Markdown link, JSON-LD${ORIGIN ? ', canonical' : ''}) on ${prepainted} pages, _redirects (${rules.filter(rule => !rule.startsWith('#')).length} rules), _headers, ${pages.length} .md pages and 404.md, ${Object.keys(redirects).length} moved-page fallbacks, robots.txt, llms.txt, sitemap.md${ORIGIN ? ', sitemap.xml, .well-known/ard.json and .well-known/ai-catalog.json' : ''}`);
+if (!ORIGIN) console.log('  no origin: set it in constants/site.ts (or SITE_ORIGIN) for sitemap.xml, the agent catalog, canonical links and JSON-LD URLs');

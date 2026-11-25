@@ -125,7 +125,7 @@ package final class ControlBars {
     /// when nothing is between them; nil when anything else is, or when `s` hides its
     /// edge effect on that side, as content must not run sharp under a bar there
     /// (LLP 1123 D14, `edgeEffectHidden`).
-    func bars(of s: NodeView, in c: NodeView, top: Bool) -> [NodeView]? { lifts(of: s, in: c, top: top)?.map(\.bar) }
+    package func bars(of s: NodeView, in c: NodeView, top: Bool) -> [NodeView]? { lifts(of: s, in: c, top: top)?.map(\.bar) }
 
     /// A bar and the sibling it is lifted over (D3).
     package typealias Lift = (bar: NodeView, over: NodeView)
@@ -181,14 +181,7 @@ package final class ControlBars {
     private func available(_ p: NodeView) -> CGRect {
         var room = p.contentBox()
         if case .edges(let e)? = presenter.navigation.covers[p.id] {
-            let off = RouteGeometry.clearanceOff(p), credit = Int(p.style["inset_credit"]?.number ?? 0)
-            // Each edge by its index, top right bottom left, and its bit in both sets
-            let kept = { (edge: Int, inset: CGFloat) -> CGFloat in
-                let bit = 1 << edge
-                if off & bit != 0 { return 0 }
-                if credit & bit == 0 { return inset }
-                return max(0, inset - ((p.kernelPadding?[edge] ?? nil) ?? 0))
-            }
+            let kept = { (edge: Int, inset: CGFloat) in RouteGeometry.clearancePadding(p, edge: edge, inset: inset) }
             room = room.inset(by: UIEdgeInsets(top: kept(0, e.top), left: kept(3, e.left), bottom: kept(2, e.bottom), right: kept(1, e.right)))
         }
         return room

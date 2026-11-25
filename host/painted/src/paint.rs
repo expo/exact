@@ -1159,7 +1159,7 @@ impl Painter {
                     self.backend.pop_clip();
                 }
             }
-            NodeType::NativeView if !paints_self => self.held_module(node),
+            NodeType::NativeView if !paints_self => self.held_module(walk.scene.kernel, node),
             // The rest is this element's own paint (its picture, field, or control).
             _ if !paints_self => {}
             // @ref LLP 1056 D7 — a 2D canvas's kept bitmap fills its content box.

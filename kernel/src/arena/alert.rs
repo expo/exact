@@ -7,17 +7,21 @@ use std::sync::LazyLock;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct State {
     pub prefixes: SlotSet,
+    /// Dialogs whose host needs a viewport box before presenting them.
+    pub measured_dialogs: SlotSet,
     /// Popovers a shown source opened as choosers (`set_popover_source_visible`).
     pub choosers: SlotSet,
 }
 
 impl State {
     pub fn clear(&mut self) {
+        self.measured_dialogs.clear();
         self.prefixes.clear();
         self.choosers.clear();
     }
 
     pub fn remove(&mut self, slot: u32) {
+        self.measured_dialogs.remove(slot);
         self.prefixes.remove(slot);
         self.choosers.remove(slot);
     }

@@ -318,6 +318,20 @@ extension Agent {
     /// mounted for it. Observations, never a second model; a stale id is
     /// refused by name. An inline run's geometry is its fragment union.
     func layout(_ req: [String: Any]) -> [String: Any] {
+        #if os(iOS) && targetEnvironment(simulator) && EXACT_AGENT
+        if req["simulatorRotation"] as? Bool == true {
+            guard let window = presenter.viewport.window, let scene = window.windowScene else { return [:] }
+            // The inner screen has a division even when fully open. Only active divisions affect app layout.
+            var mask = UIApplication.shared.supportedInterfaceOrientations(for: window)
+            if let route = presenter.orientationLock.supported { mask.formIntersection(route) }
+            var locked = presenter.orientationLock.locked
+            if #available(iOS 26, *) { locked = locked || scene.effectiveGeometry.isInterfaceOrientationLocked }
+            return ["angle": session.view?.simulatorHingeAngle as Any, "orientation": Agent.orientation(scene), "device": UIDevice.current.orientation.rawValue,
+                    "allowed": OrientationLock.named(OrientationLock.bits(mask)), "locked": locked,
+                    "inner": !(ReservedRegions.divisions(of: window) ?? []).isEmpty,
+                    "ready": Agent.frontRefusal(window) == nil && window.rootViewController?.transitionCoordinator == nil]
+        }
+        #endif
         let bars = drawnBarBoxes()
         var reply = layout(bars: bars)
         guard let id = req["id"] as? Int else { return reply }

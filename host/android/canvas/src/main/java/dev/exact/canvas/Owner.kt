@@ -476,12 +476,13 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
 
     /** A touch: answered within [waitMs] if exact2 is free (as LLP 1072's events are synchronous, so the response is
      * in this frame), else published when it is. Whether it was answered. */
-    fun touch(action: Int, x: Float, y: Float, tool: Int, waitMs: Long, at: Long, history: MotionEvent?): Boolean {
+    fun touch(action: Int, x: Float, y: Float, tool: Int, waitMs: Long, at: Long, history: MotionEvent?, released: ((IntArray) -> Unit)? = null): Boolean {
         // Android recycles the delivered event as soon as the reader returns.
         val batch = history?.let { MotionEvent.obtain(it) }
         return answer(waitMs) {
             try { batch?.forwardHistory(tool) } finally { batch?.recycle() }
-            Native.touch(action, x, y, tool, at)
+            val list = Native.touch(action, x, y, tool, at)
+            if (list != null && released != null) main.post { released(list) }
             if (action == 0 && ahead) { handler.removeCallbacks(aheadSlice); handler.post(aheadSlice) }
         }
     }
@@ -853,6 +854,12 @@ internal object Exact {
 
     fun moduleEvent(id: Int, slot: Int, generation: Int, session: Long, kind: String, payload: String) =
         field { Native.moduleEvent(id, slot, generation, session, kind, payload) }
+
+    fun moduleSizes(reports: Collection<() -> org.json.JSONArray?>) = field {
+        val sizes = org.json.JSONArray()
+        for (report in reports) report()?.let(sizes::put)
+        if (sizes.length() > 0) Native.moduleSizes(sizes.toString())
+    }
 
     fun frameLoaded(id: Int, slot: Int, generation: Int, session: Long) =
         field { Native.frameLoaded(id, slot, generation, session) }

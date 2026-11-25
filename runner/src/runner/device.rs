@@ -303,9 +303,17 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
+    pub(in crate::runner) fn retire_hold(&mut self, ticket: u64) {
+        if let Some(at) = self.device_holds.iter().position(|h| h.ticket == ticket) {
+            let hold = self.device_holds.remove(at);
+            self.log(format!("device {} {ticket} retired", hold.capability));
+        }
+    }
+
     /// Retire every hold whose node is gone (after a commit).
     pub(super) fn retire_holds(&mut self) {
         self.retire_modules();
+        self.presence_let_go();
         self.prune_origins();
         self.views_committed();
         let kernel = &self.kernel;

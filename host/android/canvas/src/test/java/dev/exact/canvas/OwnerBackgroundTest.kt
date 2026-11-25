@@ -63,8 +63,9 @@ class OwnerBackgroundTest {
             var scrollStatement: IntArray? = null
             val samples = ArrayList<Float>()
             val touches = ArrayList<Triple<Int, Float, Long>>()
-            @JvmStatic @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long) {
+            @JvmStatic @Implementation fun touch(action: Int, x: Float, y: Float, tool: Int, at: Long): IntArray? {
                 touches.add(Triple(action, y, at))
+                return null
             }
             fun statement() = intArrayOf(
                 scrollScale.toBits(), 1, 2 or 4 or 8, 0,

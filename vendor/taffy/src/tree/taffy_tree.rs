@@ -1,8 +1,9 @@
 //! Contains [TaffyTree](crate::tree::TaffyTree): the default implementation of [LayoutTree](crate::tree::LayoutTree), and the error type for Taffy.
+use crate::style::CalcHandle;
 #[cfg(not(feature = "std"))]
 use slotmap::SecondaryMap;
 #[cfg(feature = "std")]
-use slotmap::SparseSecondaryMap as SecondaryMap;
+type SecondaryMap<K, V> = slotmap::SparseSecondaryMap<K, V, core::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
 use slotmap::{DefaultKey, SlotMap};
 
 use std::rc::Rc;
@@ -200,7 +201,7 @@ pub struct TaffyTree<NodeContext = ()> {
     layout_inputs: SecondaryMap<DefaultKey, Replay>,
 
     // EXACT PATCH 13: `calc()` handles resolve through a caller-supplied function.
-    calc_resolver: fn(*const (), f32) -> f32,
+    calc_resolver: fn(CalcHandle, f32) -> f32,
 
     // EXACT PATCH 20: the absolutely positioned boxes each containing block holds that are
     // not its children (the caller's record), and the static position each one's parent kept.
@@ -225,7 +226,8 @@ pub struct TaffyTree<NodeContext = ()> {
     // EXACT PATCH 72: one count per engine entry, independent of the caller's passes.
     layout_pass: u16,
     size_cache_policy: SizeCachePolicy,
-    size_counts: SizeCounts,
+    size_counts_enabled: bool,
+    size_counts: core::cell::RefCell<SizeCounts>,
 }
 
 /// EXACT PATCH 9: a containment candidate's record since its ancestors were
@@ -302,15 +304,15 @@ impl<NodeContext> TraverseTree for TaffyTree<NodeContext> {}
 
 // CacheTree impl for TaffyTree
 impl<NodeContext> CacheTree for TaffyTree<NodeContext> {
-    fn cache_get(&mut self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
+    fn cache_get(&self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
         if self.size_cache_policy == SizeCachePolicy::Off && input.run_mode == RunMode::ComputeSize {
             return None;
         }
-        let node = &mut self.nodes[node_id.into()];
+        let node = &self.nodes[node_id.into()];
         let output = node.cache.get(input, self.layout_pass, node.style.aspect_ratio.is_some());
         if let Some(output) = output {
-            if self.size_counts.enabled {
-                self.size_counts.stored(node_id, input, &output, node.cache.size_answers());
+            if self.size_counts_enabled {
+                self.size_counts.borrow_mut().stored(node_id, input, &output, node.cache.size_answers());
             }
         }
         output
@@ -330,8 +332,8 @@ impl<NodeContext> CacheTree for TaffyTree<NodeContext> {
         if self.size_cache_policy != SizeCachePolicy::Off || input.run_mode != RunMode::ComputeSize {
             self.nodes[node_id.into()].cache.store(input, layout_output, self.layout_pass, self.size_cache_policy);
         }
-        if self.size_counts.enabled {
-            self.size_counts.stored(node_id, input, &layout_output, self.nodes[node_id.into()].cache.size_answers());
+        if self.size_counts_enabled {
+            self.size_counts.get_mut().stored(node_id, input, &layout_output, self.nodes[node_id.into()].cache.size_answers());
         }
     }
 
@@ -343,7 +345,9 @@ impl<NodeContext> CacheTree for TaffyTree<NodeContext> {
             }
         }
         self.nodes[node_id.into()].cache.clear();
-        self.size_counts.clear(node_id);
+        if self.size_counts_enabled {
+            self.size_counts.get_mut().clear(node_id);
+        }
     }
 }
 
@@ -552,20 +556,24 @@ where
             None,
         );
         self.taffy.nodes[key].style = placed_style;
-        // The overflow is measured from the inline-start edge, mirrored for RTL
-        let start = match self.taffy.nodes[key].style.direction.is_rtl() {
-            true => outset.right,
-            false => outset.left,
+        #[cfg(feature = "content_size")]
+        let scrollable_overflow_rect = {
+            let o = output.scrollable_overflow_rect;
+            let r = o.rect();
+            crate::tree::ScrollableOverflow::new(
+                Rect {
+                    left: (r.left - outset.left).min(0.0),
+                    right: (r.right - outset.left).max(0.0),
+                    top: (r.top - outset.top).min(0.0),
+                    bottom: (r.bottom - outset.top).max(0.0),
+                },
+                o.is_reversed(),
+            )
         };
-        let o = output.scrollable_overflow_rect;
         let placed = LayoutOutput {
             size,
-            scrollable_overflow_rect: Rect {
-                left: o.left - start,
-                right: o.right - start,
-                top: o.top - outset.top,
-                bottom: o.bottom - outset.top,
-            },
+            #[cfg(feature = "content_size")]
+            scrollable_overflow_rect,
             baselines: Baselines::NONE,
             ..output
         };
@@ -607,7 +615,9 @@ where
                 let node_context = tree.taffy.node_context_data.get_mut(node_key);
                 let leaf = (tree.measure_function)(inputs, node_id, node_context, style);
                 if inputs.run_mode != RunMode::PerformLayout {
-                    tree.taffy.size_counts.computed(node_id, &inputs, &leaf);
+                    if tree.taffy.size_counts_enabled {
+                        tree.taffy.size_counts.get_mut().computed(node_id, &inputs, &leaf);
+                    }
                     return leaf;
                 }
                 let inputs = LayoutInput { known_dimensions: leaf.size.map(Some), ..inputs };
@@ -652,7 +662,9 @@ where
                     Display::Grid => tree.grid(node_id, inputs),
                     _ => compute_block_layout(tree, node_id, inputs, None),
                 });
-                tree.taffy.size_counts.computed(node_id, &inputs, &output);
+                if tree.taffy.size_counts_enabled {
+                    tree.taffy.size_counts.get_mut().computed(node_id, &inputs, &output);
+                }
                 return output;
             }
 
@@ -686,7 +698,9 @@ where
                     (tree.measure_function)(inputs, node_id, node_context, style)
                 }
             };
-            tree.taffy.size_counts.computed(node_id, &inputs, &output);
+            if tree.taffy.size_counts_enabled {
+                tree.taffy.size_counts.get_mut().computed(node_id, &inputs, &output);
+            }
             output
         })
     }
@@ -779,7 +793,9 @@ where
             return output;
         }
         let output = self.visit(node_id, node, inputs, block_ctx);
-        self.taffy.size_counts.computed(node_id, &inputs, &output);
+        if self.taffy.size_counts_enabled {
+            self.taffy.size_counts.get_mut().computed(node_id, &inputs, &output);
+        }
         self.taffy.cache_store(node_id, &inputs, output);
         if let Some(rec) = self.rec.as_mut() {
             rec.answered(node, &inputs, &output);
@@ -854,8 +870,8 @@ where
             None if self.taffy.nodes[root.into()].style.display == Display::Grid => self.grid(root, inputs),
             None => compute_flexbox_layout(self, root, inputs),
         };
-        if replayed.is_none() {
-            self.taffy.size_counts.computed(root, &inputs, &output);
+        if replayed.is_none() && self.taffy.size_counts_enabled {
+            self.taffy.size_counts.get_mut().computed(root, &inputs, &output);
         }
         self.memoizing = false;
         self.taffy.memo = memo;
@@ -926,15 +942,20 @@ where
         // are computed again, not found in their caches (each is stored
         // again as that layout passes it: what the replay did, it does).
         if output.is_none() {
-            if self.taffy.size_counts.enabled && !stored.is_empty() { self.taffy.size_counts.counts.stopped_replays += 1; }
+            if self.taffy.size_counts_enabled && !stored.is_empty() {
+                self.taffy.size_counts.get_mut().counts.stopped_replays += 1;
+            }
             for &node in &stored {
                 self.taffy.nodes[node.into()].cache.clear();
-                self.taffy.size_counts.clear(node);
+                if self.taffy.size_counts_enabled {
+                    self.taffy.size_counts.get_mut().clear(node);
+                }
             }
         }
-        if output.is_some() && self.taffy.size_counts.enabled {
+        if output.is_some() && self.taffy.size_counts_enabled {
             let most = nodes.iter().map(|&node| self.taffy.nodes[node.into()].cache.size_answers()).max().unwrap_or(0);
-            self.taffy.size_counts.counts.replayed_max_answers = self.taffy.size_counts.counts.replayed_max_answers.max(most);
+            let sc = self.taffy.size_counts.get_mut();
+            sc.counts.replayed_max_answers = sc.counts.replayed_max_answers.max(most);
         }
         memo.nodes = nodes;
         memo.overflows = overflows;
@@ -1124,7 +1145,7 @@ where
     }
 
     #[inline(always)]
-    fn resolve_calc_value(&self, val: *const (), basis: f32) -> f32 {
+    fn resolve_calc_value(&self, val: CalcHandle, basis: f32) -> f32 {
         (self.taffy.calc_resolver)(val, basis)
     }
 
@@ -1217,7 +1238,7 @@ impl<NodeContext, MeasureFunction> CacheTree for TaffyView<'_, NodeContext, Meas
 where
     MeasureFunction: FnMut(LayoutInput, NodeId, Option<&mut NodeContext>, &Style) -> LayoutOutput,
 {
-    fn cache_get(&mut self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
+    fn cache_get(&self, node_id: NodeId, input: &LayoutInput) -> Option<LayoutOutput> {
         self.taffy.cache_get(node_id, input)
     }
 
@@ -1227,7 +1248,9 @@ where
 
     fn cache_clear(&mut self, node_id: NodeId) {
         self.taffy.nodes[node_id.into()].cache.clear();
-        self.taffy.size_counts.clear(node_id);
+        if self.taffy.size_counts_enabled {
+            self.taffy.size_counts.get_mut().clear(node_id);
+        }
     }
 }
 
@@ -1358,29 +1381,31 @@ impl<NodeContext> TaffyTree<NodeContext> {
 
     /// Enable work counts for tests. Disabled layouts do not collect questions or counts.
     pub fn track_size_computations(&mut self, enabled: bool) {
-        self.size_counts.enabled = enabled;
+        self.size_counts_enabled = enabled;
+        self.size_counts.get_mut().enabled = enabled;
     }
 
     /// Computations and retained answers since the last reset.
     pub fn size_cache_counts(&self) -> SizeCacheCounts {
-        self.size_counts.counts
+        self.size_counts.borrow().counts
     }
 
     /// Start a caller's layout, which may call the engine several times.
     pub fn reset_size_cache_counts(&mut self) {
-        if !self.size_counts.enabled { return; }
-        self.size_counts.counts = SizeCacheCounts::default();
-        self.size_counts.peaks.clear();
+        if !self.size_counts_enabled { return; }
+        let sc = self.size_counts.get_mut();
+        sc.counts = SizeCacheCounts::default();
+        sc.peaks.clear();
         for (id, node) in &self.nodes {
             let held = node.cache.size_answers();
-            if held > 0 { self.size_counts.peaks.insert(id.into(), held); }
-            self.size_counts.counts.max_answers = self.size_counts.counts.max_answers.max(held);
+            if held > 0 { sc.peaks.insert(id.into(), held); }
+            sc.counts.max_answers = sc.counts.max_answers.max(held);
         }
     }
 
     /// Per-node peaks since the last count reset, including answers held at that reset.
     pub fn size_cache_peaks(&self) -> impl Iterator<Item = (NodeId, usize)> + '_ {
-        self.size_counts.peaks.iter().map(|(&node, &peak)| (node, peak))
+        self.size_counts.borrow().peaks.iter().map(|(&node, &peak)| (node, peak)).collect::<Vec<_>>().into_iter()
     }
 
     /// Current size-answer count of each live node.
@@ -1390,7 +1415,8 @@ impl<NodeContext> TaffyTree<NodeContext> {
 
     /// Lifetime peak and distinct nodes which held more than nine answers.
     pub fn size_cache_history(&self) -> (usize, usize) {
-        (self.size_counts.most_held, self.size_counts.over_nine.len())
+        let sc = self.size_counts.borrow();
+        (sc.most_held, sc.over_nine.len())
     }
 
     /// Cache allocations retained by the live tree, including spare slots.
@@ -1412,7 +1438,9 @@ impl<NodeContext> TaffyTree<NodeContext> {
             for node in self.nodes.values_mut() { node.cache.reset_pass_stamps(); }
             self.layout_pass = 1;
         }
-        self.size_counts.begin();
+        if self.size_counts_enabled {
+            self.size_counts.get_mut().begin();
+        }
     }
 
     /// Creates a new [`TaffyTree`]
@@ -1446,22 +1474,26 @@ impl<NodeContext> TaffyTree<NodeContext> {
             nodes: SlotMap::with_capacity(capacity),
             children: SlotMap::with_capacity(capacity),
             parents: SlotMap::with_capacity(capacity),
+            #[cfg(feature = "std")]
+            node_context_data: SecondaryMap::with_capacity_and_hasher(capacity, Default::default()),
+            #[cfg(not(feature = "std"))]
             node_context_data: SecondaryMap::with_capacity(capacity),
             config: TaffyConfig::default(),
             layout_pass: 0,
             size_cache_policy: SizeCachePolicy::default(),
-            size_counts: SizeCounts::default(),
+            size_counts_enabled: false,
+            size_counts: core::cell::RefCell::new(SizeCounts::default()),
             changed_layouts: Vec::new(),
-            changed_layout_indices: SecondaryMap::new(),
-            layout_inputs: SecondaryMap::new(),
+            changed_layout_indices: SecondaryMap::default(),
+            layout_inputs: SecondaryMap::default(),
             calc_resolver: |_, _| 0.0,
-            hoisted_absolutes: SecondaryMap::new(),
-            static_positions: SecondaryMap::new(),
-            multicol_bounds: SecondaryMap::new(),
-            grid_origins: SecondaryMap::new(),
-            outset_paddings: SecondaryMap::new(),
-            bar_depths: SecondaryMap::new(),
-            bar_slots: SecondaryMap::new(),
+            hoisted_absolutes: SecondaryMap::default(),
+            static_positions: SecondaryMap::default(),
+            multicol_bounds: SecondaryMap::default(),
+            grid_origins: SecondaryMap::default(),
+            outset_paddings: SecondaryMap::default(),
+            bar_depths: SecondaryMap::default(),
+            bar_slots: SecondaryMap::default(),
             memo: Memo::default(),
         }
     }
@@ -1482,7 +1514,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
 
     /// EXACT PATCH 13: resolve every `calc()` handle (see [`crate::style::Dimension::calc`])
     /// with `resolver`, given the handle and the percentage basis. Unset, a calc is zero.
-    pub fn set_calc_resolver(&mut self, resolver: fn(*const (), f32) -> f32) {
+    pub fn set_calc_resolver(&mut self, resolver: fn(CalcHandle, f32) -> f32) {
         self.calc_resolver = resolver;
     }
 

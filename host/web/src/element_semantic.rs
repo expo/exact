@@ -3,13 +3,7 @@
 //! and what data can give a node, beside what its literal props and styles do:
 //! its tag, and the attributes element.rs `props_of` derives.
 
-use exact_kernel::{NodeFacts, NodeType, PropId, StyleId};
-
-/// The element for `tag`, a `semanticTag`; `None` where the node's type
-/// decides (a `textarea`, an `option`, an `audio`).
-pub(super) fn element(tag: &str) -> Option<&'static str> {
-    ELEMENTS.iter().find(|e| **e == tag).copied()
-}
+use exact_kernel::{NodeFacts, NodeType, PropId, PropList, StyleId};
 
 /// The layout row whose presentation belongs to the HTML element. An option
 /// remains visible in its native menu (LLP 1069.001 D2). A modal dialog is
@@ -27,44 +21,6 @@ pub(super) fn browser_row(node: &NodeFacts<'_>) -> Option<StyleId> {
     }
 }
 
-const ELEMENTS: &[&str] = &[
-    // HTML grouping and phrasing content.
-    "p",
-    "strong",
-    "em",
-    "blockquote",
-    "ol",
-    "ul",
-    "li",
-    // Landmarks, time and dialog.
-    "time",
-    "main",
-    "header",
-    "nav",
-    "section",
-    "footer",
-    "article",
-    "aside",
-    "dialog",
-    // @ref LLP 1021 D1 — HTML's separator, void: the kernel gives it no
-    // children, and its UA rows are the node's own.
-    "hr",
-    // @ref LLP 1153 D7 — HTML's own elements, laid out by the browser's
-    // table algorithm and its UA sheet (`display: table` and the rest);
-    // the plan carries no grid rows for them.
-    "table",
-    "caption",
-    "thead",
-    "tbody",
-    "tfoot",
-    "tr",
-    "th",
-    "td",
-    "dl",
-    "dt",
-    "dd",
-];
-
 /// The tags element.rs `element` can give a node of type `node_type` as data
 /// sets `prop`, where `prop` decides the tag, and none where it does not. The
 /// page's sheet keeps the rules for every possible tag (exact-web-js `style::bound_tokens`,
@@ -77,7 +33,7 @@ pub fn tags_by_data(node_type: NodeType, prop: PropId) -> Vec<&'static str> {
             vec!["h1", "h2", "h3", "h4", "h5", "h6", "div"]
         }
         (NodeType::Control, PropId::Value | PropId::Start | PropId::End) => vec!["progress", "div"],
-        (_, PropId::SemanticTag) => ELEMENTS
+        (_, PropId::SemanticTag) => PropList::SEMANTIC_ELEMENTS
             .iter()
             .copied()
             .chain(["textarea", "audio", "div"])

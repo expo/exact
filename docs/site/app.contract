@@ -11,7 +11,6 @@ font "Inter"
   400 italic = "assets/fonts/Inter-Italic.ttf"
   500 = "assets/fonts/Inter-Medium.ttf"
   600 = "assets/fonts/Inter-SemiBold.ttf"
-  700 = "assets/fonts/Inter-Bold.ttf"
 
 font "JetBrains Mono"
   400 = "assets/fonts/JetBrainsMono-Regular.ttf"

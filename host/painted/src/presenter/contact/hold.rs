@@ -3,7 +3,7 @@ use super::HeldKind;
 use exact_motion::{HoldStart, Value, VelocityTracker};
 
 pub(in crate::presenter) struct Hold {
-    pub(in crate::presenter) primary: HoldStart,
+    pub(in crate::presenter) primary: Option<HoldStart>,
     pub(in crate::presenter) velocity: VelocityTracker,
     pub(in crate::presenter) kind: HeldKind,
     /// The newest sample's input time (ms) and the input's travel then, for
@@ -13,6 +13,11 @@ pub(in crate::presenter) struct Hold {
     pub(in crate::presenter) lifting: bool,
 }
 impl Hold {
+    /// All gestures except a shared list own a motion property at recognition.
+    pub(in crate::presenter) fn motion(&self) -> HoldStart {
+        self.primary.expect("gesture has taken its motion property")
+    }
+
     /// Record the held `value` at `at_ms`, the input's own time, which the
     /// release velocity reads (LLP 1057.001 §3), after `input` of travel. A
     /// lift where the input already was, soon after, is no sample

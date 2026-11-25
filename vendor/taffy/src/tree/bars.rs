@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::geometry::Line;
-use crate::style::AlignItemsKeyword as Keyword;
+use crate::style::{AlignItemsKeyword as Keyword, Overflow};
 use crate::tree::{LayoutPartialTree, RequestedAxis, RunMode, SizingMode};
 
 /// A bar as its parent measured it.
@@ -154,13 +154,29 @@ where
         let mut output = algorithm(self, inputs);
         self.taffy.nodes[key].style = Rc::clone(&placed_style);
         if inputs.run_mode == RunMode::PerformLayout {
-            let scroller = placed_style.overflow.x.is_scroll_container() || placed_style.overflow.y.is_scroll_container();
-            let _overflow = self.place_bars(&bars, output.size, border, inset, rtl, scroller);
+            let overflow_style = placed_style.overflow;
+            let scroller = overflow_style.x.is_scroll_container() || overflow_style.y.is_scroll_container();
+            let scrollbar = Size {
+                width: if overflow_style.y == Overflow::Scroll { placed_style.scrollbar_width } else { 0.0 },
+                height: if overflow_style.x == Overflow::Scroll { placed_style.scrollbar_width } else { 0.0 },
+            };
+            #[cfg(feature = "content_size")]
+            let reversed = output.scrollable_overflow_rect.is_reversed();
+            #[cfg(not(feature = "content_size"))]
+            let reversed = Point { x: rtl, y: false };
+            let _overflow = self.place_bars(&bars, output.size, border, scrollbar, inset, rtl, scroller, reversed);
             // The absolute pass leaves the bars out of the overflow; each adds its own at its slot,
             // but a scroller's, which do not scroll
             #[cfg(feature = "content_size")]
             if !scrollport {
-                output.scrollable_overflow_rect = output.scrollable_overflow_rect.union(_overflow);
+                let client_size = output.size - border.sum_axes() - scrollbar;
+                output.scrollable_overflow_rect =
+                    crate::compute::common::scrollable_overflow::finalize_scrollable_overflow(
+                        output.scrollable_overflow_rect.rect().union(_overflow),
+                        client_size,
+                        reversed,
+                        scroller,
+                    );
             }
         }
         output
@@ -225,7 +241,8 @@ where
                 true => (style.margin.left.is_auto(), style.margin.right.is_auto()),
                 false => (style.margin.top.is_auto(), style.margin.bottom.is_auto()),
             };
-            let stretch = along_auto && !start && !end && matches!(keyword, None | Some(Keyword::Stretch));
+            let stretch =
+                along_auto && !start && !end && matches!(keyword, None | Some(Keyword::Normal | Keyword::Stretch));
             let (min, max) = match horizontal {
                 true => (style.min_size.width, style.max_size.width),
                 false => (style.min_size.height, style.max_size.height),
@@ -314,15 +331,20 @@ where
     /// Lay each of `bars` out in its slot of a parent `size` big, in tree order, keeping each
     /// one's slot depth for publication; returns what they add to the parent's scrollable
     /// overflow, measured from its scroll origin (the padding box's inline-start corner).
+    #[allow(clippy::too_many_arguments)]
     fn place_bars(
         &mut self,
         bars: &[Bar],
         size: Size<f32>,
         border: Rect<f32>,
+        scrollbar: Size<f32>,
         inset: Rect<f32>,
         rtl: bool,
         scroller: bool,
+        reversed: Point<bool>,
     ) -> Rect<f32> {
+        #[cfg(not(feature = "content_size"))]
+        let _ = (rtl, scroller, reversed);
         let mut before = Rect::ZERO;
         let mut overflow = Rect { left: 0.0, right: 0.0, top: 0.0, bottom: 0.0 };
         for bar in bars {
@@ -401,18 +423,29 @@ where
             // The next slot on the edge lies past this one's inner side, a region's included
             let inner = start[bar.edge] + bar.depth - at(&border, bar.edge) - at(&inset, bar.edge);
             *side(&mut before, bar.edge) = at(&before, bar.edge).max(inner);
-            let origin = match rtl {
-                true => Point { x: size.width - (location.x + out.size.width) - border.right, y: location.y - border.top },
-                false => Point { x: location.x - border.left, y: location.y - border.top },
-            };
-            overflow = overflow.union(crate::compute::common::scrollable_overflow::compute_scrollable_overflow_contribution(
-                origin,
-                out.size,
-                out.scrollable_overflow_rect,
-                style.overflow,
-                style.contain,
-                scroller,
-            ));
+            #[cfg(feature = "content_size")]
+            {
+                let origin = Point {
+                    x: location.x - border.left - if rtl { scrollbar.width } else { 0.0 },
+                    y: location.y - border.top,
+                };
+                let overflow_container = crate::compute::common::scrollable_overflow::ScrollableOverflowContainer {
+                    parent_is_scroll_container: scroller,
+                    parent_size: size - border.sum_axes() - scrollbar,
+                    reversed,
+                    padding: Rect::ZERO,
+                };
+                overflow = overflow.union(crate::compute::common::scrollable_overflow::compute_scrollable_overflow_contribution(
+                    origin,
+                    out.size,
+                    out.scrollable_overflow_rect.rect(),
+                    layout.border,
+                    style.overflow,
+                    style.contain,
+                    &overflow_container,
+                    None,
+                ));
+            }
         }
         overflow
     }

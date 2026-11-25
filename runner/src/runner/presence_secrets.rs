@@ -681,6 +681,48 @@ impl<D: DataSource> PresenceSecrets<D> for LinkedPresence {
         r.presence_checked(id, checked);
     }
 
+    /// Each call whose request is no longer wanted (the app aborted it, or
+    /// let it go) leaves the backend's queue, unanswered. A check the agent
+    /// or a later bind would make is withdrawn and ends as cancelled, so the
+    /// name is not held for an answer no one will give; one the platform is
+    /// making ends when the platform answers.
+    fn presence_let_go(&self, r: &mut Runner<D>) {
+        let gone: Vec<u64> = (r.presence.calls.iter())
+            .filter(|(_, c)| c.ticket.is_some_and(|t| !r.holds(t)))
+            .map(|(id, _)| *id)
+            .collect();
+        for &id in &gone {
+            let p = &mut r.presence;
+            let Some(call) = p.calls.remove(&id) else {
+                continue;
+            };
+            let holds: Vec<u64> = (p.holds.iter())
+                .filter(|(_, c, _)| *c == id)
+                .map(|(h, _, _)| *h)
+                .collect();
+            p.holds.retain(|(_, c, _)| *c != id);
+            let unasked = p.asks.iter().any(|a| a.id == id) || p.waiting.contains(&id);
+            p.asks.retain(|a| a.id != id);
+            p.waiting.retain(|w| *w != id);
+            if let Some(backend) = p.backend.as_mut() {
+                backend.cancel(id);
+                if unasked || !holds.is_empty() {
+                    let why = "the call was let go".to_owned();
+                    backend.checked(id, Checked::Failed("SYSTEM_CANCEL".into(), why));
+                }
+            }
+            for hold in holds {
+                r.retire_hold(hold);
+            }
+            r.log(format!("store {} {}: let go", call.op, call.name));
+            let done = Done::Failed("AbortError".into(), "the call was let go".into());
+            Pending::complete(&call.slot, response(&answer(&done)));
+        }
+        if !gone.is_empty() {
+            r.pump_presence();
+        }
+    }
+
     /// The store adopts the backend's occupancy, at the start of a commit:
     /// a move that landed shows in this commit, and asks the store's readers
     /// again where `has` or `locked` changed.

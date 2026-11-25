@@ -12,7 +12,7 @@ name = "exact_kernel"
 crate-type = ["rlib"]
 
 [dependencies]
-cssparser = { version = "0.37.0", default-features = false }
+cssparser = { version = "0.38.0", default-features = false }
 exact-color = { path = "../color" }
 exact-motion = { path = "../motion" }
 exact-num = { path = "../num" }
@@ -20,7 +20,7 @@ exact-svg-filter = { path = "../svg-filter" }
 exact-textflow = { path = "../textflow" }
 icu_properties = "2.3.0"
 smol_str = "0.2.2"
-taffy = { version = "0.14", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size", "calc", "parse"] }
+taffy = { version = "0.16", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size", "calc", "parse"] }
 
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }

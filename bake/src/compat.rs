@@ -483,6 +483,21 @@ pub fn compatibility_id_pinned(
             compat.inputs["grantCeiling"].as_str(),
             &contract::native::app_text(app_dir),
         );
+        if std::env::var_os("OUT_DIR").is_some() {
+            println!("cargo:rerun-if-env-changed=EXACT_ANDROID_MANIFEST_PERMISSIONS");
+        }
+        if let Ok(inventory) = std::env::var("EXACT_ANDROID_MANIFEST_PERMISSIONS") {
+            let names: Vec<String> = serde_json::from_str(&inventory)
+                .map_err(|e| format!("merged Android manifest permissions: {e}"))?;
+            if names.windows(2).any(|pair| pair[0] >= pair[1]) || names.iter().any(String::is_empty)
+            {
+                return Err(
+                    "the merged Android permission inventory must contain sorted, unique names"
+                        .into(),
+                );
+            }
+            compat.inputs["androidLinked"]["permissions"] = serde_json::json!(names);
+        }
         compat.id = compatibility_digest(&compat.inputs);
     }
     crate::icon_rules::apply(&mut compat, ships, entries)?;

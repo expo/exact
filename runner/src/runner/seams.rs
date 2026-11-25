@@ -383,6 +383,8 @@ pub trait PresenceSecrets<D: DataSource> {
     fn pump_presence(&self, _: &mut Runner<D>) {}
     /// The agent answered a presence hold.
     fn presence_answered(&self, _: &mut Runner<D>, _: u64, _: &HoldAnswer) {}
+    /// Presence calls whose request is no longer held leave their queues.
+    fn presence_let_go(&self, _: &mut Runner<D>) {}
     /// The backend's occupancy, adopted into the store.
     fn adopt_presence(&self, _: &mut Runner<D>) {}
 }
@@ -692,6 +694,11 @@ impl<D: DataSource> Runner<D> {
     pub(in crate::runner) fn presence_answered(&mut self, hold: u64, answer: &HoldAnswer) {
         let p = self.seams.presence;
         p.presence_answered(self, hold, answer)
+    }
+
+    pub(in crate::runner) fn presence_let_go(&mut self) {
+        let p = self.seams.presence;
+        p.presence_let_go(self)
     }
 
     pub(in crate::runner) fn adopt_presence(&mut self) {

@@ -1,11 +1,12 @@
 # Recipe: foldables
 
-Drive a Duo simulator with `fold 130`. Its `devicePosture` is `continuous` at 0° and
-180°, `folded` at 90° and 130°. Android reports `folded` only for a half-open hinge.
+On a Duo, `fold 130` sets the hinge. Posture is `continuous` at 0° and
+180°, `folded` at 90° and 130°. Android reports `folded` only when half open.
 Place panes by `horizontalViewportSegments` (columns) and `verticalViewportSegments`
 (rows). A flat separating hinge still gives two segments, the cover display one.
 `env(viewport-segment-<left|top|width|height> <x> <y>)` excludes the hinge band.
-Some browsers (Safari 27) report no fold.
+Safari 27 reports no fold. For the Duo’s cover in landscape, write `fold 0` then
+`rotate landscapeLeft`.
 
 ```contract
 shape Viewport
@@ -28,7 +29,7 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
 [Apple's talk](https://developer.apple.com/videos/play/tech-talks/111463/)):
 
 - Scrolling content can span the hinge; keep controls off it.
-- Centre a non-scrolling pane (full width on narrow screens), or use the trailing book segment.
+- Centre a non-scrolling pane (full width if narrow) or use the trailing segment.
 - **A list and its detail** is a split view (`pattern list-detail`; UIKit's on iOS,
   LLP 1127). **Peer panes** use [native containers](../contract-for-agents.md#arranged-panes)
   on iOS 27.1 and responsive CSS elsewhere (Duo Lab's Panes tab).
@@ -45,7 +46,7 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
   An iOS keyboard can leave that segment below the viewport and zero tall;
   Duo Lab's note sheet then lifts the cap.
 - End panes under the keyboard at `100%` or `bottom: 0`; hosts' segment heights differ.
-- Keep pane instances to retain field text. UIKit may end editing on a panel switch.
+- Keep panes to retain text. A panel switch may end editing.
 - Panes move as UIKit's with `-exact-layout-transition="-exact-spring(439, 41.9, 1)"`; browsers drop
   `env()` early on opening (fall back to `exactViewport().segments`).
 - UIKit's alerts and sheets on a fold: [Folds on iOS](../contract-for-agents.md#folds-on-ios).

@@ -160,10 +160,9 @@ extension Presenter {
     /// bars or the bar, as a hand-built table runs under its navigation bar
     /// whatever is pinned under it; an open top under the route's cover (the
     /// bar) is reached with no bars at all, as a thread in a box with its
-    /// floating button is. An open foot over the route's bottom cover (a tab
-    /// bar, kept under `viewport-fit=cover`, where `reachBottom` gives UIKit no
-    /// scroller) is reached with no bars too, as a hand-built table runs under
-    /// its tab bar (#223). A top with more than bars over the scroller keeps
+    /// floating button is. A separate scroller with an open foot over the route's
+    /// bottom cover draws under the tab bar the same way (#223).
+    /// A top with more than bars over the scroller keeps
     /// both edges where they are (a footer under it keeps the bottom cover).
     package func controlBands(of v: NodeView, in route: NodeView, _ judge: ControlBars, apart: Bool = false) -> Bands {
         guard let sv = v.scrollView else { return Bands() }
@@ -181,10 +180,8 @@ extension Presenter {
         return Self.drawn(band, v, sv) ? Bands(band: band, top: top, bottom: bottom ?? []) : Bands()
     }
 
-    /// The band of a scroller's open foot over its route's bottom cover (a tab bar or the home indicator, kept
-    /// under `viewport-fit=cover`, where `reachBottom` gives UIKit no scroller), apart from a title's collapse
-    /// (`apart`), as a hand-built table under a fixed header runs under its tab bar (#223); `nil` where bars
-    /// lie under the scroller or something else does, or the route has no bottom cover.
+    /// The band at a scroller's open foot over its route's bottom cover, apart from a title's collapse
+    /// (`apart`), as a hand-built table below a fixed header runs under its tab bar (#223).
     private func openFoot(of v: NodeView, _ sv: UIScrollView, in route: NodeView, _ judge: ControlBars, apart: Bool) -> Bands? {
         let r = v.convert(v.bounds, to: route)
         guard apart, judge.lifts(of: v, in: route, top: false)?.isEmpty == true, case .edges(let e)? = navigation.covers[route.id],

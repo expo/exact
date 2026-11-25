@@ -36,6 +36,7 @@ mod table;
 pub(crate) mod text_item;
 mod titles;
 pub use publication::compute;
+pub(crate) use publication::overflow_extent;
 
 use crate::id::{IdMap, IdSet};
 use crate::shared_style::{engine_hash, Interner};

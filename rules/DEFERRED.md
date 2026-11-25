@@ -2380,6 +2380,7 @@ one reasonable "view" at a time; the count is the cost. (Charlie, 2026-08-29.)
 
 **Admitted (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** Pocket Lab's Fold lab can move an iOS simulator's hinge
 with `fold <degrees>` in a drive or authored test (LLP 1078 D7). The driver acts outside the app and waits for the device's angle. The wire still has ten operations.
+**Admitted (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).** A drive or authored test can turn an iOS simulator with `rotate` and wait for its scene's interface orientation (AJ1, LLP 1078 D7). This reaches the landscape tray on a closed Duo. The driver acts outside the app.
 **Admitted (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).** Android reads posture and viewport segments from Jetpack WindowManager for Pocket Lab (LLP 1078 D11).
 
 Not shipping: causal trace, behavior diff and verify, mutation
@@ -2492,11 +2493,11 @@ This half matters more than the feature half.
 
 ## Moving something off this list
 
-Write one line naming what it unblocks, and take something off the doing-list in the same PR.
-If nothing can come off, Charlie may waive the take in writing; the waiver is recorded beside the entry, in his words. Without a take or a waiver, the answer is no. **Restated (Charlie, 2026-09-27):** the take stays the default; the waiver
-exists so that an exception is a visible act and not drift.
+Write one line naming what it unblocks, and take something off the doing-list in the same PR. If nothing can come off, Charlie may waive the take in writing; the waiver is recorded beside the entry, in his words. Without a take or a waiver, the answer is no. **Restated (Charlie, 2026-09-27):** the take stays the default; the waiver exists so that an exception is a visible act and not drift.
 
 **App-owned Android queries (Charlie, 2026-11-24, "recs ok").** `host.android.queries` takes the package, action and action-with-scheme entries and allow-lists of a package’s `manifest.queries` (LLP 1133.030 D9). This lets an app’s Kotlin discover installed speech engines.
+
+**App-owned Android permissions (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).** `host.android.permissions` shares the package allow-list of install-time permissions. Adding `android.permission.DETECT_SCREEN_CAPTURE` lets Pocket Lab count system screenshots in its own Kotlin. AG1 keeps a framework screenshot event off the doing-list (LLP 1133.030 D9).
 
 **Package-owned Android POI service (Charlie, 2026-11-24, "recs ok").** LLP 1133.030 D9 admits one package's Kotlin point-of-interest service, with a ranged minimum car API, the generated template descriptor, an optional service-bound map permission and host validation enforced by Exact.
 

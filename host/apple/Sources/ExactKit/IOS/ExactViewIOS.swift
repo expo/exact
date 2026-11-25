@@ -65,6 +65,9 @@ public final class ExactView: UIView {
     /// hinge), and how many layouts have re-read the division regions since
     /// it last changed while they disagreed with it (LLP 1078 D5).
     private var hingeStatus: Int?
+    #if targetEnvironment(simulator) && EXACT_AGENT
+    private(set) var simulatorHingeAngle: CGFloat?
+    #endif
     private var regionRereads = 0
     private static let regionRereadLimit = 5
     private var lastDisplayScale: CGFloat = 0
@@ -164,8 +167,11 @@ public final class ExactView: UIView {
         // lay out again (LLP 1078 D5). The status is kept: the posture
         // follows it, and a layout whose regions disagree with it re-reads
         // them on the following frames (`fit`).
-        ReservedRegions.observeHinge(on: self) { [weak self] status in
+        ReservedRegions.observeHinge(on: self) { [weak self] status, angle in
             guard let self else { return }
+            #if targetEnvironment(simulator) && EXACT_AGENT
+            simulatorHingeAngle = angle.map { $0 * 180 / .pi }
+            #endif
             session.presenter.hingeReported = true
             if status != nil { session.presenter.hasFold = true }
             if status != hingeStatus { hingeStatus = status; regionRereads = 0 }

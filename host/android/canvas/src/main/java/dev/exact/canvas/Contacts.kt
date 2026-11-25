@@ -114,7 +114,7 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
     fun hold(e: MotionEvent?) {
         view.removeCallbacks(held)
         heldAt = 0L
-        if (e == null) return
+        if (e == null || scrolling.caughtSharedFling) return
         heldAt = e.eventTime + ViewConfiguration.getLongPressTimeout()
         view.postDelayed(held, (heldAt - android.os.SystemClock.uptimeMillis()).coerceAtLeast(0))
     }

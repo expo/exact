@@ -25,14 +25,14 @@ package enum ReservedRegions {
         return nil
     }
 
-    /// Add a `UIHingeInteraction` whose updates call `changed` with the hinge's status (0 unknown,
-    /// 1 closed, 2 partially open, 3 fully open; `nil` when the update carries no hinge). `false`
+    /// Add a `UIHingeInteraction` whose updates report the hinge angle in radians and its status
+    /// (0 unknown, 1 closed, 2 partially open, 3 fully open). Both are nil without a hinge. Returns false
     /// before iOS 27.1.
     @discardableResult
-    static func observeHinge(on view: UIView, changed: @escaping (Int?) -> Void) -> Bool {
+    static func observeHinge(on view: UIView, changed: @escaping (Int?, CGFloat?) -> Void) -> Bool {
         #if os(iOS)
         if #available(iOS 27.1, *) {
-            view.addInteraction(UIHingeInteraction { _, update in changed(update.hinge.map { $0.status.rawValue }) })
+            view.addInteraction(UIHingeInteraction { _, update in changed(update.hinge.map { $0.status.rawValue }, update.hinge?.angle) })
             return true
         }
         #endif

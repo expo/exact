@@ -260,3 +260,89 @@ fn compat_uses_recorded_settings_instead_of_its_own_environment() {
         );
     }
 }
+
+#[test]
+fn android_compat_uses_the_merged_permissions_after_package_resolution() {
+    let app = App::new("merged-permissions");
+    let network = "android.permission.ACCESS_NETWORK_STATE";
+    let capture = "android.permission.DETECT_SCREEN_CAPTURE";
+    let installed = [network, capture];
+    let device = app.0.join("node_modules/@exact/device");
+    std::fs::create_dir_all(&device).unwrap();
+    std::fs::write(device.join("exact.json"), r#"{"kind":"interface","name":"@exact/device","version":"1.0.0","grants":[],"shapes":{"BatteryManager":{"level":"number"}},"names":[{"source":"getBattery","live":true,"answers":"BatteryManager","substitute":{"default":{"level":1}}}],"views":[],"hatches":[]}"#).unwrap();
+    std::fs::write(device.join("package.json"), r#"{"name":"@exact/device","exports":{"contract":"./exact.json","default":"./exact.json"}}"#).unwrap();
+    let provider = app.0.join("node_modules/@fixture/provider/android");
+    std::fs::create_dir_all(&provider).unwrap();
+    std::fs::write(
+        provider.join("../package.json"),
+        r#"{"name":"@fixture/provider","exports":{"./android":"./android/exact.json"}}"#,
+    )
+    .unwrap();
+    std::fs::write(provider.join("exact.json"), serde_json::json!({"kind":"implementation","implements":"@exact/device@^1.0","platform":"android","targets":["android"],"sources":{"kotlin":["."]},"class":"capture.Module","manifest":{"permissions":installed}}).to_string()).unwrap();
+    app.write(
+        "package.json",
+        r#"{"dependencies":{"@exact/device":"1.0.0"}}"#,
+    );
+    let bake = |imports: bool, declared: &[&str], merged: &[&str]| {
+        app.write("app.json", &serde_json::json!({"app":{"id":"com.example.capture","name":"Capture"},"implementations":{"@exact/device":{"android":"@fixture/provider/android"}},"host":{"android":{"permissions":declared}}}).to_string());
+        let view = if imports {
+            "use getBattery, BatteryManager from \"@exact/device\"\ncomponent App\n  resource battery = getBattery() as shape BatteryManager else empty(level=-1)\n  view\n    text \"battery\"\n"
+        } else {
+            "component App\n  view\n    text \"battery\"\n"
+        };
+        app.write("app.contract", view);
+        let result = Command::new(env!("CARGO_BIN_EXE_exact-bake"))
+            .arg("compat")
+            .arg(&app.0)
+            .args([
+                "--target",
+                "aarch64-linux-android",
+                "--platform",
+                "android",
+                "--json",
+            ])
+            .env(
+                "EXACT_ANDROID_MANIFEST_PERMISSIONS",
+                serde_json::to_string(merged).unwrap(),
+            )
+            .env_remove("OUT_DIR")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        serde_json::from_slice::<Value>(&result.stdout).unwrap()
+    };
+    let implicit = bake(true, &[], &installed);
+    let repeated = bake(true, &installed, &installed);
+    std::fs::write(
+        device.join("package.json"),
+        r#"{"name":"@exact/device","exports":{".":"./exact.json"}}"#,
+    )
+    .unwrap();
+    let bound = bake(true, &installed, &installed);
+    let dropped = bake(false, &installed, &installed);
+    assert_eq!(
+        bound["inputs"]["capabilities"],
+        dropped["inputs"]["capabilities"]
+    );
+    let removed = bake(false, &[network], &[network]);
+    assert_ne!(removed["id"], dropped["id"]);
+    assert_eq!(
+        removed["inputs"]["androidLinked"]["permissions"],
+        serde_json::json!([network])
+    );
+    assert_eq!(implicit["id"], repeated["id"]);
+    for compat in [&implicit, &repeated, &dropped] {
+        assert_eq!(
+            compat["inputs"]["androidLinked"]["permissions"],
+            serde_json::json!(installed)
+        );
+        assert_eq!(
+            compat["inputs"]["capabilities"],
+            implicit["inputs"]["capabilities"]
+        );
+    }
+}

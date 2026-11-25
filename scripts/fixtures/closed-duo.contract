@@ -1,0 +1,17 @@
+shape Viewport
+  width: number
+  height: number
+  orientationType: string
+
+component App
+  resource viewport = exactViewport() as shape Viewport
+  derive wide = viewport.width > viewport.height
+  view
+    column padding=20 gap=12
+      text (wide ? "one row" : "two rows") testId="tray"
+      view display="flex" flex-direction=(wide ? "row" : "column") gap=8
+        button testId="first"
+          text "First"
+        button testId="second"
+          text "Second"
+      text viewport.orientationType testId="direction"

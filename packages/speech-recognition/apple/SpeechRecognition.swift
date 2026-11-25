@@ -523,6 +523,8 @@ final class AnalyzerEngine: RecognitionEngine {
     private var input: AsyncStream<AnalyzerInput>.Continuation?
     private var tap: ExactSubscription?, source: ExactAudioSource?
     private var ready = false, aborted = false
+    /// A stop that came while the analyzer started acts once it has one.
+    private var stopped = false
     private let queue = DispatchQueue(label: "exact.speech-recognition.convert")
 
     /// The transcriber `word` names for `locale`, or nil when it supports no equivalent locale.
@@ -562,6 +564,7 @@ final class AnalyzerEngine: RecognitionEngine {
                 let analyzer: SpeechAnalyzer
                 if let file {
                     analyzer = try await SpeechAnalyzer(inputAudioFile: AVAudioFile(forReading: file), modules: [module], analysisContext: context, finishAfterFile: true)
+                    await self?.hold(analyzer)
                 } else {
                     let (stream, input) = AsyncStream.makeStream(of: AnalyzerInput.self)
                     analyzer = SpeechAnalyzer(modules: [module])
@@ -569,7 +572,6 @@ final class AnalyzerEngine: RecognitionEngine {
                     try await analyzer.start(inputSequence: stream)
                     await self?.began(analyzer, input, format)
                 }
-                await self?.hold(analyzer)
                 try await self?.results(module)
                 await self?.end(nil)
             } catch {
@@ -578,12 +580,16 @@ final class AnalyzerEngine: RecognitionEngine {
         }
     }
 
-    @MainActor private func hold(_ analyzer: SpeechAnalyzer) { self.analyzer = analyzer }
+    @MainActor private func hold(_ analyzer: SpeechAnalyzer) {
+        self.analyzer = analyzer
+        if stopped { stop() }
+    }
 
     @MainActor private func began(_ analyzer: SpeechAnalyzer, _ input: AsyncStream<AnalyzerInput>.Continuation, _ format: AVAudioFormat) {
         self.analyzer = analyzer; self.input = input
         ready = true
         if aborted { input.finish(); return }
+        if stopped { return stop() }
         if let source { attach(source, format) } else { self.format = format }
     }
     private var format: AVAudioFormat?
@@ -648,6 +654,7 @@ final class AnalyzerEngine: RecognitionEngine {
     }
 
     func stop() {
+        stopped = true
         tap?.cancel(); tap = nil
         input?.finish()
         let analyzer = analyzer

@@ -86,7 +86,11 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
     }
   }
   contract([resolve(root, 'host/apple/tests/fixtures/navigation-scroller.contract'), '-o', env[`${prefix}_NAVIGATION_SCROLLER_PLAN`] = resolve(dir, 'navigation-scroller.plan')]);
-  contract([resolve(root, 'host/apple/tests/fixtures/route-scroll-edges.contract'), '-o', env[`${prefix}_ROUTE_SCROLL_EDGES_PLAN`] = resolve(dir, 'route-scroll-edges.plan')]);
+  const scrollEdges = resolve(root, 'host/apple/tests/fixtures/route-scroll-edges.contract');
+  const coverScrollEdges = resolve(dir, 'cover-scroll-edges.contract');
+  writeFileSync(coverScrollEdges, readFileSync(scrollEdges, 'utf8').replace('main navigationKey=', 'main viewport-fit="cover" navigationKey='));
+  contract([coverScrollEdges, '-o', env[`${prefix}_COVER_SCROLL_EDGES_PLAN`] = resolve(dir, 'cover-scroll-edges.plan')]);
+  contract([scrollEdges, '-o', env[`${prefix}_ROUTE_SCROLL_EDGES_PLAN`] = resolve(dir, 'route-scroll-edges.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/bottom-toolbar.contract'), '-o', env[`${prefix}_BOTTOM_TOOLBAR_PLAN`] = resolve(dir, 'bottom-toolbar.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/bottom-toolbar-tabs.contract'), '-o', env[`${prefix}_BOTTOM_TOOLBAR_TABS_PLAN`] = resolve(dir, 'bottom-toolbar-tabs.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/bottom-toolbar-live.contract'), '-o', env[`${prefix}_BOTTOM_TOOLBAR_LIVE_PLAN`] = resolve(dir, 'bottom-toolbar-live.plan')]);

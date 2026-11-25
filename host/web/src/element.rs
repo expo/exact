@@ -458,11 +458,7 @@ fn element(node: &NodeFacts<'_>) -> &'static str {
     {
         return "a";
     }
-    if let Some(t) = node
-        .props
-        .str(PropId::SemanticTag)
-        .and_then(semantic::element)
-    {
+    if let Some(t) = node.props.semantic_element() {
         return t;
     }
     match node.node_type {
