@@ -3,10 +3,9 @@
 // session's tracks in its track table (`context.tracks`) so a package that
 // consumes a track (`@exact/recording`) reaches it by id.
 //
-// - One capture per process (D3): one `AVAudioEngine`, whose input node's
-//   tap fans out through each track's enabled flag. It runs while any track
-//   in the process holds a lease, configured by the lease that
-//   opened it; it is made at the first and stopped at the last.
+// - The first lease configures capture for the process (D3). Normally the
+//   AVAudioEngine input tap supplies each track. A mixed take uses the
+//   camera session's microphone and its PCM output for other readers.
 // - A track holds a lease while it has a consumer (D6): its first consumer
 //   takes it, and after use only a start does (a recorder's start,
 //   `setTrackEnabled(enabled=true)`); a reader joining an idle track hears
@@ -70,6 +69,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
 
     private let context: ExactPackageContext
     private let audioSource: ExactAudioSource?
+    private let substituteOrigin: AVAudioFramePosition?
     private let process: ProcessCapture?
     private var next = 0
     /// The cameras (VideoCapture.swift, LLP 1133.008).
@@ -82,16 +82,29 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     final class Track {
         let id: String, stream: String
         let source: ExactAudioSource?
-        var enabled = true { didSet { for reader in consumers.values { reader.audio?.enabled = enabled } } }
+        var movieInput: AVCaptureDeviceInput?, movieSamples: AVCaptureAudioDataOutput?
+        var movieConsumer: ExactMovieAudioConsumer? { consumers.values.lazy.compactMap { $0.consumer as? ExactMovieAudioConsumer }.first }
+        var movieInBackground = false
+        let engineMute: TrackMute
+        var enabled = true { didSet { if enabled != oldValue { updateMute() } } }
+        var audible: Bool { enabled && platformMute == nil && !pausedForBackground }
+        private func updateMute() {
+            if let mic = source as? AgentMicrophone { mic.setEnabled(audible) }
+            else if movieConsumer == nil { engineMute.history.enabled(audible, at: .init(clock: CMClockGetHostTimeClock())) }
+            movieConsumer?.microphone(movieInput, samples: movieSamples, enabled: audible)
+            for reader in consumers.values { reader.audio?.enabled = audible }
+        }
         var label: String, muted = true, muteReason: String? = "idle", readyState = "live"
         var settings: [String: Any] = [:], options: CaptureOptions
         var consumers: [ObjectIdentifier: (consumer: ExactTrackConsumer, cause: ExactTrackCause, audio: TrackAudioSource?)] = [:]
-        var active = false, used = false, leased = false, pausedForBackground = false
+        var active = false, used = false, leased = false
+        var pausedForBackground = false { didSet { if oldValue != pausedForBackground { updateMute() } } }
+        var activationError: String?
         /// Why the platform mutes it now, if it does (an interruption, the background).
-        var platformMute: String?
-        init(id: String, stream: String, label: String, options: CaptureOptions, source: ExactAudioSource?) {
+        var platformMute: String? { didSet { if (oldValue == nil) != (platformMute == nil) { updateMute() } } }
+        init(id: String, stream: String, label: String, options: CaptureOptions, source: ExactAudioSource?, mute: TrackMute) {
             self.id = id; self.stream = stream; self.label = label; self.options = options
-            self.source = source
+            self.source = source; engineMute = mute
         }
     }
 
@@ -99,8 +112,9 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
         self.init(context: context, audioSource: context.agent ? nil : ProcessCapture.shared, process: context.agent ? nil : .shared)
     }
 
-    init(context: ExactPackageContext, audioSource: ExactAudioSource?, process: ProcessCapture? = nil) {
+    init(context: ExactPackageContext, audioSource: ExactAudioSource?, substituteOrigin: AVAudioFramePosition? = nil, process: ProcessCapture? = nil) {
         self.context = context
+        self.substituteOrigin = substituteOrigin
         self.audioSource = audioSource
         self.process = process
         process?.listen(self)
@@ -184,8 +198,10 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
         let options = CaptureOptions(constraints: constraints, apple: args["apple"] as? [String: Any] ?? [:])
         let make = { [self] in
             next += 1
+            let mute = TrackMute()
+            let source: ExactAudioSource? = context.agent && process == nil ? AgentMicrophone(context, input: audioSource, origin: substituteOrigin, mute: mute) : audioSource
             let t = Track(id: "track-\(context.session)-\(next)", stream: "stream-\(context.session)-\(next)",
-                          label: context.agent ? "Agent microphone" : Permission.inputName, options: options, source: audioSource)
+                          label: context.agent ? "Agent microphone" : Permission.inputName, options: options, source: source, mute: mute)
             t.settings = process.map { options.settings($0.format) } ?? Self.agentSettings
             if overlay != nil { t.platformMute = overlay }
             tracks[t.id] = t
@@ -210,20 +226,67 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     // MARK: tracks and leases (D6)
 
     public func subscribe(_ id: String, _ consumer: ExactTrackConsumer, start: Bool, cause: ExactTrackCause) throws -> ExactSubscription {
-        let origin = cause.origin
         guard cause.current, let t = tracks[id] else { throw ExactTrackError("NotFoundError") }
-        if t.readyState == "ended" { consumer.ended(); return ExactSubscription {} }
-        let audio = t.source.map { TrackAudioSource($0, cause: cause) }
-        audio?.enabled = t.enabled
+        if t.readyState == "ended" {
+            if consumer is ExactMovieAudioConsumer { throw ExactTrackError("NotReadableError") }
+            consumer.ended(); return ExactSubscription {}
+        }
+        guard let movie = consumer as? ExactMovieAudioConsumer else {
+            return subscribe(t, consumer, start: start, cause: cause)
+        }
+        // A live recording control can start audio alone while hidden (LLP 1126.004 D4).
+        guard start, context.foreground, admitsCapture(cause, start: start) else { throw ExactTrackError("NotAllowedError") }
+        guard !t.options.voiceProcessing, !context.audioSession.hasCall, !ProcessCapture.inCall else { throw ExactTrackError("NotSupportedError") }
+        guard t.movieConsumer == nil else { throw ExactTrackError("NotReadableError") }
+        let restore = try process?.reserveMovie(t.options, track: ObjectIdentifier(t), history: t.engineMute.history)
+        t.engineMute.joinMovie()
+        movie.useMicrophoneHistory(t.engineMute.history)
+        let lease = subscribe(t, movie, start: true, cause: cause)
+        do {
+            if let process {
+                guard t.leased else { throw ExactTrackError(t.activationError ?? "NotReadableError") }
+                t.movieInput = try process.movieInput()
+                t.movieSamples = process.movieSamples?.output
+                t.settings = process.movieSettings
+                process.movieReader = movie
+                process.movieSamples?.record(movie)
+                movie.cameraInterruption { [weak process] in process?.parkMovie($0, camera: true) }
+                movie.prepareMicrophone {
+                    [weak process] session in process?.beginMovie(in: session)
+                }
+            }
+            movie.microphone(t.movieInput, samples: t.movieSamples, enabled: t.audible)
+        } catch {
+            lease.cancel()
+            restore?.cancel()
+            t.engineMute.leaveMovie()
+            throw error
+        }
+        return ExactSubscription {
+            t.movieInput = nil; t.movieSamples = nil; t.movieInBackground = false
+            lease.cancel()
+            if !t.active { self.release(t) }
+            restore?.cancel()
+            t.engineMute.leaveMovie()
+        }
+    }
+
+    private func admitsCapture(_ cause: ExactTrackCause, start: Bool) -> Bool {
+        (cause.origin == "app" && context.foreground) || (cause.origin == "press" && start)
+    }
+
+    private func subscribe(_ t: Track, _ consumer: ExactTrackConsumer, start: Bool, cause: ExactTrackCause) -> ExactSubscription {
+        let audio = t.source.map { TrackAudioSource($0, cause: cause, track: ObjectIdentifier(t), engineMute: t.engineMute) }
+        audio?.enabled = t.audible
         audio?.delivering = t.active && !t.muted && (process == nil || t.leased)
         t.consumers[ObjectIdentifier(consumer)]?.audio?.removeTaps()
         t.consumers[ObjectIdentifier(consumer)] = (consumer, cause, audio)
         // The app's own call starts the capture, and so does a live recording press the runner admitted (`press`).
-        let person = (origin == "app" && context.foreground) || (origin == "press" && start)
+        let person = admitsCapture(cause, start: start)
         if t.active, !(start && person && process != nil && !t.leased) {
             consumer.live(audio)
             if t.muted { consumer.muted(t.muteReason ?? "idle") }
-        } else if person, t.enabled, !t.used || start {
+        } else if person, t.enabled || consumer is ExactMovieAudioConsumer, !t.used || start {
             activate(t)
             // A retry can fail with the same mute reason; this new subscription must hear it too.
             if t.muted { consumer.muted(t.muteReason ?? "idle") }
@@ -244,6 +307,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     private func each(_ t: Track, _ f: (ExactTrackConsumer) -> Void) { for c in Array(t.consumers.values) { f(c.consumer) } }
 
     private func mute(_ t: Track, _ reason: String, consumersHear heard: String? = nil) {
+        t.source?.advance(to: context.now())
         for reader in t.consumers.values { reader.audio?.delivering = false }
         guard !(t.muted && t.muteReason == reason) else { return }
         t.muted = true; t.muteReason = reason
@@ -252,6 +316,7 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     }
 
     private func unmute(_ t: Track) {
+        t.source?.advance(to: context.now())
         for reader in t.consumers.values { reader.audio?.delivering = t.active && (process == nil || t.leased) }
         guard t.muted else { return }
         t.muted = false; t.muteReason = nil
@@ -272,11 +337,12 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
         if let process, !t.leased {
             do {
                 try process.lease(t.options, session: context.audioSession, log: context.log)
-                t.leased = true
-                t.settings = t.options.settings(process.format)
+                t.leased = true; t.activationError = nil
+                t.settings = process.movieSamples != nil ? process.movieSettings : t.options.settings(process.format)
                 t.platformMute = nil
                 context.changed("media-capture.microphoneStatus")
             } catch {
+                t.activationError = (error as? ExactTrackError)?.code
                 context.log("media-capture: \(t.id) did not open: \(error)")
                 t.platformMute = "interrupted"
             }
@@ -300,9 +366,10 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
 
     private func end(_ t: Track, _ why: String) {
         guard t.readyState == "live" else { return }
+        t.source?.advance(to: context.now())
         t.readyState = "ended"; t.active = false
         for reader in t.consumers.values { reader.audio?.removeTaps() }
-        release(t)
+        if t.movieInput == nil { release(t) }
         context.log("media-capture: \(t.id) ended (\(why))")
         each(t) { $0.ended() }
         t.consumers.removeAll()
@@ -314,22 +381,30 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
     /// An event of the audio session or the engine, for every track this session runs.
     func heard(_ event: String) {
         for t in tracks.values where t.readyState == "live" {
+            if ["interrupted", "route", "reopening", "reset"].contains(event) { t.engineMute.history.discontinuity() }
             switch event {
             case "reopening":
-                if t.leased && (!context.foreground || !t.enabled || !hasAppConsumer(t)) { deactivate(t) }
+                if t.movieInput == nil && t.leased && (!context.foreground || !t.enabled || !hasAppConsumer(t)) { deactivate(t) }
                 continue
+            case "handoff-failed":
+                release(t)
+                t.platformMute = "interrupted"
             case "interrupted": t.platformMute = "interrupted"
             case "resumed", "reopened":
                 if t.platformMute == "interrupted" {
                     t.platformMute = nil
-                    if !t.pausedForBackground && (!context.foreground || !t.enabled || !hasAppConsumer(t)) { deactivate(t); continue }
+                    if t.movieInput == nil && !t.pausedForBackground && (!context.foreground || !t.enabled || !hasAppConsumer(t)) { deactivate(t); continue }
                 }
             case "reset":
                 // A media-services reset: the capture is let go, and nothing records until a start (D7).
                 t.platformMute = "interrupted"
-                if t.active { mute(t, "interrupted", consumersHear: "media-reset") }
+                if t.active {
+                    if t.muted && t.muteReason == "interrupted" {
+                        for case let movie as ExactMovieAudioConsumer in t.consumers.values.map(\.consumer) { movie.muted("media-reset") }
+                    } else { mute(t, "interrupted", consumersHear: "media-reset") }
+                }
                 t.active = false; t.pausedForBackground = false
-                release(t)
+                if t.movieInput == nil { release(t) }
                 continue
             default: continue
             }
@@ -350,18 +425,36 @@ public final class MediaCaptureModule: ExactPackage, ExactTrackOwner {
             }
         }
         #if os(iOS)
-        guard !Permission.recordsInBackground else { return }
+        let keepsMicrophone = Permission.recordsInBackground
+        #else
+        let keepsMicrophone = true
+        #endif
+        if keepsMicrophone {
+            for t in tracks.values where t.readyState == "live" && t.active && t.movieInBackground == shown {
+                guard let movie = t.movieConsumer else { continue }
+                t.movieInBackground = !shown
+                if !shown { movie.muted("background") }
+                else if t.platformMute == nil { movie.unmuted() }
+                if t.movieInput != nil { process?.parkMovie(!shown) }
+            }
+            return
+        }
         for t in tracks.values where t.readyState == "live" && t.active && (!shown || t.pausedForBackground) {
             t.pausedForBackground = !shown
             if shown {
+                let interruption = t.movieConsumer != nil ? t.platformMute : nil
                 t.platformMute = overlay
-                if t.enabled, hasAppConsumer(t) { activate(t) } else { deactivate(t) }
+                if t.movieInput != nil, hasAppConsumer(t) { process?.parkMovie(false) }
+                if (t.enabled || t.movieConsumer != nil), hasAppConsumer(t) {
+                    activate(t)
+                    if let interruption { t.platformMute = interruption; settle(t) }
+                } else { deactivate(t) }
             } else {
-                release(t)
                 settle(t)
+                if t.movieInput != nil { process?.parkMovie(true) }
+                release(t)
             }
         }
-        #endif
     }
 
     /// Under the agent: a preferred `mediaStreamTrack` is the platform's change to every live track (D10 item 11).
@@ -522,6 +615,160 @@ enum Permission {
     }
 }
 
+/// One session-clock signal per substitute track. Every tap receives the same PCM,
+/// including the final partial packet before an enabled change, pause or stop.
+private final class AgentMicrophone: ExactAudioSource {
+    private let defaultFormat = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
+    private let context: ExactPackageContext
+    private let input: ExactAudioSource?, origin: AVAudioFramePosition?, mute: TrackMute
+    private var enabled = true
+    private var upstream: ExactSubscription?
+    private let lock = NSLock()
+    var format: AVAudioFormat { input?.format ?? defaultFormat }
+    private var nextFrame = 0, nextTap = 0
+    private var maskedThrough = -Double.infinity
+    private var edges: [(milliseconds: Double, enabled: Bool)] = []
+    private var taps: [Int: (AVAudioPCMBuffer, AVAudioTime) -> Void] = [:]
+    private var timer: (() -> Void)?
+    init(_ context: ExactPackageContext, input: ExactAudioSource?, origin: AVAudioFramePosition?, mute: TrackMute) {
+        self.context = context; self.input = input; self.origin = origin; self.mute = mute
+    }
+
+    private var stamp: CMTime { CMTime(seconds: context.now() / 1000, preferredTimescale: 1_000_000_000) }
+
+    func setEnabled(_ value: Bool) {
+        let now = context.now()
+        if !value && mute.hasMovie {
+            // Run the virtual capture callbacks already due. Disable before masking the
+            // outstanding packet, or before an injected source can deliver any held PCM.
+            generate(to: now) { self.mute.history.enabled(false, at: .init(self.stamp)) }
+        } else {
+            advance(to: now)
+            mute.history.enabled(value, at: .init(stamp))
+        }
+        lock.withLock {
+            enabled = value
+            if !value || !mute.hasMovie { mark(now, value) }
+        }
+    }
+
+    private func mark(_ milliseconds: Double, _ audible: Bool) {
+        if audible != (edges.last?.enabled ?? true) { edges.append((milliseconds, audible)) }
+    }
+
+    func substituteLevel(at milliseconds: Double, standalone: Bool) -> Double? {
+        guard input == nil else { return nil }
+        if standalone && (mute.hasMovie || milliseconds < maskedThrough) { return nil }
+        let frame = Int((milliseconds * 48).rounded(.down))
+        let enabled = lock.withLock { edges.last(where: { $0.milliseconds <= milliseconds })?.enabled ?? true }
+        return enabled ? exactMicrophoneLevel(frame / 2400) : 0
+    }
+
+    func tap(_ block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) -> ExactSubscription {
+        advance(to: context.now())
+        nextTap += 1
+        let id = nextTap
+        let first = lock.withLock { taps[id] = block; return taps.count == 1 }
+        if first {
+            if let input { upstream = input.tap { [weak self] pcm, time in self?.receive(pcm, time) } }
+            else { schedule() }
+        }
+        return ExactSubscription { [weak self] in
+            guard let self else { return }
+            let last = self.lock.withLock { self.taps[id] = nil; return self.taps.isEmpty }
+            if last {
+                self.timer?(); self.timer = nil
+                self.upstream?.cancel(); self.upstream = nil
+            }
+        }
+    }
+
+    private func receive(_ pcm: AVAudioPCMBuffer, _ time: AVAudioTime) {
+        let (readers, enabled) = lock.withLock { (Array(taps.values), self.enabled) }
+        let count = Int(pcm.frameLength), rate = Int32(pcm.format.sampleRate)
+        let (offset, overflow) = time.sampleTime.subtractingReportingOverflow(origin ?? 0)
+        let dated = time.isSampleTimeValid && time.sampleRate == pcm.format.sampleRate && !overflow
+        let frame = dated ? offset : 0
+        let sessionTime = AVAudioTime(sampleTime: frame, atRate: pcm.format.sampleRate)
+        let cuts: [Range<Int>]
+        if mute.hasMovie {
+            if origin != nil && dated {
+                cuts = mute.history.silence(from: CMTime(value: frame, timescale: rate),
+                                            frames: count, rate: rate, through: .init(stamp))
+            } else { cuts = [0..<count] }
+        } else { cuts = enabled ? [] : [0..<count] }
+        if let shared = ProcessCapture.masked(pcm, cuts) { for deliver in readers { deliver(shared, sessionTime) } }
+    }
+
+    private func schedule() {
+        timer = context.after(100, coalescing: true) { [weak self] in
+            guard let self, !self.taps.isEmpty else { return }
+            self.advance(to: self.context.now())
+            self.schedule()
+        }
+    }
+
+    func advance(to milliseconds: Double) { generate(to: milliseconds) }
+
+    private func generate(to milliseconds: Double, beforeLast edge: (() -> Void)? = nil) {
+        var pending = edge
+        defer { pending?() }
+        if let input {
+            pending?(); pending = nil
+            input.advance(to: milliseconds)
+            return
+        }
+        let end = Int((milliseconds * 48).rounded(.up))
+        let provenEnd = Int((context.now() * 48).rounded(.down))
+        if taps.isEmpty { nextFrame = end; return }
+        while nextFrame < end {
+            let first = nextFrame, count = min(480, end - first)
+            if first + count == end { pending?(); pending = nil }
+            guard let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)) else { return }
+            pcm.frameLength = pcm.frameCapacity
+            let data = pcm.floatChannelData![0]
+            let through = CMTime(value: Int64(min(first + count, provenEnd)), timescale: 48000)
+            let cuts = mute.hasMovie ? mute.history.silence(from: CMTime(value: Int64(first), timescale: 48000),
+                frames: count, rate: 48000, through: .init(through)) : (enabled ? [] : [0..<count])
+            if mute.hasMovie {
+                maskedThrough = Double(first + count) / 48
+                lock.withLock {
+                    mark(Double(first) / 48, cuts.first?.lowerBound != 0)
+                    for cut in cuts {
+                        mark(Double(first + cut.lowerBound) / 48, false)
+                        if cut.upperBound < count { mark(Double(first + cut.upperBound) / 48, true) }
+                    }
+                }
+            }
+            for i in 0..<count {
+                let frame = first + i
+                let tone = exactMicrophoneSample(at: Double(frame) / 48, level: exactMicrophoneLevel(frame / 2400))
+                data[i] = cuts.contains(where: { $0.contains(i) }) ? 0 : Float(tone) / 32768
+            }
+            nextFrame += count
+            let time = AVAudioTime(sampleTime: Int64(first), atRate: format.sampleRate)
+            for deliver in taps.values { deliver(pcm, time) }
+        }
+    }
+}
+
+/// Keep the track's history across capture owners. A standalone engine tap
+/// keeps its original enabled delivery until a movie needs timestamped handoff.
+final class TrackMute {
+    let history = ExactAudioMute()
+    private let lock = NSLock()
+    private var joined = false, active = false
+    var hasMovie: Bool { lock.withLock { joined } }
+    var inMovie: Bool { lock.withLock { active } }
+    func joinMovie() { lock.withLock { joined = true; active = true } }
+    func leaveMovie() {
+        lock.withLock {
+            active = false
+            if history.proven { joined = false }
+        }
+    }
+}
+
 /// Media Capture's disabled audio is silence, with the source's frames and timestamps (LLP 1133.033 D8).
 final class TrackAudioSource: ExactAudioSource {
     private let source: ExactAudioSource, cause: ExactTrackCause
@@ -535,13 +782,19 @@ final class TrackAudioSource: ExactAudioSource {
     private var next = 0
     private var taps: [Int: ExactSubscription] = [:]
     var format: AVAudioFormat { source.format }
+    func advance(to milliseconds: Double) { source.advance(to: milliseconds) }
+    func substituteLevel(at milliseconds: Double, standalone: Bool) -> Double? { source.substituteLevel(at: milliseconds, standalone: standalone) }
 
     var enabled: Bool {
         get { lock.lock(); defer { lock.unlock() }; return isEnabled }
         set { lock.lock(); isEnabled = newValue; lock.unlock() }
     }
 
-    init(_ source: ExactAudioSource, cause: ExactTrackCause) { self.source = source; self.cause = cause }
+    private let track: ObjectIdentifier, engineMute: TrackMute
+
+    init(_ source: ExactAudioSource, cause: ExactTrackCause, track: ObjectIdentifier, engineMute: TrackMute) {
+        self.source = source; self.cause = cause; self.track = track; self.engineMute = engineMute
+    }
 
     func tap(_ block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) -> ExactSubscription {
         lock.lock()
@@ -549,9 +802,9 @@ final class TrackAudioSource: ExactAudioSource {
         next += 1; let id = next; taps[id] = ExactSubscription {}; lock.unlock()
         // Only this tap's audio callback accesses the reusable buffer. The shared input is never changed.
         var silence = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4096)!
-        let upstream = source.tap { [weak self] buffer, time in
+        let receive: ProcessCapture.TrackTap = { [weak self] buffer, time, masked in
             guard let self else { return }
-            let enabled = self.lock.withLock { self.isDelivering && self.taps[id] != nil ? self.isEnabled : nil }
+            let enabled = self.lock.withLock { self.isDelivering && self.taps[id] != nil ? (masked || self.isEnabled) : nil }
             guard let enabled else { return }
             if enabled { return self.cause.whileCurrent { block(buffer, time) } }
             if silence.format != buffer.format || silence.frameCapacity < buffer.frameLength {
@@ -564,6 +817,9 @@ final class TrackAudioSource: ExactAudioSource {
             }
             self.cause.whileCurrent { block(silence, time) }
         }
+        let upstream: ExactSubscription
+        if let process = source as? ProcessCapture { upstream = process.tap(track, mute: engineMute, receive) }
+        else { let masked = source is AgentMicrophone; upstream = source.tap { receive($0, $1, masked) } }
         lock.lock()
         guard taps[id] != nil else { lock.unlock(); upstream.cancel(); return ExactSubscription {} }
         taps[id] = upstream
@@ -584,13 +840,25 @@ final class TrackAudioSource: ExactAudioSource {
     deinit { removeTaps() }
 }
 
-/// The process's one capture (D3): an engine whose input tap fans every
-/// buffer out to each tap, running while any lease is held.
+/// The process's microphone and audio-session claim (D3, D7).
 final class ProcessCapture: ExactAudioSource {
     static let shared = ProcessCapture()
+    /// Closing an owner waits for its last callback before the other input can attach.
+    private final class EngineDelivery {
+        private let lock = NSLock()
+        private var open = true
+        func send(_ work: () -> Void) { lock.withLock { if open { work() } } }
+        func close() { lock.withLock { open = false } }
+    }
+    private var engineDelivery: EngineDelivery?
     private var engine: AVAudioEngine?
-    private let openEngine: ((CaptureOptions) throws -> Void)?
-    init(openEngine: ((CaptureOptions) throws -> Void)? = nil) { self.openEngine = openEngine }
+    typealias EngineTap = (AVAudioPCMBuffer, AVAudioTime) -> Void
+    private let openEngine: ((CaptureOptions, @escaping EngineTap) throws -> ExactSubscription)?
+    private var substituteEngine: ExactSubscription?
+    private let substituteInput: (() -> AVCaptureDeviceInput)?
+    init(movieInput: (() -> AVCaptureDeviceInput)? = nil, openEngine: ((CaptureOptions, @escaping EngineTap) throws -> ExactSubscription)? = nil) {
+        substituteInput = movieInput; self.openEngine = openEngine
+    }
     private var leases = 0
     private var claim: ExactSubscription?
     private var options: CaptureOptions?
@@ -599,7 +867,13 @@ final class ProcessCapture: ExactAudioSource {
     private var listeners: [ObjectIdentifier: () -> MediaCaptureModule?] = [:]
     /// The taps, read on the audio thread under the lock.
     private let lock = NSLock()
-    private var taps: [Int: (AVAudioPCMBuffer, AVAudioTime) -> Void] = [:]
+    typealias TrackTap = (AVAudioPCMBuffer, AVAudioTime, Bool) -> Void
+    struct Reader {
+        let track: ObjectIdentifier?
+        let mute: TrackMute?
+        let receive: TrackTap
+    }
+    private var taps: [Int: Reader] = [:]
     private var nextTap = 0
     private(set) var format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1)!
 
@@ -609,11 +883,61 @@ final class ProcessCapture: ExactAudioSource {
     private func tell(_ event: String) { for get in Array(listeners.values) { get()?.heard(event) } }
 
     func tap(_ block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) -> ExactSubscription {
-        lock.lock(); nextTap += 1; let id = nextTap; taps[id] = block; lock.unlock()
+        tap(nil) { buffer, time, _ in block(buffer, time) }
+    }
+
+    func tap(_ track: ObjectIdentifier?, mute: TrackMute? = nil, _ block: @escaping TrackTap) -> ExactSubscription {
+        lock.lock()
+        nextTap += 1; let id = nextTap
+        taps[id] = Reader(track: track, mute: mute, receive: block)
+        movieSamples?.setTaps(Array(taps.values))
+        lock.unlock()
         return ExactSubscription { [weak self] in
             guard let self else { return }
-            self.lock.lock(); self.taps[id] = nil; self.lock.unlock()
+            self.lock.withLock {
+                self.taps[id] = nil
+                self.movieSamples?.setTaps(Array(self.taps.values))
+            }
         }
+    }
+
+    /// Mask once per track. Camera callbacks carry their own PTS and clock.
+    static func deliver(_ buffer: AVAudioPCMBuffer, _ time: AVAudioTime, to readers: [Reader],
+                        captureTime: CMTime? = nil, session: AVCaptureSession? = nil) {
+        var adjusted: [ObjectIdentifier: AVAudioPCMBuffer] = [:]
+        for reader in readers {
+            guard let track = reader.track, let mute = reader.mute, mute.hasMovie else { reader.receive(buffer, time, false); continue }
+            if let shared = adjusted[track] { reader.receive(shared, time, true); continue }
+            let frames = Int(buffer.frameLength), rate = Int32(buffer.format.sampleRate)
+            let cuts: [Range<Int>]
+            if let captureTime {
+                cuts = mute.history.silence(from: captureTime, frames: frames, rate: rate,
+                    through: .init(clock: session?.synchronizationClock))
+            } else if mute.inMovie || !time.isHostTimeValid {
+                cuts = mute.history.undated(frames)
+            } else {
+                // The standalone engine timestamps its own packets in host time.
+                cuts = mute.history.silence(from: CMClockMakeHostTimeFromSystemUnits(time.hostTime),
+                    frames: frames, rate: rate, through: .init(clock: CMClockGetHostTimeClock()))
+            }
+            guard let shared = masked(buffer, cuts) else { continue }
+            adjusted[track] = shared
+            reader.receive(shared, time, true)
+        }
+    }
+
+    fileprivate static func masked(_ buffer: AVAudioPCMBuffer, _ cuts: [Range<Int>]) -> AVAudioPCMBuffer? {
+        if cuts.isEmpty { return buffer }
+        guard let pcm = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return nil }
+        pcm.frameLength = buffer.frameLength
+        let stride = Int(buffer.format.streamDescription.pointee.mBytesPerFrame)
+        for (dst, src) in zip(UnsafeMutableAudioBufferListPointer(pcm.mutableAudioBufferList),
+                              UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)) {
+            guard let dest = dst.mData, let source = src.mData else { return nil }
+            memcpy(dest, source, Int(src.mDataByteSize))
+            for cut in cuts { memset(dest + cut.lowerBound * stride, 0, cut.count * stride) }
+        }
+        return pcm
     }
 
     /// A lease: the first claims the session and starts the engine with its options.
@@ -636,29 +960,153 @@ final class ProcessCapture: ExactAudioSource {
         leases = max(0, leases - 1)
         guard leases == 0 else { return }
         stop()
-        claim?.cancel()
-        claim = nil
+        if movieSamples == nil || parked { claim?.cancel(); claim = nil }
+    }
+
+    private var parked = false
+    private var routeGeneration = 0
+
+    /// When the camera backgrounds, remaining microphone leases return to the engine.
+    private var background = false, cameraInterrupted = false
+    func parkMovie(_ value: Bool, camera: Bool = false) {
+        guard let movieReader else { return }
+        let wasParked = background || cameraInterrupted
+        if camera { cameraInterrupted = value } else { background = value }
+        let park = background || cameraInterrupted
+        guard wasParked != park else { return }
+        routeGeneration += 1
+        let generation = routeGeneration
+        parked = false
+        if !park { movieSamples?.takeEngine(relinquishEngine()) }
+        movieReader.captureMicrophone(!park) { [self] in
+            guard routeGeneration == generation, movieSamples != nil, park else { return }
+            movieSamples?.park()
+            parked = true
+            restoreEngine()
+        }
+    }
+
+    private func restoreEngine() {
+        guard leases > 0 else { claim?.cancel(); claim = nil; return }
+        guard substituteEngine == nil, engine == nil, claim != nil, let options else { return }
+        do { try start(options) }
+        catch {
+            claim?.cancel(); claim = nil
+            log("media-capture: the microphone did not reopen: \(error)")
+            tell("handoff-failed")
+        }
+    }
+
+    fileprivate weak var movieReader: ExactMovieAudioConsumer?
+    private(set) var movieSamples: MovieSamples?
+    private var movieDevice: AVCaptureDevice?
+    private var lastEngineTime: AVAudioTime?
+
+    func beginMovie(in session: AVCaptureSession) {
+        movieSamples?.releaseEngine()
+        movieSamples?.begin(session, anchor: lock.withLock { lastEngineTime })
+    }
+
+    /// Reserve the microphone for the movie. Its track holds the session claim through detachment.
+    func reserveMovie(_ requested: CaptureOptions, track: ObjectIdentifier, history: ExactAudioMute) throws -> ExactSubscription {
+        guard movieSamples == nil else { throw ExactTrackError("NotReadableError") }
+        let effective = leases > 0 ? options ?? requested : requested
+        guard !requested.voiceProcessing, !Self.inCall, !voiceProcessed(effective), engine?.inputNode.isVoiceProcessingEnabled != true else { throw ExactTrackError("NotSupportedError") }
+        #if os(macOS)
+        movieDevice = try engine.map { try Self.runningDevice($0.inputNode) }
+        #endif
+        let samples = MovieSamples(track, history: history)
+        // Main reserves the engine. The graph releases it immediately before attaching the microphone.
+        lock.withLock {
+            movieSamples = samples
+            samples.setTaps(Array(taps.values))
+        }
+        samples.takeEngine(relinquishEngine())
+        return ExactSubscription { [self] in
+            lock.withLock { movieSamples = nil }
+            samples.releaseEngine()
+            samples.finish()
+            movieDevice = nil; movieReader = nil
+            background = false; cameraInterrupted = false
+            routeGeneration += 1
+            parked = false
+            restoreEngine()
+        }
+    }
+
+    var movieSettings: [String: Any] {
+        var settings = options?.settings(format) ?? [:]
+        #if os(macOS)
+        settings["deviceId"] = movieDevice?.uniqueID
+        #else
+        settings["deviceId"] = AVAudioSession.sharedInstance().currentRoute.inputs.first?.uid
+        #endif
+        return settings
+    }
+
+    func movieInput() throws -> AVCaptureDeviceInput {
+        if let substituteInput { return substituteInput() }
+        var device = movieDevice ?? AVCaptureDevice.default(for: .audio)
+        #if os(macOS)
+        if movieDevice == nil, let id = options?.deviceId, let selected = AVCaptureDevice(uniqueID: id), selected.hasMediaType(.audio) {
+            device = selected
+        }
+        #endif
+        guard let device else { throw ExactTrackError("NotFoundError") }
+        let input = try AVCaptureDeviceInput(device: device)
+        movieDevice = device
+        #if os(macOS)
+        let desc = input.ports.first { $0.mediaType == .audio }?.formatDescription ?? device.activeFormat.formatDescription
+        let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(desc)
+        let rate = asbd?.pointee.mSampleRate ?? 0, channels = asbd?.pointee.mChannelsPerFrame ?? 0
+        #else
+        let session = AVAudioSession.sharedInstance()
+        let rate = session.sampleRate, channels = AVAudioChannelCount(session.inputNumberOfChannels)
+        #endif
+        if rate > 0, channels > 0, let actual = AVAudioFormat(standardFormatWithSampleRate: rate, channels: channels) { format = actual }
+        return input
+    }
+
+    fileprivate static var inCall: Bool {
+        #if os(iOS)
+        let mode = AVAudioSession.sharedInstance().mode
+        return mode == .voiceChat || mode == .videoChat
+        #else
+        return false
+        #endif
+    }
+
+    private func voiceProcessed(_ options: CaptureOptions) -> Bool {
+        options.voiceProcessing || (Self.inCall && !options.echoRefused)
     }
 
     private func start(_ options: CaptureOptions) throws {
-        if let openEngine { return try openEngine(options) }
+        let processed = voiceProcessed(options)
+        if movieSamples != nil, processed || Self.inCall { throw ExactTrackError("NotSupportedError") }
+        if movieSamples != nil && !parked {
+            #if os(iOS)
+            configureInput(options, AVAudioSession.sharedInstance())
+            #endif
+            return
+        }
+        for reader in lock.withLock({ Array(taps.values) }) { reader.mute?.history.beginProducer() }
+        let delivery = EngineDelivery()
+        engineDelivery = delivery
+        let deliver: EngineTap = { [weak self] buffer, time in
+            guard let self else { return }
+            delivery.send {
+                let readers = self.lock.withLock { self.lastEngineTime = time; return Array(self.taps.values) }
+                Self.deliver(buffer, time, to: readers)
+            }
+        }
+        if let openEngine { substituteEngine = try openEngine(options, deliver); return }
         let engine = AVAudioEngine()
         let input = engine.inputNode
+        if processed { try input.setVoiceProcessingEnabled(true) }
         #if os(iOS)
-        let s = AVAudioSession.sharedInstance()
-        // During a call (LLP 1133.033 D10) the session is the call's, `.voiceChat` or `.videoChat`, which applies no
-        // echo cancellation without voice processing on the I/O unit.
-        let inCall = s.mode == .voiceChat || s.mode == .videoChat
-        #else
-        let inCall = false
+        configureInput(options, AVAudioSession.sharedInstance())
         #endif
-        if options.voiceProcessing || (inCall && !options.echoRefused) { try input.setVoiceProcessingEnabled(true) }
-        #if os(iOS)
-        if let d = options.preferredIOBufferDuration { try? s.setPreferredIOBufferDuration(d) }
-        if let id = options.deviceId, let port = s.availableInputs?.first(where: { $0.uid == id }) { try? s.setPreferredInput(port) }
-        if options.prefersNoInterruptions { try? s.setPrefersNoInterruptionsFromSystemAlerts(true) }
-        if options.inputDataSource != nil || options.polarPattern != nil { Self.chooseDataSource(options, s, log) }
-        #else
+        #if os(macOS)
         // A `deviceId` is ideal, not exact (Media Capture): one the Mac does not have leaves the default input.
         if let id = options.deviceId, let unit = input.audioUnit, var device = Self.device(uid: id) {
             let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, UInt32(MemoryLayout<AudioDeviceID>.size))
@@ -669,11 +1117,7 @@ final class ProcessCapture: ExactAudioSource {
         // No input: a tap on a 0 Hz format raises an exception that ends the app, so refuse first.
         guard format.sampleRate > 0, format.channelCount > 0 else { throw CaptureError("NotFoundError: no microphone is available") }
         self.format = format
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, time in
-            guard let self else { return }
-            self.lock.lock(); let taps = Array(self.taps.values); self.lock.unlock()
-            for tap in taps { tap(buffer, time) }
-        }
+        input.installTap(onBus: 0, bufferSize: 4096, format: format, block: deliver)
         if let hatch = MediaCaptureModule.hatch {
             let mixer = AVAudioMixerNode()
             engine.attach(mixer)
@@ -688,10 +1132,19 @@ final class ProcessCapture: ExactAudioSource {
         try engine.start()
         self.engine = engine
         // A route or hardware change stops the engine; the handler only schedules the reopening (D7).
-        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
-            DispatchQueue.main.async { self?.reopen() }
+        observer = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self, weak engine] _ in
+            DispatchQueue.main.async { [weak engine] in if let engine, self?.engine === engine { self?.reopen() } }
         }
     }
+
+    #if os(iOS)
+    private func configureInput(_ options: CaptureOptions, _ s: AVAudioSession) {
+        if let d = options.preferredIOBufferDuration { try? s.setPreferredIOBufferDuration(d) }
+        if let id = options.deviceId, let port = s.availableInputs?.first(where: { $0.uid == id }) { try? s.setPreferredInput(port) }
+        if options.prefersNoInterruptions { try? s.setPrefersNoInterruptionsFromSystemAlerts(true) }
+        if options.inputDataSource != nil || options.polarPattern != nil { Self.chooseDataSource(options, s, log) }
+    }
+    #endif
 
     #if os(iOS)
     /// The input's data source and polar pattern (D4), by the source's
@@ -714,6 +1167,19 @@ final class ProcessCapture: ExactAudioSource {
     #endif
 
     #if os(macOS)
+    private static func runningDevice(_ node: AVAudioInputNode) throws -> AVCaptureDevice {
+        var id = AudioDeviceID(kAudioObjectUnknown), size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard let unit = node.audioUnit, AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global, 0, &id, &size) == noErr else { throw ExactTrackError("NotReadableError") }
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var uid: Unmanaged<CFString>?
+        size = UInt32(MemoryLayout.size(ofValue: uid))
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &uid) == noErr, let uid,
+              let device = AVCaptureDevice(uniqueID: uid.takeRetainedValue() as String) else { throw ExactTrackError("NotReadableError") }
+        return device
+    }
+
     /// The Core Audio device whose UID `AVCaptureDevice.uniqueID` is.
     private static func device(uid: String) -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
@@ -726,12 +1192,23 @@ final class ProcessCapture: ExactAudioSource {
     }
     #endif
 
+    /// Keep the running tap until the graph is about to attach the input. The
+    /// session queue takes the closure once. Cancellation also releases it.
+    private func relinquishEngine() -> () -> Void {
+        let held = engine, substitute = substituteEngine, notification = observer, delivery = engineDelivery
+        engineDelivery = nil
+        engine = nil; substituteEngine = nil; observer = nil
+        return {
+            delivery?.close()
+            substitute?.cancel()
+            if let notification { NotificationCenter.default.removeObserver(notification) }
+            held?.inputNode.removeTap(onBus: 0)
+            held?.stop()
+        }
+    }
     private func stop() {
-        if let observer { NotificationCenter.default.removeObserver(observer) }
-        observer = nil
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
+        movieSamples?.releaseEngine()
+        relinquishEngine()()
     }
 
     /// The engine stopped under a configuration change: another one, the gap journaled.
@@ -750,6 +1227,94 @@ final class ProcessCapture: ExactAudioSource {
             log("media-capture: the capture did not reopen: \(error)")
             tell("interrupted")
         }
+    }
+}
+
+/// While a movie owns the input, the same session supplies PCM to existing recorders and meters.
+final class MovieSamples: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    let output = AVCaptureAudioDataOutput()
+    private let queue = DispatchQueue(label: "exact.media-capture.movie-audio")
+    private var taps: [ProcessCapture.Reader] = []
+    private let track: ObjectIdentifier
+    private var clock: CMClock?
+
+    private let transfer = NSLock()
+    private var engineRelease: (() -> Void)?
+    func takeEngine(_ release: @escaping () -> Void) {
+        transfer.withLock { engineRelease?(); engineRelease = release }
+    }
+    func releaseEngine() { transfer.withLock { engineRelease?(); engineRelease = nil } }
+
+    private weak var recorder: ExactMovieAudioConsumer?
+    func record(_ reader: ExactMovieAudioConsumer) { queue.sync { recorder = reader } }
+    private var accepting = false
+    func park() { queue.sync { accepting = false; history.discontinuity() } }
+
+    func setTaps(_ readers: [ProcessCapture.Reader]) { queue.async { self.taps = readers } }
+
+    private var converter: AVAudioConverter?
+    private weak var session: AVCaptureSession?
+    private var anchor: AVAudioTime?
+
+    func begin(_ session: AVCaptureSession, anchor: AVAudioTime?) {
+        queue.async {
+            self.history.discontinuity()
+            self.session = session; self.clock = session.synchronizationClock
+            self.anchor = anchor; self.accepting = true
+        }
+    }
+
+    private let history: ExactAudioMute
+
+    init(_ track: ObjectIdentifier, history: ExactAudioMute) {
+        self.history = history; self.track = track
+        super.init()
+        output.setSampleBufferDelegate(self, queue: queue)
+    }
+
+    func finish() {
+        output.setSampleBufferDelegate(nil, queue: nil)
+        queue.sync { accepting = false; taps.removeAll() }
+    }
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sample: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard connection.isActive, output.connection(with: .audio) === connection else { return }
+        receive(sample)
+    }
+
+    func receive(_ sample: CMSampleBuffer) {
+        guard accepting else { return }
+        let masked = recorder?.movieAudio(sample)
+        guard !taps.isEmpty, let desc = sample.formatDescription else { return }
+        if let current = session?.synchronizationClock { clock = current }
+        guard let clock else { return }
+        let format = AVAudioFormat(cmAudioFormatDescription: desc)
+        let host = CMSyncConvertTime(sample.presentationTimeStamp, from: clock, to: CMClockGetHostTimeClock())
+        guard host.isNumeric else { return }
+        let ticks = CMClockConvertHostTimeToSystemUnits(host)
+        let position = CMTimeConvertScale(sample.presentationTimeStamp, timescale: Int32(format.sampleRate), method: .default).value
+        let time = anchor.flatMap { $0.sampleRate == format.sampleRate ? AVAudioTime(hostTime: ticks).extrapolateTime(fromAnchor: $0) : nil }
+            ?? AVAudioTime(hostTime: ticks, sampleTime: position, atRate: format.sampleRate)
+        let same = taps.filter { $0.track == track }, others = taps.filter { $0.track != track }
+        let original = (!others.isEmpty || (!same.isEmpty && masked === sample)) ? pcm(sample, format) : nil
+        if let original { ProcessCapture.deliver(original, time, to: others, captureTime: sample.presentationTimeStamp, session: session) }
+        if !same.isEmpty, let masked, let shared = (masked === sample ? original : pcm(masked, format)) {
+            for tap in same { tap.receive(shared, time, true) }
+        }
+    }
+
+    private func pcm(_ sample: CMSampleBuffer, _ format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let length = AVAudioFrameCount(sample.numSamples)
+        guard length > 0, let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: length) else { return nil }
+        pcm.frameLength = length
+        guard CMSampleBufferCopyPCMDataIntoAudioBufferList(sample, at: 0, frameCount: Int32(length), into: pcm.mutableAudioBufferList) == noErr else { return nil }
+        if format.commonFormat == .pcmFormatFloat32, !format.isInterleaved { return pcm }
+        if converter?.inputFormat != format, let floats = AVAudioFormat(standardFormatWithSampleRate: format.sampleRate, channels: format.channelCount) {
+            converter = AVAudioConverter(from: format, to: floats)
+        }
+        guard let converter, let converted = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: length),
+              (try? converter.convert(to: converted, from: pcm)) != nil else { return nil }
+        return converted
     }
 }
 

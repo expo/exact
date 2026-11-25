@@ -9,6 +9,17 @@
 - `bun test ./host/web/tests/hold.test.mjs` fails before the held-state assertion because the fixture’s `drag-in.js` has no `receive` export.
 - A multi-file Bun run leaves a CDP browser profile behind. Run `bun test ./host/web/collection-wait.test.mjs ./host/web/documents-copy.test.mjs` with an empty `TMPDIR`. All 35 tests pass and an `exact-cdp-*/Default` directory remains.
 - The JS router sweep serves `/post/photos.zip/` with status 200 where the dotted-route case expects 404. Run `cargo test -p exact-web --test it navigation::browser_session_history_on_the_js_target -- --ignored --exact --nocapture`.
+- Consolidate the iOS mixed recorder’s audio reset observation with the process audio-session owner. Run recording’s `reset-sdk` case with a paused take and the last microphone claim released. The take must still finish with `media-reset` (#1606).
+- Measure the engine callback during camera handoff with two WAV taps. In the mock, holding the track’s enabled timestamp read for 120 ms stalls engine delivery for that interval. Check callback time and missed frames on hardware (#1606).
+- Move Apple camera-only recording to the mixed recorder’s sample writer (LLP 1133.009 D3, AH1).
+
+- Apple mixed recording cannot take the audio engine’s voice-processed input. Revisit if the camera session gains a port for that signal. [Apple’s voice-chat mode](https://developer.apple.com/documentation/avfaudio/avaudiosession/mode-swift.struct/voicechat) (#1606).
+- On a Mac with two microphones, record audio from device A, then request an audio track for device B. Both readers share the first device’s capture (#1606 parent).
+- On Apple, interrupt a camera-only track and request Resume while it is still muted. The recorder reports recording (#1606 parent).
+- Force an Apple camera-only export to fail while replacing an existing take. The previous file has already been removed (#1606 parent).
+- Interrupt an Apple audio-only recorder, then deliver a media-services reset. Its consumer hears only the interruption (#1606 parent).
+- Request 16 kHz stereo capture on Apple with a 48 kHz mono input. The microphone path reads back the device format without requesting the preferred rate or channel count (LLP 1133.009 D2).
+
 - A clipped table row registered as the content-region owner loses the outer grid in its derived layout. Put a 160-point-wide relative `tr` at top 11.3 with a `td` content branch. On c718a4b67 its paragraph projects to y=14.3 where ordinary layout places it at 132.5.
 - `cargo clippy -p exact-kernel --lib -- -D warnings` fails on main at f007d990e. The public `distance` and `sides` fields in `kernel/src/kernel/owner_update.rs` lack documentation.
 - In a parallel `cargo test -p exact-kernel --test it` on the shared Mac, `svg_scene::bounds::a_use_box_stops_at_the_expansion_limit` took 6.93 s against its five-second bound. The same binary passed alone in 2.19 s and in the full suite with four test threads.

@@ -38,22 +38,18 @@ import UIKit
 public final class RecordingModule: ExactPackage {
     private let context: ExactPackageContext
     private var recorders: [String: MediaTake] = [:]
+    private var starting: [Int: MixedTake] = [:]
     private var meters: [String: Meter] = [:]
     private var waveforms: [String: Waveform] = [:]
     private var next = 0
 
     public init(context: ExactPackageContext) { self.context = context }
 
-    /// The synthetic signal at step `i` (one step a 50 ms of the session clock): the recorder's formula (§10).
-    static func synthetic(_ i: Int) -> Double {
-        let x = Double(i)
-        return min(1, 0.12 + 0.75 * abs(sin(x * 0.37)) * (0.55 + 0.45 * sin(x * 0.05)))
-    }
-
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
         let recorder = (args["recorder"] as? String).flatMap { recorders[$0] }
         switch name {
-        case "startMediaRecorder": reply(start(args))
+        case "startMediaRecorder":
+            if let immediate = start(args, reply) { reply(immediate) }
         case "pauseMediaRecorder", "resumeMediaRecorder":
             guard let r = recorder else { return reply(["error": "NotFoundError"]) }
             guard r.state != "inactive" else { return reply(["error": "InvalidStateError"]) }
@@ -109,17 +105,32 @@ public final class RecordingModule: ExactPackage {
 
     // MARK: recorders
 
-    private func start(_ args: [String: Any]) -> [String: Any] {
+    private func start(_ args: [String: Any], _ reply: @escaping ([String: Any]) -> Void) -> [String: Any]? {
         guard let stream = args["stream"] as? String, let entry = context.tracks.lookup(stream), entry.kind == "stream" else { return ["error": "NotFoundError"] }
         let maxDuration = args["maxDuration"] as? Double ?? 0
         if args["maxDuration"] != nil && (!maxDuration.isFinite || maxDuration <= 0) { return ["error": "TypeError"] }
         if let video = entry.tracks.first(where: { context.tracks.lookup($0)?.kind == "video" }) {
-            guard entry.tracks.count == 1 else { return ["error": "NotSupportedError"] }
+            let audio = entry.tracks.first { context.tracks.lookup($0)?.kind == "audio" }
+            guard entry.tracks.count == (audio == nil ? 1 : 2) else { return ["error": "NotSupportedError"] }
             let type = args["mimeType"] as? String ?? "video/mp4"
             guard context.agent || type == "video/mp4",
                   let path = Recorder.path(args["path"] as? String ?? "", "video/mp4"), let url = context.file(path) else { return ["error": "NotSupportedError"] }
             next += 1
-            let r = VideoTake(id: "recorder-\(context.session)-\(next)", path: path, url: url, context: context, maxDuration: maxDuration,
+            let id = "recorder-\(context.session)-\(next)"
+            if let audio {
+                let r = MixedTake(id: id, path: path, url: url, context: context, maxDuration: maxDuration,
+                                  changed: { [weak self] in self?.announce() })
+                let request = context.request
+                recorders[id] = r
+                if let request { starting[request] = r }
+                r.subscribe(video: video, audio: audio) { [weak self] answer in
+                    if let request { self?.starting[request] = nil }
+                    if answer["error"] != nil { self?.recorders[id] = nil } else { self?.announce() }
+                    reply(answer)
+                }
+                return nil
+            }
+            let r = VideoTake(id: id, path: path, url: url, context: context, maxDuration: maxDuration,
                               changed: { [weak self] in self?.announce() })
             do {
                 r.subscription = try context.tracks.subscribe(video, r, start: true, origin: context.origin)
@@ -186,6 +197,8 @@ public final class RecordingModule: ExactPackage {
         meters.removeAll()
     }
 
+    public func cancel(_ request: Int) { starting[request]?.finish("requested") { _ in } }
+
     /// A recorder whose reply was dropped: stopped, its file finished, never the app's (D6).
     public func dispose(_ ids: [String]) {
         for id in ids { recorders[id]?.finish("requested") { _ in } }
@@ -223,8 +236,8 @@ final class Recorder: ExactTrackConsumer, MediaTake {
     private let bitRate: Double?, bitRateMode: String?, apple: [String: Any]
     var subscription: ExactSubscription?
     private var tap: ExactSubscription?
-    /// The agent's spans of recording, ms of the session clock.
-    private var spans: [(Double, Double?)] = []
+    private var source: ExactAudioSource?
+    private let wave = AgentWave()
     // The writer's own, on `queue`.
     private let queue: DispatchQueue
     private var writer: Writer?
@@ -239,7 +252,7 @@ final class Recorder: ExactTrackConsumer, MediaTake {
         self.bitRate = bitRate; self.bitRateMode = bitRateMode; self.apple = apple; self.changed = changed
         queue = DispatchQueue(label: "exact.recording.\(id)")
         since = context.now()
-        spans = [(context.now(), nil)]
+        if context.agent { wave.begin(since!) }
     }
 
     /// The path with its container's extension: added when the app wrote none, nil when it disagrees.
@@ -263,8 +276,8 @@ final class Recorder: ExactTrackConsumer, MediaTake {
 
     func pause(_ why: String) {
         guard state == "recording" else { return }
+        if context.agent { source?.advance(to: context.now()); wave.end(context.now(), source: source) }
         recorded = duration; since = nil
-        if context.agent, let last = spans.indices.last { spans[last].1 = context.now() }
         state = "paused"; reason = why; recordingFlag.value = false
         limit?(); limit = nil
         context.log("recording: \(id) paused (\(why))")
@@ -272,8 +285,9 @@ final class Recorder: ExactTrackConsumer, MediaTake {
     }
 
     func resume() {
+        if context.agent { source?.advance(to: context.now()) }
         state = "recording"; reason = nil; since = context.now(); recordingFlag.value = true
-        if context.agent { spans.append((context.now(), nil)) }
+        if context.agent { wave.begin(since!) }
         arm()
         // A resumed subscription gets its own tap and appends to the same writer.
         tap?.cancel(); tap = nil
@@ -291,6 +305,11 @@ final class Recorder: ExactTrackConsumer, MediaTake {
 
     func live(_ source: ExactAudioSource?) {
         guard let source, tap == nil, state != "inactive" else { return }
+        self.source = source
+        if context.agent {
+            tap = source.tap { [wave, context] pcm, time in wave.append(pcm, at: time, through: context.now(), envelope: { source.substituteLevel(at: $0, standalone: true) }) }
+            return
+        }
         let format = source.format, pending = pending, limit = AVAudioFrameCount(format.sampleRate * 2)
         do {
             try queue.sync {
@@ -339,17 +358,17 @@ final class Recorder: ExactTrackConsumer, MediaTake {
         finishing.append(done)
         guard state != "inactive" else { return }
         recorded = duration; since = nil
-        if context.agent, let last = spans.indices.last, spans[last].1 == nil { spans[last].1 = context.now() }
+        if context.agent { source?.advance(to: context.now()); wave.end(context.now(), source: source) }
         state = "inactive"; reason = why; self.error = error
         limit?(); limit = nil
         recordingFlag.value = false
         tap?.cancel(); tap = nil
         changed()
-        let spans = spans, agent = context.agent, url = url, duration = recorded, writer = writer
+        let agent = context.agent, url = url, duration = recorded, writer = writer
         queue.async { [self] in
             if agent {
                 try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? Writer.tone(spans).write(to: url)
+                try? wave.wav().write(to: url)
             }
             let complete = { let failure = writer?.failure; DispatchQueue.main.async { self.completed(why, duration, failure: failure) } }
             if let writer { writer.finish(complete) } else { complete() }
@@ -481,7 +500,7 @@ final class Writer {
             do { try backup.write(from: buffer) } catch { backupFailure = Writer.code(error) }
         }
         guard failure == nil else { return }
-        guard let input, input.isReadyForMoreMediaData, let sample = sample(buffer) else {
+        guard let input, input.isReadyForMoreMediaData, let sample = Self.sample(buffer, at: frames) else {
             return fail(asset?.error.map(Writer.code) ?? "the writer refused a buffer")
         }
         if input.append(sample) { frames += Int64(buffer.frameLength) } else { fail(asset?.error.map(Writer.code) ?? "the writer refused a buffer") }
@@ -513,7 +532,8 @@ final class Writer {
         return status == .error ? nil : out
     }
 
-    private func sample(_ buffer: AVAudioPCMBuffer) -> CMSampleBuffer? {
+    static func sample(_ buffer: AVAudioPCMBuffer, at frames: Int64) -> CMSampleBuffer? {
+        let rate = buffer.format.sampleRate
         var description: CMAudioFormatDescription?
         guard CMAudioFormatDescriptionCreate(allocator: nil, asbd: buffer.format.streamDescription, layoutSize: 0, layout: nil, magicCookieSize: 0,
                                              magicCookie: nil, extensions: nil, formatDescriptionOut: &description) == noErr else { return nil }
@@ -571,17 +591,59 @@ final class Writer {
         _ = try FileManager.default.replaceItemAt(url, withItemAt: rebuilt)
     }
 
-    /// The agent's take: WAV, 16-bit mono at 8 kHz, of a 440 Hz tone whose amplitude follows the signal over its spans (§10).
-    static func tone(_ spans: [(Double, Double?)], rate: Double = 8000) -> Data {
-        var samples: [Int16] = []
-        for (from, to) in spans {
-            var t = from
-            while t < (to ?? from) {
-                let level = RecordingModule.synthetic(Int(floor(t / 50)))
-                samples.append(Int16(max(-1, min(1, 0.8 * level * sin(2 * .pi * 440 * t / 1000))) * 32767))
-                t += 1000 / rate
+
+}
+
+/// An 8 kHz substitute WAV uses the track's PCM. Each recording span keeps its
+/// own first sample. Gaps without a live input count toward duration as silence.
+private final class AgentWave {
+    private let lock = NSLock()
+    private var samples: [Int16] = []
+    private var start: Double?, base = 0
+
+    func begin(_ clock: Double) { lock.withLock { start = clock; base = samples.count } }
+
+    func end(_ clock: Double, source: ExactAudioSource?) {
+        lock.withLock {
+            guard let start else { return }
+            let end = base + max(0, Int(((clock - start) * 8).rounded(.up)))
+            if samples.count < end {
+                for frame in samples.count..<end {
+                    let instant = start + Double(frame - base) / 8
+                    let level = source?.substituteLevel(at: instant, standalone: true) ?? 0
+                    samples.append(exactMicrophoneSample(at: instant, level: level))
+                }
+            }
+            else { samples.removeLast(samples.count - end) }
+            self.start = nil
+        }
+    }
+
+    func append(_ pcm: AVAudioPCMBuffer, at time: AVAudioTime, through clock: Double, envelope: (Double) -> Double?) {
+        lock.withLock {
+            guard let start, time.isSampleTimeValid, let data = pcm.floatChannelData?[0] else { return }
+            let rate = pcm.format.sampleRate
+            let origin = Int64((start * rate / 1000).rounded(.up))
+            let first = max(0, Int(ceil(Double(time.sampleTime - origin) * 8000 / rate)))
+            let captured = Int(ceil(Double(time.sampleTime + Int64(pcm.frameLength) - origin) * 8000 / rate))
+            let end = min(captured, max(0, Int(ceil((clock - start) * 8))))
+            let next = max(first, samples.count - base)
+            guard end > next else { return }
+            if base + next > samples.count { samples.append(contentsOf: repeatElement(0, count: base + next - samples.count)) }
+            for frame in next..<end {
+                let index = Int(origin - time.sampleTime) + Int((Double(frame) * rate / 8000).rounded(.down))
+                let instant = start + Double(frame) / 8
+                if Double(origin) != start * rate / 1000, let level = envelope(instant) {
+                    // The deterministic tone is continuous. Sample it at the WAV span's exact phase.
+                    samples.append(exactMicrophoneSample(at: instant, level: level))
+                } else { samples.append(Int16(clamping: Int(max(-1, min(1, data[index])) * 32768))) }
             }
         }
+    }
+
+    func wav() -> Data {
+        let samples = lock.withLock { self.samples }
+        let rate = 8000
         var data = Data()
         func word<T: FixedWidthInteger>(_ v: T) { withUnsafeBytes(of: v.littleEndian) { data.append(contentsOf: $0) } }
         data.append(contentsOf: Array("RIFF".utf8)); word(UInt32(36 + samples.count * 2)); data.append(contentsOf: Array("WAVE".utf8))
@@ -605,6 +667,7 @@ class Meter: ExactTrackConsumer {
     private(set) var levels: [Double] = []
     private var energy = 0.0, duration = 0.0, last = 0.0
     private var at: Double, running = false, quiet = false
+    private var envelope: ((Double) -> Double?)?
     /// Each interval's RMS, from the audio thread.
     private let measured = Measured()
 
@@ -619,6 +682,10 @@ class Meter: ExactTrackConsumer {
     func live(_ source: ExactAudioSource?) {
         running = true
         guard let source, tap == nil else { return }
+        if agent, source.substituteLevel(at: at, standalone: false) != nil {
+            envelope = { source.substituteLevel(at: $0, standalone: false) }
+            return
+        }
         let window = AVAudioFrameCount(max(1, source.format.sampleRate * interval / 1000)), measured = measured
         tap = source.tap { buffer, _ in measured.add(buffer, window: window) }
     }
@@ -651,8 +718,10 @@ class Meter: ExactTrackConsumer {
                 fresh = Array(repeating: 0, count: min(steps, history))
                 duration += Double(steps) * interval / 1000; last = 0
             }
-        } else if agent {
-            if steps > 0 { fresh = (1...steps).map { RecordingModule.synthetic(Int(floor((at + Double($0) * interval) / 50))) } }
+        } else if let envelope {
+            if steps > 0 { fresh = (1...steps).map { envelope(at + Double($0) * interval) ?? 0 } }
+        } else if agent, tap == nil {
+            if steps > 0 { fresh = (1...steps).map { exactMicrophoneLevel(Int(floor((at + Double($0) * interval) / 50))) } }
         } else {
             fresh = measured.take()
         }

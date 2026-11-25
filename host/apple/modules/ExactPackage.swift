@@ -973,6 +973,19 @@ public extension ExactTrackConsumer {
     func live(video source: ExactVideoSource?) {}
 }
 
+/// The camera recorder takes its microphone from the leased audio track (LLP 1133.009 D3).
+/// The owner supplies the input before the camera subscribes and reports later enabled changes on main.
+public protocol ExactMovieAudioConsumer: ExactTrackConsumer {
+    func microphone(_ input: AVCaptureDeviceInput?, samples: AVCaptureAudioDataOutput?, enabled: Bool)
+    func useMicrophoneHistory(_ history: ExactAudioMute)
+    func cameraInterruption(_ handoff: @escaping (Bool) -> Void)
+    func prepareMicrophone(_ begin: @escaping (AVCaptureSession) -> Void)
+    /// Supplies capture-clock PCM. Other readers of this track receive the returned, mute-adjusted samples.
+    @discardableResult func movieAudio(_ sample: CMSampleBuffer) -> CMSampleBuffer?
+    /// Completion follows the capture session's configuration commit.
+    func captureMicrophone(_ active: Bool, done: @escaping () -> Void)
+}
+
 /// A running camera capture (LLP 1133.008 D3, D8 item 3): the platform's
 /// capture graph, which a consumer attaches outputs to rather than reading
 /// frames. A video track's consumer is told `live(video:)` instead of
@@ -1004,17 +1017,153 @@ public protocol ExactVideoSource: AnyObject {
     func focus(at point: CGPoint)
 }
 
+/// The recorder owns these microphone routes on the camera session's configuration queue.
+public final class ExactMovieAudioRoutes {
+    public weak var input: AVCaptureDeviceInput?
+    public weak var samples: AVCaptureAudioDataOutput?
+
+    public func restrictConnections(in session: AVCaptureSession) {
+        guard let input else { return }
+        for route in session.connections where route.output !== samples {
+            if route.inputPorts.contains(where: { $0.input === input }) { session.removeConnection(route) }
+        }
+    }
+}
+
 public extension ExactVideoSource {
+    var movieAudioRoutes: ExactMovieAudioRoutes { shared("recording.microphone") { ExactMovieAudioRoutes() } }
     /// Configure without stopping capture.
     func configure(_ change: @escaping (AVCaptureSession) -> Void) { configure(stopped: false, change) }
+}
+
+/// A disable and a buffer's mute decision share one lock (LLP 1133.009 D3, AL1).
+public final class ExactAudioMute {
+    public struct Reading {
+        fileprivate let clock: CMClock?
+        public let time: CMTime
+        public init(_ time: CMTime) { self.time = time; clock = nil }
+        public init(clock: CMClock?) { self.clock = clock; time = clock.map(CMClockGetTime) ?? .invalid }
+    }
+
+    private let lock = NSLock()
+    private enum State { case open, disabled, waiting, enabledAfter(CMTime) }
+    private var state = State.open, provenEnabled = true, undatedEnabled = true
+    private var observedWhileDisabled = false
+    private var clock: CMClock?, latest = CMTime.invalid, latestSample = CMTime.invalid
+
+    public init() {}
+
+    private func invalidate() {
+        latest = .invalid
+        observedWhileDisabled = false
+        if case .enabledAfter = state { state = .waiting; provenEnabled = false; undatedEnabled = false }
+    }
+
+    public func discontinuity() { lock.withLock { invalidate() } }
+
+    /// An engine that owns the microphone during a camera interruption has no
+    /// session-clock PTS. It can carry uninterrupted sound, or silence.
+    public func undated(_ frames: Int) -> [Range<Int>] {
+        lock.withLock { undatedEnabled ? [] : [0..<frames] }
+    }
+
+    public var proven: Bool { lock.withLock { provenEnabled } }
+
+    public func beginProducer() { lock.withLock { undatedEnabled = provenEnabled } }
+
+    private func observe(_ reading: Reading) -> Bool {
+        if clock !== reading.clock { invalidate(); clock = reading.clock }
+        let time = reading.time
+        let advanced = time.isNumeric && latest.isNumeric && time > latest
+        if !time.isNumeric || (latest.isNumeric && !advanced) { invalidate() }
+        latest = time
+        return advanced
+    }
+
+    public func enabled(_ value: Bool, at reading: @autoclosure () -> Reading) {
+        lock.withLock {
+            if !value {
+                if case .disabled = state { return }
+                state = .disabled
+                provenEnabled = false; undatedEnabled = false
+                observedWhileDisabled = false
+            } else if case .disabled = state {
+                state = observe(reading()) && observedWhileDisabled ? .enabledAfter(latest) : .waiting
+            }
+        }
+    }
+
+    public func silence(from start: CMTime, frames: Int, rate: CMTimeScale,
+                        through reading: @autoclosure () -> Reading) -> [Range<Int>] {
+        lock.withLock {
+            let advanced = observe(reading())
+            if case .disabled = state { observedWhileDisabled = latest.isNumeric }
+            guard rate > 0, frames > 0 else { return [0..<frames] }
+            let duration = CMTime(value: Int64(frames), timescale: rate)
+            let last = start + CMTime(value: Int64(frames - 1), timescale: rate)
+            if start.isNumeric {
+                if latestSample.isNumeric && start < latestSample { return [0..<frames] }
+                latestSample = last
+            }
+            guard latest.isNumeric else { return [0..<frames] }
+            switch state {
+            case .disabled: return [0..<frames]
+            case .waiting:
+                if advanced, start.isNumeric, last <= latest { state = .enabledAfter(latest) }
+                return [0..<frames]
+            case .open, .enabledAfter: break
+            }
+            guard start.isNumeric else { return [0..<frames] }
+            // Compare in sample frames. Rounding the capture start outwards keeps a
+            // fractional PTS or a clock with a different timescale on the silent side.
+            func count(_ time: CMTime) -> Int {
+                if time <= .zero { return 0 }
+                if time >= duration { return frames }
+                return Int(CMTimeConvertScale(time, timescale: rate, method: .roundTowardZero).value)
+            }
+            let lowerStart = CMTimeConvertScale(start, timescale: rate, method: .roundTowardNegativeInfinity)
+            let upperStart = CMTimeConvertScale(start, timescale: rate, method: .roundTowardPositiveInfinity)
+            var first = 0
+            if case .enabledAfter(let time) = state {
+                let lowerEdge = CMTimeConvertScale(time, timescale: rate, method: .roundTowardNegativeInfinity)
+                first = count(lowerEdge + duration + CMTime(value: 1, timescale: rate) - lowerStart)
+            }
+            let end = count(CMTimeConvertScale(latest, timescale: rate, method: .roundTowardNegativeInfinity) - upperStart)
+            if first >= end { return [0..<frames] }
+            if first == 0 && end == frames { provenEnabled = true; return [] }
+            var cuts: [Range<Int>] = []
+            if first > 0 { cuts.append(0..<first) }
+            if end < frames { cuts.append(end..<frames) }
+            return cuts
+        }
+    }
 }
 
 /// A running audio capture, which a consumer taps.
 public protocol ExactAudioSource: AnyObject {
     var format: AVAudioFormat { get }
+    /// Flush the driver's microphone up to this session-clock time before a reader changes state.
+    func advance(to milliseconds: Double)
+    /// The deterministic microphone envelope at session time, when this source supplies it.
+    func substituteLevel(at milliseconds: Double, standalone: Bool) -> Double?
     /// `block` hears each buffer of the capture on the audio thread until
     /// the subscription is cancelled. It must not block.
     func tap(_ block: @escaping (AVAudioPCMBuffer, AVAudioTime) -> Void) -> ExactSubscription
+}
+
+public extension ExactAudioSource {
+    func advance(to milliseconds: Double) {}
+    func substituteLevel(at milliseconds: Double, standalone: Bool) -> Double? { nil }
+}
+
+/// The substitute microphone's level in each 50 ms step (LLP 1133.009 §10).
+public func exactMicrophoneLevel(_ step: Int) -> Double {
+    let x = Double(step)
+    return min(1, 0.12 + 0.75 * abs(sin(x * 0.37)) * (0.55 + 0.45 * sin(x * 0.05)))
+}
+
+public func exactMicrophoneSample(at milliseconds: Double, level: Double) -> Int16 {
+    Int16(0.8 * level * sin(2 * .pi * 440 * milliseconds / 1000) * 32767)
 }
 
 /// The authority a consumer joined with. A view's cause expires when the runner
@@ -1277,6 +1426,13 @@ public final class ExactPads {
 /// and the host composes every claim with the app's own sound.
 public final class ExactAudioSession {
     public typealias Claim = (_ mode: String?, _ options: [String], _ background: Bool, _ events: @escaping (String) -> Void) -> (() -> Void)?
+    // Host and package images can each link ExactPackage. Both use the main thread's claim count.
+    private static let callsKey = "exact.audio-session.call-claims"
+    private var calls: Int {
+        get { Thread.main.threadDictionary[Self.callsKey] as? Int ?? 0 }
+        set { Thread.main.threadDictionary[Self.callsKey] = newValue }
+    }
+    public var hasCall: Bool { calls > 0 }
     private let claimFn: Claim
     public init(_ claim: @escaping Claim) { claimFn = claim }
     /// A capture's claim: the session records (`.playAndRecord`) while any
@@ -1299,7 +1455,9 @@ public final class ExactAudioSession {
     /// for as long as any call lasts. Nil where the host has no audio
     /// session owner to compose.
     public func claimCall(video: Bool, events: @escaping (String) -> Void) -> ExactSubscription? {
-        claimFn(video ? "call-video" : "call-voice", [], true, events).map(ExactSubscription.init)
+        guard let release = claimFn(video ? "call-video" : "call-voice", [], true, events) else { return nil }
+        calls += 1
+        return ExactSubscription { self.calls -= 1; release() }
     }
     /// CallKit activated (`provider(_:didActivate:)`) or deactivated the
     /// calls' session.

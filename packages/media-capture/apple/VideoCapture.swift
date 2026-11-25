@@ -542,7 +542,7 @@ final class VideoCapture: NSObject, ExactVideoSource {
 
     /// Another camera for the process's capture (iOS): the session's input replaced.
     func switchTo(_ next: AVCaptureDevice) {
-        let session = session, old = input, hatch = MediaCaptureModule.sessionHatch
+        let session = session, old = input, hatch = MediaCaptureModule.sessionHatch, routes = movieAudioRoutes
         device = next
         queue.async { [weak self] in
             session.beginConfiguration()
@@ -552,6 +552,7 @@ final class VideoCapture: NSObject, ExactVideoSource {
                 self?.input = input
             }
             hatch?(session)
+            routes.restrictConnections(in: session)
             session.commitConfiguration()
         }
         log("camera: the capture moved to \(next.localizedName)")
@@ -642,9 +643,13 @@ final class VideoCapture: NSObject, ExactVideoSource {
     // MARK: ExactVideoSource
 
     func configure(stopped: Bool, _ change: @escaping (AVCaptureSession) -> Void) {
-        let session = session
+        let session = session, routes = movieAudioRoutes
         queue.async {
-            if !Self.configure(session, stopped: stopped, admitted: { self.starts.admitted }, change) {
+            let restarted = Self.configure(session, stopped: stopped, admitted: { self.starts.admitted }) { session in
+                change(session)
+                routes.restrictConnections(in: session)
+            }
+            if !restarted {
                 DispatchQueue.main.async {
                     for get in Array(self.holders.values) {
                         if let track = get(), track.capture === self, !self.starts.admitted {

@@ -1460,8 +1460,8 @@ reading. Nothing that isn't HTML is added by it.
   over a camera stream sharing the preview and frame analysis session, to an
   `app:/` file. Unblocks a guided clip with the app's overlay and countdown.
   Android and the web first, then Apple; `maxDuration` bounds the clip and
-  the track's `frameRate` constraint sets its ideal rate. The result names
-  its MIME type, byte size, duration, pixel size and frame rate.
+  the track's `frameRate` constraint sets its ideal rate. The result names its MIME type, byte size, duration, pixel size and frame rate.
+- **Expanded (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 3–1):** One camera track and one microphone track record an actor’s take to one file on one capture session’s clock (LLP 1133.009 D3). On iOS and macOS, the session’s data outputs feed a single asset writer, with disabled audio silenced before append (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel", AH1, panel 4–0). Mute and recovery follow the capture-clock guarantee in D3 (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel", AL1, panel 4–0). Android keeps `NotSupportedError` until an Android app asks.
 - **Expanded (Charlie, 2026-10-23, "Expand, no take", on LLP 1133.009 §15
   question 6):** recording the microphone to a file and reading its level,
   by Media Capture's and MediaStream Recording's names (`getUserMedia(audio=)`

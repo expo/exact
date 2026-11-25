@@ -59,3 +59,33 @@ Each step says what to do and what should happen.
     `adb logcat -s exact` shows `recording: recovered …/take-N.m4a`, the
     take is in the list after its next refresh (record and stop another
     take if it is not), and it plays back up to the stop.
+
+## Mixed microphone mute and lip sync on iPhone
+
+Use an app that records one camera and one microphone track into `take.mp4`.
+Play a steady tone near the phone throughout. Start recording, face the camera,
+and say “pop” near the beginning and end so lip closure and sound are easy to
+compare. Mark times on the recording timer, which excludes pauses.
+
+1. At 20 s disable the microphone track. At 35 s enable it.
+2. At 55 s disable it again. At 60 s invoke Siri or take an incoming call.
+   End the interruption, return to the app, and resume recording with the
+   microphone still disabled. At 75 s of recorded time enable it.
+3. Stop at two minutes. Copy the finished MP4 and run the following command.
+   If your marks differ, adjust the start and stop seconds to sit inside each
+   interval. The line for each interval prints its peak in dBFS.
+
+```sh
+for interval in '5 15' '22 33' '40 50' '56 59' '65 73' '80 90'; do
+  set -- $interval
+  printf '%s–%s seconds ' "$1" "$2"
+  ffmpeg -hide_banner -nostats -i take.mp4 -map 0:a:0 \
+    -af "atrim=start=$1:end=$2,astats=metadata=0:reset=0" \
+    -f null - 2>&1 | awk '/Peak level dB:/ {peak=$NF} END {print peak " dBFS"}'
+done
+```
+
+Run the loop in `sh` or Bash. The enabled intervals should contain the tone.
+The three muted intervals, including the one after resume, should read silence
+or the codec floor. Report all six levels, the actual marks, phone and OS,
+and whether the sound leads or lags the lips at each end of the take.

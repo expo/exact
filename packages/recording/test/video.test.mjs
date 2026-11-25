@@ -18,11 +18,23 @@ test.skipIf(process.platform !== 'darwin')('Apple video recording writes a playa
       '-emit-module-path', join(out, 'ExactPackage.swiftmodule'), 'host/apple/modules/ExactPackage.swift', '-o', join(out, 'libExactPackage.a')]);
     run(['swiftc', '-parse-as-library', '-swift-version', '5', '-I', out, '-L', out, '-lExactPackage',
       'packages/media-capture/apple/MediaCapture.swift', 'packages/media-capture/apple/VideoCapture.swift',
-      'packages/recording/apple/Recording.swift', 'packages/recording/apple/VideoRecorder.swift', 'packages/recording/test/Video.swift', '-o', join(out, 'video')]);
+      'packages/recording/apple/Recording.swift', 'packages/recording/apple/VideoRecorder.swift', 'packages/recording/test/Video.swift', 'packages/recording/test/MixedClock.swift', '-o', join(out, 'video')]);
     const results = ['', 'delayed', 'rate'].map(scenario => spawnSync(join(out, 'video'),
       [join(out, 'files'), ...(scenario ? [scenario] : [])], { encoding: 'utf8', timeout: 20000 }));
     expect(results.map(r => r.status), results.map(r => r.stderr).join('\n')).toEqual([0, 0, 0]);
     for (const r of results) expect(r.stdout).toContain('PASS Apple');
+    const scenarios = ['interruption-reader', 'restored-reader', 'fractional-join', 'short-wav', 'flush-at-disable', 'early-pts', 'disjoint', 'port-change', 'disable-buffer', 'enable-buffer', 'standalone-disable', 'early-audio', 'offset-microphone', 'clock-discontinuities', 'paused-picture', 'proof-order', 'idle-wav', 'supplied-microphone', 'prehistory', 'recovery-handoff', 'old-engine', 'fractional-substitute', 'fractional-wav', 'no-audio', 'clock-return', 'clock-missing', 'clock-present', 'substitute-shared', 'background-allowed', 'finish-pressure', 'max-prefix', 'fractional',
+      'retained', 'skew', 'reset-blocked', 'interrupted-foreground', 'staging', 'paused-tail', 'queued-edge', 'clock-lag', 'pressure', 'overlap-lease', 'same-background', 'muted-readers', 'reader-pause', 'readers', 'detach-lease', 'reset-session', 'reset-unrelated', 'wrong-port',
+      'inactive-pcm', 'late-inactive', 'pending-interrupt', 'pending-cancel', 'cancel-0', 'cancel-1', 'cancel-2', 'inactive-camera', 'claimed-call',
+      'substitute-mute', 'background-press', 'reset', 'processed'];
+    const failures = [];
+    for (const scenario of scenarios) {
+      const directory = join(out, scenario);
+      mkdirSync(directory);
+      const result = spawnSync(join(out, 'video'), [directory, scenario], { encoding: 'utf8', timeout: 20000 });
+      if (result.status !== 0 || !result.stdout.includes('PASS Apple mixed')) failures.push([scenario, result.stderr, result.stdout]);
+    }
+    expect(failures).toEqual([]);
   } finally { rmSync(out, { recursive: true, force: true }); }
 }, 120000);
 
