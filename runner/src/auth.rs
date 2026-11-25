@@ -818,13 +818,16 @@ pub fn arm_with_fixture<D: DataSource>(
     fixture: Option<&str>,
 ) -> Arm {
     let ticket = out.ticket;
-    if out.request.reach.origin == crate::CallOrigin::Action {
-        settle(
-            runner,
-            ticket,
-            403,
-            "auth sessions are refused during a background action",
-        );
+    if out.request.reach.origin != crate::CallOrigin::App {
+        let origin = out.request.reach.origin;
+        runner.ticket_person_required(ticket);
+        let message = match origin {
+            crate::CallOrigin::Action => {
+                "auth sessions are refused during a background action".to_owned()
+            }
+            _ => format!("person-required ({} origin)", origin.word()),
+        };
+        settle(runner, ticket, 403, &message);
         return Arm::Settled;
     }
     let body = String::from_utf8_lossy(&out.request.body).into_owned();

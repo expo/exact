@@ -1,6 +1,7 @@
 # scrollIntoView commit path (update_into_views_inner) bypasses admit_drag_files grant/URL validation and render_owned reconciliation
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Bound session roles, ran admit_drag_files on all scrollIntoView commit phases, and reconciled transactional owned resources and tasks before and after seek phases in Runner::update_into_views.
 **Systems:** runner (kernel commit pipeline, drag-out admission, owned reconciliation)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25
