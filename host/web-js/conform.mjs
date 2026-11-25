@@ -75,7 +75,7 @@
 //   first step the Linux host fails or has no delivery for (a pointer's
 //   phases, a wheel, a list's `into`, the browser's history) or that
 //   `LINUX_APART` names; a `drag` it takes. A target whose `LINUX_APART`
-//   names a step fails a Linux error before that step.
+//   names a step fails when Linux cannot run it, or errs before that step.
 //   --browser runs a cross-browser comparison of the JS target instead:
 //   Chrome is the oracle and each named engine takes the identical steps.
 //   --browser firefox,webkit shares one live Chrome drive between both engines;
@@ -523,7 +523,8 @@ async function drive(t, report, targetFail, dir, ws, js) {
       return session;
     };
     if (linux?.why) {
-      if (storageParity) fail('linux', linux.why);
+      // A target that names where Linux parts expects Linux to take the steps before it
+      if (storageParity || typeof LINUX_APART[t.name]?.[0] === 'string') fail('linux', linux.why);
       recordStep({ target: t.name, step: 'linux', skipped: linux.why });
     }
     else if (linux) {

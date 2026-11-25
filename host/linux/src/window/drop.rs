@@ -52,8 +52,8 @@ const MOZ_URL: &str = "text/x-moz-url";
 /// The plain text types a drag may offer, the first offered taken: UTF-8
 /// by name, then X11's name for it, then text in no named charset.
 const TEXTS: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
-/// How long a drop's items may take to arrive: what a source has not
-/// finished sending by then is not delivered, so a stalled source cannot
+/// How long after the drop its items may take to arrive: what a source has
+/// not finished sending by then is not delivered, so a stalled source cannot
 /// hold the drop pending (D2 holds a newer drag's enters for it).
 const DEADLINE: Duration = Duration::from_secs(10);
 /// The most a drop's type may send; a type that sends more is not
@@ -269,18 +269,22 @@ struct Drag {
 }
 
 /// A drop the presenter was told of, kept until it is delivered or
-/// refused, and its items while they arrive.
+/// refused: when its items are due, counted from Wayland's drop, and the
+/// items while they arrive.
 struct Released {
     drag: Drag,
+    deadline: Instant,
     reading: Option<Reading>,
 }
 
-/// Drop `id`'s items arriving through a pipe a type, until `deadline`.
+/// Drop `id`'s items arriving through a pipe a type, until `deadline`, each
+/// type at most `largest` bytes.
 struct Reading {
     id: u32,
     pipes: [Option<PipeReader>; 3],
     bytes: [Vec<u8>; 3],
     deadline: Instant,
+    largest: usize,
 }
 
 /// The types the window reads from an offer, each spelled as offered: its
@@ -337,14 +341,8 @@ impl Listener {
                 poll_for(guard.connection_fd().as_raw_fd(), display),
                 poll_for(woken.as_raw_fd(), libc::POLLIN),
             ];
-            let pipes: Vec<(usize, usize)> = self.pipes().collect();
-            fds.extend(pipes.iter().map(|&(r, k)| {
-                let pipe = self.released[r]
-                    .reading
-                    .as_ref()
-                    .and_then(|r| r.pipes[k].as_ref());
-                poll_for(pipe.map_or(-1, AsRawFd::as_raw_fd), libc::POLLIN)
-            }));
+            let pipes: Vec<(usize, usize, i32)> = self.pipes().collect();
+            fds.extend(pipes.iter().map(|&(.., fd)| poll_for(fd, libc::POLLIN)));
             let now = Instant::now();
             let wait = self
                 .readings()
@@ -366,10 +364,24 @@ impl Listener {
             if fds[0].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
                 return;
             }
+            // The display's read is resolved first, so winit's thread never waits on this one's pipes
+            if fds[0].revents & libc::POLLIN != 0 {
+                match guard.read() {
+                    Ok(_) => {}
+                    Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {}
+                    Err(_) => return,
+                }
+            } else {
+                drop(guard);
+            }
+            // The answers the event loop sent before the window closed still count
             if fds[1].revents != 0 && !woke(woken) {
+                self.obey();
                 return;
             }
-            for (fd, &(r, k)) in fds[2..].iter().zip(&pipes) {
+            // A drop past its deadline lands before its pipes are read, so nothing arrives after it
+            self.land();
+            for (fd, &(r, k, _)) in fds[2..].iter().zip(&pipes) {
                 if fd.revents != 0 {
                     if let Some(reading) = self.released[r].reading.as_mut() {
                         reading.read(k);
@@ -377,13 +389,6 @@ impl Listener {
                 }
             }
             self.land();
-            if fds[0].revents & libc::POLLIN != 0 {
-                match guard.read() {
-                    Ok(_) => {}
-                    Err(WaylandError::Io(e)) if e.kind() == ErrorKind::WouldBlock => {}
-                    Err(_) => return,
-                }
-            }
         }
     }
 
@@ -415,13 +420,15 @@ impl Listener {
         self.released.iter().filter_map(|r| r.reading.as_ref())
     }
 
-    /// Each open pipe, by its drop's place in `released` and its type's.
-    fn pipes(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
+    /// Each open pipe, by its drop's place in `released` and its type's,
+    /// with its descriptor.
+    fn pipes(&self) -> impl Iterator<Item = (usize, usize, i32)> + '_ {
         self.released.iter().enumerate().flat_map(|(r, released)| {
-            let reading = released.reading.as_ref();
-            (0..3)
-                .filter(move |&k| reading.is_some_and(|reading| reading.pipes[k].is_some()))
-                .map(move |k| (r, k))
+            let open = released
+                .reading
+                .iter()
+                .flat_map(|reading| reading.pipes.iter().enumerate());
+            open.filter_map(move |(k, pipe)| Some((r, k, pipe.as_ref()?.as_raw_fd())))
         })
     }
 
@@ -464,8 +471,9 @@ impl Listener {
                     };
                     match id {
                         Some(id) => {
-                            self.released[at].reading =
-                                Some(Reading::start(id, &self.released[at].drag))
+                            let released = &mut self.released[at];
+                            released.reading =
+                                Some(Reading::start(id, &released.drag, released.deadline));
                         }
                         None => self.released.remove(at).drag.offer.destroy(),
                     }
@@ -488,9 +496,9 @@ impl Listener {
 }
 
 impl Reading {
-    /// Ask the source for `drag`'s types for drop `id`. A type whose pipe
-    /// cannot be made arrives empty.
-    fn start(id: u32, drag: &Drag) -> Self {
+    /// Ask the source for `drag`'s types for drop `id`, due by `deadline`.
+    /// A type whose pipe cannot be made arrives empty.
+    fn start(id: u32, drag: &Drag, deadline: Instant) -> Self {
         let Wanted { uris, link, text } = &drag.wanted;
         let pipes = [uris, link, text].map(|mime| {
             let (reader, writer) = std::io::pipe().ok()?;
@@ -504,7 +512,8 @@ impl Reading {
             id,
             pipes,
             bytes: Default::default(),
-            deadline: Instant::now() + DEADLINE,
+            deadline,
+            largest: LARGEST,
         }
     }
 
@@ -530,20 +539,21 @@ impl Reading {
         (id, items(&uris, &link, &text))
     }
 
-    /// Read what type `k`'s pipe holds: its end closes the pipe, and an
-    /// error or more than [`LARGEST`] closes it with nothing.
+    /// Read some of what type `k`'s pipe holds, a bounded batch so other
+    /// pipes and the display are heard between: its end closes the pipe,
+    /// and an error or more than `largest` bytes closes it with nothing.
     fn read(&mut self, k: usize) {
         let Some(pipe) = self.pipes[k].as_mut() else {
             return;
         };
         let mut chunk = [0; 1 << 16];
-        loop {
+        for _ in 0..16 {
             match pipe.read(&mut chunk) {
                 Ok(0) => {
                     self.pipes[k] = None;
                     return;
                 }
-                Ok(n) if self.bytes[k].len() + n <= LARGEST => {
+                Ok(n) if self.bytes[k].len() + n <= self.largest => {
                     self.bytes[k].extend_from_slice(&chunk[..n])
                 }
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
@@ -643,61 +653,19 @@ fn items(uris: &[u8], link: &[u8], text: &[u8]) -> Dropped {
     dropped
 }
 
-/// `text` as a link that is not a file: an absolute URI (RFC 3986, section
-/// 3), its scheme a letter and then letters, digits, `+`, `-` or `.`, its
-/// other characters those a URI may hold, each `%` followed by two hex
-/// digits, and brackets only around its host's IP literal.
+/// `text` as a link that is not a file: a URI, as a URI list's line is
+/// one (RFC 2483), told from plain text by its scheme (RFC 3986: a letter,
+/// then letters, digits, `+`, `-` or `.`) and by holding no space or control
+/// character. Its parts are the app's to check before following it (D1), as
+/// they are where GTK's URI-list reader and Android's hand a link over.
 fn web_link(text: &str) -> Option<&str> {
     let text = text.trim();
-    let (scheme, rest) = text.split_once(':')?;
+    let (scheme, _) = text.split_once(':')?;
     let mut letters = scheme.chars();
-    let scheme_ok = letters.next().is_some_and(|c| c.is_ascii_alphabetic())
-        && letters.all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
-    if !scheme_ok || scheme.eq_ignore_ascii_case("file") {
-        return None;
-    }
-    let bytes = rest.as_bytes();
-    let mut at = 0;
-    while at < bytes.len() {
-        match bytes[at] {
-            b'%' if bytes
-                .get(at + 1..at + 3)
-                .is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit)) =>
-            {
-                at += 3
-            }
-            b if b.is_ascii_alphanumeric() || b"-._~:/?#[]@!$&'()*+,;=".contains(&b) => at += 1,
-            _ => return None,
-        }
-    }
-    // An IP literal is the authority's host, `//[…]`, after any user information
-    let host = rest
-        .strip_prefix("//")
-        .map(|authority| authority.split(['/', '?', '#']).next().unwrap_or_default())
-        .map(|authority| {
-            authority
-                .rsplit_once('@')
-                .map_or(authority, |(_, host)| host)
-        });
-    let literal = host
-        .and_then(|h| h.strip_prefix('['))
-        .and_then(|h| h.split_once(']'));
-    let brackets = rest.matches(['[', ']']).count();
-    let brackets_ok = match literal {
-        Some((inside, after)) => {
-            brackets == 2
-                && !inside.is_empty()
-                && inside
-                    .bytes()
-                    .all(|b| b.is_ascii_hexdigit() || b":.vV".contains(&b))
-                && (after.is_empty()
-                    || after
-                        .strip_prefix(':')
-                        .is_some_and(|port| port.bytes().all(|b| b.is_ascii_digit())))
-        }
-        None => brackets == 0,
-    };
-    brackets_ok.then_some(text)
+    let valid = letters.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && letters.all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+        && !text.chars().any(|c| c.is_whitespace() || c.is_control());
+    (valid && !scheme.eq_ignore_ascii_case("file")).then_some(text)
 }
 
 /// Text a browser wrote as UTF-16, as Mozilla's types are: by its byte
@@ -895,6 +863,7 @@ impl Dispatch<WlDataDevice, ()> for Listener {
                     let (number, point) = (drag.number, drag.point);
                     state.released.push(Released {
                         drag,
+                        deadline: Instant::now() + DEADLINE,
                         reading: None,
                     });
                     state.tell(Heard::Dropped { number, point });

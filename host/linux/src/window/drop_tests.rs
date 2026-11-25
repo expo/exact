@@ -31,20 +31,25 @@ fn a_malformed_entry_is_neither_the_link_nor_a_path() {
     let dropped = items(list, b"", b"");
     assert_eq!(dropped.url, "https://example.com/valid");
     assert!(dropped.paths.is_empty(), "{:?}", dropped.paths);
-    for bad in [
-        "https://[broken",
-        "https://example.com/%ZZ",
+    for junk in [
+        "not a uri",
+        "1http://example.com/",
         "https://exa mple.com/",
-        "https://example.com/]",
+        ":no-scheme",
     ] {
-        assert_eq!(web_link(bad), None, "{bad}");
+        assert_eq!(web_link(junk), None, "{junk}");
     }
-    for good in [
+    for uri in [
         "http://[::1]:8080/a",
         "mailto:a@example.com",
-        "https://example.com/a%20b?q=1#f",
+        "https://[broken",
+        "x-app:open",
     ] {
-        assert_eq!(web_link(good), Some(good));
+        assert_eq!(
+            web_link(uri),
+            Some(uri),
+            "a URI's parts are the app's to check"
+        );
     }
     assert_eq!(
         file_path(b"///tmp/%+1"),
@@ -176,6 +181,7 @@ fn reading(deadline: Instant) -> (Reading, [PipeWriter; 3]) {
         pipes,
         bytes: Default::default(),
         deadline,
+        largest: 32,
     };
     (reading, writers)
 }
@@ -221,28 +227,15 @@ fn a_drop_lands_once_each_type_arrived_or_with_what_had_by_the_deadline() {
 
 #[test]
 fn a_type_larger_than_the_limit_is_not_delivered() {
-    let (mut large, [uris, link, text]) = reading(Instant::now() + Duration::from_secs(60));
-    drop((uris, link));
-    let writer = std::thread::spawn(move || {
-        let mut text = text;
-        let chunk = vec![b'x'; 1 << 20];
-        for _ in 0..=LARGEST >> 20 {
-            if text.write_all(&chunk).is_err() {
-                return;
-            }
-        }
-    });
-    while large.pipes[2].is_some() {
-        large.read(0);
-        large.read(1);
-        large.read(2);
-        std::thread::yield_now();
+    let (mut reading, [mut uris, link, mut text]) =
+        reading(Instant::now() + Duration::from_secs(60));
+    uris.write_all(&[b'x'; 32]).unwrap();
+    text.write_all(&[b'x'; 33]).unwrap();
+    drop((uris, link, text));
+    for k in 0..3 {
+        reading.read(k);
     }
-    writer.join().unwrap();
-    assert!(large.done(Instant::now()));
-    assert_eq!(
-        large.items().1.text,
-        "",
-        "past the limit the text is dropped"
-    );
+    assert!(reading.done(Instant::now()));
+    assert_eq!(reading.bytes[0].len(), 32, "the limit itself is delivered");
+    assert!(reading.bytes[2].is_empty(), "one byte past it is not");
 }
