@@ -8,7 +8,7 @@ package struct ChromeIndex {
     static let keys = ["navigationBack", "inert", "popover", "popovertarget",
                        "contextTarget", "contextPopover", "href", "toolbarPlacement", "accessibilityKeyShortcuts", "menuPlacement",
                        "commandfor", "swipeContent", "id", "accessibilityLive", "autofocus", "listStyle",
-                       "accessibilityModal", "accessibilityDescribedBy", "accessibilityLabelledBy", "focusGuide", "statusBarStyle",
+                       "accessibilityModal", "accessibilityDescribedBy", "accessibilityActions", "accessibilityLabelledBy", "focusGuide", "statusBarStyle",
                        "systemBarsHidden", "tip", "draggable"]
     /// Props a pass reads for one value. Every list row has a role and every
     /// `main` or `header` a tag, so these are indexed by that value, never by
@@ -26,13 +26,18 @@ package struct ChromeIndex {
     /// changed since `takeChangedNames` — what resolves a name without
     /// reading every named view.
     private(set) package var named: [String: Set<UInt32>] = [:]
+    var inlineNamed: [String: Set<UInt32>] = [:]
+    func accessibilityID(_ name: String) -> UInt32? {
+        named[name]?.min() ?? inlineNamed[name]?.min()
+    }
+    var inlineActionOwners = Set<UInt32>()
     private var nameOf: [UInt32: String] = [:]
     private var changedNames = Set<String>()
     mutating func takeChangedNames() -> Set<String> {
         defer { changedNames.removeAll(keepingCapacity: true) }
         return changedNames
     }
-    private mutating func rename(_ id: UInt32, _ name: String?) {
+    mutating func rename(_ id: UInt32, _ name: String?) {
         let old = nameOf[id]
         guard old != name else { return }
         if let old {

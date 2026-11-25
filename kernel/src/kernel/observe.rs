@@ -104,6 +104,8 @@ pub(crate) struct Observations {
     passing_keyboard: IdSet<u32>,
     /// The bars (D12): which boxes are styled as one, and their slots' depths.
     pub(crate) bars: super::bar::Bars,
+    /// The navigation chrome beside each route, in points on the physical left and right.
+    side_bars: IdMap<u32, [f32; 2]>,
     /// What each owner's host reports of its margins (D8).
     pub(crate) margins: IdMap<u32, super::margins::OwnerMargins>,
     /// The native targets owners and the session report.
@@ -237,6 +239,7 @@ impl Observations {
         self.bars.forget(slot);
         self.keyboards.forget(slot);
         self.margins.remove(&slot);
+        self.side_bars.remove(&slot);
         self.segments.remove(&slot);
         self.stopped_reading(slot);
     }
@@ -258,6 +261,42 @@ impl Observations {
 }
 
 impl Kernel {
+    /// Set the physical widths of host navigation beside a route (LLP 1123 D9).
+    /// A change owes a layout only where the route has readers of this family.
+    pub fn set_route_bar_insets(
+        &mut self,
+        view: ViewId,
+        sides: [f32; 2],
+    ) -> Result<bool, KernelError> {
+        let slot = self
+            .arena
+            .slot_of(view)
+            .ok_or(LayoutError::UnknownView(view))?;
+        if !sides.iter().all(|v| v.is_finite() && *v >= 0.0) {
+            return Err(LayoutError::InvalidEnv.into());
+        }
+        let observations = &mut self.arena.observations;
+        if observations
+            .side_bars
+            .get(&slot)
+            .copied()
+            .unwrap_or_default()
+            == sides
+        {
+            return Ok(false);
+        }
+        if sides == [0.0; 2] {
+            observations.side_bars.remove(&slot);
+        } else {
+            observations.side_bars.insert(slot, sides);
+        }
+        Ok(
+            observations.forget_readings(&self.arena.readers.observed, Family::Bar.bits(), |o| {
+                o == Some(slot)
+            }),
+        )
+    }
+
     /// Set the band of the content owner whose root is `view`, top right
     /// bottom left in its block's space: its controller view's raw
     /// `safeAreaInsets` (LLP 1123 D2's owner update, D9), with Exact's
@@ -994,6 +1033,17 @@ fn measure_families(arena: &NodeArena, slot: u32, space: &Space, read: Component
                 depths[at + e] = (sides[e][1] - sides[e][0]).max(0.0);
             }
         }
+    }
+    if read & Family::Bar.bits() != 0 {
+        let [left, right] = space
+            .owner
+            .and_then(|owner| arena.observations.side_bars.get(&owner))
+            .copied()
+            .unwrap_or_default();
+        let at = Family::Bar as usize * 4;
+        let physical = [0.0, right, 0.0, left];
+        observed[at..at + 4].copy_from_slice(&physical.map(Some));
+        depths[at..at + 4].copy_from_slice(&physical);
     }
     let keyboard = super::keyboard::reads_keyboard(read)
         .then(|| super::keyboard::readings(arena, slot, space))

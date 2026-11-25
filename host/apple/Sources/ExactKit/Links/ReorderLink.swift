@@ -10,7 +10,7 @@ import UIKit
 #endif
 
 package protocol NativeListReorder: AnyObject {
-    func drop(before: UInt32?)
+    func queueDrop(before: UInt32?)
     func cancel()
 }
 
@@ -84,14 +84,21 @@ package enum ReorderLink {
 extension NodeView {
     /// A grouped grip's reorder actions (LLP 1094 D9).
     package override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
-        presenter?.reorders.actions(self) ?? super.accessibilityCustomActions()
+        // Reading an unset NSView custom-actions property during an AX request
+        // makes AppKit report kAXErrorFailure even when the handler succeeds.
+        let assigned = hasAssignedCustomActions ? super.accessibilityCustomActions() : nil
+        return appendingActions(to: presenter?.reorders.actions(self) ?? assigned)
+    }
+    package override func setAccessibilityCustomActions(_ actions: [NSAccessibilityCustomAction]?) {
+        hasAssignedCustomActions = actions != nil
+        super.setAccessibilityCustomActions(actions)
     }
 }
 #else
 extension NodeView {
     /// A grouped grip's reorder actions (LLP 1094 D9).
     package override var accessibilityCustomActions: [UIAccessibilityCustomAction]? {
-        get { presenter?.reorders.actions(self) ?? super.accessibilityCustomActions }
+        get { appendingActions(to: presenter?.reorders.actions(self) ?? super.accessibilityCustomActions) }
         set { super.accessibilityCustomActions = newValue }
     }
 }

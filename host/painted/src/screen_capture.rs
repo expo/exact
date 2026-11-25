@@ -8,6 +8,8 @@ use ibex2::stdlib::{app_fs::AppDirectories, fs};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+mod selection;
+
 /// A capture refusal, by DOMException name.
 pub type Failure = (&'static str, String);
 
@@ -19,6 +21,8 @@ pub struct Display {
     pub width: u32,
     /// Physical pixel height.
     pub height: u32,
+    /// Desktop CSS rectangle for an independent window still.
+    pub frame: Option<Json>,
     /// Read one opaque, top-down RGBA8 frame, without showing a window.
     pub read: Box<dyn FnOnce() -> Result<Vec<u8>, Failure> + Send>,
 }
@@ -231,10 +235,13 @@ fn encode_file(
     let (bytes, media_type) = encode(&pixels, encoding)?;
     let mut file = directories.stage(grants, path).map_err(file_error)?;
     file.write_all(&bytes).map_err(file_error)?;
-    let answer = json!({
+    let mut answer = json!({
         "path": path, "width": display.width, "height": display.height,
         "type": media_type, "screen": display.screen,
     });
+    if let Some(frame) = display.frame {
+        answer["frame"] = frame;
+    }
     // A JPEG decoder returns the lossy file's pixels.
     let image = if media_type == "image/png" {
         PublishedImage::new(&bytes, pixels)
@@ -258,7 +265,7 @@ fn encode(
 
 /// Fixture screens, with no native screen read. A drive can set `screens`
 /// to the same rectangles it prefers for `getScreenDetails`.
-pub fn fixtures(preferred: &Json) -> Result<Vec<Display>, Failure> {
+fn fixture_screens(preferred: &Json) -> Vec<Json> {
     let default = json!([{"left":0,"top":0,"width":1440,"height":900,
         "availLeft":0,"availTop":0,"availWidth":1440,"availHeight":900,
         "devicePixelRatio":2,"isPrimary":true,"isInternal":true,"label":"Agent display",
@@ -270,31 +277,86 @@ pub fn fixtures(preferred: &Json) -> Result<Vec<Display>, Failure> {
             .total_cmp(&coord(b, "left"))
             .then_with(|| coord(a, "top").total_cmp(&coord(b, "top")))
     });
-    let dimensions: Vec<_> = screens
+    screens
+}
+
+fn fixture_frame(screen: &Json) -> Json {
+    json!({"x":screen["left"], "y":screen["top"], "width":screen["width"], "height":screen["height"]})
+}
+
+fn primary(screens: &[Json]) -> usize {
+    screens
         .iter()
-        .map(|s| {
-            let scale = s["devicePixelRatio"].as_f64().unwrap_or(1.);
-            let dimension = |k: &str| (s[k].as_f64().unwrap_or(0.) * scale).round() as u32;
-            (dimension("width"), dimension("height"))
-        })
-        .collect();
-    sizes(dimensions.iter().copied())?;
-    Ok(screens
-        .into_iter()
-        .zip(dimensions)
-        .enumerate()
-        .map(|(index, (mut screen, (width, height)))| {
-            if screen.get("clientRect").is_none() {
-                screen["clientRect"] = Json::Null;
-            }
-            Display {
-                screen,
-                width,
-                height,
-                read: Box::new(move || Ok(card(index, width, height))),
-            }
-        })
-        .collect())
+        .position(|s| s["isPrimary"] == true)
+        .unwrap_or(0)
+}
+
+fn fixture_targets(
+    screens: &[Json],
+    args: &Json,
+    handle: Option<&str>,
+) -> Result<Vec<Display>, Failure> {
+    selection::validate(args)?;
+    let home = primary(screens);
+    if !args["window"].is_null()
+        && (handle.is_none() || args["window"].as_str() != handle || screens.is_empty())
+    {
+        return Err(selection::missing());
+    }
+    let mut targets = Vec::new();
+    for (index, screen) in screens.iter().enumerate() {
+        if !args["window"].is_null() && index != home {
+            continue;
+        }
+        if !args["screen"].is_null() && !selection::matches(screen, &args["screen"]) {
+            continue;
+        }
+        let scale = screen["devicePixelRatio"].as_f64().unwrap_or(1.);
+        let dimension = |k: &str| (screen[k].as_f64().unwrap_or(0.) * scale).round() as u32;
+        let (full_width, full_height) = (dimension("width"), dimension("height"));
+        let [left, top, width, height] =
+            selection::crop(screen, &args["rect"], full_width, full_height)?;
+        let cursor = (args["cursor"] == "always" && index == home).then(|| {
+            (
+                i64::from(full_width / 2) - i64::from(left),
+                i64::from(full_height / 2) - i64::from(top),
+            )
+        });
+        let mut screen = screen.clone();
+        if screen.get("clientRect").is_none() {
+            screen["clientRect"] = Json::Null;
+        }
+        targets.push(Display {
+            frame: (!args["window"].is_null()).then(|| fixture_frame(&screen)),
+            screen,
+            width,
+            height,
+            read: Box::new(move || {
+                let mut pixels = card(index, width, height);
+                if let Some((px, py)) = cursor.filter(|(x, y)| {
+                    (0..i64::from(width)).contains(x) && (0..i64::from(height)).contains(y)
+                }) {
+                    for dy in 0..12.min(i64::from(height) - py) {
+                        for dx in 0..(dy / 2 + 1).min(i64::from(width) - px) {
+                            let offset = (((py + dy) * i64::from(width) + px + dx) * 4) as usize;
+                            pixels[offset..offset + 3].fill(255);
+                        }
+                    }
+                }
+                Ok(pixels)
+            }),
+        });
+    }
+    if !args["screen"].is_null() && targets.len() != 1 {
+        return Err(selection::missing());
+    }
+    sizes(targets.iter().map(|t| (t.width, t.height)))?;
+    Ok(targets)
+}
+
+#[cfg(test)]
+fn fixtures(preferred: &Json) -> Result<Vec<Display>, Failure> {
+    fixture_targets(&fixture_screens(preferred), &Json::Null, None)
 }
 
 fn card(index: usize, width: u32, height: u32) -> Vec<u8> {
@@ -348,6 +410,7 @@ pub struct FixtureCapture {
     context: Context,
     captures: Captures,
     screens: Json,
+    handle: Option<String>,
 }
 
 impl Package for FixtureCapture {
@@ -356,6 +419,7 @@ impl Package for FixtureCapture {
             context,
             captures: Captures::default(),
             screens: Json::Null,
+            handle: None,
         }
     }
     fn later(&mut self, name: &str, args: &Json, preferred: Option<&Json>, reply: Reply) {
@@ -365,15 +429,44 @@ impl Package for FixtureCapture {
         if !self.context.agent() {
             return reply.error("NotSupportedError", None);
         }
+        let screens = fixture_screens(if self.screens.is_array() {
+            &self.screens
+        } else {
+            preferred
+                .and_then(|p| p.get("screens"))
+                .unwrap_or(&Json::Null)
+        });
         match name {
             "requestScreenRecording" => reply.send(json!({"available":true,"state":"granted"})),
-            "captureScreens" => match fixtures(if self.screens.is_array() {
-                &self.screens
-            } else {
-                preferred
-                    .and_then(|p| p.get("screens"))
-                    .unwrap_or(&Json::Null)
-            }) {
+            "getFrontmostWindow" | "getWindowAtPoint" => {
+                let Some(screen) = screens.get(primary(&screens)) else {
+                    return reply.error("NotFoundError", None);
+                };
+                let frame = fixture_frame(screen);
+                if name == "getWindowAtPoint" {
+                    let (Some(x), Some(y)) = (args["x"].as_f64(), args["y"].as_f64()) else {
+                        return reply.error("TypeError", None);
+                    };
+                    let Ok([left, top, w, h]) = selection::css_rect(&frame) else {
+                        return reply.error("NotFoundError", None);
+                    };
+                    if !(x >= left && y >= top && x < left + w && y < top + h) {
+                        return reply.error("NotFoundError", None);
+                    }
+                }
+                if self.handle.is_none() {
+                    let mut nonce = [0u8; 16];
+                    if let Err(e) = getrandom::fill(&mut nonce) {
+                        return reply.error("EncodingError", Some(&e.to_string()));
+                    }
+                    self.handle = Some(format!("{:032x}", u128::from_le_bytes(nonce)));
+                }
+                reply.send(
+                    json!({"handle":self.handle,"title":"Agent window","frame":frame,
+                                   "app":{"pid":1,"name":"Agent","processName":"Agent"}}),
+                );
+            }
+            "captureScreens" => match fixture_targets(&screens, args, self.handle.as_deref()) {
                 Ok(displays) => self.captures.start(&self.context, args, displays, reply),
                 Err((code, why)) => reply.error(code, Some(&why)),
             },
@@ -387,6 +480,7 @@ impl Package for FixtureCapture {
         self.captures.cancel(request);
     }
     fn destroy(&mut self) {
+        self.handle = None;
         self.captures = Captures::default();
     }
 }

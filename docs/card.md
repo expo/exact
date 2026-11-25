@@ -92,6 +92,7 @@ test steps (app.test.contract, docs/contract-grammar.md)
   expect text "id" == "…"
   expect tree has "id" (missing) · expect disabled "id" (enabled) · expect focused "id" · expect state draft == ""
   clock data · clock settle · clock +5000 · reload
+  tap "intro" drag 0 -170 over 400 hold 200
   back
   presence allow (cancel, fail, lockout, invalidated)
   fail fetch, pass fetch, drop stream "<prefix>"
@@ -183,7 +184,7 @@ a test, and verify: Empty storage per test. `clock data` lands replies, `clock s
     clock data
     reload
     expect text "n" == "1"
-composing a screen: One focal point. Emphasis is a part, not paint on a `button`; the main action is `buttonStyle="filled"`. Search: `input type="search"` in the `header`, live. A form is a grouped list (`grouped-form`); no rows, an `EmptyState`, its `button` indented under it.
+composing a screen: One focal point. Use a part for emphasis, `buttonStyle="filled"` for the main action and live `input type="search"` in the `header`. Forms use grouped lists (`grouped-form`). If empty, indent the `button` under `EmptyState`.
   use SummaryCard from "exact:content"
   column gap=16 padding=16
     SummaryCard(label="Streak", value="12", detail="days in a row", progress=none, symbol=none)
@@ -191,7 +192,7 @@ composing a screen: One focal point. Emphasis is a part, not paint on a `button`
       text "Log today"
 
 rules
-- An event's payload follows captured arguments: text for a field, `select` or date; a bool for a checkbox or switch; a number for a range; none for `press` and `submit`. `change=set(i.id)` calls `set(id, payload)`.
+- After captured arguments, fields, selects and dates pass text. Checkboxes and switches pass bools. Ranges pass numbers. `press` and `submit` pass none. `change=set(i.id)` calls `set(id, payload)`.
 
 ```contract
 component App

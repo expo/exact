@@ -96,7 +96,9 @@ extension NavigationBarIOSTests {
             waitFor("and reports it", cap: 5) { self.toggles(session) == edges }
         }
         let page = try node(session, "fixture")
-        let outside = page.convert(CGPoint(x: page.bounds.midX, y: page.bounds.maxY - 20), to: window)
+        let visible = page.convert(page.bounds, to: window).intersection(window.bounds)
+        guard !visible.isEmpty else { return XCTFail("the page has no visible area to tap") }
+        let outside = CGPoint(x: visible.midX, y: max(visible.midY, visible.maxY - 20))
 
         try openByTouch("closed>open;")
         try tap(outside)

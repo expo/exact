@@ -99,7 +99,8 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
             val event = JSONObject().put("tag", tag).put("data", record.opt("data") ?: JSONObject.NULL)
                 .put("title", record.optString("title")).put("body", body ?: JSONObject.NULL)
             val navigate = record.optString("navigate").takeIf { record.has("navigate") }
-            val tap = ExtensionContext.activation(app, "notifications", "notificationclick", JSONArray().put(tag).put(event), navigate)
+            val args = JSONArray().put(tag).put(event)
+            val tap = ExtensionContext.activation(app, "notifications", "notificationclick", args, navigate)
             val open = PendingIntent.getActivity(app, 0, distinct(tap, identifier, 0), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val channel = record.getString("channel")
             val builder = Notification.Builder(app, channel)
@@ -120,7 +121,12 @@ class NotificationsModule(context: ExtensionContext) : ExactExtension(context) {
             // The first frame makes the channels on a thread of its own; a post can come first, and the platform
             // drops a post whose channel does not exist.
             if (manager.getNotificationChannel(channel) == null) Channels.ensure(app)
+            val posted = manager.getNotificationChannel(channel)
+            val enabled = posted != null && manager.areNotificationsEnabled()
+                && posted.importance != NotificationManager.IMPORTANCE_NONE
+                && posted.group?.let { manager.getNotificationChannelGroup(it)?.isBlocked } != true
             manager.notify(identifier, ID, builder.build())
+            if (enabled) ExtensionContext.emitWhileVisible("notifications", "notificationshow", args, hold = 16)
         }
     }
 

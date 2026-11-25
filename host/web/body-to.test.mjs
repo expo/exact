@@ -14,6 +14,8 @@ import { spawnSync } from 'node:child_process';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
 const ROOT = resolve(import.meta.dirname, '../..');
+const built = spawnSync('cargo', ['build', '-q', '-p', 'exact-web-js'], { cwd: ROOT, encoding: 'utf8' });
+if (built.status !== 0) throw new Error(built.stderr || 'grant normalizer build failed');
 const BIG = (17 << 20) + 5;
 const byte = i => (i * 31 ^ i >> 9) & 255;
 
@@ -26,7 +28,7 @@ test('a wasm request uses the module host and retires with its incarnation', asy
     const bindings = {
       host, controllers, byTicket, forgettable, heldAsks: new Map(),
       loadPageNative: () => {}, localAssetURL: url => url, pageFile: () => null,
-      encoder: new TextEncoder(),
+      encoder: new TextEncoder(), now: () => 37,
       safelyFulfill: (...args) => replies.push(args),
       track: promise => tracked.push(promise),
       httpHelpers: async () => ({ request(op, context) {
@@ -46,6 +48,7 @@ test('a wasm request uses the module host and retires with its incarnation', asy
     expect(options.active()).toBe(false);
     expect(replies[0].slice(0, 4)).toEqual([7, 9, 0, 200]);
     expect(new TextDecoder().decode(replies[0][5])).toBe('reply');
+    expect(replies[0][7]).toBe(37);
     expect([controllers.size, byTicket.size, forgettable.size]).toEqual([0, 0, 0]);
   } finally {
     server.stop(true);
@@ -54,8 +57,6 @@ test('a wasm request uses the module host and retires with its incarnation', asy
 
 // The grant set as the build makes it (the exact-web-js normalizer).
 function normalized(spec) {
-  const built = spawnSync('cargo', ['build', '-q', '-p', 'exact-web-js'], { cwd: ROOT, encoding: 'utf8' });
-  if (built.status !== 0) throw new Error(built.stderr || 'grant normalizer build failed');
   const scratch = mkdtempSync(resolve(tmpdir(), 'exact-grants-'));
   try {
     writeFileSync(resolve(scratch, 'grants.txt'), spec);

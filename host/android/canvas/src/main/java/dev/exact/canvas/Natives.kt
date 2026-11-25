@@ -22,44 +22,6 @@ import java.io.File
 import kotlin.math.roundToInt
 
 /**
- * A native module's view (LLP 1024): the app registers one per module name. [reset] readies a released view for
- * another element (LLP 1068 §4.8 reuse); a module that returns false from it is destroyed instead.
- */
-interface NativeModule {
-    fun create(context: Context, props: JSONObject): View
-    /** [create] for element [id], the node's id: a package's view is made with it (LLP 1133.008 D8 item 1). */
-    fun create(context: Context, props: JSONObject, id: Int): View = create(context, props)
-    fun update(view: View, props: JSONObject)
-    /** Bound before the first update. Keep this callback only until the next binding; a retired one is ignored. */
-    fun events(view: View, emit: (String, String) -> Unit) {}
-    /** Activity callbacks; CREATE receives saved state, SAVE_INSTANCE_STATE fills its private bundle (LLP 1133.021). */
-    fun lifecycle(view: View, event: ViewLifecycle, state: android.os.Bundle? = null) {}
-    fun reset(view: View): Boolean = false
-    fun destroy(view: View) {}
-}
-
-/** The app's optional module roster, compiled from `modules/android` as `class exact.app.Modules`. */
-interface NativeModules {
-    val modules: Map<String, NativeModule>
-
-    companion object {
-        /** Resolve the app's roster at its first module view, so apps without one load nothing. */
-        fun load(): Map<String, NativeModule> = object : AbstractMap<String, NativeModule>() {
-            override val entries: Set<Map.Entry<String, NativeModule>> by lazy {
-                val type = try { Class.forName("exact.app.Modules") } catch (e: ClassNotFoundException) { return@lazy emptySet() }
-                try {
-                    (type.getDeclaredConstructor().newInstance() as NativeModules).modules.entries
-                } catch (e: Exception) {
-                    val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
-                    android.util.Log.e("exact", "native modules: exact.app.Modules could not be made: $cause")
-                    emptySet()
-                }
-            }
-        }
-    }
-}
-
-/**
  * A `video` or `audio` element's player (LLP 1042.001 D3). An APK whose plan has one links Media3's
  * ([ExactActivity.video]); the reader itself names no player, so an APK without one carries none of its code. A
  * player is lent to a node's [MediaRecord]: the record outlives it and is where it starts.
@@ -93,16 +55,6 @@ interface VideoPlayer {
     fun release()
 }
 
-/** Where a media element's player reports (LLP 1042.001 D3, D7): to exact2, keyed by the element's node. */
-interface MediaSink {
-    /** An event by HTML's name, with its payload ("" for none). */
-    fun event(name: String, payload: String)
-    /** The element's observed state, a JSON object: its row of `state.media`. */
-    fun state(json: String)
-    /** The current source's first frame is in the view. */
-    fun firstFrame()
-}
-
 /**
  * The platform elements of the stream (op 28: `video`, `iframe`, a native module's view). Each is a real Android view,
  * attached here at its device size so it runs as it would anywhere (a player's TextureView, a WebView, a MapLibre
@@ -110,17 +62,19 @@ interface MediaSink {
  * rows draw where the element is: it scrolls, clips and stacks with the content around it. A view that invalidates
  * (a video frame, a page, map tiles) has only its node recorded again, at the next frame.
  */
-class Natives(
+class Natives internal constructor(
     context: Context,
     private val root: () -> File,
-    private val modules: Map<String, NativeModule>,
+    private val hosted: HostedModules,
     private val videos: ((Context) -> VideoPlayer)? = null,
 ) : FrameLayout(context) {
+    constructor(context: Context, root: () -> File, modules: Map<String, NativeModule>, videos: ((Context) -> VideoPlayer)? = null)
+        : this(context, root, HostedModules(modules), videos)
+
+    private val modules get() = hosted.modules
     internal var keeps = false
         private set
-    /** Where a video's or a page's path is a file ([AssetRoot]). */
-    private val assets: File get() = root()
-
+    private val assets: File get() = root() // AssetRoot resolves local video and page paths.
     /** The running generation's assets moved (a signed update activated, LLP 1030.006 D1): every video and page is
      * opened again, so one at an unchanged path shows the new generation's file. */
     fun reroot() {
@@ -150,6 +104,7 @@ class Natives(
         /** A kept partition's navigation events and commands (LLP 1020.002 D2, D3). */
         var browser: FrameBrowser? = null
         var module: String? = null
+        var parkedState: String? = null
         var generation = 0
         var session = 0L
         var slot = 0
@@ -353,7 +308,7 @@ class Natives(
         }
     }
 
-    internal val lifecycle = HostedLifecycle()
+    internal val lifecycle get() = hosted.lifecycle
     private val elements = HashMap<Int, Element>()
     private val byView = HashMap<View, Element>()
     private val pool = HashMap<String, ArrayList<View>>()
@@ -365,8 +320,7 @@ class Natives(
     private val modulePool = (context as? android.app.Activity)?.intent?.getStringExtra("modpool")?.toIntOrNull() ?: MODULE_POOL
     private val webs = (context as? android.app.Activity)?.intent?.getStringExtra("webpool") != "0"
     private var scheduled = false
-    /** Asked to draw a frame after nodes were recorded again (no new stream). */
-    var frame: () -> Unit = {}
+    var frame: () -> Unit = {} // Draw again after nodes were recorded without a new stream.
 
     init {
         FrameAutomations.readers += this
@@ -406,6 +360,8 @@ class Natives(
     private var placing = false
     private val placeMatrix = android.graphics.Matrix()
     private val placePoint = FloatArray(2)
+    private val bounds = NativeBounds(this, { byView[it]?.hidden == true }) { v -> byView[v]?.takeIf { it.kind == 2 || it.kind == 5 }?.node }
+    internal fun accessible(on: Boolean) { bounds.enabled = on; bounds.place(origins) }
     private val placer = android.view.ViewTreeObserver.OnPreDrawListener { HostFacts.onScreen(display); placeControls(); placeFrames(); true }
 
     override fun onAttachedToWindow() {
@@ -414,16 +370,13 @@ class Natives(
     }
 
     override fun onDetachedFromWindow() {
+        bounds.clear()
         viewTreeObserver.removeOnPreDrawListener(placer)
         super.onDetachedFromWindow()
     }
 
-    /**
-     * A media controller's view is kept where its node is drawn, at each frame, as a text field's is (LLP 1042.001
-     * D4): the layer draws none of it, but its real bounds are where it is seen, so an accessibility service, its
-     * popups' anchor and its focus find it there. A controller none of whose rows is drawn is moved off the window
-     * and hidden from accessibility.
-     */
+    /** A media controller's real bounds anchor its popups, focus and accessibility at its drawing (LLP 1042.001 D4).
+     * A controller none of whose rows is drawn is moved off the window and hidden from accessibility. */
     private fun placeControls() {
         placing = true
         try {
@@ -494,7 +447,7 @@ class Natives(
         e.node.endRecording()
     }
 
-    /** The node id of the element whose view is [view] or holds it ([ExactForma]'s place), or null (main thread). */
+    /** The node hosting [view] or one of its ancestors ([ExactForma]’s place), on the main thread. */
     fun place(view: View): Int? {
         var v: View? = view
         while (v != null && v !== this) {
@@ -508,8 +461,7 @@ class Natives(
      * 1042.001 D11). */
     fun controller(id: Int): View? = elements[id]?.takeIf { it.kind == 0 && !it.parked }?.let { players[it.view]?.controller }
 
-    /** The reader's own view, which takes the window's focus back from a media controller (LLP 1042.001 D4). */
-    var reader: View? = null
+    var reader: View? = null // Takes the window focus back from a media controller (LLP 1042.001 D4).
 
     /**
      * A key that the view holding the focus did not take and that would move the focus out of a media controller
@@ -548,12 +500,12 @@ class Natives(
 
     /** A controller reports itself only where its node stands ([Access]), not again among the layer's views. */
     override fun onInitializeAccessibilityNodeInfo(info: android.view.accessibility.AccessibilityNodeInfo) {
+        bounds.place(origins, hierarchy = true)
         super.onInitializeAccessibilityNodeInfo(info)
         for (p in players.values) p.controller?.let { info.removeChild(it) }
     }
 
-    /** The node op 28 draws for [id] (main thread). */
-    fun node(id: Int): RenderNode? = elements[id]?.node
+    fun node(id: Int): RenderNode? = elements[id]?.node // The node op 28 draws, on the main thread.
 
     private val layerElements = HashMap<Int, HashSet<Int>>()
 
@@ -592,14 +544,17 @@ class Natives(
     private var placedVersion = -1L
     internal var origins: PaintedOrigins? = null
         set(value) {
+            bounds.clear()
             field?.tracksFrames = false
             field = value
             value?.tracksFrames = frameElements.isNotEmpty()
+            value?.hasHostedViews = hatched != null || NativeModules.available(modules)
             placedVersion = -1
         }
 
-    /** Position the real WebViews at their painted origins so WebView can compute its visible window between touches. */
+    /** Publish hosted accessibility bounds and position each WebView at its visible window between touches. */
     internal fun placeFrames() {
+        bounds.place(origins)
         if (frameElements.isEmpty()) return
         val graph = origins ?: return
         val version = graph.version
@@ -636,9 +591,9 @@ class Natives(
     internal fun transform(view: View, matrix: android.graphics.Matrix): Boolean =
         byView[view]?.let { origins?.transform(it.node, matrix) } == true
 
-    /** A view the app's Kotlin hatches host at a node (kind 5, LLP 1115.001.000 D4), made for this layer's
-     * activity: each element its own. */
+    /** Each element gets its own hatch view, made for this layer’s activity (LLP 1115.001.000 D4). */
     var hatched: ((Int, Context) -> View?)? = null
+        set(value) { field = value; origins?.hasHostedViews = value != null || NativeModules.available(modules) }
 
     /** Every element's node, for a row recorded on another thread: one map shared until an element comes or goes. */
     private var nodes: Map<Int, RenderNode>? = null
@@ -712,6 +667,7 @@ class Natives(
             if (kind == 2 && !e.parked) e.view.visibility = View.INVISIBLE
             e.hidden = true
             if (!e.parked && e.props != props) apply(e, props)
+            if (kind == 2 && !e.parked && (row == 0 || !lazy)) lifecycle.painted(e.view)
             if (!e.parked) play(e, false)
             return
         }
@@ -728,6 +684,7 @@ class Natives(
         if (e.parked && (row == 0 || audio && (w <= 0 || h <= 0))) unpark(e)
         if (e.parked) return
         if (e.props != props) apply(e, props)
+        if (kind == 2 && (row == 0 || !lazy)) lifecycle.painted(e.view)
         if (returned && (row == 0 || !lazy || !lazyVideo)) play(e, true)
         if (e.dirty && !e.buffers) record(e)
     }
@@ -763,7 +720,10 @@ class Natives(
      */
     fun near(show: Set<Int>, keep: Set<Int>, known: Set<Int>, seen: Set<Int> = show) {
         for (e in elements.values) if (!e.placed && e.rows.any { known.contains(it) }) e.placed = true
-        if (held > 0) for (e in elements.values) if (far(e, keep)) park(e)
+        if (held > 0) for (e in elements.values) {
+            if (far(e, keep)) park(e)
+            else if (e.kind == 2 && !e.parked && e.rows.isNotEmpty()) lifecycle.painted(e.view)
+        }
         if (waiting > 0) lend(show, seen)
         // A video plays while a row of its is in the view, as a list's player plays the row on screen: a row near
         // but out of view is prepared and paused on its first frame.
@@ -818,7 +778,10 @@ class Natives(
     /** The reader cannot tell where rows are: every element has its view. */
     fun everywhere() {
         lazy = false
-        for (e in elements.values) if (e.kind == 0 && !e.parked) play(e, !e.hidden)
+        for (e in elements.values) if (!e.parked) {
+            if (e.kind == 0) play(e, !e.hidden)
+            if (e.kind == 2 && e.rows.isNotEmpty()) lifecycle.painted(e.view)
+        }
         if (waiting == 0) return
         for (e in elements.values) if (e.parked) { unpark(e); if (e.kind == 0) play(e, !e.hidden) }
         frame()
@@ -921,6 +884,7 @@ class Natives(
 
     private fun park(e: Element) {
         e.browser?.end("the frame left the view")
+        if (e.kind == 2) e.parkedState = lifecycle.saveBeforeFirstPlacement(e.view)
         byView.remove(e.view)
         retire(e)
         e.view = standIn
@@ -937,7 +901,7 @@ class Natives(
         e.parked = false; waiting--
         if (pooled(e)) held++
         byView[view] = e
-        if (e.kind == 2) bindEvents(e)
+        if (e.kind == 2) { bindEvents(e); e.parkedState = null }
         e.browser?.automation?.attach()
         if (e.w > 0 && e.h > 0 || e.kind == 2) place(e)
         // Its page is loaded afresh from `src`: what was asked of it meanwhile moved nothing.
@@ -967,9 +931,11 @@ class Natives(
             if (e.directRows.isEmpty() && e.layers.isEmpty()) releaseUnpainted(e)
         }
     }
-
     private fun obtain(kind: Int, json: JSONObject, id: Int = 0): View? = when (kind) {
-        5 -> hatched?.invoke(id, context)?.also { (it.parent as? android.view.ViewGroup)?.removeView(it) }
+        5 -> hatched?.invoke(id, context)?.also {
+            (context as? ExactActivity)?.prepareHostedView()
+            (it.parent as? ViewGroup)?.removeView(it)
+        }
         3 -> if (buffered && !refused) View(context) else TextureView(context).apply { isOpaque = false }
         0 -> if (json.optBoolean("audio")) {
             val loan = BackgroundAudio.take(MediaAllocation(id, json))
@@ -988,6 +954,7 @@ class Natives(
             val module = modules[name]
             if (module == null) { android.util.Log.w("exact", "no native module $name"); null }
             else {
+                (context as? ExactActivity)?.prepareHostedView()
                 val key = "$name:$id:${json.optInt("slot")}:${json.optInt("generation")}"
                 val borrowed = if (lifecycle.awaiting(key)) null else pool[name]?.removeLastOrNull()
                 borrowed ?: module.create(context, moduleProps(json), id)
@@ -1197,10 +1164,11 @@ class Natives(
 
     private fun bindEvents(e: Element) {
         val binding = ++e.eventBinding
+        val main = android.os.Handler(context.mainLooper)
         modules[e.module]?.events(e.view) { kind, payload ->
             // Modules may reply asynchronously; retirement or reuse must never retarget that reply.
-            post {
-                if (elements[e.id] === e && !e.parked && e.eventBinding == binding) {
+            main.post {
+                if (!e.parked && e.eventBinding == binding) {
                     Exact.moduleEvent(e.id, e.slot, e.generation, e.session, kind, payload)
                 }
             }
@@ -1258,7 +1226,7 @@ class Natives(
 
     /** A kept partitioned frame's reporter. Its events go to the frame's allocation, which exact2 checks, so an
      * element let go for a new partition still ends its navigation in flight. */
-    private fun browser(e: Element) = FrameBrowser({ (e.view as? WebView)?.takeIf { !e.parked } }, { JSONObject(e.wanted).text("src") },
+    private fun browser(e: Element) = FrameBrowser({ (e.view as? WebView)?.takeIf { !e.parked } }, { JSONObject(e.wanted).text("src") }, { JSONObject(e.wanted).text("id") },
         { url -> if (!e.parked) loadFrame(e, url) }, { event, record -> android.os.Handler(context.mainLooper).post {
             Exact.frameEvent(e.id, e.slot, e.generation, e.session, event, record)
         } })
@@ -1326,7 +1294,6 @@ class Natives(
                     e.browser?.command(op) ?: refuseCommand(e, op.optString(1), json)
                 }
             }
-            // A hatch gave the node another view.
             5 -> if (old != null && old.optInt("gen") != json.optInt("gen")) {
                 val view = obtain(5, json, e.id) ?: return
                 byView.remove(e.view); removeView(e.view)
@@ -1337,8 +1304,8 @@ class Natives(
             }
             else -> {
                 modules[e.module]?.update(e.view, moduleProps(json))
-                // An update that asked for a layout (an ImageView's scale type takes effect only at its next layout)
-                // is laid out before it is recorded: at an unchanged size nothing else lays the view out first.
+                bounds.bind(e.view)
+                // At an unchanged size a module must still lay out a new scale type before its view is recorded.
                 if (e.view.isLayoutRequested && e.w > 0 && e.h > 0) place(e)
             }
         }
@@ -1417,14 +1384,16 @@ class Natives(
         nodes = null
         // The node is gone; a reader made again keeps the records of the nodes it will make again (LLP 1042.001 D1).
         if (e.kind == 0 && forget) MediaRecords.forget(e.id)
-        if (e.parked) { waiting--; e.node.discardDisplayList(); return }
+        if (e.parked) {
+            if (forget) e.parkedState?.let(lifecycle::forget)
+            waiting--; e.node.discardDisplayList(); return
+        }
         byView.remove(e.view)
         if (e.kind == 3) { if (e.buffers) { detachBuffers(e); e.wrapped.clear() } else unwindow(e) }
         retire(e, reuse)
         e.node.discardDisplayList()
     }
 
-    /** [e]'s view is kept for the next element of its kind, or goes. */
     private fun retire(e: Element, reuse: Boolean = true) {
         if (e.kind == 1 || e.kind == 2) retiring?.invoke(e.view)
         if (e === focusedFrame) frameFocused(e, false)
@@ -1468,6 +1437,34 @@ class Natives(
             removeView(e.view)
             (e.view as? WebView)?.destroy()
         }
+    }
+
+    /** The first paint on this reader names the live allocations again. [unrowed] retires any it omits. */
+    internal fun takeModuleViews(from: Natives) {
+        for (e in from.elements.values.filter { it.kind == 2 && !it.parked }) {
+            from.retiring?.invoke(e.view)
+            from.elements.remove(e.id)
+            from.byView.remove(e.view)
+            from.held--
+            e.rows.clear()
+            e.directRows.clear()
+            e.layers.clear()
+            e.placed = false
+            e.dirty = true
+            e.node.discardDisplayList()
+            lifecycle.awaitPaint(e.view)
+            elements[e.id] = e
+            byView[e.view] = e
+            held++
+            // Both layers share the window. A parent change within this frame keeps the subtree's window
+            // attachment, including nested compositions and the focused descendant.
+            e.view.dispatchStartTemporaryDetach()
+            if (e.view.hasFocus()) from.clearChildFocus(e.view)
+            from.detachViewFromParent(e.view)
+            attachViewToParent(e.view, -1, e.view.layoutParams)
+            e.view.dispatchFinishTemporaryDetach()
+        }
+        from.nodes = null
     }
 
     fun destroyAll(keepPlayback: Boolean = false) {

@@ -232,11 +232,7 @@ impl<D: DataSource> Runner<D> {
         if !tracked {
             return;
         }
-        let value = if value == "clear" {
-            Json::Null
-        } else {
-            value.clone()
-        };
+        let value = value.clone();
         let track = self
             .extensions
             .samples
@@ -406,66 +402,6 @@ impl<D: DataSource> Runner<D> {
             }
         }
         reading
-    }
-
-    /// Whether a value preferred for a sampled source is a reading, or a
-    /// list of steps each a reading with its `at`.
-    pub(in crate::runner) fn track_checked(
-        &self,
-        row: &ModulesRow,
-        value: &Json,
-    ) -> Result<(), String> {
-        let decl = self.samples_of(row).unwrap_or_default();
-        let counts = self.substitute(row)["counts"].clone();
-        let stamp = decl["stamp"].as_str().unwrap_or("timestamp");
-        let key = self.key(row);
-        let one = |reading: &Json| -> Result<(), String> {
-            let mut full = reading.clone();
-            let Some(map) = full.as_object_mut() else {
-                return Err(format!("{key}: a reading is an object"));
-            };
-            map.remove("at");
-            // What the runner adds to a count's step, or a batch's.
-            let added: Vec<(&str, Json)> = match counts.is_object() {
-                true => ["since", "stamp"]
-                    .iter()
-                    .filter_map(|f| Some((counts[*f].as_str()?, json!(0))))
-                    .filter(|(f, _)| !map.contains_key(*f))
-                    .collect(),
-                false => vec![
-                    (stamp, json!(0)),
-                    (decl["cursor"].as_str().unwrap_or("sequence"), json!(0)),
-                    ("samples", json!([])),
-                    ("dropped", json!(0)),
-                    ("interrupted", json!(false)),
-                ]
-                .into_iter()
-                .chain(decl["since"].as_str().map(|f| (f, json!(0))))
-                .collect(),
-            };
-            for (field, value) in added {
-                map.insert(field.into(), value);
-            }
-            let ty = self.plan.sources[row.source.0 as usize].ty;
-            self.answer_json(ty, &key, &full)
-                .map(|_| ())
-                .map_err(|e| e.to_string())
-        };
-        match value {
-            Json::Array(steps) if !steps.is_empty() => {
-                for step in steps {
-                    if !step["at"].as_f64().is_some_and(|at| at >= 0.0) {
-                        return Err(format!(
-                            "{key}: each step has `at`, ms after it is preferred"
-                        ));
-                    }
-                    one(step)?;
-                }
-                Ok(())
-            }
-            Json::Array(_) => Err(format!("{key}: a track has at least one step")),
-            reading => one(reading),
-        }
     }
 
     /// The fastest frequency an app-origin consumer of `stream` reads it at:
@@ -755,5 +691,60 @@ impl<D: DataSource> Runner<D> {
             .and_then(|s| self.sibling(row, s))
             .and_then(|s| self.value_of(&s));
         value.is_some_and(|v| error_code(&v).is_none() && v["available"] == false)
+    }
+}
+
+pub(super) fn track_checked(
+    sub: &Json,
+    key: &str,
+    check: impl Fn(&Json) -> Result<(), String>,
+    value: &Json,
+) -> Result<(), String> {
+    let decl = &sub["samples"];
+    let counts = &sub["counts"];
+    let stamp = decl["stamp"].as_str().unwrap_or("timestamp");
+    let one = |reading: &Json| -> Result<(), String> {
+        let mut full = reading.clone();
+        let Some(map) = full.as_object_mut() else {
+            return Err(format!("{key}: a reading is an object"));
+        };
+        map.remove("at");
+        // What the runner adds to a count's step, or a batch's.
+        let added: Vec<(&str, Json)> = match counts.is_object() {
+            true => ["since", "stamp"]
+                .iter()
+                .filter_map(|f| Some((counts[*f].as_str()?, json!(0))))
+                .filter(|(f, _)| !map.contains_key(*f))
+                .collect(),
+            false => vec![
+                (stamp, json!(0)),
+                (decl["cursor"].as_str().unwrap_or("sequence"), json!(0)),
+                ("samples", json!([])),
+                ("dropped", json!(0)),
+                ("interrupted", json!(false)),
+            ]
+            .into_iter()
+            .chain(decl["since"].as_str().map(|f| (f, json!(0))))
+            .collect(),
+        };
+        for (field, value) in added {
+            map.insert(field.into(), value);
+        }
+        check(&full)
+    };
+    match value {
+        Json::Array(steps) if !steps.is_empty() => {
+            for step in steps {
+                if !step["at"].as_f64().is_some_and(|at| at >= 0.0) {
+                    return Err(format!(
+                        "{key}: each step has `at`, ms after it is preferred"
+                    ));
+                }
+                one(step)?;
+            }
+            Ok(())
+        }
+        Json::Array(_) => Err(format!("{key}: a track has at least one step")),
+        reading => one(reading),
     }
 }

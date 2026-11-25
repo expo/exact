@@ -120,7 +120,7 @@ final class NavigationBarIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else {
             throw missing("scene", "the system keyboard needs the hosted iOS test app")
         }
-        let session = try fixture("keyboard-pop", module: false)
+        let session = try fixture("keyboard-pop", module: false, keyboardWindow: true)
         let p = session.presenter
         let view = try XCTUnwrap(session.view)
         let nav = try XCTUnwrap(p.navigationHost.primaryNavigation)
@@ -153,7 +153,7 @@ final class NavigationBarIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else {
             throw missing("scene", "the system keyboard needs the hosted iOS test app")
         }
-        let session = try fixture("keyboard-gesture-ownership", module: false)
+        let session = try fixture("keyboard-gesture-ownership", module: false, keyboardWindow: true)
         let p = session.presenter
         let nav = try XCTUnwrap(p.navigationHost.primaryNavigation)
         p.press(try node(session, "open-focused-plain").id)
@@ -169,7 +169,7 @@ final class NavigationBarIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else {
             throw missing("scene", "native keyboard insets need the hosted app responder lifecycle")
         }
-        let session = try fixture("keyboard-inset-contributions", module: false)
+        let session = try fixture("keyboard-inset-contributions", module: false, keyboardWindow: true)
         let p = session.presenter
         let root = try XCTUnwrap(p.root.subviews.first as? NodeView)
         p.apply(wireBatch([["op": "props", "id": Int(root.id), "set": ["interactiveWidget": "resizes-visual"]]]))
@@ -299,7 +299,7 @@ final class NavigationBarIOSTests: XCTestCase {
 
     /// One decision's pushes, swipe, cancel and native pop (`testScreenResponderDecisionsSurviveCompletedAndCancelledPops`).
     private func screenResponderDecision(_ decision: String, legacy: Bool) throws {
-        let session = try fixture("keyboard-screen-\(decision)", module: false)
+        let session = try fixture("keyboard-screen-\(decision)", module: false, keyboardWindow: true)
         let p = session.presenter
         let nav = try XCTUnwrap(p.navigationHost.primaryNavigation)
         let opener = try node(session, "open-focused-plain").id
@@ -1067,8 +1067,11 @@ final class NavigationBarIOSTests: XCTestCase {
         XCTAssertFalse(detail.navigationItem.hidesBackButton, "the route has an enabled Back control")
         XCTAssertEqual(home.navigationItem.backButtonDisplayMode, .minimal, "the authored Back is a symbol alone")
         XCTAssertEqual(detail.navigationItem.rightBarButtonItems?.count, 1, "Back is never an item; Compose is")
-        let bar = nav.navigationBar
+        let bar = nav.navigationBar, title = try node(session, "title-detail")
         if !bar.traitCollection.placesVerticalBar {
+            let titleFrame = try XCTUnwrap(bar.titleFrame("Detail"))
+            try assertBarLayout(agent, title, bar, region: titleFrame)
+            try assertInlineTitleCopies(agent, title, in: bar, at: titleFrame)
             let back = try node(session, "back")
             let control = try XCTUnwrap(bar.drawnBackControl()), frame = control.convert(control.bounds, to: bar)
             XCTAssertGreaterThanOrEqual(frame.width, 20)
@@ -1079,9 +1082,36 @@ final class NavigationBarIOSTests: XCTestCase {
             bar.addSubview(overlay)
             bar.addSubview(search)
             search.layoutIfNeeded()
+            let sameTitle = UILabel(frame: control.bounds)
+            sameTitle.text = "Detail"
+            control.addSubview(sameTitle)
             try assertBarLayout(agent, back, control)
+            overlay.isUserInteractionEnabled = true
+            XCTAssertNil(bar.drawnBackControl(), "either leading control could be Back")
+            let clipped = UIView(frame: CGRect(x: 70, y: 0, width: 10, height: 10))
+            clipped.clipsToBounds = true
+            let duplicate = UILabel(frame: CGRect(x: 12, y: 2, width: 46, height: 21))
+            duplicate.text = "Detail"
+            clipped.addSubview(duplicate)
+            bar.addSubview(clipped)
+            try assertBarLayout(agent, title, bar, region: titleFrame)
+            let drawn = try XCTUnwrap(bar.drawnTitleLabel("Detail"))
+            drawn.isHidden = true
+            control.isUserInteractionEnabled = false
+            XCTAssertNil(bar.drawnTitleLabel("Detail"), "a disabled Back still owns its caption")
+            control.isUserInteractionEnabled = true
+            drawn.isHidden = false
+            clipped.removeFromSuperview()
+            sameTitle.removeFromSuperview()
             search.removeFromSuperview()
             overlay.removeFromSuperview()
+            let saved = detail.navigationItem.rightBarButtonItems
+            detail.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "View the complete record", style: .plain, target: nil, action: nil)
+            bar.layoutIfNeeded()
+            let shifted = try XCTUnwrap(bar.titleFrame("Detail"))
+            XCTAssertLessThan(shifted.midX, bar.bounds.midX - 1)
+            try assertBarLayout(agent, title, bar, region: shifted)
+            detail.navigationItem.rightBarButtonItems = saved
         }
         // Under a fixed bar an authored scrollTop is the browser's: the scroll
         // view sits below the bar, so 80 is an offset of 80 and 0 is 0.

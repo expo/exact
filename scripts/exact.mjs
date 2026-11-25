@@ -346,7 +346,7 @@ export async function setup({check = false, platform = null, device = false, app
     // The nightly builds the web's wasm: with -Zbuild-std from rust-src for size, and without it (a --wasm dev build) from its own wasm32 std.
     // A game's web bake lints its logic on the same nightly, so it takes clippy too.
     run('rustup', ['toolchain', 'install', WEB_TOOLCHAIN, '--profile', 'minimal', '--component', 'rust-src', '--component', 'llvm-tools', '--component', 'clippy', '--target', 'wasm32-unknown-unknown']);
-    webToolchainEnv(process.env); // Fetch the nightly standard library's locked sources too.
+    webToolchainEnv(process.env, { recheck: true }); // Fetch the nightly standard library's locked sources too.
     if (output('wasm-bindgen', ['--version']) !== `wasm-bindgen ${bindgen}`)
       run('cargo', [`+${pin.channel}`, 'install', 'wasm-bindgen-cli', '--version', bindgen, '--locked', '--force']);
     if (binaryenVersion(output('wasm-opt', ['--version'])) !== BINARYEN) {
@@ -415,6 +415,7 @@ export async function setup({check = false, platform = null, device = false, app
   const report = prebuilt ? rows : [...(platform ? await platformReport(platform, rows, { device, hermes }) : rows), cratesRow()];
   if (platform === 'android') report.push(...rows.filter(row => row.name === 'Android JDK JIT'));
   printReport(report);
+  if (check && process.platform === 'darwin' && !device && (!platform || platform === 'ios')) await (await import('../host/apple/touches.mjs')).checkSimulatorAccessibility(appDir, app?.id);
   const missing = report.filter(row => row.required && !row.ok);
   if (missing.length) throw new Error(`${missing.map(row => row.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or differ; run exact setup (it installs what it can and names the rest)`);
   if (prebuilt) { console.log('Web tools ready for this app.'); return; }

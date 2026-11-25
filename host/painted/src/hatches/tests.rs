@@ -454,7 +454,19 @@ fn a_recording_is_at_most_4096_ops_and_256_kb_and_the_latest_published_wins() {
     shared.stop(after);
     assert!(shared.live(ticket) && !shared.live(after) && !shared.live(observer));
     assert!(
-        shared.due_afters(100.0).is_empty(),
+        shared.due_afters(100.0, usize::MAX).is_empty(),
         "a stopped after never fires"
     );
+}
+
+#[test]
+fn a_capped_seek_keeps_the_rest_of_its_due_timers() {
+    let mut timers = super::session::Afters::default();
+    for (due, token) in [(2., 3), (1., 1), (1., 2), (3., 4)] {
+        timers.add(due, token);
+    }
+    assert_eq!(timers.take_due(2., 1), [1]);
+    assert_eq!(timers.next(), Some(1.));
+    assert_eq!(timers.take_due(2., usize::MAX), [2, 3]);
+    assert_eq!(timers.next(), Some(3.));
 }

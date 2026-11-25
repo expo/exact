@@ -188,9 +188,10 @@ impl Linked {
         // does its own I/O and plays CSS's transitions (LLP 1047.001 D2); its
         // numerals roll in the runtime's text (LLP 1077 D15), its date
         // and time controls are its own pickers (LLP 1115.001.000 D2), and
-        // it shows no tips (LLP 1035.006.000 D4); a drag out of the page is
-        // the browser's own, its data the page's glue (LLP 1094.000 D6):
-        // nothing to link for any of them.
+        // it shows no tips (LLP 1035.006.000 D4); the browser supplies a
+        // drag's events and data, out of the page and into it, and the page's
+        // glue delivers them (LLP 1094.000 D6, LLP 1094.001 D3): nothing to
+        // link for any of them.
         let mut uses = Uses::NONE
             .with(Capability::GroupedLists)
             .with(Capability::Io)
@@ -199,7 +200,8 @@ impl Linked {
             .with(Capability::Dates)
             .with(Capability::Sqlite)
             .with(Capability::Tips)
-            .with(Capability::DragOut);
+            .with(Capability::DragOut)
+            .with(Capability::DragIn);
         if self.markup.is_some() {
             uses = uses.with(Capability::Markdown);
         }
@@ -420,6 +422,19 @@ mod tests {
             batch.contains("text-shadow:0px 0px 1px #000000ff"),
             "{batch}"
         );
+    }
+
+    #[test]
+    fn a_drop_target_boots_with_the_documents_its_files_arrive_as() {
+        let plan = contract::compile(
+            "component A\n  state drops = 0\n  action took(e: DragEvent)\n    drops = drops + 1\n  view\n    column drop=took\n",
+        )
+        .unwrap();
+        crate::link(crate::Linked {
+            documents: true,
+            ..crate::Linked::CORE
+        });
+        Host::boot(&plan.encode(), (), Default::default(), "/").unwrap();
     }
 
     #[test]

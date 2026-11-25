@@ -103,7 +103,8 @@ extension NavigationHost {
             guard let holder = tabPanels.isEmpty ? primaryNavigation : routesStack(index),
                   (holder as? UINavigationController)?.transitionCoordinator == nil, !routesInFlight(wanted) else { continue }
             // A split shows its columns' routes as one stack (`SplitIOS.shown`)
-            let held = tabPanels.isEmpty ? split?.shown ?? holder.stackRoutes : holder.stackRoutes
+            let columns = tabPanels.isEmpty ? split : tabSplits[tabPanels[index]]
+            let held = columns?.shown ?? holder.stackRoutes
             if !held.elementsEqual(wanted, by: ===) {
                 return (tabPanels.isEmpty ? "the stack" : "tab \(index)") + Self.routerStackDifference(held: held, wanted: wanted)
             }
@@ -179,7 +180,7 @@ extension NavigationHost {
         for op in batch.ops where op.op == .destroy {
             guard let c = controllers[op.id], c.viewIfLoaded?.window != nil else { continue }
             c.freeze()
-            c.retiringRoot = c.node
+            c.retire()
             retiringRoutes.add(c)
         }
     }

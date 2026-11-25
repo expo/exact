@@ -171,7 +171,7 @@ mod boot;
 mod clip;
 #[cfg(any(target_os = "android", test))]
 #[path = "canvas/clock.rs"]
-mod clock;
+pub(crate) mod clock;
 #[cfg(target_os = "android")]
 #[path = "canvas/codec.rs"]
 mod codec;
@@ -183,6 +183,9 @@ pub use colors::colors;
 #[cfg(any(target_os = "android", test))]
 #[path = "canvas/device.rs"]
 mod device;
+#[cfg(target_os = "android")]
+#[path = "canvas/drop.rs"]
+mod drop;
 #[cfg(target_os = "android")]
 #[path = "canvas/field.rs"]
 pub mod field;

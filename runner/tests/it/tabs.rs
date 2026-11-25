@@ -405,6 +405,8 @@ fn a_tab_needs_navigation_for_a_stack_or_a_header() {
         button \"B\" role=\"tab\" aria-controls=\"panel-b\" aria-selected=(selected == \"b\") press=pick(\"b\") testId=\"tab-b\"
         button \"C\" role=\"tab\" aria-controls=\"panel-c\" aria-selected=(selected == \"c\") press=pick(\"c\") testId=\"tab-c\"
         button \"D\" role=\"tab\" aria-controls=\"panel-d\" aria-selected=(selected == \"d\") press=pick(\"d\") testId=\"tab-d\"
+        button \"F\" role=\"tab\" aria-controls=\"panel-f\" aria-selected=(selected == \"f\") press=pick(\"f\")
+        button \"G\" role=\"tab\" aria-controls=\"panel-g\" aria-selected=(selected == \"g\") press=pick(\"g\")
         button \"E\" role=\"tab\" aria-controls=\"panel-e\" aria-selected=(selected == \"e\") press=pick(\"e\") testId=\"tab-e\"
       column role=\"tabpanel\" id=\"panel-a\" testId=\"panel-a\"
         for p in pages key=p
@@ -424,11 +426,22 @@ fn a_tab_needs_navigation_for_a_stack_or_a_header() {
             header
               text \"D\" role=\"heading\" aria-level=1
           text \"d\"
+      column role=\"tabpanel\" id=\"panel-f\" testId=\"panel-f\"
+        column navigationKey=\"f\"
+          if selected == \"f\"
+            row role=\"toolbar\" toolbarPlacement=\"bottom\"
+              button \"Action\"
+      column role=\"tabpanel\" id=\"panel-g\" testId=\"panel-g\"
+        column navigationKey=\"g\"
+          for p in pages key=p
+            if selected == p
+              row role=\"toolbar\" toolbarPlacement=\"bottom\"
+                button \"Other\"
       column role=(selected == \"none\" ? \"region\" : \"tabpanel\") id=\"panel-e\" testId=\"panel-e\"
         column navigationKey=\"e\"
           text \"e\"
 ";
-    let r = boot(source, "/");
+    let r = exact_runner::page::Platform::Ios.boot(|| boot(source, "/"));
     let tree = agent::tree(&r);
     assert!(!unopened(&tree, "a") && unopened(&tree, "b") && unopened(&tree, "c"));
     let id = |name: &str| -> u32 {
@@ -439,10 +452,23 @@ fn a_tab_needs_navigation_for_a_stack_or_a_header() {
             .parse()
             .unwrap()
     };
-    let panels = [id("a"), id("b"), id("c"), id("d"), id("e")];
+    let panels = [
+        id("a"),
+        id("b"),
+        id("c"),
+        id("d"),
+        id("e"),
+        id("f"),
+        id("g"),
+    ];
     assert_eq!(
         r.panels_need_navigation(&panels),
-        [true, false, true, true, true]
+        [true, false, true, true, true, true, true]
+    );
+    let tv = exact_runner::page::Platform::Tvos.boot(|| boot(source, "/"));
+    assert_eq!(
+        tv.panels_need_navigation(&panels),
+        [true, false, true, true, true, false, false]
     );
     let tab: u32 = nodes(&tree)
         .into_iter()

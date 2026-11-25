@@ -7,7 +7,18 @@ import QuartzCore
 extension NodeView {
     func updateHeightDragGesture() {
         if presenter?.heightBindings[id]?.target != nil, heightRecognizer == nil {
-            let pan = TimedPan(target: self, action: #selector(heightDragging(_:)))
+            let pan: TimedPan
+            #if os(iOS)
+            if kind == "list" || kind == "scroll" {
+                let sheet = SheetScrollPan(target: self, action: #selector(heightDragging(_:)))
+                sheet.owner = self
+                pan = sheet
+            } else {
+                pan = TimedPan(target: self, action: #selector(heightDragging(_:)))
+            }
+            #else
+            pan = TimedPan(target: self, action: #selector(heightDragging(_:)))
+            #endif
             #if !os(tvOS)
             pan.maximumNumberOfTouches = 1
             #endif
@@ -25,12 +36,21 @@ extension NodeView {
     func heightShouldBegin(_ gesture: UIGestureRecognizer) -> Bool? {
         guard gesture === heightRecognizer, let pan = gesture as? UIPanGestureRecognizer else { return nil }
         let velocity = pan.velocity(in: window), translation = pan.translation(in: window)
+        #if os(iOS)
+        if let sheet = pan as? SheetScrollPan, sheet.tracksScroll, !sheet.admits(velocity == .zero ? translation : velocity) { return false }
+        #endif
         return SwipeInput.allows(self) && HeightDragDirection.accepts(
             velocityX: Double(velocity.x), velocityY: Double(velocity.y),
             translationX: Double(translation.x), translationY: Double(translation.y))
             && presenter?.heightBindings[id]?.target != nil
     }
     @objc func heightDragging(_ pan: UIPanGestureRecognizer) {
+        #if os(iOS)
+        if let sheet = pan as? SheetScrollPan, sheet.tracksScroll {
+            sheet.track()
+            return
+        }
+        #endif
         // UIKit's translation starts where it recognized the pan, past its
         // hysteresis. The drag is the finger's travel since it touched down:
         // the hold begins there and then, and steps to the finger in its

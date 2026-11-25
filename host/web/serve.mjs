@@ -41,7 +41,7 @@ const PUBLIC_FILES = new Set([
 // `/gpu/`: each declared GPU module's wasm and its glue (LLP 1009 D6).
 // `/stages/`: the core's staged capabilities, named by digest (LLP 1047.000).
 // `/modules/`: the app's native-module web executor (LLP 1024 D3), page code.
-const PUBLIC_TREES = ['/assets/', '/deck/', '/shaders/', '/rust/', '/gpu/', '/stages/', '/modules/', '/plans/', '/activities/'];
+const PUBLIC_TREES = ['/assets/', '/deck/', '/shaders/', '/rust/', '/gpu/', '/stages/', '/packages/', '/modules/', '/plans/', '/activities/'];
 const REQUIRED_BUILD_FILES = ['app.plan', 'app.wasm', 'exact.json', 'glue.js', 'navigation.js', 'index.html', 'manifest.json'];
 // An origin's update streams (LLP 1030.000 D7; `scripts/origin.mjs`):
 // `.exact/blobs/<sha256>` and `.exact/<channel>/<compatibility id>/…` — the
@@ -543,7 +543,7 @@ export function listPublicFiles(dist) {
     }
     out.push(asset.name);
   }
-  for (const tree of ['rust', 'gpu', 'stages']) if (existsSync(resolve(root, tree))) for (const name of listStaticFiles(resolve(root, tree))) out.push(`${tree}/${name}`);
+  for (const tree of ['rust', 'gpu', 'stages', 'packages']) if (existsSync(resolve(root, tree))) for (const name of listStaticFiles(resolve(root, tree))) out.push(`${tree}/${name}`);
   return out.sort();
 }
 
@@ -574,18 +574,20 @@ function planAppId(bytes) {
 // The schema is the wire authority; no table offsets or row sizes are mirrored here.
 const planFormat = JSON.parse(readFileSync(new URL('../../plan/tables/format.json', import.meta.url), 'utf8'));
 const planFormatDigest = createHash('sha256').update('EXACT.PLAN.FORMAT.SHA256.V1\0').update(canonicalBytes(planFormat)).digest().subarray(0, 8);
-const renderPolicies = planFormat.enums.RenderPolicy;
+
 const routeBuffers = new WeakMap();
 function planRoutes(bytes) {
-  if (routeBuffers.has(bytes)) return routeBuffers.get(bytes);
-  let routes;
-  try { routes = planRouteTable(bytes); } catch { routes = []; } // An absent or unfinished build admits no additional document paths.
-  routeBuffers.set(bytes, routes);
-  return routes;
+  if (!routeBuffers.has(bytes)) {
+    try { routeBuffers.set(bytes, planRouteTable(bytes)); } catch { routeBuffers.set(bytes, []); }
+  }
+  return routeBuffers.get(bytes);
 }
-/** The plan's route table, in its order: each route's name, pattern, render policy and whether it is the
- * `notfound` route (`routes.json`, LLP 1153 D3). Throws on a plan this format does not read. */
-export function planRouteTable(bytes) {
+/** The ordered routes for routes.json (LLP 1153 D3). An unknown plan format throws. */
+export const planRouteTable = bytes => planRows(bytes, 'routes', ['name', 'pattern', 'render', 'notfound']);
+/** The package views placed by this plan, including tags in conditional branches. */
+export const planViewTable = bytes => planRows(bytes, 'views', ['tag', 'extension', 'package', 'displayed', 'binds']);
+
+function planRows(bytes, name, fields) {
   if (bytes.subarray(0, 4).toString() !== 'EXPL' || bytes.readUInt32LE(4) !== planFormat.formatVersion
     || !bytes.subarray(8, 16).equals(planFormatDigest)) throw new Error('unknown plan format');
   let at = 32;
@@ -593,26 +595,20 @@ export function planRouteTable(bytes) {
   const u32 = () => bytes.readUInt32LE(take(4));
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const string = (length = u32()) => decoder.decode(bytes.subarray(take(length), at));
-  for (const field of planFormat.header) {
-    if (field.codec === 'string') string(); else take(4);
-  }
+  for (const { codec } of planFormat.header) if (codec === 'string') string(); else take(4);
   const count = u32(), strings = [], members = [], owners = [];
   for (let i = 0; i < count; i++) {
     const tag = u32();
     if (tag < 0x80000000) {
       strings.push(string(tag));
-      continue;
+    } else {
+      const owner = tag - 0x80000000, member = u32();
+      if (owner > owners.length || member > members.length) throw new Error('unknown qualified plan name');
+      if (member === members.length) members.push(string());
+      if (owner === owners.length) owners.push(bytes.subarray(take(32), at).toString('hex'));
+      strings.push(`${members[member]}#${owners[owner]}`);
     }
-    const owner = tag - 0x80000000, member = u32();
-    if (owner > owners.length || member > members.length) throw new Error('unknown qualified plan name');
-    if (member === members.length) members.push(string());
-    if (owner === owners.length) owners.push(bytes.subarray(take(32), at).toString('hex'));
-    strings.push({member, owner});
   }
-  const routeString = index => {
-    const ref = strings[index];
-    return typeof ref === 'object' ? `${members[ref.member]}#${owners[ref.owner]}` : ref;
-  };
   take(u32()); // code pool
   take(u32()); // data pool
   const width = codec => {
@@ -623,27 +619,30 @@ export function planRouteTable(bytes) {
     if (['f64', 'range', 'code', 'bytes'].includes(kind)) return 8;
     throw new Error('unknown plan codec');
   };
-  const routes = [];
+  const rows = [];
   for (const table of planFormat.tables) {
     const count = u32(), size = table.fields.reduce((n, field) => n + width(field.codec), 0);
     const start = take(count * size);
-    if (table.name !== 'routes') continue;
+    if (table.name !== name) continue;
     for (let i = 0; i < count; i++) {
       let offset = start + i * size;
       const row = {};
       for (const field of table.fields) {
-        if (field.name === 'name') row.name = routeString(bytes.readUInt32LE(offset));
-        if (field.name === 'pattern') row.pattern = routeString(bytes.readUInt32LE(offset));
-        if (field.name === 'render') { row.render = renderPolicies[bytes[offset]]; if (!row.render) throw new Error('invalid route render policy'); }
-        if (field.name === 'notfound') { const value = bytes[offset]; if (value > 1) throw new Error('invalid route'); row.notfound = !!value; }
+        if (fields.includes(field.name)) {
+          let value;
+          if (field.codec === 'str') value = strings[bytes.readUInt32LE(offset)];
+          else if (field.codec === 'bool') value = [false, true][bytes[offset]];
+          else value = planFormat.enums[field.codec.slice(5)][bytes[offset]];
+          if (value === undefined) throw new Error(`invalid ${name} ${field.name}`);
+          row[field.name] = value;
+        }
         offset += width(field.codec);
       }
-      if (typeof row.pattern !== 'string' || typeof row.name !== 'string') throw new Error('invalid route pattern');
-      routes.push(row);
+      rows.push(row);
     }
   }
   if (at !== bytes.length) throw new Error('trailing plan bytes');
-  return routes;
+  return rows;
 }
 const servedRoutePlans = new Map();
 function routeFileIdentity(dist, files) {

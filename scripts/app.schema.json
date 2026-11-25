@@ -3,19 +3,13 @@
   "$id": "exact2/app.json",
   "title": "The app manifest (LLP 1030 D2, 1030.000 D7): the W3C Web App Manifest's own keys, plus `app` (identity), `host.<platform>` (host metadata bake generates per platform), and `deploy` (policy, never identity).",
   "type": "object",
-  "required": [
-    "name",
-    "app"
-  ],
+  "required": ["name", "app"],
   "properties": {
     "extra": {
       "type": "object",
       "description": "App configuration imported by app.ts. extra.eas.projectId is the EAS project used by @exact/push/expo.",
       "properties": {
-        "eas": {
-          "type": "object",
-          "properties": { "projectId": { "type": "string", "minLength": 1 } }
-        }
+        "eas": {"type": "object", "properties": {"projectId": {"type": "string", "minLength": 1}}}
       }
     },
     "frame_health": {
@@ -46,51 +40,34 @@
     "launch": {
       "type": "array",
       "description": "Modules whose launch parts run at launch, in this order. Each names modules/<name>/ in the app, else in exact2. Every declared host must have a part: apple/launch/*.swift, web/service.js, linux/launch.rs or android/launch.rs. Apple service sources in apple/service/*.swift become lib<name>_service.dylib, loaded after startup. A missing part refuses the build.",
-      "items": {
-        "type": "string",
-        "pattern": "^[a-z][a-z0-9]*$"
-      }
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*$"}
     },
     "moduleConfig": {
       "type": "object",
       "description": "Per-module settings a launch part reads at launch (the Info.plist key ExactModuleConfig): module name to its settings.",
-      "additionalProperties": {
-        "type": "object"
-      }
+      "additionalProperties": {"type": "object"}
     },
     "modules": {
       "type": "array",
-      "description": "The native-module roster (LLP 1024 D1): the custom-element tags the app's module artifact serves (modules/apple/*.swift beside libexact_modules.dylib on Apple, modules/web/index.js on the web). A hyphenated tag in the Contract that this list lacks is bake-unknown-module.",
-      "items": {
-        "type": "string",
-        "pattern": "^[a-z][a-z0-9_]*(-[a-z][a-z0-9_]*)+$"
-      }
+      "description": "The native-module roster (LLP 1024 D1): the custom-element tags the app's module artifact serves (modules/apple/*.swift beside libexact_modules.dylib on Apple, exact.app.Modules in modules/android on Android, modules/web/index.js on the web). A hyphenated tag in the Contract that this list lacks is bake-unknown-module.",
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(-[a-z][a-z0-9_]*)+$"}
     },
     "data": {
       "type": "array",
       "description": "The app's data-* words (LLP 1075.003 Q2), without the `data-`: real attributes on the web, read by the app module's hatches on Apple through typed keys the build writes from this list (ExactDataKey). A data-* attribute in the Contract that this list lacks is bake-undeclared-data.",
-      "items": {
-        "type": "string",
-        "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$"
-      }
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$"}
     },
     "hatches": {
       "description": "The app's hatch words (LLP 1075.003.000 Q1): a node marked hatch=\"word\" hands its platform object (a UIView or NSView and its kind's UIKit or AppKit object, or a DOM element) to the app module's element hatch, which compares it with typed keys the build writes from this list (ExactHatchKey). A hatched node leaves the host's fast path. A hatch word in the Contract that this list lacks is bake-undeclared-hatch. Either a list of words, each handled on every platform the app builds, or an object giving each word the platforms whose module handles it, as {\"avatar\": [\"ios\", \"macos\", \"web\"]} (LLP 1075.003.000.001 §5): a platform the word does not name shows the node and never calls a hatch for it, and its typed keys leave the word out.",
       "oneOf": [
         {
           "type": "array",
-          "items": {
-            "type": "string",
-            "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$"
-          }
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$"}
         },
         {
           "type": "object",
           "propertyNames": { "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$" },
-          "additionalProperties": {
-            "type": "array",
-            "items": { "enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"] }
-          }
+          "additionalProperties": {"type": "array", "items": {"enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"]}}
         }
       ]
     },
@@ -103,20 +80,20 @@
         "additionalProperties": { "type": "string" }
       }
     },
+    "development": {
+      "description": "Development-trust overrides for declared package keys, by interface and target.",
+      "type": "object", "additionalProperties": false, "properties": { "packages": { "$ref": "#/properties/packages" } }
+    },
     "packages": {
       "description": "Each package's configuration by target (LLP 1133.021 §9 item 7), as its interface's `config` declares it, read at bake and written into the bundle: {\"@exact/maps\": {\"web\": {\"tiles\": \"https://tile.openstreetmap.org/{z}/{x}/{y}.png\"}, \"android\": {\"apiKey\": {\"env\": \"EXACT_GOOGLE_MAPS_API_KEY\"}}}}. A key typed `env` names the environment variable that holds its value, never the value; the value still ships inside the app.",
-      "type": "object",
-      "additionalProperties": {
-        "type": "object",
-        "propertyNames": { "enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"] },
+      "type": "object", "additionalProperties": {
+        "type": "object", "propertyNames": { "enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"] },
         "additionalProperties": {
-          "type": "object",
-          "additionalProperties": {
+          "type": "object", "additionalProperties": {
             "anyOf": [
               { "type": ["string", "number", "boolean"] },
               { "type": "object", "properties": { "env": { "type": "string" } }, "required": ["env"], "additionalProperties": false }
-            ]
-          }
+            ] }
         }
       }
     },
@@ -127,20 +104,14 @@
         "shaderRoots": {
           "type": "array",
           "description": "Additional flat WGSL directories relative to app.json; duplicate stems and symlinks are refused.",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
+          "items": {"type": "string", "minLength": 1}
         },
         "shaderPreludes": {
           "type": "object",
           "description": "Ordered WGSL library paths relative to app.json, prepended to the named shader stem before reflection and packaging. A game may also name the renderer's own sets: exact-game-render:frame, exact-game-render:material and exact-game-render:material_shadows.",
           "additionalProperties": {
             "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1
-            }
+            "items": {"type": "string", "minLength": 1}
           }
         },
         "modules": {
@@ -148,10 +119,7 @@
           "description": "GPU artifacts beside the primary <app>-gpu (LLP 1009 D6): module name -> the surface names it registers. Module m is the crate <app>-gpu-m, loaded the first time a canvas of one of its surfaces is on screen; every other surface is the primary's.",
           "additionalProperties": {
             "type": "array",
-            "items": {
-              "type": "string",
-              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
-            }
+            "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
           }
         }
       }
@@ -211,10 +179,7 @@
       "type": "string",
       "minLength": 1
     },
-    "short_name": {
-      "description": "The name where space is short: a home screen, a dock tile.",
-      "type": "string"
-    },
+    "short_name": {"description": "The name where space is short: a home screen, a dock tile.", "type": "string"},
     "version": {
       "description": "The version people see, which `exact share` gives its builds as iOS's `CFBundleShortVersionString` and AppDrop shows; without it a shared build takes `EXACT_VERSION`, else 0.1.0. Other builds take theirs from `EXACT_VERSION`.",
       "type": "string",
@@ -245,10 +210,7 @@
       "description": "The web app's identity (the web manifest's `id`); usually the same as `app.id`.",
       "type": "string"
     },
-    "start_url": {
-      "description": "The web page the installed app opens at; `/` for most apps.",
-      "type": "string"
-    },
+    "start_url": {"description": "The web page the installed app opens at; `/` for most apps.", "type": "string"},
     "handle_links": {
       "description": "Whether the app's web addresses open the installed app (LLP 1038 D8; the WICG handle_links explainer's values). `preferred`: links to app.origin within `scope`, and to each `scope_extensions` origin, open the app on iOS, iPadOS, macOS and Android, which the build signs and registers; the web build writes app.origin's association files and prints every other origin's. `not-preferred` and `auto` (what an absent member means) claim nothing natively. These navigation claims exclude Exact's /.exact/ paths and https auth callbacks. Android registers native auth callbacks separately for the browser return; the web popup's /.exact/auth/callback stays in the browser.",
       "enum": ["auto", "preferred", "not-preferred"]
@@ -270,26 +232,14 @@
     "display": {
       "description": "How an installed web app is framed: `standalone` (its own window, no browser chrome) is the usual choice.",
       "type": "string",
-      "enum": [
-        "fullscreen",
-        "standalone",
-        "minimal-ui",
-        "browser"
-      ]
+      "enum": ["fullscreen", "standalone", "minimal-ui", "browser"]
     },
     "display_override": {
       "description": "The Web App Manifest's display modes in order of preference, each used where the platform takes it, else the next, else `display`. `window-controls-overlay` puts the page under the title bar beside the window's controls: Chrome's in an installed app; on macOS, an app without routes gets the platform's tall unified title row, an empty toolbar over the page, and `env(titlebar-area-*)` its area beside the traffic lights (LLP 1039 D8).",
       "type": "array",
       "items": {
         "type": "string",
-        "enum": [
-          "window-controls-overlay",
-          "tabbed",
-          "fullscreen",
-          "standalone",
-          "minimal-ui",
-          "browser"
-        ]
+        "enum": ["window-controls-overlay", "tabbed", "fullscreen", "standalone", "minimal-ui", "browser"]
       }
     },
     "orientation": {
@@ -403,25 +353,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "kind",
-          "component",
-          "state",
-          "preview"
-        ],
+        "required": ["kind", "component", "state", "preview"],
         "properties": {
-          "kind": {
-            "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-          },
-          "component": {
-            "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-          },
-          "state": {
-            "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-          },
+          "kind": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
+          "component": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
+          "state": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
           "title": {
             "type": "string",
             "minLength": 1,
@@ -435,14 +371,8 @@
             "description": "Literal platform label; no control characters."
           },
           "preview": { "type": "object" },
-          "push": {
-            "type": "boolean",
-            "default": false
-          },
-          "frequent": {
-            "type": "boolean",
-            "default": false
-          },
+          "push": {"type": "boolean", "default": false},
+          "frequent": {"type": "boolean", "default": false},
           "android": {
             "type": "object",
             "additionalProperties": false,
@@ -463,10 +393,7 @@
     "watch": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "source",
-        "component"
-      ],
+      "required": ["source", "component"],
       "properties": {
         "sync": {
           "type": "object", "additionalProperties": false,
@@ -494,39 +421,14 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "kind",
-          "families",
-          "component",
-          "props",
-          "refresh",
-          "preview"
-        ],
+        "required": ["kind", "families", "component", "props", "refresh", "preview"],
         "properties": {
-          "kind": {
-            "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-          },
-          "title": {
-            "type": "string",
-            "description": "Gallery display name; defaults to the humanised kind."
-          },
-          "description": {
-            "type": "string",
-            "description": "Gallery description; defaults to the humanised kind."
-          },
-          "component": {
-            "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-          },
-          "props": {
-            "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-          },
-          "refresh": {
-            "type": "string",
-            "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"
-          },
+          "kind": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
+          "title": {"type": "string", "description": "Gallery display name; defaults to the humanised kind."},
+          "description": {"type": "string", "description": "Gallery description; defaults to the humanised kind."},
+          "component": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
+          "props": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
+          "refresh": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$"},
           "families": {
             "type": "array",
             "minItems": 1,
@@ -555,12 +457,7 @@
             "minItems": 1,
             "uniqueItems": true,
             "items": {
-              "enum": [
-                "accessoryCircular",
-                "accessoryRectangular",
-                "accessoryInline",
-                "accessoryCorner"
-              ]
+              "enum": ["accessoryCircular", "accessoryRectangular", "accessoryInline", "accessoryCorner"]
             },
             "description": "Optional watchOS families; defaults to the accessory families in families."
           },
@@ -626,7 +523,7 @@
     "open_url": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What `openURL` hands to the system beyond http, https, mailto and tel (LLP 1133.000 §2, open a URL). Each scheme is one another app registers, such as an editor's (`vscode`, `zed`, `jetbrains`): web, macOS and iOS open a URL of a declared scheme with whatever the system has registered for it (a browser asks first); an undeclared one stays refused. Under the agent the open is journaled, not performed. Schemes the hosts handle themselves (`http`, `https`, `mailto`, `tel`, `doc`, `app`, `app-settings`) or that run or read content (`file`, `filesystem`, `javascript`, `vbscript`, `data`, `blob`, `about`, `view-source`, `jar`, `intent`, `content`) are refused here, and refused again by the hosts. `sms` may be declared: it opens the system's message composer.",
+      "description": "What `openURL` hands to the system beyond http, https, mailto and tel (LLP 1133.000 §2, open a URL). A scheme can belong to this app or another app, such as an editor's (`vscode`, `zed`, `jetbrains`): web, Android, macOS and iOS open a URL of a declared scheme with whatever the system has registered for it. On the web the browser asks first. An undeclared scheme stays refused. Under the agent the open is journaled, not performed. Schemes the hosts handle themselves (`http`, `https`, `mailto`, `tel`, `doc`, `app`, `app-settings`) or that run or read content (`file`, `filesystem`, `javascript`, `vbscript`, `data`, `blob`, `about`, `view-source`, `jar`, `intent`, `content`) are refused here, and refused again by the hosts. `sms` may be declared: it opens the system's message composer.",
       "properties": {
         "schemes": {
           "type": "array",
@@ -694,90 +591,35 @@
           {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "kind",
-              "title",
-              "symbol",
-              "tool"
-            ],
+            "required": ["kind", "title", "symbol", "tool"],
             "properties": {
               "kind": {
                 "type": "string",
                 "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
                 "description": "The control's stable identity, unique among the app's controls regardless of case. A person's placed control keeps it, so renaming it removes the placed one."
               },
-              "title": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
-                "description": "What the system labels the button with."
-              },
-              "symbol": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
-                "description": "An SF Symbol name for the button's glyph."
-              },
-              "description": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
-                "description": "What the controls gallery says about it."
-              },
+              "title": {"type": "string", "minLength": 1, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])", "description": "What the system labels the button with."},
+              "symbol": {"type": "string", "minLength": 1, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])", "description": "An SF Symbol name for the button's glyph."},
+              "description": {"type": "string", "minLength": 1, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])", "description": "What the controls gallery says about it."},
               "tool": {
                 "type": "string",
                 "minLength": 1,
                 "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
                 "description": "A tool line's name: a press calls it with no arguments, passing none for each optional parameter. It needs no `intents.tools` face, may not destroy, and may take no required parameter."
               },
-              "authentication": {
-                "enum": [
-                  "required",
-                  "local",
-                  "always"
-                ],
-                "description": "Who may press a tool control on a locked device (LLP 1133.023 D10): `required` (the default) asks for the person, `local` for this device unlocked, `always` runs it locked."
-              }
+              "authentication": {"enum": ["required", "local", "always"], "description": "Who may press a tool control on a locked device (LLP 1133.023 D10): `required` (the default) asks for the person, `local` for this device unlocked, `always` runs it locked."}
             }
           },
           {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "kind",
-              "title",
-              "symbol",
-              "url"
-            ],
+            "required": ["kind", "title", "symbol", "url"],
             "properties": {
-              "kind": {
-                "type": "string",
-                "pattern": "^[A-Za-z][A-Za-z0-9_-]*$",
-                "description": "The control's stable identity, unique among the app's controls regardless of case. A person's placed control keeps it, so renaming it removes the placed one."
-              },
-              "title": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
-                "description": "What the system labels the button with."
-              },
-              "symbol": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
-                "description": "An SF Symbol name for the button's glyph."
-              },
-              "description": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
-                "description": "What the controls gallery says about it."
-              },
-              "url": {
-                "type": "string",
-                "pattern": "^/(?!/)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])",
-                "description": "A location one of the navigation root's routes matches: a press opens the app there."
-              }
+              "kind": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]*$", "description": "The control's stable identity, unique among the app's controls regardless of case. A person's placed control keeps it, so renaming it removes the placed one."},
+              "title": {"type": "string", "minLength": 1, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])", "description": "What the system labels the button with."},
+              "symbol": {"type": "string", "minLength": 1, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])", "description": "An SF Symbol name for the button's glyph."},
+              "description": {"type": "string", "minLength": 1, "pattern": "^(?=.*\\S)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])", "description": "What the controls gallery says about it."},
+              "url": {"type": "string", "pattern": "^/(?!/)[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029]*(?![\\s\\S])", "description": "A location one of the navigation root's routes matches: a press opens the app there."}
             }
           }
         ]
@@ -791,12 +633,7 @@
         "entities": {
           "type": "object",
           "description": "Each content-index kind a parameter may name, with its type's name as the system shows it (D9).",
-          "additionalProperties": {
-            "type": "object",
-            "required": ["title"],
-            "additionalProperties": false,
-            "properties": { "title": { "type": "string", "minLength": 1 } }
-          }
+          "additionalProperties": {"type": "object", "required": ["title"], "additionalProperties": false, "properties": {"title": {"type": "string", "minLength": 1}}}
         },
         "tools": {
           "type": "object",
@@ -844,20 +681,11 @@
       "description": "The W3C Web App Manifest's file handling declaration: what this app opens. The Apple bake derives `CFBundleDocumentTypes` from it (LLP 1033 D1), and a browser reads the same key.",
       "items": {
         "type": "object",
-        "required": [
-          "action",
-          "accept"
-        ],
+        "required": ["action", "accept"],
         "properties": {
           "action": { "type": "string" },
           "name": { "type": "string" },
-          "accept": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "array",
-              "items": { "type": "string" }
-            }
-          }
+          "accept": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}}
         },
         "additionalProperties": false
       }
@@ -882,10 +710,7 @@
               "items": {
                 "type": "object",
                 "required": ["name", "accept"],
-                "properties": {
-                  "name": { "type": "string", "minLength": 1 },
-                  "accept": { "oneOf": [{ "type": "string" }, { "type": "array", "minItems": 1, "items": { "type": "string" } }] }
-                },
+                "properties": {"name": {"type": "string", "minLength": 1}, "accept": {"oneOf": [{"type": "string"}, {"type": "array", "minItems": 1, "items": {"type": "string"}}]}},
                 "additionalProperties": false
               }
             }
@@ -902,16 +727,8 @@
           },
           "additionalProperties": false
         },
-        "android": {
-          "type": "object",
-          "properties": { "mimeTypes": { "type": "array", "items": { "type": "string", "pattern": "^[a-z*]+/[a-z0-9.+*-]+$" } } },
-          "additionalProperties": false
-        },
-        "windows": {
-          "type": "object",
-          "properties": { "dataFormats": { "type": "array", "items": { "enum": ["Text", "Uri", "StorageItems", "Bitmap", "Html", "Rtf"] } } },
-          "additionalProperties": false
-        }
+        "android": {"type": "object", "properties": {"mimeTypes": {"type": "array", "items": {"type": "string", "pattern": "^[a-z*]+/[a-z0-9.+*-]+$"}}}, "additionalProperties": false},
+        "windows": {"type": "object", "properties": {"dataFormats": {"type": "array", "items": {"enum": ["Text", "Uri", "StorageItems", "Bitmap", "Html", "Rtf"]}}}, "additionalProperties": false}
       },
       "additionalProperties": false
     },
@@ -931,10 +748,7 @@
     "app": {
       "description": "The app's identity on every platform (LLP 1030 D2). Required.",
       "type": "object",
-      "required": [
-        "id",
-        "name"
-      ],
+      "required": ["id", "name"],
       "properties": {
         "id": {
           "description": "The reverse-DNS identity: the bundle identifier on Apple, the update stream's app id, and app.ts's `appId`. `exact new` writes com.example.<name>-<six hex digits>, unique to the app; change it before distributing.",
@@ -942,27 +756,14 @@
           "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z][a-zA-Z0-9-]*)+$",
           "x-hint": "every dot-separated part starts with a letter, since the Linux app id and the default Android package require that (Apple alone allows a leading digit). Put a letter before a part that starts with a digit, as in com.example.x2048, and set host.android.id when Android needs a different package."
         },
-        "name": {
-          "description": "The name a native host shows: the menu bar, the app switcher, Finder.",
-          "type": "string",
-          "minLength": 1
-        },
-        "origin": {
-          "description": "The https origin a web build is served from, when it signs people in (OAuth callbacks are derived from it).",
-          "type": "string",
-          "pattern": "^https?://"
-        },
-        "command": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9-]*$",
-          "description": "The name this app answers to on the command line: `exact install <app>` writes a shim by this name (LLP 1033 D2). Default: the app directory's name."
-        }
+        "name": {"description": "The name a native host shows: the menu bar, the app switcher, Finder.", "type": "string", "minLength": 1},
+        "origin": {"description": "The https origin a web build is served from, when it signs people in (OAuth callbacks are derived from it).", "type": "string", "pattern": "^https?://"},
+        "command": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "The name this app answers to on the command line: `exact install <app>` writes a shim by this name (LLP 1033 D2). Default: the app directory's name."}
       },
       "additionalProperties": false
     },
     "host": {
-      "description": "Per-platform host settings the build bakes into each native app; a platform's key may be empty.",
-      "type": "object",
+      "type": "object", "description": "Per-platform host settings the build bakes into each native app; a platform's key may be empty.",
       "properties": {
         "ios": {
           "description": "iOS: `minimumOS` (default 17.0), `deviceFamily` (iphone, ipad), and the keys below.",
@@ -1009,19 +810,13 @@
               "minLength": 1,
               "description": "Primary Icon Composer .icon directory, relative to app.json and inside the app. Compiled with the app's catalogs; conflicts with an .appiconset in those catalogs are refused. Absent: use icons. The watch app takes it when its icon.json lists watchOS under supported-platforms.circles; tvOS never does."
             },
-            "minimumOS": {
-              "description": "The oldest iOS the app runs on, as \"17.0\"; never below 17.0.",
-              "type": "string"
-            },
+            "minimumOS": {"description": "The oldest iOS the app runs on, as \"17.0\"; never below 17.0.", "type": "string"},
             "launchImage": {
-              "description": "A picture the launch screen centres on `background_color` (UILaunchScreen's UIImageName), drawn `width` points wide: the app's first frame drawn ahead of it, so the launch shows what the first frame shows (Expo's splash `image` and `imageWidth`). A PNG in the app's directory; light and dark alike.",
+              "description": "A picture the launch screen centres on `background_color` (UILaunchScreen's UIImageName), drawn `width` points wide: the app's first frame drawn ahead of it, so the launch shows what the first frame shows (Expo's splash `image` and `imageWidth`). A PNG in the app's directory; the same picture in both appearances unless color_scheme_dark.src names another.",
               "type": "object",
               "required": ["src", "width"],
               "additionalProperties": false,
-              "properties": {
-                "src": { "type": "string", "pattern": "\\.png$", "description": "The PNG, relative to the app's directory." },
-                "width": { "type": "number", "minimum": 1, "description": "Its width on the launch screen, in points; its height follows its aspect." }
-              }
+              "properties": {"color_scheme_dark": {"$ref": "#/$defs/darkLaunchImage"}, "src": {"type": "string", "pattern": "\\.png$", "description": "The PNG, relative to the app's directory."}, "width": {"type": "number", "minimum": 1, "description": "Its width on the launch screen, in points; its height follows its aspect."}}
             },
             "optimize": {
               "enum": ["speed", "size", "balanced"],
@@ -1031,27 +826,12 @@
               "type": "boolean",
               "description": "Draw UIKit in its design before iOS 26 (no Liquid Glass), as Apple's UIDesignRequiresCompatibility key did; iOS 27 ignores that key, so the link records the iOS 18 SDK, the last before the new design, and every UIKit behaviour keyed on a later SDK is off. App Store Connect requires uploads to be built with a recent SDK and reads the recorded one. Absent or false: the SDK the app is built with."
             },
-        "link": {
-          "type": "array",
-          "description": "Linker arguments for the app's native-module artifact (LLP 1024), one argument each, for what an archive in modules/apple/*.xcframework needs but cannot declare, such as -lc++.",
-          "items": { "type": "string" }
-        },
+        "link": {"type": "array", "description": "Linker arguments for the app's native-module artifact (LLP 1024), one argument each, for what an archive in modules/apple/*.xcframework needs but cannot declare, such as -lc++.", "items": {"type": "string"}},
             "deviceFamily": {
               "type": "array",
-              "items": {
-                "type": "string",
-                "enum": [
-                  "iphone",
-                  "ipad"
-                ]
-              }
+              "items": {"type": "string", "enum": ["iphone", "ipad"]}
             },
-            "localNetworking": {
-              "type": [
-                "string",
-                "boolean"
-              ]
-            },
+            "localNetworking": {"type": ["string", "boolean"]},
             "appTransportSecurity": {
               "description": "App Transport Security keys the build writes into the iOS Info.plist's `NSAppTransportSecurity`, and into tvOS's, which has no WebKit and takes only `allowsArbitraryLoads`. Absent: no key, and ATS refuses cleartext `http://` to a named host. `localNetworking` adds `NSAllowsLocalNetworking` beside these, unless `allowsArbitraryLoads` is set.",
               "type": "object",
@@ -1085,52 +865,25 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "id": {
-                  "description": "The clip's bundle identifier. Absent: `<app id>.Clip`.",
-                  "type": "string",
-                  "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z][a-zA-Z0-9-]*)+$"
-                },
-                "name": {
-                  "description": "The clip's display name and bundle name. Absent: the app's.",
-                  "type": "string",
-                  "minLength": 1
-                }
+                "id": {"description": "The clip's bundle identifier. Absent: `<app id>.Clip`.", "type": "string", "pattern": "^[a-zA-Z][a-zA-Z0-9-]*(\\.[a-zA-Z][a-zA-Z0-9-]*)+$"},
+                "name": {"description": "The clip's display name and bundle name. Absent: the app's.", "type": "string", "minLength": 1}
               }
             },
-            "urlSchemes": {
-              "type": "array",
-              "description": "Further URL schemes the bundle registers. Not http or https: those are protocol_handlers' pair.",
-              "items": { "type": "string" }
-            },
+            "urlSchemes": {"type": "array", "description": "Further URL schemes the bundle registers. Not http or https: those are protocol_handlers' pair.", "items": {"type": "string"}},
             "alternativeNames": { "$ref": "#/$defs/alternativeNames" },
             "queriesSchemes": {
               "description": "Other apps' URL schemes a native module may ask `canOpenURL` about, to see whether the app is installed (Info.plist's LSApplicationQueriesSchemes): iOS answers false for any scheme not listed, and honours at most 50. A scheme as RFC 3986 writes it, without `:`.",
               "type": "array",
               "maxItems": 50,
-              "items": {
-                "type": "string",
-                "pattern": "^[A-Za-z][A-Za-z0-9+.-]*$"
-              }
+              "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9+.-]*$"}
             },
             "nfc": {
               "description": "The NFC tag reader session's lists (LLP 1133.035 D11), written to Info.plist: `iso7816Identifiers`, the ISO 7816 application identifiers (hex) a tag session selects, and `felicaSystemCodes`, the FeliCa system codes it polls for (never the wildcard FF). Core NFC reports no ISO 7816 or FeliCa tag the app does not list.",
               "type": "object",
               "additionalProperties": false,
               "properties": {
-                "iso7816Identifiers": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "pattern": "^([0-9A-Fa-f]{2}){5,16}$"
-                  }
-                },
-                "felicaSystemCodes": {
-                  "type": "array",
-                  "items": {
-                    "type": "string",
-                    "pattern": "^(?![Ff]{4}$)[0-9A-Fa-f]{4}$"
-                  }
-                }
+                "iso7816Identifiers": {"type": "array", "items": {"type": "string", "pattern": "^([0-9A-Fa-f]{2}){5,16}$"}},
+                "felicaSystemCodes": {"type": "array", "items": {"type": "string", "pattern": "^(?![Ff]{4}$)[0-9A-Fa-f]{4}$"}}
               }
             },
             "team": { "type": "string" }
@@ -1152,15 +905,8 @@
               "type": "object",
               "additionalProperties": false
             },
-            "presenter": {
-              "enum": ["native", "painted"],
-              "description": "Absent: native. Painted builds the app’s <macos-crate>-painted binary as a benchmark carrier; distribution is refused until LLP 1149’s accessibility gate."
-            },
-            "icon": {
-              "type": "string",
-              "minLength": 1,
-              "description": "Primary Icon Composer .icon directory, relative to app.json and inside the app. Compiled with the app's catalogs; conflicts with an .appiconset in those catalogs are refused. Absent: use icons."
-            },
+            "presenter": {"enum": ["native", "painted"], "description": "Absent: native. Painted builds the app’s <macos-crate>-painted binary as a benchmark carrier; distribution is refused until LLP 1149’s accessibility gate."},
+            "icon": {"type": "string", "minLength": 1, "description": "Primary Icon Composer .icon directory, relative to app.json and inside the app. Compiled with the app's catalogs; conflicts with an .appiconset in those catalogs are refused. Absent: use icons."},
             "resources": {
               "description": "Native-only resource trees, copied under Contents with modes and internal relative symlinks preserved, before the bundle is sealed (a build stamp placed here is inside the seal). Excluded from plan assets and TypeScript capture; changing them requires a new binary. A `from` under a directory Exact owns is refused, as `host.ios.resources`' is. Mach-O code is signed with the bundle; a helper executable needing a hardened-runtime exception names it in the source's grants, as `runtime.allow-jit Helpers/node/bin/node`; the app's own executable takes none (LLP 1069.008 D9).",
               "type": "array",
@@ -1172,10 +918,7 @@
                 }
               }
             },
-            "minimumOS": {
-              "description": "The oldest macOS the app runs on, as \"14.0\"; never below 14.0.",
-              "type": "string"
-            },
+            "minimumOS": {"description": "The oldest macOS the app runs on, as \"14.0\"; never below 14.0.", "type": "string"},
             "activationPolicy": {
               "enum": ["regular", "accessory"],
               "description": "\"accessory\": a menu-bar app (LLP 1133.025 D6), written as LSUIElement: no Dock tile and no menu bar of its own, and every launch opens no window; a `-exact-menu=\"status\"` button is how the person reaches it, and `focus()` shows its window. Absent: regular."
@@ -1201,11 +944,7 @@
               "type": "boolean",
               "description": "Draw AppKit in its design before macOS 26 (no Liquid Glass bezels or control metrics), as Apple's UIDesignRequiresCompatibility key did; macOS 27 ignores that key, so the link records the macOS 15 SDK, the last before the new design, and every AppKit behaviour keyed on a later SDK is off. App Store Connect requires uploads to be built with a recent SDK and reads the recorded one. Absent or false: the SDK the app is built with."
             },
-        "link": {
-          "type": "array",
-          "description": "Linker arguments for the app's native-module artifact (LLP 1024), one argument each, for what an archive in modules/apple/*.xcframework needs but cannot declare, such as -lc++.",
-          "items": { "type": "string" }
-        },
+        "link": {"type": "array", "description": "Linker arguments for the app's native-module artifact (LLP 1024), one argument each, for what an archive in modules/apple/*.xcframework needs but cannot declare, such as -lc++.", "items": {"type": "string"}},
             "appTransportSecurity": {
               "description": "App Transport Security keys the build writes into the macOS Info.plist's `NSAppTransportSecurity`. Absent: no key, and ATS refuses cleartext `http://` to a named host.",
               "type": "object",
@@ -1223,34 +962,14 @@
             },
             "team": { "type": "string" },
             "alternativeNames": { "$ref": "#/$defs/alternativeNames" },
-            "urlSchemes": {
-              "type": "array",
-              "description": "Further URL schemes the bundle registers. Not http or https: those are protocol_handlers' pair.",
-              "items": { "type": "string" }
-            },
+            "urlSchemes": {"type": "array", "description": "Further URL schemes the bundle registers. Not http or https: those are protocol_handlers' pair.", "items": {"type": "string"}},
             "window": {
               "type": "object",
               "properties": {
-                "width": {
-                  "type": "number",
-                  "minimum": 1,
-                  "maximum": 16384
-                },
-                "height": {
-                  "type": "number",
-                  "minimum": 1,
-                  "maximum": 16384
-                },
-                "minWidth": {
-                  "type": "number",
-                  "minimum": 1,
-                  "maximum": 16384
-                },
-                "minHeight": {
-                  "type": "number",
-                  "minimum": 1,
-                  "maximum": 16384
-                },
+                "width": {"type": "number", "minimum": 1, "maximum": 16384},
+                "height": {"type": "number", "minimum": 1, "maximum": 16384},
+                "minWidth": {"type": "number", "minimum": 1, "maximum": 16384},
+                "minHeight": {"type": "number", "minimum": 1, "maximum": 16384},
                 "keepRunning": {
                   "type": "boolean",
                   "description": "Closing the window (⌘W, File ▸ Close Window, the red button) hides it and the app keeps running, its session and native module alive; the Dock icon or `open -a` shows it again as it was. ⌘Q still quits. For an app with work the person expects to go on without the window (a server, a sync), as Mail and Messages do. Absent or false: the app ends with its window. A `launch_handler.client_mode` of `navigate-new` already outlives its last window, and this changes nothing there."
@@ -1270,21 +989,18 @@
               "type": "string",
               "pattern": "^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$"
             },
-            "painter": {
-              "enum": ["ink"],
-              "description": "Opt into ink (LLP 1149 D12); absent: the current painter, with `EXACT_PAINTER` overriding the choice, and ink refused until its Vulkan presenter is implemented."
-            },
-            "minimumOS": {
-              "description": "The oldest Android the app runs on, as \"12\"; never below 10. Below 12 the APK carries the reader's Android 10 and 11 code (host/android/README.md, \"Android 10 and 11\"); at 12 or later it carries none.",
-              "enum": ["10", "11", "12", "13", "14", "15", "16"]
-            },
+            "urlSchemes": {"type": "array", "description": "Custom schemes whose URLs open as app locations. Use protocol_handlers for a template.", "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9+.-]*$"}},
+            "painter": {"enum": ["ink"], "description": "Opt into ink (LLP 1149 D12); absent: the current painter, with `EXACT_PAINTER` overriding the choice, and ink refused until its Vulkan presenter is implemented."},
+            "minimumOS": { "description": "The oldest Android the app runs on, as \"12\"; never below 10. Below 12 the APK carries the reader's Android 10 and 11 code (host/android/README.md, \"Android 10 and 11\"); at 12 or later it carries none.",
+              "enum": ["10", "11", "12", "13", "14", "15", "16"] },
             "launchImage": {
-              "description": "What Android 12's starting window shows on `background_color` (or the platform's surface without one) in place of the launcher icon, which it shows unsaid. A picture (iOS's `host.ios.launchImage`; Expo's splash `image` and `imageWidth`) is that icon, `width` dp wide, which the platform shows within a centred square 192 dp across and, on stock Android, cuts to the circle in it; before Android 12, whose launch window has no icon, it is centred on the window's background. `false` shows no icon. A PNG in the app's directory; light and dark alike. Changing it requires a new native build.",
+              "description": "What Android 12's starting window shows on `background_color` (or the platform's surface without one) in place of the launcher icon, which it shows unsaid. A picture (iOS's `host.ios.launchImage`; Expo's splash `image` and `imageWidth`) is that icon, `width` dp wide, which the platform shows within a centred square 192 dp across and, on stock Android, cuts to the circle in it; before Android 12, whose launch window has no icon, it is centred on the window's background. `false` shows no icon. A PNG in the app's directory; the same picture in both appearances unless color_scheme_dark.src names another. Changing it requires a new native build.",
               "type": ["object", "boolean"],
               "required": ["src", "width"],
               "additionalProperties": false,
               "properties": {
                 "src": { "type": "string", "pattern": "\\.png$", "description": "The PNG, relative to the app's directory." },
+                "color_scheme_dark": { "$ref": "#/$defs/darkLaunchImage" },
                 "width": { "type": "number", "minimum": 1, "maximum": 192, "description": "Its width in the launch window, in dp, up to the icon's 192; its height follows its aspect." }
               }
             },
@@ -1304,14 +1020,16 @@
                 "additionalProperties": false
               }
             },
+            "queries": {"description": "Android package visibility for modules/android, checked against the package manifest allow-list (LLP 1133.030 D9).", "type": "array", "items": {"oneOf": [
+              {"type": "object", "required": ["package"], "properties": {"package": {"type": "string"}}, "additionalProperties": false},
+              {"type": "object", "required": ["action"], "properties": {"action": {"type": "string"}, "scheme": {"type": "string"}}, "additionalProperties": false}
+            ]}},
             "maven": {
               "description": "Pinned group:artifact:version coordinates on Google's Maven or Maven Central for the app's Kotlin in modules/android. Like a package implementation's maven array, these join the APK's locked, checksum-verified Gradle graph (LLP 1133.008 D8 item 5; host/android/README.md).",
               "type": "array",
-              "items": {
-                "type": "string",
+              "items": { "type": "string",
                 "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:(?!(?:[Ll][Aa][Tt][Ee][Ss][Tt]|[Rr][Ee][Ll][Ee][Aa][Ss][Ee])(?:\\.|$))(?!.*-[Ss][Nn][Aa][Pp][Ss][Hh][Oo][Tt]$)[A-Za-z0-9_.-]+$(?![\\s\\S])",
-                "x-hint": "use group:artifact:version with a pinned version, without ranges, dynamic selectors, SNAPSHOTs, classifiers or repositories"
-              }
+                "x-hint": "use group:artifact:version with a pinned version, without ranges, dynamic selectors, SNAPSHOTs, classifiers or repositories" }
             },
             "certificates": {
               "description": "The SHA-256 fingerprints of every certificate that signs the app (the debug key, the upload key, Play App Signing's), as `AB:CD:…`: the origin's `/.well-known/assetlinks.json` lets each use the app's passkeys (LLP 1133.011 D6).",
@@ -1325,10 +1043,7 @@
           "description": "Linux: the painter.",
           "type": "object",
           "properties": {
-            "painter": {
-              "enum": ["ink"],
-              "description": "Opt into ink (LLP 1149 D12); absent: the GPU painter when available, otherwise the CPU, with `EXACT_PAINTER` overriding the choice."
-            }
+            "painter": {"enum": ["ink"], "description": "Opt into ink (LLP 1149 D12); absent: the GPU painter when available, otherwise the CPU, with `EXACT_PAINTER` overriding the choice."}
           },
           "additionalProperties": false
         },
@@ -1389,121 +1104,56 @@
       "properties": {
         "origin": { "$ref": "#/$defs/cadence" },
         "bundles": { "$ref": "#/$defs/cadence" },
-        "binaries": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/cadenceOrOff" }
-        },
+        "binaries": {"type": "object", "additionalProperties": {"$ref": "#/$defs/cadenceOrOff"}},
         "release": {
           "type": "object",
-          "additionalProperties": {
-            "type": "string",
-            "enum": [
-              "automatic",
-              "internal",
-              "manual"
-            ]
-          }
+          "additionalProperties": {"type": "string", "enum": ["automatic", "internal", "manual"]}
         },
-        "phased": {
-          "type": "object",
-          "additionalProperties": { "type": "boolean" }
-        },
+        "phased": {"type": "object", "additionalProperties": {"type": "boolean"}},
         "store": {
           "description": "Per platform (web, macos, ios, linux, windows, android), whether an installed app has an update store: \"0\" links none, so every change ships as a new binary; \"A\" links the store, so signed plans and assets update over the air (LLP 1030 D4). The web host links none, so its can only be \"0\". Android's reads \"0\" when absent (every other native platform's reads \"A\"); at \"A\" the APK links the store and takes signed plans, assets and TypeScript modules, never native code (LLP 1030.006). `exact new` writes the web's; a native verb writes its platform's the first time it runs (LLP 1153 D1). Signed TypeScript and Rust module delivery isn't implemented.",
           "type": "object",
-          "additionalProperties": {
-            "type": "string",
-            "enum": [
-              "0",
-              "A"
-            ]
-          }
+          "additionalProperties": {"type": "string", "enum": ["0", "A"]}
         },
         "streams": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "required": [
-              "channel",
-              "compatibilityId"
-            ],
-            "properties": {
-              "channel": { "type": "string" },
-              "compatibilityId": { "type": "string" }
-            },
-            "additionalProperties": false
-          }
+          "items": {"type": "object", "required": ["channel", "compatibilityId"], "properties": {"channel": {"type": "string"}, "compatibilityId": {"type": "string"}}, "additionalProperties": false}
         },
         "channels": {
           "description": "Each channel's update origin: a directory or URL, or \"appdrop\" for AppDrop's origin named after deploy.signing.key (https://appdrop.app/u/<key id>), which needs no account or server.",
           "type": "object",
           "additionalProperties": { "type": "string" }
         },
-        "activate": {
-          "type": "string",
-          "enum": [
-            "next-launch",
-            "app-decides",
-            "immediate"
-          ]
-        },
+        "activate": {"type": "string", "enum": ["next-launch", "app-decides", "immediate"]},
         "check": {
           "type": "object",
           "properties": {
-            "interval": {
-              "type": "number",
-              "exclusiveMinimum": 0,
-              "description": "Seconds between foreground update checks; defaults to 900 under every activation policy."
-            },
+            "interval": {"type": "number", "exclusiveMinimum": 0, "description": "Seconds between foreground update checks; defaults to 900 under every activation policy."},
             "background": { "type": "boolean" }
           },
           "additionalProperties": false
         },
         "sunset": {
           "type": "object",
-          "additionalProperties": {
-            "type": "object",
-            "required": [
-              "message"
-            ],
-            "properties": {
-              "message": { "type": "string" },
-              "store": { "type": "string" }
-            },
-            "additionalProperties": false
-          }
+          "additionalProperties": {"type": "object", "required": ["message"], "properties": {"message": {"type": "string"}, "store": {"type": "string"}}, "additionalProperties": false}
         },
         "brownfield": { "type": "boolean" },
         "signing": {
           "type": "object",
           "properties": {
-            "key": {
-              "type": "string",
-              "description": "The id of the key `exact deploy` signs with, by reference: the private key lives in the publisher's key directory (`EXACT_SIGNING_KEY_DIR`, default `~/.config/exact/keys/<id>.pem`), never here."
-            },
-            "keys": {
-              "type": "object",
-              "additionalProperties": { "type": "string" },
-              "description": "Verification keys by id, each an Ed25519 public key as base64 of its 32 raw bytes; baked into the binary and part of the compatibility id (LLP 1026 D11; 1030 D3a)."
-            }
+            "key": {"type": "string", "description": "The id of the key `exact deploy` signs with, by reference: the private key lives in the publisher's key directory (`EXACT_SIGNING_KEY_DIR`, default `~/.config/exact/keys/<id>.pem`), never here."},
+            "keys": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Verification keys by id, each an Ed25519 public key as base64 of its 32 raw bytes; baked into the binary and part of the compatibility id (LLP 1026 D11; 1030 D3a)."}
           },
           "additionalProperties": false
         },
-        "channel": {
-          "type": "string",
-          "description": "The channel this build bakes in (LLP 1030.000 D4): a key of `channels`. Default: the only key of `channels`, else \"prod\"."
-        }
+        "channel": {"type": "string", "description": "The channel this build bakes in (LLP 1030.000 D4): a key of `channels`. Default: the only key of `channels`, else \"prod\"."}
       },
       "additionalProperties": false
     },
     "install": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {
-        "web": { "$ref": "#/$defs/installPlatform" },
-        "ios": { "$ref": "#/$defs/installPlatform" },
-        "macos": { "$ref": "#/$defs/installPlatform" }
-      }
+      "properties": {"web": {"$ref": "#/$defs/installPlatform"}, "ios": {"$ref": "#/$defs/installPlatform"}, "macos": {"$ref": "#/$defs/installPlatform"}}
     },
     "brand": {
       "type": "object",
@@ -1517,11 +1167,7 @@
             "image": { "type": "string" },
             "text": { "type": "string" },
             "font": { "type": "string" },
-            "weight": {
-              "type": "number",
-              "minimum": 100,
-              "maximum": 900
-            },
+            "weight": {"type": "number", "minimum": 100, "maximum": 900},
             "letterSpacing": {
               "type": "number",
               "minimum": -10,
@@ -1533,83 +1179,42 @@
     },
     "rust": {
       "oneOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/$defs/rustMode"
-        },
+        {"type": "boolean"},
+        {"$ref": "#/$defs/rustMode"},
         {
           "type": "object",
           "properties": {
             "mode": { "$ref": "#/$defs/rustMode" },
             "dev": { "$ref": "#/$defs/rustChoice" },
-            "prod": {
-              "$ref": "#/$defs/rustChoice"
-            },
-            "placement": {
-              "$ref": "#/$defs/placement"
-            },
+            "prod": {"$ref": "#/$defs/rustChoice"},
+            "placement": {"$ref": "#/$defs/placement"},
             "platforms": {
               "type": "object",
               "properties": {
-                "web": {
-                  "$ref": "#/$defs/rustEnvironment"
-                },
-                "ios": {
-                  "$ref": "#/$defs/rustEnvironment"
-                },
-                "macos": {
-                  "$ref": "#/$defs/rustEnvironment"
-                },
-                "linux": {
-                  "$ref": "#/$defs/rustEnvironment"
-                },
-                "android": {
-                  "$ref": "#/$defs/rustEnvironment"
-                },
-                "windows": {
-                  "$ref": "#/$defs/rustEnvironment"
-                }
+                "web": {"$ref": "#/$defs/rustEnvironment"},
+                "ios": {"$ref": "#/$defs/rustEnvironment"},
+                "macos": {"$ref": "#/$defs/rustEnvironment"},
+                "linux": {"$ref": "#/$defs/rustEnvironment"},
+                "android": {"$ref": "#/$defs/rustEnvironment"},
+                "windows": {"$ref": "#/$defs/rustEnvironment"}
               },
               "additionalProperties": false
             },
             "module": {
               "type": "object",
-              "properties": {
-                "package": {
-                  "type": "string",
-                  "pattern": "^[a-zA-Z0-9_-]+$"
-                }
-              },
-              "required": [
-                "package"
-              ],
+              "properties": {"package": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$"}},
+              "required": ["package"],
               "additionalProperties": false,
               "description": "The portable logic-wrapper cdylib package exporting the Exact logic ABI. One explicit replacement unit; data/helper crates remain ordinary Cargo dependencies."
             },
             "data": {
               "type": "object",
               "properties": {
-                "crate": {
-                  "type": "string",
-                  "pattern": "^[a-zA-Z0-9_-]+$",
-                  "description": "The Cargo package of the data crate, a crate beside app.json."
-                },
-                "type": {
-                  "type": "string",
-                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+$",
-                  "description": "The DataSource type, by its path from the crate's library: `pinapp_data::Pins`."
-                },
-                "source": {
-                  "type": "string",
-                  "description": "The constructor when it is not `<type>::default()`: the type itself (a unit struct), or `<type>::new(…)` with literal arguments."
-                }
+                "crate": {"type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "description": "The Cargo package of the data crate, a crate beside app.json."},
+                "type": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(::[A-Za-z_][A-Za-z0-9_]*)+$", "description": "The DataSource type, by its path from the crate's library: `pinapp_data::Pins`."},
+                "source": {"type": "string", "description": "The constructor when it is not `<type>::default()`: the type itself (a unit struct), or `<type>::new(…)` with literal arguments."}
               },
-              "required": [
-                "crate",
-                "type"
-              ],
+              "required": ["crate", "type"],
               "additionalProperties": false,
               "description": "The Rust data crate that answers the app's sources (LLP 1153.003 D2). The host crates link it and bake the first frame through it; with app.ts beside it, it answers the sources its RUST_SOURCES names and TypeScript the rest."
             }
@@ -1622,11 +1227,7 @@
     "commands": {
       "description": "The app's own verbs for the exact.mjs `exact new` generates, by name: each a command as argv, run in the app's directory with the arguments after the verb, EXACT_APP_DIR and EXACT (and EXACT2) set. `\"verify\": [\"bun\", \"verify.mjs\"]` makes `bun exact.mjs verify web` run `bun verify.mjs web`. `bun exact.mjs update` rewrites exact.mjs and keeps these; a name exact.mjs already uses (test, agent, web, …) is refused.",
       "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "minItems": 1,
-        "items": { "type": "string", "minLength": 1 }
-      }
+      "additionalProperties": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
     },
     "before_build": {
       "description": "A command, as argv, that prepares files the app's builds read and its repository does not hold, such as a script that fetches photos into a folder Git ignores (`[\"bun\", \"scripts/fetch.mjs\"]`; `bun` is the Bun that runs exact.mjs, so it runs on every host). The exact.mjs `exact new` generates runs it in the app's directory, with EXACT_APP_DIR and EXACT (and EXACT2) set, no input and its output on stderr, before each of its verbs that builds, runs, compiles or checks the app (app-cli.mjs lists them), and before test and agent where they build first; a failure stops the verb. It runs that often, so make it finish at once when its files are there.",
@@ -1639,23 +1240,14 @@
       "description": "The app's own server, started for tests, verification and agent drives.",
       "additionalProperties": false,
       "properties": {
-        "database": {
-          "type": "boolean",
-          "default": true,
-          "description": "False declares that the server keeps no database: DB is omitted and no scratch database is created or removed. Otherwise its entry or an imported module must read the database path from DB."
-        }
+        "database": {"type": "boolean", "default": true, "description": "False declares that the server keeps no database: DB is omitted and no scratch database is created or removed. Otherwise its entry or an imported module must read the database path from DB."}
       }
     },
-    "forma": {
-      "type": "string",
-      "description": "The app's design (LLP 1121 D2): a `.forma` file, relative to app.json. Without it, `app.forma` beside app.contract is the design when there is one."
-    },
+    "forma": {"type": "string", "description": "The app's design (LLP 1121 D2): a `.forma` file, relative to app.json. Without it, `app.forma` beside app.contract is the design when there is one."},
     "purchases": {
       "type": "object",
       "description": "In-app purchases (LLP 1133.015 §9). `catalog`: a JSON file of the Digital Goods API's `ItemDetails`, relative to app.json, which the synthetic store sells under the agent; its ids are the products configured in App Store Connect and Play Console.",
-      "properties": {
-        "catalog": { "type": "string" }
-      },
+      "properties": {"catalog": {"type": "string"}},
       "additionalProperties": false
     },
     "strings": {
@@ -1663,19 +1255,10 @@
       "description": "The UI's string tables (LLP 1060): strings/<locale>.json beside app.contract, read by `t(\"key\", name=value)`.",
       "additionalProperties": false,
       "properties": {
-        "base": {
-          "type": "string",
-          "pattern": "^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$",
-          "description": "The locale every `t` is checked against and every other table falls back to; \"en\" when absent."
-        }
+        "base": {"type": "string", "pattern": "^[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*$", "description": "The locale every `t` is checked against and every other table falls back to; \"en\" when absent."}
       }
     },
-    "auth": {
-      "description": "Signing in through the system browser (LLP 1069.006): the scope the client-metadata documents name.",
-      "type": "object",
-      "properties": { "scope": { "type": "string" } },
-      "additionalProperties": false
-    },
+    "auth": {"description": "Signing in through the system browser (LLP 1069.006): the scope the client-metadata documents name.", "type": "object", "properties": {"scope": {"type": "string"}}, "additionalProperties": false},
     "env": {
       "type": "array",
       "description": "Settings read at build by app.ts and its transitive app-local runtime imports (LLP 1153 D4), as a top-level `const API = import.meta.env.API_BASE_URL`, optionally `?? 'a default'`: each value comes from the environment, then `.env.local`, then `.env` beside app.json, and is inlined into the module. Every read of a name must use the same default, including no default. Every value is public: it ships in the module on every host, so a secret never belongs here. Reading an undeclared name or declaring a name unread by this graph is refused at build. Type-only imports and re-exports read no settings. `{ \"name\": \"API_BASE_URL\", \"launch\": true }` marks one a launch may give (LLP 1153.002): on Apple, Linux and Windows a non-empty value in the launched process's environment replaces the build's (`SIMCTL_CHILD_API_BASE_URL`, an XCUITest's `launchEnvironment`, `devicectl`'s `--environment-variables`); Android and the web read the build's. Grants are fixed at build, so a grant over a marked name is refused, and its name may not begin with EXACT_.",
@@ -1683,15 +1266,7 @@
       "items": {
         "oneOf": [
           { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
-          {
-            "type": "object",
-            "properties": {
-              "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
-              "launch": { "type": "boolean" }
-            },
-            "required": ["name"],
-            "additionalProperties": false
-          }
+          {"type": "object", "properties": {"name": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}, "launch": {"type": "boolean"}}, "required": ["name"], "additionalProperties": false}
         ]
       }
     },
@@ -1703,29 +1278,15 @@
         "type": "object",
         "required": ["idSuffix", "name"],
         "properties": {
-          "idSuffix": {
-            "description": "Appended to app.id (and host.android.id), as `.dev`: one or more parts, each a dot, a letter, then letters, digits or `-`.",
-            "type": "string",
-            "pattern": "^(\\.[a-zA-Z][a-zA-Z0-9-]*)+$"
-          },
+          "idSuffix": {"description": "Appended to app.id (and host.android.id), as `.dev`: one or more parts, each a dot, a letter, then letters, digits or `-`.", "type": "string", "pattern": "^(\\.[a-zA-Z][a-zA-Z0-9-]*)+$"},
           "name": { "description": "The name people see for this variant, in place of app.name: the launcher, the home screen, the menu bar, the executable.", "type": "string", "minLength": 1 },
           "icons": { "description": "This variant's icons, in place of `icons`; under it, color_scheme_dark.icons and the app's host.ios.icon and host.macos.icon are not read. Absent: the app's.", "type": "array", "items": { "$ref": "#/$defs/icon" } },
           "host": {
             "description": "This variant's Icon Composer projects, the only members of `host` a variant has: each replaces the app's on its platform, and wins there over `icons` as the app's does (LLP 1163 D4). Absent: the app's, unless the variant has `icons`.",
             "type": "object",
             "properties": {
-              "ios": {
-                "type": "object",
-                "properties": { "icon": { "type": "string", "minLength": 1, "description": "An Icon Composer .icon directory inside the app, in place of host.ios.icon." } },
-                "required": ["icon"],
-                "additionalProperties": false
-              },
-              "macos": {
-                "type": "object",
-                "properties": { "icon": { "type": "string", "minLength": 1, "description": "An Icon Composer .icon directory inside the app, in place of host.macos.icon." } },
-                "required": ["icon"],
-                "additionalProperties": false
-              }
+              "ios": {"type": "object", "properties": {"icon": {"type": "string", "minLength": 1, "description": "An Icon Composer .icon directory inside the app, in place of host.ios.icon."}}, "required": ["icon"], "additionalProperties": false},
+              "macos": {"type": "object", "properties": {"icon": {"type": "string", "minLength": 1, "description": "An Icon Composer .icon directory inside the app, in place of host.macos.icon."}}, "required": ["icon"], "additionalProperties": false}
             },
             "additionalProperties": false
           },
@@ -1742,9 +1303,7 @@
     "typescript": {
       "type": "object",
       "properties": {
-        "placement": {
-          "$ref": "#/$defs/placement"
-        },
+        "placement": {"$ref": "#/$defs/placement"},
         "sources": {
           "type": "object",
           "additionalProperties": { "type": "string" },
@@ -1788,11 +1347,7 @@
     },
     "audio_session": {
       "type": "string",
-      "enum": [
-        "ambient",
-        "playback",
-        "playback-mix"
-      ],
+      "enum": ["ambient", "playback", "playback-mix"],
       "description": "The audio session the app's sounds, media and canvas audio share (LLP 1096 D8). On iOS and tvOS: ambient (default) mixes with other apps' audio and obeys the ring/silent switch; playback ignores the switch and interrupts other audio; playback-mix ignores the switch and mixes without ducking, for sound played over another app's audio, and is never Now Playing. On the web page initialization sets the Audio Session API's type where the browser has it: playback-mix as ambient, the other values as written, without requiring sound output. An omitted setting keeps the browser's auto. The Mac has no session."
     },
     "dev": {
@@ -1801,20 +1356,8 @@
         "rebuild": {
           "type": "object",
           "properties": {
-            "rust": {
-              "type": "string",
-              "enum": [
-                "save",
-                "manual"
-              ]
-            },
-            "typescript": {
-              "type": "string",
-              "enum": [
-                "save",
-                "manual"
-              ]
-            }
+            "rust": {"type": "string", "enum": ["save", "manual"]},
+            "typescript": {"type": "string", "enum": ["save", "manual"]}
           },
           "additionalProperties": false,
           "description": "Build trigger while the development watcher runs; save by default for both languages. Independent from replacement capability."
@@ -1825,23 +1368,22 @@
   },
   "additionalProperties": false,
   "$defs": {
-    "plistValue": {
-      "description": "A property-list value: a string, number, boolean, array or dictionary.",
-      "type": ["string", "number", "boolean", "array", "object"],
-      "items": { "$ref": "#/$defs/plistValue" },
-      "additionalProperties": { "$ref": "#/$defs/plistValue" }
-    },
+    "plistValue": {"description": "A property-list value: a string, number, boolean, array or dictionary.", "type": ["string", "number", "boolean", "array", "object"], "items": {"$ref": "#/$defs/plistValue"}, "additionalProperties": {"$ref": "#/$defs/plistValue"}},
+    "darkLaunchImage": {"type": "object", "required": ["src"], "additionalProperties": false, "properties": {"src": {"type": "string", "description": "The dark PNG, relative to the app directory.", "pattern": "\\.png$"}}},
     "launchColour": {
       "type": "string",
       "pattern": "^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|color\\(\\s*display-p3(\\s+(0(\\.\\d+)?|\\.\\d+|1(\\.0+)?|(\\d{1,2}(\\.\\d+)?|100(\\.0+)?)%)){3}\\s*(/\\s*(0(\\.\\d+)?|\\.\\d+|1(\\.0+)?|(\\d{1,2}(\\.\\d+)?|100(\\.0+)?)%)\\s*)?\\))$",
       "x-hint": "write #RGB, #RRGGBB or #RRGGBBAA, or a Display P3 colour as color(display-p3 r g b) or color(display-p3 r g b / a), each component from 0 to 1 or 0% to 100%",
       "description": "A launch colour: hex, or Display P3 as CSS writes it, which iOS and the web's first paint show in Display P3 and Android and the browser's manifest take clipped to sRGB."
     },
+    "shippedSwiftPackage": {
+      "description": "A Swift package shipped by an Apple implementation, relative to its exact.json (LLP 1133.001 D9).",
+      "type": "object", "required": ["path", "products"], "additionalProperties": false, "properties": {
+        "path": { "type": "string", "pattern": "^(?!/|[A-Za-z]:/)(?!.*(?:^|/)\\.\\.?(/|$))[^\\\\\\s]+$", "x-hint": "use a relative package directory with no whitespace, backslashes, . or .. components" },
+        "products": { "$ref": "#/$defs/swiftPackages/items/properties/products" } } },
     "swiftPackages": {
       "description": "Swift Package Manager products for native Swift, with exact versions. The app keeps Package.resolved; exact lock refreshes it (LLP 1133.001 D9, expo/exact#751).",
-      "type": "array",
-      "items": {
-        "type": "object", "required": ["url", "exactVersion", "products"], "additionalProperties": false,
+      "type": "array", "items": { "type": "object", "required": ["url", "exactVersion", "products"], "additionalProperties": false,
         "properties": {
           "url": { "type": "string", "pattern": "^https://[^/?#@\\s]+/[^?#\\s]+$" },
           "exactVersion": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$" },
@@ -1851,26 +1393,15 @@
     },
     "alternativeNames": {
       "description": "Other names Siri and App Shortcuts answer to for the app, such as its name before a rename (Info.plist's INAlternativeAppNames): each a `name` and an optional `pronunciationHint`, written as it sounds. At most three. A watch app gets the iPhone app's. Apple admits names based on the app's own or ones its users commonly call it, never another app's.",
-      "type": "array",
-      "maxItems": 3,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["name"],
-        "properties": {
-          "name": { "type": "string", "minLength": 1 },
-          "pronunciationHint": { "type": "string", "minLength": 1 }
-        }
-      }
+      "type": "array", "maxItems": 3,
+      "items": {"type": "object", "additionalProperties": false, "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "pronunciationHint": {"type": "string", "minLength": 1}}}
     },
     "webCsp": {
       "description": "Directives by name in lower case, each a list of sources to add to Exact's, or a string that replaces Exact's value (the word `exact` standing for Exact's sources).",
-      "type": "object",
-      "additionalProperties": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] }
+      "type": "object", "additionalProperties": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] }
     },
     "icon": {
-      "type": "object",
-      "required": ["src"],
+      "type": "object", "required": ["src"],
       "properties": {
         "src": { "type": "string", "description": "The file, relative to app.json: a PNG, SVG or ICO under assets/." },
         "sizes": { "type": "string", "description": "As the file is, \"1024x1024\" or \"any\" for an SVG; absent, read from the file." },
@@ -1890,84 +1421,34 @@
         { "type": "object", "required": ["meta"], "additionalProperties": false, "properties": { "meta": { "type": "object", "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } }
       ]
     },
-    "webHeadAttribute": {
-      "description": "An attribute's value, or true for a bare attribute such as async.",
-      "oneOf": [{ "type": "string" }, { "enum": [true] }]
-    },
+    "webHeadAttribute": {"description": "An attribute's value, or true for a bare attribute such as async.", "oneOf": [{"type": "string"}, {"enum": [true]}]},
     "cadence": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "continuous",
-            "manual"
-          ]
-        },
-        {
-          "type": "object",
-          "required": [
-            "schedule"
-          ],
-          "properties": {
-            "schedule": { "type": "string" }
-          },
-          "additionalProperties": false
-        }
+        {"type": "string", "enum": ["continuous", "manual"]},
+        {"type": "object", "required": ["schedule"], "properties": {"schedule": {"type": "string"}}, "additionalProperties": false}
       ]
     },
     "cadenceOrOff": {
       "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "continuous",
-            "manual",
-            "off"
-          ]
-        },
-        {
-          "type": "object",
-          "required": [
-            "schedule"
-          ],
-          "properties": {
-            "schedule": { "type": "string" }
-          },
-          "additionalProperties": false
-        }
+        {"type": "string", "enum": ["continuous", "manual", "off"]},
+        {"type": "object", "required": ["schedule"], "properties": {"schedule": {"type": "string"}}, "additionalProperties": false}
       ]
     },
     "installPlatform": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "methods"
-      ],
+      "required": ["methods"],
       "properties": {
         "recommended": { "type": "string" },
-        "methods": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/installMethod"
-          }
-        },
+        "methods": {"type": "array", "items": {"$ref": "#/$defs/installMethod"}},
         "urls": {
           "type": "array",
           "description": "Additional known web destinations, such as the public deployment URL. Web only.",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "label",
-              "url"
-            ],
-            "properties": {
-              "label": {
-                "type": "string",
-                "minLength": 1
-              },
-              "url": { "type": "string" }
-            }
+            "required": ["label", "url"],
+            "properties": {"label": {"type": "string", "minLength": 1}, "url": {"type": "string"}}
           }
         }
       }
@@ -1975,121 +1456,44 @@
     "installMethod": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "kind",
-        "url"
-      ],
+      "required": ["kind", "url"],
       "properties": {
-        "kind": {
-          "type": "string",
-          "enum": [
-            "browser",
-            "go",
-            "direct",
-            "testflight",
-            "app-store",
-            "download",
-            "terminal"
-          ]
-        },
-        "url": {
-          "type": "string",
-          "minLength": 1
-        },
-        "label": {
-          "type": "string",
-          "minLength": 1
-        },
-        "description": {
-          "type": "string",
-          "minLength": 1
-        },
-        "version": {
-          "type": "string",
-          "minLength": 1
-        },
-        "setupUrl": {
-          "type": "string",
-          "minLength": 1
-        },
-        "command": {
-          "type": "string",
-          "minLength": 1
-        }
+        "kind": {"type": "string", "enum": ["browser", "go", "direct", "testflight", "app-store", "download", "terminal"]},
+        "url": {"type": "string", "minLength": 1},
+        "label": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "setupUrl": {"type": "string", "minLength": 1},
+        "command": {"type": "string", "minLength": 1}
       }
     },
-    "rustMode": {
-      "type": "string",
-      "enum": [
-        "auto",
-        "native",
-        "tiered",
-        "wasm",
-        "off"
-      ]
-    },
+    "rustMode": {"type": "string", "enum": ["auto", "native", "tiered", "wasm", "off"]},
     "rustChoice": {
       "oneOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/$defs/rustMode"
-        },
+        {"type": "boolean"},
+        {"$ref": "#/$defs/rustMode"},
         {
           "type": "object",
-          "properties": {
-            "mode": {
-              "$ref": "#/$defs/rustMode"
-            }
-          },
+          "properties": {"mode": {"$ref": "#/$defs/rustMode"}},
           "additionalProperties": false
         }
       ]
     },
     "rustEnvironment": {
       "oneOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "$ref": "#/$defs/rustMode"
-        },
+        {"type": "boolean"},
+        {"$ref": "#/$defs/rustMode"},
         {
           "type": "object",
-          "properties": {
-            "mode": {
-              "$ref": "#/$defs/rustMode"
-            },
-            "dev": {
-              "$ref": "#/$defs/rustChoice"
-            },
-            "prod": {
-              "$ref": "#/$defs/rustChoice"
-            },
-            "placement": {
-              "$ref": "#/$defs/placement"
-            }
-          },
+          "properties": {"mode": {"$ref": "#/$defs/rustMode"}, "dev": {"$ref": "#/$defs/rustChoice"}, "prod": {"$ref": "#/$defs/rustChoice"}, "placement": {"$ref": "#/$defs/placement"}},
           "additionalProperties": false
         }
       ]
     },
-    "placement": {
-      "type": "string",
-      "enum": [
-        "main",
-        "worker"
-      ],
-      "description": "Where the module instance runs (LLP 1027.002 D1): on the runner's thread, or on an owner of its own. A change is a new compatibility id."
-    },
+    "placement": {"type": "string", "enum": ["main", "worker"], "description": "Where the module instance runs (LLP 1027.002 D1): on the runner's thread, or on an owner of its own. A change is a new compatibility id."},
     "placementPolicy": {
       "type": "object",
-      "properties": {
-        "placement": {
-          "$ref": "#/$defs/placement"
-        }
-      },
+      "properties": {"placement": {"$ref": "#/$defs/placement"}},
       "additionalProperties": false
     }
   }

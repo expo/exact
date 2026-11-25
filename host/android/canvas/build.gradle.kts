@@ -1,27 +1,44 @@
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.jetbrains.kotlin.config.KotlinCompilerVersion
+
 plugins { id("com.android.library") }
+// Compile the hosted ComposeView regression without transforming the reader's classes.
+val composeCompilerForTests = configurations.create("composeCompilerForTests")
+tasks.withType<KotlinCompile>().configureEach {
+    if (name.contains("UnitTest")) pluginClasspath.from(composeCompilerForTests)
+}
 // An app's build gives the reader a build directory of its own (`-PcanvasBuildDir`, agent-android.mjs).
 providers.gradleProperty("canvasBuildDir").orNull?.let { layout.buildDirectory = file(it) }
+// A locked app also verifies the reader's test graph. Include the translation suite in that graph
+// when the app binds it, and always in the standalone reader tests.
+val translationLibraries = listOf("com.google.mlkit:translate:17.0.3", "com.google.mlkit:language-id:17.0.6")
+val testTranslation = !providers.gradleProperty("mavenLock").isPresent ||
+    providers.gradleProperty("maven").orNull.orEmpty().split(',').containsAll(translationLibraries)
 android {
     namespace = "dev.exact.canvas"
     compileSdk { version = release(37) { minorApiLevel = 2 } }
     defaultConfig { minSdk = 29; consumerProguardFiles("proguard-rules.pro") }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
-    // A package's unit tests compile its Kotlin into this module's tests; the reader links none of it.
+    // Package tests and the shell's Compose pickers compile here; the reader links none of them.
     sourceSets {
         getByName("main").kotlin.directories.add("../../../vendor/ibex/crates/ibex2/android")
         getByName("test").kotlin.directories.addAll(listOf(
+            "../app/src/compose/java",
             "../../../packages/age-range/android", "../../../packages/age-range/test",
             "../../../packages/store-update/android", "../../../packages/store-update/test",
             "../../../packages/barcode-detection/android", "../../../packages/barcode-detection/test",
             "../../../packages/alarms/android", "../../../packages/alarms/test",
             "../../../packages/background/android", "../../../packages/background/test",
             "../../../packages/background-transfer/android", "../../../packages/background-transfer/test/android",
+            "../../../packages/browser-automation/android", "../../../packages/browser-automation/test",
             "../../../packages/calendar/android", "../../../packages/calendar/test",
             "../../../packages/calls/android", "../../../packages/calls/test",
             "../../../packages/camera/android", "../../../packages/camera/test",
             "../../../packages/fixtures/camera-calibration/android", "../../../packages/fixtures/camera-calibration/test",
+            "../../../packages/clipboard/android", "../../../packages/clipboard/test",
             "../../../packages/contacts/android", "../../../packages/contacts/test",
             "../../../packages/gamepad/android", "../../../packages/gamepad/test",
+            "../../../packages/face-detection/android", "../../../packages/face-detection/test",
             "../../../packages/geofencing/android", "../../../packages/geofencing/test",
             "../../../packages/geocoding/android", "../../../packages/geocoding/test",
             "../../../packages/geolocation/android", "../../../packages/geolocation/test",
@@ -32,27 +49,44 @@ android {
             "../../../packages/motion/android", "../../../packages/motion/test",
             "../../../packages/local-auth/android", "../../../packages/local-auth/test",
             "../../../packages/passkeys/android", "../../../packages/passkeys/test",
+            "../../../packages/notifications/android", "../../../packages/notifications/test",
             "../../../packages/payments/android", "../../../packages/payments/test",
             "../../../packages/photos/android", "../../../packages/photos/test",
             "../../../packages/push/android", "../../../packages/push/test/android",
             "../../../packages/recording/android", "../../../packages/recording/test",
             "../../../packages/speech-recognition/android", "../../../packages/speech-recognition/test",
         ))
+        if (testTranslation) getByName("test").kotlin.directories.addAll(listOf(
+            "../../../packages/translation/android", "../../../packages/translation/test",
+        ))
     }
     // Robolectric keeps a sandbox for each SDK level and shadow set the tests name, more than
     // Gradle's default 512 MB worker holds.
-    testOptions { unitTests.all { it.maxHeapSize = "1g" } }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all { it.maxHeapSize = "1g" }
+    }
 }
 
 dependencies {
+    composeCompilerForTests("org.jetbrains.kotlin:kotlin-compose-compiler-plugin-embeddable:${KotlinCompilerVersion.VERSION}")
+    testImplementation(platform(libs.compose.bom))
+    testImplementation(libs.compose.material3)
+    testImplementation("androidx.activity:activity-compose:1.9.0")
+    testImplementation(libs.compose.test.junit4)
+    testImplementation("androidx.core:core:1.16.0")
     testImplementation("com.google.firebase:firebase-messaging:26.0.1")
     testImplementation("com.google.android.gms:play-services-base:18.9.0")
     implementation("androidx.browser:browser:1.9.0")
     implementation("androidx.activity:activity:1.9.0")
+    implementation("androidx.window:window:1.5.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.webkit:webkit:1.16.0")
     testImplementation("com.google.android.play:age-signals:0.0.4")
     testImplementation("com.google.android.play:app-update:2.1.0")
+    testImplementation("com.google.mlkit:face-detection:16.1.7")
     testImplementation("com.google.mlkit:text-recognition:16.0.1")
+    if (testTranslation) translationLibraries.forEach { testImplementation(it) }
     testImplementation("com.google.mlkit:barcode-scanning:17.3.0")
     testImplementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
     testImplementation("junit:junit:4.13.2")

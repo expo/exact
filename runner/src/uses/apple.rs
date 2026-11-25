@@ -3,20 +3,20 @@
 //!
 //! @ref LLP 1047.001 D10 (a family's use rule covers every plan that reaches its code)
 //!
-//! [`uses`] is what the web, Android and Linux link and admit, and their
+//! [`super::uses`] is what the web, Android and Linux link and admit, and their
 //! compatibility ids name it. The native roster's entries and Apple's own
 //! reading of a shared one are added here, so those hosts do not move.
 //! What the bake alone can know (an image file's bytes, the app's module
 //! artifact) it adds to the set itself (`exact_bake`'s `production_uses`).
 
 use super::{
-    constant_str, decoration_rows, keeps_midi, runs_command, runs_sounds, uses,
-    uses_picture_in_picture, Capability, Uses,
+    code_uses, constant_str, declares_sounds, decoration_rows, hears_midi, plan_uses, reads_midi,
+    Capability, Uses, DOCUMENT_PICKERS, MIDI_COMMANDS, PICTURE_IN_PICTURE, SOUND_COMMANDS,
 };
 use exact_kernel::{NodeType, PropId, StyleId};
 use exact_plan::{BindingKind, BindingsRow, EventKind, Plan};
 
-/// What `plan` uses on Apple: [`uses`], with [`Capability::Grid`] the grid
+/// What `plan` uses on Apple: [`super::uses`], with [`Capability::Grid`] the grid
 /// rows' grammars and the grid algorithm together, which a grid row or a
 /// layout that can reach the algorithm ([`lays_out_grid`]) selects,
 /// [`Capability::Effects`] a box's `filter` or what SVG uses,
@@ -26,7 +26,8 @@ use exact_plan::{BindingKind, BindingsRow, EventKind, Plan};
 /// other native hosts link the algorithm whole, so for them the capability
 /// is the rows' grammars.
 pub fn apple_uses(plan: &Plan) -> Uses {
-    let mut uses = uses(plan).beyond(Uses::NONE.with(Capability::Effects).with(Capability::Drag));
+    let mut uses = plan_uses(plan, code_uses(plan, command_capability))
+        .beyond(Uses::NONE.with(Capability::Effects).with(Capability::Drag));
     let mut add = |capability, used: bool| {
         if used {
             uses = uses.with(capability);
@@ -63,20 +64,6 @@ pub fn apple_uses(plan: &Plan) -> Uses {
             _ => false,
         }),
     );
-    // One Swift family presents the file picker and the document pickers;
-    // `requestPermission` and dropped or pasted documents are the core's.
-    add(
-        Capability::Picker,
-        runs_command(
-            plan,
-            &[
-                "saveFile",
-                "showOpenFilePicker",
-                "showDirectoryPicker",
-                "showSaveFilePicker",
-            ],
-        ),
-    );
     // An event-only or a view-only package reaches the module seam too.
     add(
         Capability::Modules,
@@ -95,10 +82,6 @@ pub fn apple_uses(plan: &Plan) -> Uses {
         !plan.views.is_empty()
             || has_node(plan, |t| t == NodeType::NativeView)
             || binds(plan, BindingKind::Prop, PropId::Hatch as u16),
-    );
-    add(
-        Capability::Traces,
-        runs_command(plan, &["startTrace_EXPERIMENTAL", "stopTrace_EXPERIMENTAL"]),
     );
     add(Capability::Controls, uses_controls(plan));
     // `wakelock="screen"` holds the display awake (LLP 1125 D11).
@@ -179,10 +162,7 @@ pub fn apple_uses(plan: &Plan) -> Uses {
     );
     // The media family's four products, each beside its loaded arm. An
     // `audio` element is a `Video` node.
-    add(
-        Capability::Video,
-        has_node(plan, |t| t == NodeType::Video) || uses_picture_in_picture(plan),
-    );
+    add(Capability::Video, has_node(plan, |t| t == NodeType::Video));
     add(
         Capability::WebViews,
         has_node(plan, |t| t == NodeType::WebView),
@@ -190,13 +170,16 @@ pub fn apple_uses(plan: &Plan) -> Uses {
     // The transport answers `exactTransport` (LLP 1125 D5).
     add(
         Capability::Sound,
-        runs_sounds(plan)
+        declares_sounds(plan)
             || plan
                 .resources
                 .iter()
                 .any(|r| plan.str(r.source) == crate::transport::SOURCE),
     );
-    add(Capability::Midi, keeps_midi(plan));
+    add(
+        Capability::Midi,
+        !plan.sequences.is_empty() || reads_midi(plan) || hears_midi(plan),
+    );
     // A navigation root or a route: lowering gives the first root with a
     // `navigationKey` its `navigationBack`, and every route has a key. The
     // others are a route's or a root's props, each read only by the family.
@@ -265,6 +248,19 @@ pub fn apple_uses(plan: &Plan) -> Uses {
         .any(|id| binds(plan, BindingKind::Prop, id as u16)),
     );
     uses
+}
+
+fn command_capability(name: &str) -> Option<Capability> {
+    Some(match name {
+        // The same Swift family presents the file and document pickers.
+        // `requestPermission` and dropped or pasted documents are core.
+        name if DOCUMENT_PICKERS.contains(&name) => Capability::Picker,
+        "startTrace_EXPERIMENTAL" | "stopTrace_EXPERIMENTAL" => Capability::Traces,
+        PICTURE_IN_PICTURE => Capability::Video,
+        name if SOUND_COMMANDS.contains(&name) => Capability::Sound,
+        name if MIDI_COMMANDS.contains(&name) => Capability::Midi,
+        _ => return None,
+    })
 }
 
 /// What a data module's `grants` select of the native roster on Apple: the

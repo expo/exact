@@ -27,7 +27,7 @@ pub(super) struct Open {
     anchor: Option<Rect4>,
     reading_anchor: bool,
     point: Option<(f32, f32)>,
-    serial: u32,
+    pub(super) serial: u32,
     key: NodeKey,
     pub(super) restore: Option<NodeKey>,
     /// Whether the invoker is a programmatic `source` (it invokes nothing
@@ -191,6 +191,17 @@ impl<D: DataSource> Presenter<D> {
             return false;
         }
         let anchor = invoker.and_then(|id| self.box_of(id)).map(|b| b.rect);
+        let dismissible = modal
+            || self
+                .host
+                .kernel()
+                .node(id)
+                .is_some_and(|n| n.props.str(PropId::Popover) != Some("manual"));
+        let request = if dismissible {
+            self.request_back_layer(3)
+        } else {
+            None
+        };
         let restore = self.replace_surface(invoker, now);
         if let Err(e) = self.pointer_cancel(now) {
             self.host.log(e);
@@ -204,6 +215,7 @@ impl<D: DataSource> Presenter<D> {
         }
         // A surface presented by a synchronous blur handler owns focus and paint.
         if self.top_open() {
+            self.resolve_back_layer(request);
             return false;
         }
         // A blur handler can destroy or replace the dialog.
@@ -216,9 +228,10 @@ impl<D: DataSource> Presenter<D> {
             if let Some(e) = self.set_focus(restore, now) {
                 self.host.log(e);
             }
+            self.resolve_back_layer(request);
             return false;
         }
-        let serial = self.next_surface_serial();
+        let serial = request.unwrap_or_else(|| self.next_surface_serial());
         let node = self.host.kernel().node(id);
         let by_source = invoker
             .and_then(|i| self.host.kernel().node(i))
@@ -244,6 +257,7 @@ impl<D: DataSource> Presenter<D> {
             measured: None,
             placement: top::area::History::default(),
         });
+        self.resolve_back_layer(request);
         if !modal {
             if let Err(e) = self
                 .host
@@ -322,6 +336,7 @@ impl<D: DataSource> Presenter<D> {
         let Some(open) = self.alert.take() else {
             return;
         };
+        self.update_hosted_back();
         self.queue_surface_closed(open.key, open.modal);
         if !open.modal {
             self.report_top_layer();

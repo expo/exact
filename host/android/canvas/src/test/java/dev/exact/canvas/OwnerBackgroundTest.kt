@@ -119,7 +119,7 @@ class OwnerBackgroundTest {
         val chrome = ArrayList<Int>()
         val requests = ArrayList<Int>()
         owner.chrome = { chrome += it[0] }
-        owner.asked = { requests += it[0] }
+        owner.asked = { words, _ -> requests += words[0] }
         try {
             val frames = Host.frames
             owner.ask {
@@ -293,7 +293,7 @@ class OwnerBackgroundTest {
         val calls = ArrayList<String>()
         val landscape = intArrayOf(Requests.ORIENTATION, 0, 5, 1, 0b1100, 0, 0, 0)
         owner.chrome = { calls += "chrome ${it[0]}" }
-        owner.asked = { assertArrayEquals(landscape, it); calls += "orientation" }
+        owner.asked = { words, _ -> assertArrayEquals(landscape, words); calls += "orientation" }
         withMainSyncBarrier {
             assertTrue(owner.boot(64, 64, 1f, "", "", false, started = {
                 turn(1)
@@ -327,7 +327,7 @@ class OwnerBackgroundTest {
         val alert = intArrayOf(Requests.SURFACE, 0, 10, 1, Surfaces.ALERT, 0, 0, 0, 64, 64, 0, 0, 0)
         owner.published = { calls += "published" }
         owner.chrome = { calls += "chrome ${it[0]}" }
-        owner.asked = { assertArrayEquals(alert, it); calls += "alert" }
+        owner.asked = { words, _ -> assertArrayEquals(alert, words); calls += "alert" }
         assertTrue(owner.boot(64, 64, 1f, "", "", false) {})
         owner.ask { }
         main.idle()

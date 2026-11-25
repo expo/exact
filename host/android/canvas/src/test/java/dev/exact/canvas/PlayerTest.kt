@@ -154,6 +154,32 @@ class PlayerTest {
         assertEquals(Color.BLUE, tip(10f))
     }
 
+    @Test fun collectingAHostedViewsClipPreservesThePaint() {
+        val node = RenderNode("module").apply { setPosition(0, 0, 60, 60) }
+        val clip = intArrayOf(4, f(10), f(20), f(40), f(30)) + IntArray(8)
+        val draw = intArrayOf(28, 1, 2, 0, 0, f(60), f(60)) + IntArray(9)
+        val stream = identity + clip + draw + intArrayOf(6)
+        fun paint(collect: Boolean): Bitmap {
+            val graph = PaintedOrigins().apply { hasHostedViews = collect }
+            val bitmap = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
+            val canvas = object : Canvas(bitmap) {
+                override fun drawRenderNode(node: RenderNode) { drawColor(Color.BLUE) }
+            }
+            Player(emptyMap()).apply { origins = graph; native = { node } }
+                .replay(canvas, IntBuffer.wrap(stream), 0, stream.size)
+            if (collect) {
+                val visible = RectF(0f, 0f, 60f, 60f)
+                assertTrue(graph.transform(node, android.graphics.Matrix(), visible))
+                assertEquals(RectF(10f, 20f, 50f, 50f), visible)
+            }
+            return bitmap
+        }
+        val without = paint(false)
+        assertEquals(Color.BLUE, without.getPixel(10, 20))
+        assertEquals(Color.TRANSPARENT, without.getPixel(9, 20))
+        assertTrue(without.sameAs(paint(true)))
+    }
+
     @Test fun anIframeKeepsItsFilterOriginAndItsOwnPaintClip() {
         val graph = PaintedOrigins().apply { tracksFrames = true }
         val frame = RenderNode("frame").apply { setPosition(0, 0, 200, 100) }

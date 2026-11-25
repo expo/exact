@@ -83,6 +83,14 @@ pub use program::Program;
 pub mod host_work;
 pub mod request;
 pub use host_work::HostWork;
+/// The data handler for a BiDi message from a named browser sandbox (LLP 1020.002 D9).
+pub const SCRIPT_MESSAGE: &str = "event:script.message";
+
+/// Whether a package calls this source as a handler with JSON arguments and a JSON result.
+pub fn is_package_handler(source: &str) -> bool {
+    source.starts_with("tool:") || source == SCRIPT_MESSAGE
+}
+
 pub mod runner;
 pub use runner::QueuedSendReplacer;
 pub mod sandbox;
@@ -171,7 +179,8 @@ pub use secrets::{SecretLease, SecretWait, SharedSecrets};
 pub use store::{Socket, SocketCall, Store, StoreChange, StoreError, StoreWrite};
 pub use uses::{svg_filters, svg_islands, uses, Capability, Uses};
 pub use viewport::{
-    Contrast, Fold, Gamut, Hover, Pointer, Posture, Preferences, ScreenReader, Update, Viewport,
+    Contrast, Fold, Gamut, Hover, Pointer, Posture, Preferences, ScreenOrientation, ScreenReader,
+    Update, Viewport,
 };
 pub use vm::Trap;
 

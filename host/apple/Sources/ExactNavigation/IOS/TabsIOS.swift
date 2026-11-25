@@ -236,7 +236,7 @@ extension NavigationHost {
     func followSearchTab() {
         #if os(iOS)
         guard #available(iOS 26.0, *), let index = builtSearch, let tab = builtTabs[index] as? UISearchTab,
-              let root = tabStack(index)?.stackRoutes.first as? RouteController else { return }
+              let root = (tabSplits[tabPanels[index]]?.list ?? routesStack(index))?.stackRoutes.first as? RouteController else { return }
         // A built root with no field, or one that lost it, is a landing page
         let activates = root.search?.field?.props["autofocus"].map { $0 != "false" } ?? false
         guard tab.automaticallyActivatesSearch != activates else { return }

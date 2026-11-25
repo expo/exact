@@ -303,6 +303,7 @@ impl<D: DataSource> Host<D> {
         let mut runner = runner;
         let _roles = runner.bind_roles(); // Its own while it opens (LLP 1121 stage 5).
         runner.set_device_links(links.device);
+        batch.package_views(runner.plan());
         // @ref LLP 1095 D4 — the theme's reach into the host's own sheet (a
         // new runner's page drops the last one's, glue.js).
         batch.theme(&exact_kernel::style::roles::theme_css());
@@ -619,7 +620,10 @@ impl<D: DataSource> Host<D> {
         let answers = [
             match checked {
                 Some((env, keyboard)) => self.put_view(env, size, keyboard),
-                None => self.runner.set_view(size, None).map_err(viewport_error),
+                None => self
+                    .runner
+                    .set_view(size, None, None)
+                    .map_err(viewport_error),
             },
             (self.runner.set_preferences(viewport.preferences)).map_err(viewport_error),
             // the fold rides the same report (LLP 1078 D6)

@@ -264,7 +264,14 @@ impl<D: DataSource> Presenter<D> {
                 input.cancelable = false;
                 let bound = self.bound_text(id);
                 self.field_history.applied(id, &next, redo);
-                if let Some(error) = self.apply_field_edit(id, next, selection, bound, now, input) {
+                if let Some(error) = self.apply_field_edit(
+                    id,
+                    next,
+                    field::EditSelection::Presenter(selection),
+                    bound,
+                    now,
+                    input,
+                ) {
                     self.host.log(error);
                 }
             }

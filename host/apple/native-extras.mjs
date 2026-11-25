@@ -10,6 +10,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, relative, resolve } from 'node:path';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 import { nativePackageConfig } from '../../js/bake/src/package-config.mjs';
+import { swiftPackageInventories } from '../../scripts/package-libraries.mjs';
 import { experimental } from './toolchain.mjs';
 import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
 import { widgetsDigest } from './widgets.mjs';
@@ -35,13 +36,17 @@ export function nativeExtras(app, platform = 'ios', extensions, contractSources 
   // Paths say where a checkout is, not what it holds: every file is named by where it is in its package or app,
   // and by its bytes.
   const named = (value) => typeof value === 'string' && value.startsWith('/') ? (existsSync(value) ? `${basename(value)}:${sha(readFileSync(value))}` : `missing:${basename(value)}`) : Array.isArray(value) ? value.map(named) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, named(v)])) : value;
-  const packages = appleImplementations(app.dir, platform, extensions, contractSources).map(named);
+  // An implementation's package root is a directory, which has no bytes to name: a Swift package it ships by path is
+  // named by its files instead, as the build's inputs name it (swiftPackageInventories).
+  const implementations = appleImplementations(app.dir, platform, extensions, contractSources);
+  const packages = implementations.map(({ swiftPackageRoot, ...impl }) => named(impl));
+  const shipped = swiftPackageInventories(app, implementations, platform).map(row => row.identity);
   const modules = app.modulesFor(platform);
   const own = (modules.apple ?? []).map(file => [relative(app.dir, file), sha(readFileSync(file))]);
   const frameworks = (modules.frameworks ?? []).map(file => relative(app.dir, file));
   const composing = packages.length > 0 || own.length > 0;
   const tamber = composing && existsSync(`${app.dir}/app.tamber`) ? sha(readFileSync(`${app.dir}/app.tamber`)) : null;
   // The packages' configuration, which the composed module carries (compose.mjs `composedModule`).
-  const config = composing ? nativePackageConfig(app.manifest, platform) : {};
-  return sha(canonical({ version: 1, packages, own, frameworks, composing, tamber, data: composing ? app.manifest.data ?? null : null, tags: modules.tags ?? [], ...(Object.keys(config).length ? { config } : {}) }));
+  const config = composing ? nativePackageConfig(app.manifest, platform, process.env, true) : {};
+  return sha(canonical({ version: 1, packages, own, frameworks, composing, tamber, data: composing ? app.manifest.data ?? null : null, tags: modules.tags ?? [], ...(Object.keys(config).length ? { config } : {}), ...(shipped.length ? { shipped } : {}) }));
 }

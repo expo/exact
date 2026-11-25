@@ -6,6 +6,11 @@ use super::Bridge;
 use exact_runner::DataSource;
 
 impl<D: DataSource> Bridge<D> {
+    /// The keyboard reported by the browser before boot.
+    pub fn set_launch_keyboard(&mut self, keyboard: u32) {
+        self.launch_facts.keyboard = exact_runner::page::Keyboard::from_code(keyboard);
+    }
+
     /// The browser copied a completed drawing before asynchronous PNG encoding.
     pub fn canvas_snapshotted(&mut self, ticket: u64) -> bool {
         self.host

@@ -76,6 +76,7 @@ impl<D: DataSource> Presenter<D> {
         self.host
             .timer_due_ms()
             .into_iter()
+            .chain(self.module_due())
             .chain(self.host.runner().waits().next_check())
             .chain(self.idle_timer_retry.then_some(self.host.now()))
             .reduce(f64::min)

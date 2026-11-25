@@ -1067,7 +1067,8 @@ browser alone.
 order written. For example, `backdrop-filter="blur(12px) saturate(1.14)"`
 blurs the backdrop, then increases its saturation. `saturate(0)` is grayscale;
 `saturate(180%)` is the same as `saturate(1.8)`. A function may appear only once.
-Web, macOS and Linux apply these functions; iOS/tvOS use the fixed `.light`
+Web, macOS and the painted hosts (Android 12 and later, Windows and Linux)
+apply these functions; iOS/tvOS use the fixed `.light`
 system material approximation. macOS samples only the parent layer's subtree
 and clips children to the filter's border box, so make a glass panel a sibling
 of what it covers (a floating composer beside its scrolling transcript), not a

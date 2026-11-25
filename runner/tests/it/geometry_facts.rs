@@ -27,6 +27,7 @@ shape Insets
 shape Observed
   safeArea: option<Insets>
   layoutMargins: option<Insets>
+  bar: option<Insets>
 shape Margins
   layoutMargins: option<Rect>
 shape Hero
@@ -141,6 +142,30 @@ fn a_layout_reaches_the_fact_in_a_later_commit() {
     );
     lay_out(&mut r);
     assert!(r.refresh_geometry().unwrap().is_none());
+}
+
+#[test]
+fn a_route_bar_reaches_a_geometry_reader_at_the_next_layout() {
+    use exact_kernel::{BlockAxis, HostBlock};
+    let mut r = hero("120", "");
+    let slot = r.kernel().find_by_id("hero")[0].index;
+    let view = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(120.0),
+        height: BlockAxis::Is(40.0),
+    };
+    r.kernel_mut().set_host_block(view, Some(block)).unwrap();
+    for width in [0.0, 69.0, 0.0] {
+        assert!(!r
+            .kernel_mut()
+            .set_route_bar_insets(view, [0.0, width])
+            .unwrap());
+        lay_out(&mut r);
+        assert!(r.refresh_geometry().unwrap().is_some());
+        let sides = some(&some(&fields(&r, "g")[3])[2]);
+        assert_eq!(sides, [0.0, width as f64, 0.0, 0.0].map(Value::Number));
+    }
 }
 
 #[test]
@@ -365,5 +390,83 @@ component Card
     assert!(
         r.refresh_geometry().unwrap().is_none(),
         "the instance's request ended"
+    );
+}
+
+#[test]
+fn the_native_chain_answers_the_targets_its_holder_reported() {
+    // A box outside every owner reads the session view's targets: unavailable until they are
+    // reported, then, at the next layout, the chain by number and the relations by name, each
+    // with its kinds, identity, generation, frame in its window and raw insets, `none` while
+    // the target is unavailable
+    use exact_kernel::style::targets::{ChainEntry, Kind, NativeTarget, NativeTargets, Relation};
+    let mut r = boot(
+        "shape Target
+  number: option<number>
+  relation: option<string>
+  kinds: string[]
+  id: number
+  generation: number
+  frame: option<Rect>
+  insets: option<Insets>
+shape Chain
+  available: bool
+  generation: number
+  entries: option<Target[]>
+component App
+  resource c = exactNativeChain(\"hero\") as shape Chain
+  view
+    column id=\"hero\"
+",
+    )
+    .unwrap();
+    lay_out(&mut r);
+    assert_eq!(fields(&r, "c")[0], Value::Bool(false));
+    let controller = NativeTarget {
+        id: 4,
+        generation: 2,
+        insets: Some([62.0, 0.0, 34.0, 0.0]),
+        frame: Some([0.0, 0.0, 402.0, 874.0]),
+    };
+    let window = NativeTarget {
+        id: 5,
+        generation: 1,
+        insets: None,
+        frame: None,
+    };
+    let targets = NativeTargets {
+        chain: vec![ChainEntry {
+            target: controller,
+            kinds: Kind::Navigation.bit(),
+        }],
+        relations: vec![(Relation::Window, window)],
+    };
+    r.kernel_mut().set_session_targets(targets).unwrap();
+    lay_out(&mut r);
+    assert!(r.refresh_geometry().unwrap().is_some());
+    let c = fields(&r, "c");
+    assert_eq!(c[0], Value::Bool(true));
+    let Value::Option(Some(entries)) = &c[2] else {
+        panic!("entries: {:?}", c[2])
+    };
+    let Value::List(entries) = &**entries else {
+        panic!("a list: {entries:?}")
+    };
+    let entry = |i: usize| match &entries[i] {
+        Value::Record(fields) => fields.to_vec(),
+        other => panic!("a record: {other:?}"),
+    };
+    let (first, second) = (entry(0), entry(1));
+    assert_eq!(first[0], Value::some(Value::Number(1.0)));
+    assert_eq!(first[1], Value::Option(None));
+    assert_eq!(first[2], Value::list(vec![Value::str("navigation")]));
+    assert_eq!((number(&first[3]), number(&first[4])), (4.0, 2.0));
+    assert_eq!(number(&some(&first[5])[2]), 402.0);
+    assert_eq!(number(&some(&first[6])[0]), 62.0);
+    assert_eq!(second[0], Value::Option(None));
+    assert_eq!(second[1], Value::some(Value::str("window")));
+    assert_eq!(
+        (&second[5], &second[6]),
+        (&Value::Option(None), &Value::Option(None))
     );
 }

@@ -544,6 +544,10 @@ impl<D: DataSource> Runner<D> {
         }
         let mut work_spent = None;
         loop {
+            let modules = self.seams.modules;
+            let show = modules.next_list_show(self).filter(|at| *at <= now_ms);
+            // Finish what is already due through the presentation instant before its handler runs.
+            let now_ms = show.map_or(now_ms, |at| at.max(self.now_ms));
             // Ties follow declaration order, then instance creation order.
             let due = self
                 .timers
@@ -952,6 +956,43 @@ impl<D: DataSource> Runner<D> {
                     self.sample();
                     let (audio, now) = (self.seams.audio, self.now_ms);
                     audio.transport_wake(self, now);
+                    continue;
+                }
+                if let Some(at) = show {
+                    if receipts.len() == TIMER_FIRE_LIMIT {
+                        return Advanced {
+                            receipts,
+                            now_ms: self.now_ms,
+                            error: Some(RunnerError::TimerFireLimit {
+                                limit: TIMER_FIRE_LIMIT,
+                            }),
+                            stopped_on_request: false,
+                            needs_apply: false,
+                        };
+                    }
+                    self.now_ms = self.now_ms.max(at);
+                    let ticket = self.next_ticket;
+                    match modules.show_listed(self) {
+                        Ok(Some(receipt)) => receipts.push(Timed {
+                            at_ms: self.now_ms,
+                            receipt,
+                        }),
+                        Ok(None) => (),
+                        Err(error) => {
+                            return Advanced {
+                                receipts,
+                                now_ms: self.now_ms,
+                                error: Some(error),
+                                stopped_on_request: false,
+                                needs_apply: false,
+                            }
+                        }
+                    }
+                    if until_request && self.next_ticket != ticket {
+                        landed = self.now_ms;
+                        stopped_on_request = true;
+                        break;
+                    }
                     continue;
                 }
                 break;

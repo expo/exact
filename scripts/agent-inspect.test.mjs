@@ -751,8 +751,9 @@ test('state world events uses the world seam and an optional type filter', async
 // A target covered by what may leave on a timer the frozen clock never reaches (euxy FRICTION 9): the refusal names the
 // tasks still waiting and the step that runs them; with none waiting it is as it was.
 test('a covered target\'s refusal names the tasks waiting on the clock', async () => {
-  const covered = (tasks, clock = 0) => tapRefusal({ state: async () => ({ clock, tasks }), tree: async () => ({ nodes: [] }) }, 'go', new Error('tap #333: node #6 covers its middle'));
+  const covered = (tasks, clock = 0, location = 'its middle') => tapRefusal({ state: async () => ({ clock, tasks }), tree: async () => ({ nodes: [] }) }, 'go', new Error(`tap #333: node #6 covers ${location}`));
   expect((await covered({ boot: 1, splash: 900, charge: null })).message).toBe('tap #333: node #6 covers its middle; the agent\'s clock stands at 0 ms, and the app\'s tasks wait on it (`boot` at 1 ms, `splash` at 900 ms): if what covers it leaves on a timer, `clock +900` runs them');
+  expect((await covered({ splash: 900 }, 0, 'the requested point')).message).toContain('clock +900');
   expect((await covered({ splash: 900 }, 1000)).message).toBe('tap #333: node #6 covers its middle');
   expect((await covered({})).message).toBe('tap #333: node #6 covers its middle');
 });

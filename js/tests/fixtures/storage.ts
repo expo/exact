@@ -177,6 +177,13 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     try { return {text:String((await native!.later({value})).text)}; }
     catch(error:any) { return {text:'refused: ' + error.message}; }
   }
+  if (op === 'native-probe') {
+    let sync: string;
+    try { native!.call({op: 'ping'}); sync = 'answered'; }
+    catch (e: any) { sync = e.name + '|' + e.message; }
+    try { await native!.later({op: 'ping'}); return {text: 'resolved'}; }
+    catch (e: any) { return {text: [native!.available, sync, e.name, e.message].join('|')}; }
+  }
   if (op === 'native-direct') return {text: String(native!.call({value}).text)}; // no bake branch
   // A package's synchronous form beside the app's own native module (native_later.rs).
   if (op === 'native-extension') return {text: String(native!.call({extension: 'pkg', sync: 'echo', args: {value}}).text)};

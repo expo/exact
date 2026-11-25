@@ -61,23 +61,23 @@ export function advance(to, wall, stop, timers = true) {
     let next = null,
       then = null,
       head = null;
-    const execution = t => (t.change ? Math.max(t.due, clock.now) : (Link.timerWait?.execution(t, wall) ?? t.due)),
-      priority = t => (t.hatch || t.data ? 2 : t.wait === 4 ? 1 : 0);
+    const execution = t => (t.change || t.presentation ? Math.max(t.due, clock.now) : (Link.timerWait?.execution(t, wall) ?? t.due)),
+      priority = t => (t.presentation ? 3 : t.hatch || t.data ? 2 : t.wait === 4 ? 1 : 0);
     // Run authored tasks before hatch and data callbacks due at the same time
-    if (!clock.stopped)
-      for (const t of clock.timers)
-        if (
-          (timers || t.change) &&
-          (!t.change || t.ready) &&
-          execution(t) <= to &&
-          !(wall && t.frame) &&
-          (!next ||
-            execution(t) < execution(next) ||
-            (execution(t) === execution(next) &&
-              (priority(t) < priority(next) || (priority(t) === priority(next) &&
-                (t.due < next.due || (t.due === next.due && timerOrder(t, next) < 0))))))
-        )
-          next = t;
+    for (const t of clock.timers)
+      if (
+        (!clock.stopped || t.presentation) &&
+        (timers || t.change || t.presentation) &&
+        (!t.change || t.ready) &&
+        execution(t) <= to &&
+        !(wall && t.frame) &&
+        (!next ||
+          execution(t) < execution(next) ||
+          (execution(t) === execution(next) &&
+            (priority(t) < priority(next) || (priority(t) === priority(next) &&
+              (t.due < next.due || (t.due === next.due && timerOrder(t, next) < 0))))))
+      )
+        next = t;
     // An answer's `then` goes before a timer due at the same time: the answer landed first; a queue's `next` between
     // them (LLP 1092 D3).
     for (const m of Mutations)
@@ -114,7 +114,7 @@ export function advance(to, wall, stop, timers = true) {
             ? beatAfter(at, next.ms, Math.max(clock.now, wall ? to : clock.now))
             : next.due + next.ms;
     }
-    if (!head && !then && !next.hatch && !next.data) {
+    if (!head && !then && !next.hatch && !next.data && !next.presentation) {
       const counts = (clock.timerFirings ??= Array(7).fill(0));
       counts[next.frame ? 6 : wall && next.wait ? 5 : (next.wait ?? 0)]++;
     }
@@ -165,7 +165,7 @@ export function drive() {
   if (clock.agent || Poisoned) return;
   let next = Infinity;
   // no timer while a wake runs unseen (wakes.js)
-  for (const t of [...(clock.stopped ? [] : clock.timers), ...Mutations])
+  for (const t of [...(clock.stopped ? clock.timers.filter(t => t.presentation) : clock.timers), ...Mutations])
     if (!t.frame && (!t.change || t.ready))
       next = Math.min(next, Link.timerWait?.wake(t) ?? t.due + (t.tolerance ?? 0));
   for (const m of Mutations) if (m.next < next) next = m.next;

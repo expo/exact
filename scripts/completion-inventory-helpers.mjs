@@ -57,6 +57,8 @@ export function helperClassifications(group) {
   ]),
   group("module announcements", ["subscription"], "bound source/module and its active readers in this session", "UI-owned",
     "The named public runner-crate source is the module announcements API or its value/admission helper. runner/src/runner/time.rs changed/apply_announced settle source watches; modules/events.rs raises events into the live module bindings. No durable outcome record is provided.", [
+    ["runner:runner/src/runner/modules/agent.rs", "check_source_substitute"],
+    ["runner:runner/src/runner/modules/arrival.rs", "check_arrival_field"],
     ["runner:runner/src/local_network.rs", "fact launch launch_once prompts Reach::refusal Reach::static_risk report State::parse State::word"],
     ["runner:runner/src/runner/source.rs", "Interrupt::trigger Native::changed Native::on_changed"],
   ]),
@@ -115,6 +117,7 @@ export function helperClassifications(group) {
     ["runner:runner/src/runner/field.rs", "Event::edit_payload Event::field_payload FieldSelection::at_end FieldSelection::caret FieldSelection::clamped FieldSelection::parse SelectionDirection::name SelectionDirection::of utf16_len"],
     ["runner:runner/src/runner/host_kinds.rs", "Event::clipboard_payload Event::media_payload Event::of_host_kind Event::paste_files_payload Event::selection_change_payload Event::selection_payload"],
     ["runner:runner/src/runner/modules/declared/desktop.rs", "chord_refusal"],
+    ["runner:runner/src/desktop.rs", "single_side_shortcut"],
     ["runner:runner/src/runner/pointer.rs",
       "AtomEvent::parse AtomEvent::value DropEvent::parse DropEvent::parse_point DropEvent::value Event::contextmenu_payload Event::pointer_payload MouseEvent::parse " +
       "MouseEvent::value PointerEvent::parse PointerEvent::value WheelEvent::parse WheelEvent::value"],
@@ -149,7 +152,7 @@ export function helperClassifications(group) {
     "The named public runner-crate source is the module lifecycle API or its value/admission helper. runner/src/runner/modules/bound.rs binds live module instances; runner/src/runner/kept.rs data_ready reconciles the current source/store before settlement.", [
     ["runner:runner/src/runner/retirement.rs", "ModuleIdentity::instance ModuleIdentity::retire ModuleInstance::failure"],
     ["runner:runner/src/runner/source.rs",
-      "Interrupt::new Native::extension_handler Native::handler Native::host Native::host_call Native::hosted Native::hosted_call Native::set Native::sync Native::sync_form Native::synced PreloadWake::ask " +
+      "Interrupt::new Native::extension_handler Native::handler Native::host Native::host_call Native::host_packages Native::hosted Native::hosted_call Native::set Native::sync Native::sync_form Native::synced PreloadWake::ask " +
       "PreloadWake::set Target::mutation Target::text"],
   ]),
   group("navigation", ["one-shot"], "current router, visit, tab or navigation operation", "UI-owned",
@@ -209,7 +212,6 @@ export function helperClassifications(group) {
     ["runner:runner/src/runner/router.rs", "Runner::host_root"],
     ["painted:host/painted/src/flights.rs", "Host::flying Host::start_flights"],
     ["painted:host/painted/src/presenter/arrive.rs", "Presenter::focus_landed"],
-    ["painted:host/painted/src/presenter/reveal.rs", "Presenter::reveal_flights"],
     ["painted:host/painted/src/presenter/stage/authored.rs", "Presenter::entrance Presenter::hold_arriving Presenter::top_of"],
     ["painted:host/painted/src/presenter/stage/zoom.rs", "Presenter::navigation_container Presenter::source_node Presenter::source_rect Presenter::sync_sources"],
   ]),
@@ -238,6 +240,7 @@ export function helperClassifications(group) {
     ["runner:runner/src/canvas_capture.rs", "Encoding::lossy_quality Encoding::new media_type_of Request::capture_canvas_as"],
     ["runner:runner/src/desktop.rs", "image_node label"],
     ["runner:runner/src/instance/owners.rs", "Tree::owners"],
+    ["runner:runner/src/lib.rs", "is_package_handler"],
     ["runner:runner/src/request_preload.rs", "secret_in_origin"],
     ["runner:runner/src/runner.rs", "Runner::plan_site_of"],
     ["runner:runner/src/runner/checkpoint.rs", "Runner::record_render_request"],

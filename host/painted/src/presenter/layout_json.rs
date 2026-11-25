@@ -16,7 +16,7 @@ impl<D: DataSource> Presenter<D> {
         let mut s = String::new();
         // LLP 1012 §1: the insets a device's shell told (`window.rs`; zeros
         // on a host with none, which has no safe area or software keyboard);
-        // the fold is whatever the agent preferred (LLP 1078 D7).
+        // the segment rectangles are the same ones CSS reads (LLP 1078).
         let fold = self.host.runner().viewport().fold;
         let [top, right, bottom, left, keyboard] = self.env_insets().map(|v| num(r2(v)));
         let _ = write!(
@@ -29,7 +29,7 @@ impl<D: DataSource> Presenter<D> {
             fold.cols,
             fold.rows
         );
-        for (i, r) in self.segments.iter().enumerate() {
+        for (i, r) in self.host.kernel().env().segments.iter().enumerate() {
             if i > 0 {
                 s.push(',');
             }

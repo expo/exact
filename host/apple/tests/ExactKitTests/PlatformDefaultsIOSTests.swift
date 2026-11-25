@@ -525,6 +525,15 @@ final class PlatformDefaultsIOSTests: XCTestCase {
         // The axis it scrolls is part of the unsaid answer.
         p.apply(wireBatch([["op": "style", "id": 3, "style": ["overflow_x": "scroll", "overflow_y": "scroll"]]]))
         XCTAssertEqual(try mode(3), .interactive)
+        // Each of UIKit's five modes by its name (LLP 1123 D7).
+        let modes: [(String, UIScrollView.KeyboardDismissMode)] = [
+            ("none", .none), ("on-drag", .onDrag), ("interactive", .interactive),
+            ("on-drag-with-accessory", .onDragWithAccessory), ("interactive-with-accessory", .interactiveWithAccessory),
+        ]
+        for (said, expected) in modes {
+            p.apply(wireBatch([["op": "props", "id": 3, "set": ["keyboardDismissMode": said], "clear": []]]))
+            XCTAssertEqual(try mode(3), expected, said)
+        }
     }
 
     /// LLP 1115.000 D11.6: a button's `aria-keyshortcuts` is a key command
@@ -534,7 +543,7 @@ final class PlatformDefaultsIOSTests: XCTestCase {
         let p = presenter([
             ["op": "create", "id": 1, "kind": "view"],
             ["op": "create", "id": 2, "kind": "button", "handlers": ["press"], "props": ["accessibilityKeyShortcuts": "Meta+n", "accessibilityLabel": "New Note"]],
-            ["op": "create", "id": 3, "kind": "button", "handlers": ["press"], "props": ["accessibilityKeyShortcuts": "Meta+Shift+f Escape"]],
+            ["op": "create", "id": 3, "kind": "button", "handlers": ["press"], "props": ["accessibilityKeyShortcuts": "Mod+Shift+O Escape"]],
             ["op": "children", "id": 1, "ids": [2, 3]],
             ["op": "roots", "ids": [1]],
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0],
@@ -547,7 +556,7 @@ final class PlatformDefaultsIOSTests: XCTestCase {
         XCTAssertEqual(named.discoverabilityTitle, "New Note", "which is what the ⌘ overlay lists")
         XCTAssertTrue(named.wantsPriorityOverSystemBehavior)
         // A button with no name has nothing to be listed by.
-        let bare = try XCTUnwrap(commands.first { $0.input == "f" })
+        let bare = try XCTUnwrap(commands.first { $0.input == "o" && $0.modifierFlags == [.command, .shift] })
         XCTAssertEqual(bare.title, "")
         XCTAssertEqual(commands.count, 3)
     }

@@ -10,6 +10,7 @@ use exact_num::{push_text, text, Piece, Shortest};
 #[derive(Debug, Default)]
 pub struct Batch {
     ops: Vec<String>,
+    package_view_owners: Option<String>,
     collection_accepted: bool,
     seq: Option<(u64, u64)>,
     alerts: Vec<String>,
@@ -272,6 +273,18 @@ impl Batch {
     /// Whether nothing was recorded.
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
+    }
+
+    /// Replace the previous plan’s package view owners before creating elements (LLP 1133.008 D8).
+    pub(crate) fn package_views(&mut self, plan: &exact_plan::Plan) {
+        let owners = plan
+            .views
+            .iter()
+            .map(|view| (plan.str(view.tag), plan.str(view.package).to_owned()))
+            .collect::<Vec<_>>();
+        let mut json = String::new();
+        string_map(&owners, &mut json);
+        self.package_view_owners = Some(json);
     }
 
     /// `{"op":"create","id":…,"tag":…,"props":{…},"css":…,"handlers":[…]}`,
@@ -1128,6 +1141,10 @@ impl Batch {
             s.push_str(op);
         }
         s.push(']');
+        if let Some(owners) = self.package_view_owners {
+            s.push_str(r#","packageViewOwners":"#);
+            s.push_str(&owners);
+        }
         let timers = timer_due_ms.is_some();
         if !self.alerts.is_empty() {
             s.push_str(",\"alerts\":[");

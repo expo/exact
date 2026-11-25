@@ -1,9 +1,9 @@
-// hinge_helper.c — sets the iPhone Duo simulator's hinge angle and orientation
+// hinge_helper.m — sets the iPhone Duo simulator's hinge angle and orientation
 // from inside the simulator (`xcrun simctl spawn <udid> hinge_helper set
 // <degrees>`, `… orient <orientation>`), by posting the vendor-defined HID
 // events the hidden hinge slider and the orientation picker in Xcode's Device
 // Hub send.
-// `bun scripts/smoke.mjs duo` compiles it per run with the selected Xcode's
+// The driver and Duo smoke compile it per run with the selected Xcode's
 // simulator SDK (LLP 1078 D9).
 //
 // From artemnovichkov/hinge (https://github.com/artemnovichkov/hinge), MIT
@@ -33,6 +33,11 @@
 //   hinge_helper sweep <from> <to> <seconds>
 //   hinge_helper orient portrait|pud|landscape-left|landscape-right
 
+#include <TargetConditionals.h>
+#if !defined(EXACT_AGENT) || !TARGET_OS_SIMULATOR
+#error The hinge helper is a simulator driver tool.
+#endif
+#import <Foundation/Foundation.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach_time.h>
 #include <math.h>
@@ -88,6 +93,45 @@ static void send_angle(IOHIDEventSystemClientRef client, double degrees) {
     CFRelease(value);
 }
 
+// Simulator tooling only. CoreMotion reports the mechanical angle in degrees.
+@interface CMAngle : NSObject
+@property (readonly) float mechanicalAngleDegrees;
+@end
+
+@interface CMAngleManager : NSObject
++ (BOOL)isAvailable;
+- (void)startAngleUpdatesToQueue:(NSOperationQueue *)queue handler:(void (^)(CMAngle *angle))handler;
+- (void)stopAngleUpdates;
+@end
+
+static int fold(IOHIDEventSystemClientRef client, double degrees) {
+    Class angleManager = NSClassFromString(@"CMAngleManager");
+    if (![angleManager isAvailable]) {
+        fprintf(stderr, "fold needs an iOS simulator with a hinge (iPhone Duo)\n");
+        return 1;
+    }
+    CMAngleManager *manager = [angleManager new];
+    __block float last = NAN;
+    [manager startAngleUpdatesToQueue:NSOperationQueue.mainQueue handler:^(CMAngle *angle) {
+        if (angle) last = angle.mechanicalAngleDegrees;
+        CFRunLoopStop(CFRunLoopGetMain());
+    }];
+    send_angle(client, degrees);
+    const double deadline = NSProcessInfo.processInfo.systemUptime + 10;
+    while (last != (float)degrees) {
+        double remaining = deadline - NSProcessInfo.processInfo.systemUptime;
+        if (remaining <= 0) break;
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, remaining, false);
+    }
+    [manager stopAngleUpdates];
+    if (last != (float)degrees) {
+        fprintf(stderr, "fold: wanted %g degrees, last reported %.9g within 10 s\n", degrees, last);
+        return 1;
+    }
+    printf("%.9g\n", last);
+    return 0;
+}
+
 static int send_orientation(IOHIDEventSystemClientRef client, const char *name) {
     static const char *const names[] = {"portrait", "pud", "landscape-left", "landscape-right"};
     for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
@@ -102,6 +146,7 @@ static int send_orientation(IOHIDEventSystemClientRef client, const char *name) 
 
 static int usage(void) {
     fprintf(stderr, "usage: hinge_helper set <degrees>\n"
+                    "       hinge_helper fold <degrees>\n"
                     "       hinge_helper sweep <from> <to> <seconds>\n"
                     "       hinge_helper orient portrait|pud|landscape-left|landscape-right\n");
     return 64;
@@ -116,6 +161,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    if (strcmp(argv[1], "fold") == 0 && argc == 3) return fold(client, atof(argv[2]));
     if (strcmp(argv[1], "set") == 0 && argc == 3) {
         send_angle(client, atof(argv[2]));
     } else if (strcmp(argv[1], "sweep") == 0 && argc == 5) {

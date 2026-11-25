@@ -107,12 +107,12 @@ function holder(lock) {
   return Number.isInteger(pid) && pid > 0 ? `process ${pid}` : 'another process';
 }
 
-/** Whether a build owns `lock` now. */
-export function lockHeld(lock) {
+/** Whether an exclusive owner holds `lock`, or any owner when checking for exclusive access. */
+export function lockHeld(lock, { exclusive = false } = {}) {
   const osLock = kernel();
   let handle;
   try { handle = osLock.open(lock, false); }
   catch (e) { if (e.code === 'ENOENT') return false; throw e; }
-  try { return !osLock.take(handle, false); }
+  try { return !osLock.take(handle, exclusive); }
   finally { osLock.close(handle); }
 }

@@ -12,7 +12,7 @@ use std::rc::Rc;
 /// Shelf's data, as much as its screens read: a library of two books, no
 /// works for a subject, no book for an ISBN, and the clock. The fixture below asks for none.
 #[derive(Default)]
-struct Nothing;
+pub(super) struct Nothing;
 impl DataSource for Nothing {
     fn query(&mut self, name: &str, _: &[Value]) -> Result<Value, DataError> {
         let book = |id: &str, title: &str| {
@@ -62,7 +62,7 @@ impl DataSource for Nothing {
 /// list taller than the screen. Detail, pushed: the Back control, a
 /// heading, a text button. Bare, pushed: no header. Quiet, pushed: a header
 /// its route says is no bar's. Other: a heading alone.
-const APP: &str = r#"routes nav
+pub(super) const APP: &str = r#"routes nav
   tab home "/"
     detail "/detail"
     bare "/bare"
@@ -182,7 +182,7 @@ fn boot(source: &str) -> Presenter<Nothing> {
 
 /// A presenter whose shell shows bars, in a phone's window, and the
 /// pictures it recorded.
-fn barred(source: &str) -> (Presenter<Nothing>, Rc<RefCell<Vec<Pixmap>>>) {
+pub(super) fn barred(source: &str) -> (Presenter<Nothing>, Rc<RefCell<Vec<Pixmap>>>) {
     let mut p = boot(source);
     let pictures = Rc::new(RefCell::new(Vec::new()));
     p.serve_requests();
@@ -204,7 +204,7 @@ fn text(p: &Presenter<Nothing>, name: &str) -> String {
     node.text_runs().iter().map(|r| &*r.text).collect()
 }
 
-fn tap(p: &mut Presenter<Nothing>, name: &str) -> Result<String, String> {
+pub(super) fn tap(p: &mut Presenter<Nothing>, name: &str) -> Result<String, String> {
     let view = id(p, name);
     let result = p.tap(view);
     p.run_commands(|| Nothing);
@@ -707,6 +707,8 @@ fn bar_colour(pictures: &Rc<RefCell<Vec<Pixmap>>>) -> [u8; 4] {
     [c.red(), c.green(), c.blue(), c.alpha()]
 }
 
+#[path = "bars_tests/insets.rs"]
+mod insets;
 #[path = "bars_tests/scheme.rs"]
 mod scheme;
 #[path = "bars_tests/scroll.rs"]
@@ -768,6 +770,7 @@ fn the_largest_font_scale_clips_neither_bar() {
     let device = Device {
         night: false,
         font_scale: 2.0,
+        orientation: None,
         screen_reader: exact_runner::ScreenReader::Unknown,
         locale: "en-US".into(),
         rtl: false,
@@ -874,6 +877,7 @@ fn tv() -> Device {
     Device {
         night: false,
         font_scale: 1.0,
+        orientation: None,
         screen_reader: exact_runner::ScreenReader::Unknown,
         locale: "en-US".into(),
         rtl: false,

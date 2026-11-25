@@ -276,6 +276,7 @@ function createPresence(root) {
     for (const [el, letGo] of globalThis.exact?.motionHolds ?? []) if (leaving.contains(el)) letGo();
   };
   let first = new Map();
+  const exitBoxes = new Map();
 
   // Read the element's presented paint without our transparent surface or
   // layout offset. Paint animations keep their clocks: only their painted
@@ -441,14 +442,14 @@ function createPresence(root) {
     // says which (`still`, rt.js `commit`), and the wasm host's then holds
     // only its clock stamp (`at`). A view the page no longer holds is
     // tracked no longer, whether or not the batch measures.
-    before(batch, views) {
+    before(batch, views, departures = []) {
       first = new Map();
+      const place = measure();
       for (const el of surfaces) reveal(flips.get(el));
       for (const el of tracked) if (!el.isConnected) tracked.delete(el);
       const still = batch.still ?? !batch.ops?.some(op => op.op !== 'at');
       if (batch.presenceSnap) { for (const el of tracked) stop(el); }
       else if (!still) {
-        const place = measure();
         const gains = (batch.ops ?? []).filter(op => op.op === 'style' && op.css?.includes(LAYOUT)).map(op => views.get(op.id));
         for (const el of new Set([...tracked, ...gains])) {
           const at = el && place(el);
@@ -457,22 +458,25 @@ function createPresence(root) {
       }
       // The batch's leaving views, each read before any exit takes one out of flow
       const exits = (batch.ops ?? []).filter(op => op.op === 'exit').map(op => [views.get(op.id), op.css]).filter(([el]) => el?.isConnected);
+      exitBoxes.clear();
+      // Only a confirmed exit releases holds. A JS region may rescue portal content as it leaves.
       for (const [el] of exits) release(el);
-      const readings = exits.map(([el]) => kept(el));
+      for (const el of new Set([...departures, ...exits.map(([el]) => el)])) {
+        exitBoxes.set(el, { kept: kept(el), block: el.offsetParent, local: place(el) });
+      }
       // Let this commit update the underlying row before reapplying the
       // ghost policy in after(). Both run in the same task, before paint.
       for (const [parent, held] of ghostParents) {
         restoreIsolation(parent, held);
         held.released = true;
       }
-      exits.forEach(([el, css], i) => this.exit(el, css, readings[i]));
+      for (const [el, css] of exits) this.exit(el, css);
     },
-    // `at`: what `kept` returned for it, when `before` read it ahead of the batch's exits
-    exit(el, css, at) {
+    exit(el, css) {
       if (!el?.isConnected || !css) return;
       stop(el);
       release(el);
-      const [box, ranked] = at ?? kept(el), s = el.style;
+      const [box, ranked] = exitBoxes.get(el)?.kept ?? kept(el), s = el.style;
       if (el.parentElement.hasAttribute('data-exact-list-item')) unwrapListItem(el.parentElement);
       const parent = el.parentElement;
       // No input, no accessibility, no focus, no ids: a view re-created with
@@ -524,6 +528,16 @@ function createPresence(root) {
     // whose box moved plays back from where it was. All are measured before
     // any starts, so no move reads another's first frame.
     after(batch, views) {
+      // A restyle can establish or drop the containing block the saved offsets were relative to.
+      // Express the old box in the new block before measuring surviving layout transitions.
+      const locate = measure(), corrections = [];
+      for (const [el, { block, local }] of exitBoxes) {
+        if (!local || !el.hasAttribute('data-exiting') || block === el.offsetParent) continue;
+        const at = locate(el);
+        if (at) corrections.push([el.style, parseFloat(el.style.left) + local[0] - at[0], parseFloat(el.style.top) + local[1] - at[1]]);
+      }
+      for (const [style, x, y] of corrections) { style.left = `${x}px`; style.top = `${y}px`; }
+      exitBoxes.clear();
       const restyled = new Set((batch.ops ?? []).filter(op => op.op === 'style').map(op => views.get(op.id)));
       for (const [parent, held] of ghostParents) {
         if (held.released || restyled.has(parent)) {

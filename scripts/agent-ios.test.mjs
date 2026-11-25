@@ -122,7 +122,7 @@ test('test and agent carry one native startup check to every test file on iOS an
     import { writeFileSync } from 'node:fs';
     import { basename } from 'node:path';
     const spawn = processes.spawn;
-    let checks = 0, launches = 0;
+    let checks = 0, launches = 0, iosFiles = 0;
     mock.module('./scripts/app-shells.mjs', () => ({ ...shells, platformOf: () => null }));
     mock.module('./scripts/web-build.mjs', () => ({ ...builds, privateNativeBuild: () => ({ env: {}, seed() {}, close() {} }) }));
     mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
@@ -133,6 +133,10 @@ test('test and agent carry one native startup check to every test file on iOS an
       } else if (basename(args[0]) === 'agent.mjs') {
         launches++;
         assert.equal(options.env.EXACT_BUILD_CHECKED, 'checked-' + checks);
+        if (args.includes('ios') && args.includes('--test')) {
+          assert.equal(options.env.EXACT_IOS_TEST_CHECKED, iosFiles++ === 0 ? '' : 'sim:warned');
+          return spawn(command, ['-e', 'process.send({ checkedSimulatorAccessibility: "sim", status: "warned" })'], options);
+        }
       } else assert.fail('unexpected subprocess: ' + args);
       return spawn(command, ['-e', ''], options);
     } }));
@@ -147,6 +151,7 @@ test('test and agent carry one native startup check to every test file on iOS an
       assert.equal(checks - before[0], windows ? 0 : 1);
       assert.equal(launches - before[1], windows ? 0 : verb === 'test' ? 2 : 1);
     }
+    assert.equal(iosFiles, platforms.size === 1 ? 0 : 2);
   `, dir); } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

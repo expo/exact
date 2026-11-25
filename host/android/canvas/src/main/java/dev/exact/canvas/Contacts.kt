@@ -101,7 +101,9 @@ internal class Contacts(private val view: ExactView, private val scrolling: Scro
         waiting = false
         val additional = pending.any { it.actionMasked == MotionEvent.ACTION_POINTER_DOWN }
         if (!additional && words != null && longPressesIn(words) != longPresses) {
-            dropCandidate(); module.cancel(); endEngine(); scrolling.yieldToHosted()
+            dropCandidate(); module.cancel()
+            if (words[0] and 64 == 0) endEngine() // A lifted reorder row still follows this contact.
+            scrolling.yieldToHosted()
         } else {
             contextPending = false
             admit()

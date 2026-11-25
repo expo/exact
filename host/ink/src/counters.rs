@@ -65,6 +65,7 @@ counters! {
     ShapeMisses => "shape_cache_misses",
     MeasureHits => "measure_cache_hits",
     MeasureMisses => "measure_cache_misses",
+    QueueSubmits => "queue_submits",
 }
 
 const COUNT: usize = NAMES.len();

@@ -120,11 +120,6 @@ const LINES: &[(&str, &str, &str)] = &[
     ("host/web-js/symbols.js", r#"const [, box, raw] = f, colon = raw.indexOf(":");"#, "iconForm: the rule's marker"),
     ("host/web-js/symbols.js", r#"if (rule !== "evenodd" || !d.trim() || d.includes(":")) return null;"#, "iconForm: a second colon is no icon"),
     ("host/web-js/dom.js", "set cssText(t) { this.map.clear(); for (const d of t.split(';')) { const i = d.indexOf(':'); if (i > 0) this.map.set(d.slice(0, i).trim(), d.slice(i + 1).trim()); } }", "the DOM shim's style declarations"),
-    (
-        "host/web/navigation/routes.js",
-        r#"].join("|"))].join("/");"#,
-        "the sidebar's placement key, its styles joined",
-    ),
 ];
 
 /// The tracked source files under `dir` (`git ls-files`), never what a build
@@ -479,10 +474,9 @@ fn the_scan_catches_each_bypass() {
     assert!(readers("x/b.js", "const [host, port] = url.split(':');")
         .0
         .is_empty());
-    let (found, seen) = readers(
-        "host/web/navigation/routes.js",
-        "// data-symbol\n  ].join(\"|\"))].join(\"/\");\n",
-    );
+    let source = "// data-symbol\n  const [, box, raw] = f, colon = raw.indexOf(\":\");\n";
+    let (found, seen) = readers("host/web-js/symbols.js", source);
     assert!(found.is_empty(), "{found:?}");
-    assert_eq!(seen, vec![4]);
+    assert_eq!(seen, vec![1]);
+    assert!(!readers("x/a.js", source).0.is_empty());
 }

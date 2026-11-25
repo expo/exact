@@ -11,7 +11,7 @@ pub(super) struct ElementStep<'n> {
     pub(super) enters: bool,
     pub(super) positioned: bool,
     pub(super) button_context: Option<&'static str>,
-    pub(super) popover_child: bool,
+    pub(super) menu_parent: Option<menu_rows::Parent>,
     pub(super) bounded: bool,
     /// Whether this element stacks its children top to bottom.
     pub(super) stacks: bool,
@@ -97,6 +97,7 @@ impl Lowerer<'_> {
         // @ref LLP 1084 D7 — a grouped list's sheet, under its classes.
         let constant =
             |e: &Expr, string_only| self.constants(scope).template_constant(e, string_only);
+        let literal_bottom = routes::bottom_toolbar::bottom(attrs);
         let mut authored = std::borrow::Cow::Borrowed(attrs.as_slice());
         values::fold_attr_templates(&mut authored, &constant);
         let attrs = authored.as_ref();
@@ -419,6 +420,12 @@ impl Lowerer<'_> {
         let sheet_page = self.nav_place.sheet_page(expanded, *span);
         let expanded = sheet_page.as_deref().unwrap_or(expanded);
         // @ref LLP 1013.001 D4 — a route's entrance and exit, by its place.
+        if routes::bottom_toolbar::bottom(expanded) {
+            if !literal_bottom {
+                return err("lower-toolbar-place", "Write `toolbarPlacement=\"bottom\"` directly on the route's toolbar row so its children and placement can be checked", *span);
+            }
+            routes::bottom_toolbar::check_row(&self.nav_place, tag, expanded, *span)?;
+        }
         self.check_route_parts(&self.nav_place, tag, expanded)?;
         let nav_place = self
             .nav_place
@@ -486,6 +493,13 @@ impl Lowerer<'_> {
                 return err(
                     "lower-state-target",
                     "a state part on a run inside a paragraph: a run's press, hover and focus are its paragraph's; put the part on the paragraph or make the run a box (LLP 1121 D8)",
+                    a.span,
+                );
+            }
+            if let Some(a) = expanded.iter().find(|a| a.name == "swipe") {
+                return err(
+                    "lower-swipe-direction",
+                    "`swipe` on a run inside a paragraph: the run is drawn in its paragraph's text, with no view of its own for the platform's swipe to be recognized on; put `swipe` on the paragraph or make the run a box (LLP 1057.001 §8)",
                     a.span,
                 );
             }
@@ -675,7 +689,9 @@ impl Lowerer<'_> {
             {
                 continue;
             }
-            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a) {
+            if let Some(e) = crate::handlers::unheard_toggle(tag, expanded, a)
+                .or_else(|| crate::handlers::swipe::refusal(expanded, a))
+            {
                 self.errors.push(e);
                 continue;
             }
@@ -1169,6 +1185,13 @@ impl Lowerer<'_> {
         } else {
             std::borrow::Cow::Borrowed(authored_children.as_slice())
         };
+        let menu_parent = menu_rows::Parent::of_children(
+            self.menu_parent,
+            native_button || t.node_type == NodeType::Pressable,
+            expanded,
+        );
+        let menu_row =
+            self.menu_parent.is_some() && menu_parent != Some(menu_rows::Parent::Section);
         Ok(ElementStep {
             id,
             children,
@@ -1183,8 +1206,8 @@ impl Lowerer<'_> {
                 || t.fixed_styles
                     .iter()
                     .any(|(id, v)| *id == StyleId::PositionType && *v != "static"),
-            button_context: controls::button_context(tag, control, self.popover_child),
-            popover_child: expanded.iter().any(|a| a.name == "popover"),
+            button_context: controls::button_context(tag, control, menu_row),
+            menu_parent,
             bounded: scroll_bounds::bounded_column(tag, expanded, self.parent_bounded_column),
             stacks: scroll_bounds::stacks(tag, t.fixed_styles, expanded),
             horizontal_flex: if attrs

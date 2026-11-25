@@ -1,6 +1,6 @@
 import { bundledAsset, grantWords, trimGrant, knownFolderPath } from '../web/grant-admission.js';
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, webImplementations } from '../../js/bake/src/typescript.mjs';
-import { packageConfig } from '../../js/bake/src/package-config.mjs';
+import { webPackageEntries } from '../../js/bake/src/package-config.mjs';
 import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, readManifest, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
 import { authoredWebBake, webRendererHost, rustDataOf } from '../../scripts/app-shells.mjs';
@@ -41,7 +41,7 @@ import { gateAgent } from './agent-gate.mjs';
 import { contentName, contentNames } from './content-names.mjs';
 import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, moduleSources, undeclaredRustData, fresh, frameAnswer, frameFixture, frameURL, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
 import { appDigest, developmentStore } from '../../scripts/agent-launch.mjs';
-import { settingLines } from '../../js/bake/src/__exact_env.mjs';
+import { productionManifestImports, settingLines } from '../../js/bake/src/__exact_env.mjs';
 import { colorSchemeMeta, interfaceStyle, launchBackground, schemeHead, withInterfaceStyle, withLook } from '../web/look.mjs';
 import { copyStaticTreeIfPresent } from '../web/serve.mjs';
 
@@ -338,7 +338,7 @@ if (siteBase !== '/') {
     ['rt.js', "export { animationClocks, launchVisits } from './navigation.js';", `export { animationClocks } from './navigation.js';
 import { launchVisits as browserVisits } from './navigation.js';
 import { appLocation } from './site.js'; export const launchVisits = () => browserVisits().map(appLocation);`],
-    ['rt.js', 'export const launchLocation = () => (checkpoint(), browserLocation());', 'export const launchLocation = () => (checkpoint(), appLocation(browserLocation()));'],
+    ['rt.js', 'export const launchLocation = pageLocation;', 'export const launchLocation = () => appLocation(pageLocation());'],
     ['router.js', 'import { canonical, locationOf,', 'import { locationOf,'],
     ['router.js', 'export { canonical, locationOf };', `import { canonical, appLocation, siteLocation, siteCanonical } from './site.js';
 export { canonical, locationOf };`],
@@ -389,18 +389,8 @@ const time = Object.hasOwn(sources, 'exactTime');
 // outside the agent on first use; an extension with none answers by name.
 const moduleFlag = existsSync(resolve(gen, 'modules.flag')) ? JSON.parse(readFileSync(resolve(gen, 'modules.flag'), 'utf8')) : { extensions: {}, sources: [] };
 if (Object.keys(moduleFlag.extensions).length) {
-  const bound = webImplementations(appDir, moduleFlag.extensions);
-  // `app.json`'s package configuration (LLP 1133.021 §9 item 7), refused here as package-config.mjs says; a production
-  // build is a release.
-  let configs;
-  try { configs = packageConfig(appDir, 'web', { extensions: moduleFlag.extensions, release: production, warn: (m) => console.warn(`${app}: ${m}`) }); } catch (e) { console.error(`${app}: ${e.message}`); process.exit(1); }
-  for (const extension of Object.keys(moduleFlag.extensions)) {
-    const at = bound.get(extension);
-    // `roster`: the views it serves (views.js), where it exports one.
-    const views = at && /\bexport\s+(const|let|var|function)\s+roster\b|\bexport\s*\{[^}]*\broster\b/.test(readFileSync(at, 'utf8'));
-    const config = `export const config = ${JSON.stringify(configs.get(extension) ?? {})};\n`;
-    writeFileSync(resolve(gen, `ext-${extension}.js`), at ? `export { implementation${views ? ', roster' : ''} } from ${JSON.stringify(at)};\n${config}` : 'export const implementation = null;\n');
-  }
+  const entries = webPackageEntries(appDir, moduleFlag.extensions, production, m => console.warn(`${app}: ${m}`));
+  for (const [extension, code] of entries) writeFileSync(resolve(gen, `ext-${extension}.js`), code);
 }
 // A source a data module answers: not one the runtime reserves (`exact…`), nor a native module's.
 const asks = Object.keys(sources).some(name => !/^exact[A-Z]/.test(name) && !moduleFlag.sources.includes(name));
@@ -467,7 +457,7 @@ async function typecheck(checking) {
   const real = realpathSync(stage);
   if (real !== tsStage) throw new Error(`the TypeScript stage moved: ${real}`);
   const { rolldown } = await import('rolldown');
-  const metadata = await configure(real, false, parseSync, true, rolldown, basename(pageAppTs));
+  const metadata = await configure(real, false, parseSync, true, rolldown, basename(pageAppTs), production);
   const backendWarning=JSON.parse(readFileSync(resolve(real,'__exact_backend.json'),'utf8')).warning;
   if (backendWarning) console.warn(`warning: ${backendWarning}`);
   // The packages whose declarations the check reads (typescript.mjs
@@ -748,7 +738,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // `prepareChunks`, below, writes their names here as Rolldown renders the entry.
   `for (const name of __EXACT_DEFERRED_CHUNKS__) document.head.append(Object.assign(document.createElement('link'), { rel: 'modulepreload', fetchPriority: 'low', href: new URL(name, ${args.includes('--inline') ? 'document.baseURI' : 'import.meta.url'}).href }));`,
 ].join('\n'));
-for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'output.js', 'store.js', 'fetches.js', 'modules.js', 'declared-values.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) cpSync(resolve(here, f), resolve(gen, f));
+for (const f of ['agent.js', 'check.js', 'perf.js', 'seam.js', 'rust-data.js', 'canvas-capture.js', 'list.js', 'list-text.js', 'facts.js', 'output.js', 'store.js', 'fetches.js', 'modules.js', 'declared-values.js', 'permissions.js', 'sheets.js', 'samples.js', 'wakes.js', 'reach.js', 'devices.js', 'members.js', 'arrival.js', 'calls.js', 'update.js', 'spans.js', 'package-session.js', 'views.js', 'pictures.js', 'markdown.js', 'symbols.js', 'motion.js', 'drag-target.js', 'transform.js', 'svg-transform.js', 'dataset.js', 'format.js', 'format-locale.js', 'hatches.js', 'arrange.js', 'reorder.js', 'flow.js', 'native.js', 'shared.js', 'store-reader.js', 'iframes.js', 'list-items.js', 'button-fill.js']) cpSync(resolve(here, f), resolve(gen, f));
 for (const file of ['modules.js', 'symbols.js']) writeFileSync(resolve(gen, file), localImports(readFileSync(resolve(here, file), 'utf8')));
 const checkpointSource = readFileSync(resolve(here, 'page-checkpoint.js'), 'utf8'), checkpointFaultImport = "import { checkpointFaults } from '../web/faults.js';";
 if (!checkpointSource.includes(checkpointFaultImport)) throw new Error('page-checkpoint.js no longer imports checkpointFaults');
@@ -1062,13 +1052,13 @@ const scopedModule = (code, id) => {
 // Both bundles take app.ts and its packages from the checked capture alone.
 const replay = ts ? (await import(resolve(root, 'js/bake/src/typescript.mjs'))).replayCaptured(tsStage,
   generatedRoots.flatMap(root => ['ts-fetch.js', ...(fetchRefused ? ['ts-fetch-refused.js'] : [])].map(name => resolve(root, name)))) : null;
-// These hooks are optional. Keep their static accesses for tree-shaking,
-// but suppress missing-export warnings only at the generated glue's path.
+// Optional hooks keep their static accesses for tree-shaking. Only generated glue suppresses their missing-export warnings.
 const optionalHookWarning = (id, message) => generatedRoots.some(root => id === resolve(root, 'ts-data.js'))
   && /Import ["`](?:kept|overlay|tools)["`] will always be undefined because there is no matching export/.test(message);
 const { rolldown, RolldownMagicString } = await import('rolldown');
 const scopedPlugins = () => [...(replay ? [replay.rolldown] : []),
-  { name: 'exact-mounts', resolveId: (source, importer) => mounted(source, importer) },
+  { name: 'exact-mounts', resolveId: (source, importer) => mounted(source, importer),
+    load: production ? productionManifestImports(appDir) : undefined },
   { name: 'source-grants', transform: scopedModule }, asyncContext()];
 const onLog = (level, log) => {
   if (level === 'warn' && log.code === 'IMPORT_IS_UNDEFINED' && optionalHookWarning(log.id, log.message)) return;

@@ -26,6 +26,19 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// as the stack's routes are prepared, before UIKit shows any of them
     /// (`NavigationRules.bar`).
     var pushed = false
+    #if os(iOS)
+    var bottomToolbar: BottomToolbarItems?
+    #endif
+    var liftedBottomRows: [NodeView] {
+        #if os(iOS)
+        bottomToolbar?.rows ?? []
+        #else
+        []
+        #endif
+    }
+    var coveredBarNodes: [NodeView] {
+        (lifted.map { [$0] } ?? barNodes) + [scoped].compactMap { $0 } + liftedBottomRows
+    }
     weak var lifted: NodeView?
     var barNodes: [NodeView] = []
     /// The pictures the bar's faces draw (`NodeView.drawnByBar`).
@@ -167,8 +180,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     override func loadView() {
         view = PresentationMount()
         paintBackdrop()
-        view.addSubview(node)
-        host?.presenter.session?.natives.routeLoaded(node)
+        node.movingRoute(into: view) { view.addSubview(node) }
     }
 
     /// The backdrop's colours last written, light and dark.
@@ -249,18 +261,22 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             scroll.contentInsetAdjustmentBehavior = .never
             scroll.keyboardDismissMode = viewportKeyboardDismissal
             #if os(iOS)
+            KeyboardDrag.watch(scroll) { [weak scroll] in scroll?.documentNode }
             scroll.scrollsToTop = false
             #endif
             scroll.delegate = self
             view.addSubview(scroll)
             contentViewport = scroll
+            // The bar's top edge may have taken its list before the page had this viewport: a launch
+            // projects once before `interactiveWidget` is read. `select` follows a list taken later
+            followTopEdge(contentScrollView(for: .top))
         } else if !usesPageViewport, let scroll = contentViewport {
             contentViewport = nil
             keyboardInset.apply(0, to: scroll)
-            view.addSubview(node)
+            node.movingRoute(into: view) { view.addSubview(node) }
             scroll.removeFromSuperview()
         }
-        if node.superview !== contentMount { contentMount.addSubview(node) }
+        if node.superview !== contentMount { node.movingRoute(into: contentMount) { contentMount.addSubview(node) } }
         host?.presenter.regrid(node) // from the controller's view, a grid origin of its own
     }
     #if os(iOS)
@@ -369,7 +385,25 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// The route's node, left in place after a batch removed the route while
     /// UIKit still shows it (`NavigationHost.prepare`), until UIKit takes the
     /// route's view out of the window.
-    var retiringRoot: NodeView?
+    private(set) var retiringRoot: NodeView?
+    func retire() {
+        retiringRoot = node
+        // Switching tabs during a pop can detach its view without completing the disappearance.
+        guard let mount = view as? PresentationMount, mount.window != nil else { return finishRetirement() }
+        mount.didLeaveWindow = { [weak self, weak mount] in
+            // UIKit can move a view between parents in one turn. Finish outside its hierarchy callbacks.
+            DispatchQueue.main.async {
+                if mount?.window == nil { self?.finishRetirement() }
+            }
+        }
+    }
+
+    private func finishRetirement() {
+        guard let retiringRoot else { return }
+        self.retiringRoot = nil
+        (viewIfLoaded as? PresentationMount)?.didLeaveWindow = nil
+        retiringRoot.removeFromSuperview()
+    }
     /// The exit it declares, kept while it is its stack's top: it has left
     /// the tree when UIKit asks for its pop's animator (RouteTransitionIOS).
     var exitPart: RoutePart?
@@ -377,8 +411,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.viewDidDisappear(animated)
         // A transition that made it appear was cancelled
         appearing = false
-        retiringRoot?.removeFromSuperview()
-        retiringRoot = nil
+        finishRetirement()
     }
 
     // Follow UIKit moving this route into another controller (`NavigationHost.moved(into:)`)
@@ -459,36 +492,43 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// iOS 26 draws the bar's edge effect on the outermost scroll view under it, which for a route
     /// whose scroller (a list) lies in its page is the page's viewport, not that scroller (measured
     /// on iOS 27: UIKit alone does the same with a table view in a scroll view). So the viewport's
-    /// top effect shows only while that scroller is scrolled from its top, as UIKit's does over a
-    /// list that is the controller's own: no effect over a list at rest. Its style stays
-    /// `automatic`: the rows blurred and faded under the whole bar to a line at its foot, as a
-    /// UIKit or SwiftUI list or scroll view draws them there (iOS 27, measured), where `soft` left
-    /// them legible under the title. A route node that sets any aspect of its edge effect (LLP 1123
-    /// D14) stops the follow: the top shows again, or stays as it stands where the node hides its
-    /// own top, since the viewport keeps UIKit's default edge effects, which the property does not
-    /// style (LLP 1077 D16).
+    /// top effect stands in for the list's (LLP 1077 D16): it shows only while the list is scrolled
+    /// from its top, as UIKit's does over a list that is the controller's own, in the list's style,
+    /// and not where the list hides its top. A list that says nothing is `automatic`: the rows
+    /// blurred and faded under the whole bar to a line at its foot, as a UIKit or SwiftUI list or
+    /// scroll view draws them there (iOS 27, measured). A route node that sets any aspect of its
+    /// edge effect (LLP 1123 D14) stops the follow: the top shows again, or stays as it stands where
+    /// the node hides its own top, in UIKit's style.
     private func followTopEdge(_ scrollView: UIScrollView?) {
         topEdgeWatch = nil
         guard #available(iOS 26.0, tvOS 26.0, *), let page = contentViewport else { return }
         topEdgeRead = (node.setsEdgeEffect, node.edgeEffectHidden(.top))
         guard let scrollView, scrollView !== page, !node.setsEdgeEffect else {
+            if page.topEdgeEffect.style != .automatic { page.topEdgeEffect.style = .automatic }
             if page.topEdgeEffect.isHidden, !node.edgeEffectHidden(.top) { page.topEdgeEffect.isHidden = false }
             return
         }
-        let follow = { [weak page] (sv: UIScrollView) in
-            let rest = sv.contentOffset.y <= 0.5 - sv.adjustedContentInset.top
-            if let page, page.topEdgeEffect.isHidden != rest { page.topEdgeEffect.isHidden = rest }
-        }
-        follow(scrollView)
-        topEdgeWatch = scrollView.observe(\.contentOffset) { sv, _ in follow(sv) }
+        showTopEdge(of: scrollView)
+        topEdgeWatch = scrollView.observe(\.contentOffset) { [weak self] sv, _ in self?.showTopEdge(of: sv) }
+    }
+
+    /// The viewport's top shows `list`'s own top effect while `list` is scrolled from its top.
+    private func showTopEdge(of list: UIScrollView) {
+        guard #available(iOS 26.0, tvOS 26.0, *), let page = contentViewport else { return }
+        let own = list.topEdgeEffect
+        let hidden = own.isHidden || list.contentOffset.y <= 0.5 - list.adjustedContentInset.top
+        if page.topEdgeEffect.style != own.style { page.topEdgeEffect.style = own.style }
+        if page.topEdgeEffect.isHidden != hidden { page.topEdgeEffect.isHidden = hidden }
     }
 
     /// What `followTopEdge` last read of the node's own edge effect: whether it sets one, and whether it hides its top.
     private var topEdgeRead: (sets: Bool, hidden: Bool)?
-    /// Follows the top edge again where a restyle of the node changed what `followTopEdge` read of it.
+    /// Follows the top edge again where a restyle of the node changed what `followTopEdge` read of
+    /// it, and otherwise shows the followed list's effect again, which a restyle of the list changes.
     func refollowTopEdge() {
-        guard let read = topEdgeRead, read != (node.setsEdgeEffect, node.edgeEffectHidden(.top)) else { return }
-        followTopEdge(contentScrollView(for: .top))
+        guard let read = topEdgeRead else { return }
+        guard read == (node.setsEdgeEffect, node.edgeEffectHidden(.top)) else { return followTopEdge(contentScrollView(for: .top)) }
+        if topEdgeWatch != nil, let list = contentScrollView(for: .top) { showTopEdge(of: list) }
     }
 }
 

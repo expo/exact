@@ -1,7 +1,13 @@
 // The fixture of @fixture/swatch: its view placed, shown, hidden and rebound,
 // what the session's instance heard of it, and what it reads of its
-// configuration, by testId for the suites.
+// configuration, by testId for the suites. A second view fills a pushed
+// route, where on iOS its controller is the route's child, and a third is in
+// that route's dialog, whose controller follows it into the sheet and back.
 use swatchReports, SwatchReports from "@fixture/swatch"
+
+routes nav
+  home "/"
+    screen "/screen"
 
 component Fixture
   state shown = false
@@ -17,16 +23,40 @@ component Fixture
     tint = (tint == "#d33" ? "#36c" : "#d33")
   action tapped(at: string)
     last = at
+  action open
+    nav = push(nav, "/screen")
+  action back
+    nav = back(nav)
+  action follow(url: string)
+    nav = go(nav, url)
   view
-    column gap=8 padding=16
-      button press=show testId="show"
-        text (shown ? "Remove" : "Show")
-      button press=hide testId="hide"
-        text (hidden ? "Unhide" : "Hide")
-      button press=recolor testId="recolor"
-        text "Recolor"
-      if shown
-        swatch-box tint=tint caption="swatch" message=tapped display=(hidden ? "none" : "block") width=160 height=90 testId="box"
-      text heard.text testId="heard"
-      text last testId="last"
-      text heard.config testId="config"
+    main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0 gap=8 padding=16
+            button press=show testId="show"
+              text (shown ? "Remove" : "Show")
+            button press=hide testId="hide"
+              text (hidden ? "Unhide" : "Hide")
+            button press=recolor testId="recolor"
+              text "Recolor"
+            button press=open testId="open"
+              text "Open"
+            if shown
+              swatch-box tint=tint caption="swatch" message=tapped display=(hidden ? "none" : "block") width=160 height=90 testId="box"
+            text heard.text testId="heard"
+            text last testId="last"
+            text heard.config testId="config"
+        if e.name == "screen"
+          column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+            header display="flex" align-items="center"
+              button id="close" press=back aria-label="Back" testId="close"
+                text "Back"
+              text "Screen" role="heading" aria-level=2
+            button commandfor="sheet" command="show-modal" testId="open-sheet"
+              text "Sheet"
+            swatch-box tint=tint message=tapped flex=1 testId="screen-box"
+            dialog id="sheet" aria-label="Sheet"
+              swatch-box tint=tint message=tapped width=160 height=90 testId="sheet-box"
+              button commandfor="sheet" command="close" testId="close-sheet"
+                text "Done"

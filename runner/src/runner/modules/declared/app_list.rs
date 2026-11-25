@@ -40,6 +40,7 @@ impl Listed {
 
     fn from_json(v: &Json) -> Option<Self> {
         Some(Listed {
+            registered_by: None,
             reference: v["ref"].as_u64()?,
             source: v["source"].as_str()?.to_owned(),
             fields: v["fields"].as_object()?.clone(),

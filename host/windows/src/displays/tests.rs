@@ -23,6 +23,16 @@ fn whole(rect: [i32; 4], scale: f32) -> Monitor {
 }
 
 #[test]
+fn square_monitor_keeps_its_natural_orientation() {
+    for (dmdo, clockwise) in [0, 3, 2, 1].into_iter().enumerate() {
+        assert_eq!(
+            screen_orientation(1920, 1920, dmdo as u32),
+            exact_runner::ScreenOrientation::rotated(true, clockwise)
+        );
+    }
+}
+
+#[test]
 fn capture_pairs_physical_rectangles_with_the_display_lists_geometry() {
     for monitors in [
         vec![

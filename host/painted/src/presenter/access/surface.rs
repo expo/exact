@@ -31,6 +31,8 @@ impl Build {
             name,
             value: String::new(),
             hint: info.hint,
+            action_owner: view,
+            actions: info.actions,
         });
         id
     }
@@ -222,12 +224,13 @@ impl<D: DataSource> Presenter<D> {
         menu_targets: &mut BTreeMap<exact_kernel::NodeKey, bool>,
     ) -> i32 {
         let mut flags = 0;
-        if self
-            .host
-            .kernel()
-            .node(row.node)
-            .is_some_and(|n| n.props.str(PropId::AccessibilityRole) == Some("menuitemcheckbox"))
-        {
+        if self.host.kernel().node(row.node).is_some_and(|n| {
+            let role = n.props.str(PropId::AccessibilityRole);
+            role == Some("menuitemcheckbox")
+                || !self.desktop_overlays()
+                    && (role == Some("menuitemradio")
+                        || n.props.bool(PropId::AccessibilityChecked).is_some())
+        }) {
             flags |= flag::CHECKABLE;
         }
         if let Some(key) = row.opens {
@@ -270,7 +273,7 @@ fn build_surface(
             ancestor,
             role::BUTTON,
             flag::CLICK | flag::EXPANDABLE | flag::EXPANDED,
-            row.title.clone(),
+            row.menu_name(),
             [0.; 4],
             info(row.node),
         );
@@ -293,7 +296,8 @@ fn build_surface(
         );
     }
     let parent = if let Some((offset, max)) = scroll {
-        let id = b.unique(info(shown.node).id);
+        let metadata = info(shown.node);
+        let id = b.unique(metadata.id);
         let flags = if offset > 0. { flag::BACKWARD } else { 0 }
             | if offset < max { flag::FORWARD } else { 0 };
         b.out.push(Node {
@@ -316,6 +320,8 @@ fn build_surface(
             name,
             value: String::new(),
             hint: String::new(),
+            action_owner: shown.node,
+            actions: if alert { Vec::new() } else { metadata.actions },
         });
         id
     } else {
@@ -366,6 +372,8 @@ fn build_surface(
                 name: text.clone(),
                 value: String::new(),
                 hint: String::new(),
+                action_owner: 0,
+                actions: Vec::new(),
             });
         }
     }
@@ -405,7 +413,11 @@ fn build_surface(
             parent,
             role,
             flags,
-            row.title.clone(),
+            if alert {
+                row.title.clone()
+            } else {
+                row.menu_name()
+            },
             rect,
             info(row.node),
         );

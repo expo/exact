@@ -2,6 +2,7 @@
 
 use super::*;
 
+pub(crate) mod bottom_toolbar;
 pub(crate) mod tab_accessory;
 
 impl Lowerer<'_> {
@@ -198,6 +199,8 @@ pub(crate) enum NavPlace {
     PanelChild(Vec<String>, Vec<Expr>),
     /// Deeper inside a root, behind a wrapper, outside any route.
     InRoot(Vec<String>, Vec<Expr>),
+    /// Directly inside the column that owns a route.
+    RouteColumn,
     /// Inside a route.
     InRoute,
 }
@@ -350,7 +353,7 @@ impl NavPlace {
         } else {
             match self {
                 NavPlace::Outside => "a tablist outside every navigation root".into(),
-                NavPlace::InRoute => "a tablist inside a route".into(),
+                NavPlace::InRoute | NavPlace::RouteColumn => "a tablist inside a route".into(),
                 _ => return Ok(()),
             }
         };
@@ -419,27 +422,47 @@ impl NavPlace {
                 a.span,
             );
         }
-        // A sheet opens at one of its own heights, which its route says; a
-        // list the compiler cannot read is given the benefit of the doubt
-        // (iOS journals a miss).
-        if let Some(a) = attrs
-            .iter()
-            .rev()
-            .find(|a| a.name == "navigationInitialDetent")
-        {
-            if tag != "dialog" && !self.is_route(attrs) {
+        // A sheet opens at, and a route may hold it at, one of its own heights, which its route
+        // says; a list the compiler cannot read is given the benefit of the doubt (iOS journals
+        // a miss).
+        for (name, what, dialogs) in [
+            (
+                "navigationInitialDetent",
+                "the height its sheet opens at",
+                true,
+            ),
+            (
+                "navigationSelectedDetent",
+                "the height its sheet is at",
+                false,
+            ),
+            (
+                "navigationUndimmedDetent",
+                "the tallest height at which its sheet leaves the screen under it live",
+                false,
+            ),
+        ] {
+            let Some(a) = attrs.iter().rev().find(|a| a.name == name) else {
+                continue;
+            };
+            if !(self.is_route(attrs) || dialogs && tag == "dialog") {
+                let on = if dialogs {
+                    "a route or a dialog"
+                } else {
+                    "a route"
+                };
                 return err(
                     "lower-attr-value",
-                    "`navigationInitialDetent` is read only on a route or a dialog. A route is an element with a `navigationKey` in the navigation stack. Write both detent attributes on the element that presents the sheet",
+                    format!("`{name}` is read only on {on}. A route is an element with a `navigationKey` in the navigation stack. Write the detent attributes on the element that presents the sheet"),
                     a.span,
                 );
             }
-            // Empty, as `navigationDetent=""` is, it is unsaid: the first.
+            // Empty, as `navigationDetent=""` is, it is unsaid
             if matches!(&a.value, Expr::Str(word, _) if !word.is_empty() && !crate::vocab::detent_word(word))
             {
                 return err(
                     "lower-attr-value",
-                    "`navigationInitialDetent` takes one word of the sheet's `navigationDetent`, the height its sheet opens at",
+                    format!("`{name}` takes one word of the sheet's `navigationDetent`, {what}"),
                     a.span,
                 );
             }
@@ -463,10 +486,18 @@ impl NavPlace {
                     };
                     return err(
                         "lower-attr-value",
-                        format!("`navigationInitialDetent=\"{word}\"` is not one of this sheet's heights, {said}; it names the one of them the sheet opens at"),
+                        format!("`{name}=\"{word}\"` is not one of this sheet's heights, {said}; it names {what}"),
                         a.span,
                     );
                 }
+            }
+        }
+        if matches!(self, NavPlace::PanelChild(..)) && self.is_route(attrs) {
+            if let Some(a) = attrs.iter().find(|a| {
+                a.name == "navigationSplit"
+                    && !matches!(&a.value, Expr::Str(s, _) if s == "split" || s == "none")
+            }) {
+                return err("lower-tab-split", "a tab is a split or a stack by construction: write the literal \"split\" or \"none\" for `navigationSplit`, or leave it out. To offer both, declare two tabs or two routes", a.span);
             }
         }
         // @ref LLP 1116.006 D2 — the split's placeholder is a box in the root route; a route
@@ -506,7 +537,7 @@ impl NavPlace {
                         modal.map_or(span, |a| a.span),
                     );
                 }
-                NavPlace::InRoute => {
+                NavPlace::InRoute | NavPlace::RouteColumn => {
                     return err(
                         "lower-route-place",
                         format!("this `{tag}` has a `navigationKey` inside another route; a route is a child of the navigation root or of a linked `role=\"tabpanel\"` in it, never of a route, so no host would show it"),
@@ -516,7 +547,7 @@ impl NavPlace {
                 NavPlace::Outside => return Ok(NavPlace::Outside),
                 _ => {
                     check_scroll(tag, attrs, children)?;
-                    return Ok(NavPlace::InRoute);
+                    return Ok(if tag == "column" { NavPlace::RouteColumn } else { NavPlace::InRoute });
                 }
             };
             return err(
@@ -546,6 +577,7 @@ impl NavPlace {
                     NavPlace::InRoot(path(p), tabs.clone())
                 }
             }
+            NavPlace::RouteColumn => NavPlace::InRoute,
             other => other.clone(),
         })
     }

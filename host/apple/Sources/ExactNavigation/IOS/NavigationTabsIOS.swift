@@ -1,6 +1,6 @@
 // @ref LLP 1075.003 §3.7 — Exact's tab container on iOS: a
-// `UITabBarController` with one controller per tab, made with it and never
-// replaced: a navigation controller for a tab that can push or show a header,
+// `UITabBarController` with one controller per tab: a split when requested on iPad,
+// a navigation controller for a tab that can push or show a header,
 // a plain one for a tab that shows one fixed route with no header
 // (PlainTabIOS.swift).
 // Each tab's stack is kept as the router keeps it (LLP 1038 §7's "one
@@ -87,9 +87,20 @@ extension NavigationHost {
         let kernel = presenter.rootTabs[p.root.id]
         let needsNavigation = Dictionary(zip(kernel?.panels ?? [], kernel?.navigation ?? []), uniquingKeysWith: { $1 })
         let navs = tabs.panels.enumerated().map { index, panel in
-            makeTabStack(panel.id, index == p.at ? first : base(p.wanted[index]), navigation: needsNavigation[panel.id] ?? true)
+            let routes = index == p.at ? first : base(p.wanted[index])
+            let navigation = needsNavigation[panel.id] ?? true
+            let owner: UIViewController
+            if UIDevice.current.userInterfaceIdiom == .pad, !ExactEnv.authoredChrome, routes.isEmpty,
+               kernel?.possibleSplits.contains(panel.id) == true {
+                owner = PendingTab(navigation: navigation)
+            } else {
+                owner = makeTabStack(panel.id, routes, navigation: navigation)
+            }
+            tabStacks[panel.id] = owner
+            return owner
         }
-        primaryNavigation = navs[p.at] as? UINavigationController
+        split = tabSplits[tabPanels[p.at]]
+        primaryNavigation = split?.list ?? (navs[p.at] as? UINavigationController)
         syncItems(tabs)
         let owned = askTabContainer(tabs, selected: p.at)
         tabContainerAsked = presenter.session?.natives.hatchesConnected == true
@@ -332,7 +343,7 @@ extension NavigationHost {
         var startsOrStops = false
         if !tabsChanged, p.tabs == nil {
             guard let rule = splitRule(p.chosen.first) else { return askSplitNextTurn() }
-            if let list = rule?.list { split?.listNode = list }
+            split?.listNode = rule?.list
             split?.rule = rule
             startsOrStops = (rule != nil) != (split != nil)
         }
@@ -362,7 +373,7 @@ extension NavigationHost {
     }
 
     /// Each batch: every other tab's stack, the selected tab, its items.
-    func syncTabs(_ p: Projection) {
+    func syncTabs(_ p: Projection, sequence: UInt64) {
         guard tabOwner != nil, let tabs = p.tabs else { return }
         // Re-adopt a replacement over unchanged panels and remove the standalone bar projected earlier in this batch
         if adoptedTablist != tabs.tablist.id {
@@ -399,6 +410,10 @@ extension NavigationHost {
         // already is only projected again; one UIKit is moving (`writable`) is
         // written once the move ends.
         for index in navs.indices where index != p.at {
+            if let columns = tabSplits[tabPanels[index]] {
+                syncInactiveSplit(columns, base(p.wanted[index]), sequence: sequence)
+                continue
+            }
             let stack = routesStack(index) ?? navs[index]
             let routes = base(p.wanted[index])
             if stack.stackRoutes.elementsEqual(routes, by: ===) || writable(stack, routes) { setRoutes(routes, in: stack) } else {
@@ -410,8 +425,10 @@ extension NavigationHost {
         // its bar when the router's tab changes, before UIKit shows it, where
         // nothing animates in; `sync` writes the rest of its stack.
         let selected = routesStack(p.at) ?? navs[p.at]
-        if selected.stackRoutes.isEmpty { if writable(selected, p.wanted[p.at]) { setRoutes(base(p.wanted[p.at]), in: selected) } }
-        else if routerTab != p.at { prepareRoutes(base(p.wanted[p.at]), in: selected) }
+        if split == nil {
+            if selected.stackRoutes.isEmpty { if writable(selected, p.wanted[p.at]) { setRoutes(base(p.wanted[p.at]), in: selected) } }
+            else if routerTab != p.at { prepareRoutes(base(p.wanted[p.at]), in: selected) }
+        }
         // @ref LLP 1038 D6 — a tab change swaps immediately. UIKit's selection
         // is the state (LLP 1075.003 §3.7): it is written only when the
         // router's own tab changes (a link, the agent's authored tablist, a
@@ -428,7 +445,7 @@ extension NavigationHost {
             if tabController == nil { presenter.session?.natives.tabsHatch(nil, event: 2, index: p.at) }
         }
         // Follow More's stack for a tab under More: selecting it moved its routes there
-        primaryNavigation = (routesStack(p.at) ?? navs[p.at]) as? UINavigationController
+        primaryNavigation = split?.list ?? ((routesStack(p.at) ?? navs[p.at]) as? UINavigationController)
         syncItems(tabs)
     }
 
@@ -549,7 +566,9 @@ extension NavigationHost {
     /// The stack that holds tab `index`'s routes: More while UIKit holds them
     /// there, else the tab's own.
     func routesStack(_ index: Int) -> UIViewController? {
-        index == moreTab ? more : tabStack(index)
+        if index == moreTab { return more }
+        let owner = tabStack(index)
+        return (owner as? PendingTab)?.children.first ?? owner
     }
 
     /// Tab `index`'s item, when Exact's tab bar shows it: a tab whose item
@@ -662,6 +681,19 @@ extension NavigationHost {
         }
         guard let index = tabIndex(of: controller) else { return true }
         if controller === tabs.selectedViewController {
+            if let columns = tabSplits[tabPanels[index]], let root = columns.shown.first, let top = columns.shown.last {
+                if top === root { reselected = root; return true }
+                guard backAllows("tab reselect") else { return false }
+                if columns.shown.count == 2 { goBack() } else { goBack(from: top.key, to: root.key) }
+                if let tab = authoredTab(index) { pressTab(tab) }
+                return true
+            }
+            if let tab = controller as? PendingTab, let stack = tab.children.first as? UINavigationController,
+               stack.stackRoutes.count > 1 {
+                guard backAllows("tab reselect") else { return false }
+                stack.popToRootViewController(animated: !ExactEnv.agentFreezes)
+                return true
+            }
             if controller.stackRoutes.count > 1 {
                 return backAllows("tab reselect")
             }
@@ -746,7 +778,11 @@ extension NavigationHost {
     /// its list (LLP 1075.003 §9.16).
     func selectInUIKit(_ index: Int, in tabs: UITabBarController) {
         guard let stack = tabStack(index) else { return }
-        tabs.selectedViewController = index == moreTab ? more : stack
+        if #available(iOS 18.0, tvOS 18.0, *), index != moreTab, !tabSplits.isEmpty, builtTabs.indices.contains(index), let tab = builtTabs[index] as? UITab {
+            tabs.selectedTab = tab
+        } else {
+            tabs.selectedViewController = index == moreTab ? more : stack
+        }
     }
 
     /// Whether a tap may let UIKit pop a stack to its root: only where Back
@@ -860,7 +896,13 @@ extension NavigationHost {
         tablistRoot = nil
         tablistOwed = nil
         tablistHidBar = false
-        for stack in tabPanels.compactMap({ tabStacks[$0] }) {
+        for columns in tabSplits.values {
+            release(columns.list)
+            release(columns.detail)
+        }
+        if !tabSplits.isEmpty { split = nil; tabSplits.removeAll() }
+        for owner in tabPanels.compactMap({ tabStacks[$0] }) {
+            let stack = (owner as? PendingTab)?.children.first ?? owner
             if let nav = stack as? UINavigationController { release(nav) } else { (stack as? PlainTab)?.show(nil) }
         }
         releaseMore()

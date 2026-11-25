@@ -30,6 +30,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// A list beside its detail: the primary stack as UIKit's split
     /// (SplitIOS.swift), its list's column `primaryNavigation`.
     var split: SplitIOS?
+    var tabSplits: [UInt32: SplitIOS] = [:]
     /// The runner could not say whether the stack splits (`reshape`), and
     /// asks again on the main queue's next turn.
     var splitAskOwed = false
@@ -316,7 +317,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for (owner, ids) in logicalChildren {
             guard let parent = owner == container?.id ? container : presenter.views[owner] else { continue }
             for (index, node) in ids.compactMap({ presenter.views[$0] }).enumerated() where presenter.views[node.id] === node {
-                parent.container.insertSubview(node, at: index)
+                node.movingRoute(into: parent.container) { parent.container.insertSubview(node, at: index) }
                 presenter.regrid(node)
             }
         }
@@ -417,6 +418,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         let frame = ownerFrame(owner, in: mount)
         if view.frame != frame { view.frame = frame }
+    }
+
+    // A background window stays mounted. UIKit can leave a push begun there unfinished through the next
+    // activation, holding later route changes until the scene enters the foreground a second time.
+    private func canAnimate(in view: UIView) -> Bool {
+        guard let window = view.window, !PageFacts.hidden else { return false }
+        return window.windowScene.map { $0.activationState == .foregroundActive } ?? true
     }
 
     private func installPrimary(_ p: Projection, first: [RouteController]) {
@@ -621,10 +629,26 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         let parts = Array(segments.enumerated().prefix { $0.offset == 0 || !logicallyHidden(wanted[$0.element.lowerBound].node) }.map(\.element))
         reshape(p)
         installPrimary(p, first: Array(wanted[parts[0]]))
-        // Before any hold: what the batch did to the split's base is the pressed row's whose press made it (LLP 1127 D3)
+        if let tabs = p.tabs {
+            for (index, panel) in tabs.panels.enumerated() {
+                if let tab = tabStacks[panel.id] as? PendingTab, tab.children.isEmpty, !p.wanted[index].isEmpty {
+                    tab.install(makeTabStack(panel.id, base(p.wanted[index]), navigation: tab.navigation))
+                }
+            }
+            split = tabSplits[tabs.panels[p.at].id]
+            if let split {
+                if let answer = splitRule(p.chosen.first) {
+                    split.rule = answer
+                    split.listNode = answer?.list
+                } else {
+                    askSplitNextTurn()
+                }
+            }
+        }
+        // Before any hold: the press whose batch opened the detail selects its row.
         if let split { creditPresses(split, batch: batch.sequence, stack: Array(wanted[parts[0]])) }
         // The other tabs' stacks, the selected tab and its items (LLP 1075.003 §3.7).
-        if p.tabs != nil { syncTabs(p) }
+        if p.tabs != nil { syncTabs(p, sequence: batch.sequence) }
         // Initial content draws before a presentation covers it.
         if parts.count > 1, let session = presenter.session, session.firstDrawMs == nil { return }
         guard !changing, !presenter.modalHost.inTransition else {
@@ -660,7 +684,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for index in 0...common where index < owners.count {
             let stack = Array(wanted[parts[index]])
             if index == 0, let split {
-                let animated = index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && !crossFading && split.controller.view.window != nil
+                let animated = index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && !crossFading && canAnimate(in: split.controller.view)
                 if syncSplit(split, stack, animated: animated) { held = true }
                 continue
             }
@@ -700,7 +724,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 }
                 #endif
                 let animated = (pushOrPop || arrives) && index == owners.count - 1 && mounted.count == boundaries.count
-                    && !ExactEnv.agentFreezes && !unanimated && !crossFading && nav.view.window != nil
+                    && !ExactEnv.agentFreezes && !unanimated && !crossFading && canAnimate(in: nav.view)
                 guard writeStack(nav.stackFront + stack, in: nav, animated: animated, visible: true) else { continue }
                 lastTransition = "idle"
                 // A press that pushed may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS).
@@ -792,7 +816,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// route hatch hears `routeEnded` (LLP 1075.003 §3.2).
     private func end(_ c: RouteController) {
         #if os(iOS)
+        projectBottomToolbar(c, in: nil)
         barHosted.show([], in: c)
+        barHosted.ended(c)
         #endif
         if let header = c.lifted { header.isHidden = false; c.lifted = nil }
         c.scoped?.isHidden = false
@@ -865,7 +891,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for (owner, ids) in logical {
             guard let parent = owner == root.id ? root : presenter.views[owner] else { continue }
             for (index, node) in ids.compactMap({ presenter.views[$0] }).enumerated() where presenter.views[node.id] === node {
-                parent.container.insertSubview(node, at: index)
+                node.movingRoute(into: parent.container) { parent.container.insertSubview(node, at: index) }
                 presenter.regrid(node)
             }
         }

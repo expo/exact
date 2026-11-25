@@ -308,18 +308,24 @@ final class PageScrollMacTests: XCTestCase {
     }
 
     func testReentrantGeometryDuringBatchDoesNotPrefitAheadOfBatch() {
-        let (p, _) = fixture()
+        _ = NSApplication.shared
+        let p = Presenter()
+        p.viewport.scrollerStyle = .legacy
+        p.viewport.setFrameSize(NSSize(width: 960, height: 900))
         var called = false
+        defer { p.onViewportFit = nil }
         p.onViewportFit = {
             called = true
+            XCTAssertTrue(p.viewport.hasCurrentDocumentFit)
             let old = p.root.frame
+            XCTAssertEqual(old.size, p.viewportSize)
             p.viewport.setFrameSize(NSSize(width: 956, height: 897))
             XCTAssertEqual(p.root.frame, old)
             XCTAssertTrue(p.deferGeometry {})
         }
         p.apply(batchFixture(ops: [
             ["op": "create", "id": 1, "kind": "view", "props": ["viewportFit": "cover"]],
-            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 960.0, "h": 900.0],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 100.0, "h": 100.0],
             ["op": "roots", "ids": [1]]
         ], timers: false, motion: false, clock: nil, error: nil))
         XCTAssertTrue(called)

@@ -906,8 +906,10 @@ impl Images {
                         continue;
                     }
                     Some(RequestStatus::WaitingBudget) => {
+                        // Once the decodes in flight land it may fit, at the
+                        // size it asked for: only what views hold shrinks it.
                         admission_budget =
-                            admission_budget.min(self.backend.session.available_bytes());
+                            admission_budget.min(self.backend.session.unheld_bytes());
                         let smaller = plan_view(header, view, scale, admission_budget);
                         if smaller.as_ref().is_ok_and(|p| p.pixels != pixels) {
                             self.backend.cancel(request);

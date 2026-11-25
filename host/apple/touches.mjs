@@ -7,12 +7,13 @@ import { createHash, randomBytes } from 'node:crypto';
 import { closeSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 import { iosTriple } from './build.mjs';
-import { claimLive } from '../../scripts/app.mjs';
-import { decodeProfile, identity, installedProfiles, phoneBridge, profile } from './devices.mjs';
+import { claimLive, readManifest } from '../../scripts/app.mjs';
+import { chooseSimulator, decodeProfile, identity, installedProfiles, phoneBridge, profile, simulatorTempDirectory } from './devices.mjs';
 import { watchCloak } from './cloak.mjs';
-import { retainCleanupError, simulatorDisplay } from '../../scripts/agent-launch.mjs';
+import { lockHeld, takeLock } from '../web/build-lock.mjs';
+import { retainCleanupError, simulatorDisplay, simulatorDisplayLockPath } from '../../scripts/agent-launch.mjs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -147,6 +148,9 @@ async function within(promise, ms, onTimeout) {
 }
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const touchLockPath = (udid, directory = simulatorTempDirectory()) => resolve(directory, `exact-touches-${udid}.lock`);
+// Older tokens name just the pid; newer claims also detect pid reuse.
+const touchOwnerLive = token => /^\d+:[0-9a-f]+$/.test(token) ? alive(Number(token.split(':')[0])) : claimLive(token);
 
 /**
  * The lock that makes one session the device's only toucher (D2). Taken
@@ -159,8 +163,7 @@ const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { retu
  * dead token, and they are serialized, so a live owner's lock is never
  * removed. Released only while it still holds this session's token.
  */
-function lock(udid) {
-  const path = resolve(tmpdir(), `exact-touches-${udid}.lock`);
+function lock(path) {
   // The holder by its pid and start time, as a build's claim is (`claimLive`): a reused pid is no holder.
   const token = JSON.stringify({ pid: process.pid, started: new Date().toISOString(), id: randomBytes(8).toString('hex') });
   const create = () => { try { writeFileSync(path, token, { flag: 'wx' }); return true; } catch (e) { if (e.code === 'EEXIST') return false; throw e; } };
@@ -168,12 +171,11 @@ function lock(udid) {
   const owner = (t) => { try { return JSON.parse(t).pid; } catch { return Number(t.split(':')[0]); } };
   // Live unless shown dead: a holder whose start `ps` cannot read, or a lock that does not parse, is live (claimLive);
   // a lock written before the start time was recorded is its pid's.
-  const live = (t) => /^\d+:[0-9a-f]+$/.test(t) ? alive(owner(t)) : claimLive(t);
   for (let attempt = 0; !create(); attempt++) {
     if (attempt > 20) throw new Error(`the device's touch lock keeps changing hands (${path})`);
     const seen = holder();
     if (seen == null) continue; // released between the create and the read: create again
-    if (live(seen)) throw new Error(`the device's touches are held by PID ${owner(seen)}${owner(seen) === process.pid ? ' (another session in this process)' : ''}`);
+    if (touchOwnerLive(seen)) throw new Error(`the device's touches are held by PID ${owner(seen)}${owner(seen) === process.pid ? ' (another session in this process)' : ''}`);
     const takeover = path + '.takeover';
     try { writeFileSync(takeover, token, { flag: 'wx' }); } catch (e) {
       if (e.code === 'EEXIST') throw new Error(`another process is taking over the device's touch lock; if none is, remove ${takeover}`);
@@ -266,7 +268,7 @@ const AX = 'com.apple.Accessibility', AX_KEYS = ['AutomationEnabled', 'Accessibi
 const accessibilityLocks = new AsyncLocalStorage();
 // Launch failure can close its touch session while still holding the display lock.
 // Work deferred past that launch must acquire the lock again.
-function withAccessibilityLock(udid, fn) {
+export function withAccessibilityLock(udid, fn) {
   const held = accessibilityLocks.getStore() ?? [];
   if (held.some(owner => owner.udid === udid && owner.active)) return fn();
   return simulatorDisplay(udid, () => {
@@ -278,41 +280,117 @@ function withAccessibilityLock(udid, fn) {
   });
 }
 /** `defaults <args>` in simulator `udid`, asynchronously: each spawn costs about 0.35 s, so a session runs them
- * together. One that has not answered in 10 s is killed, and fails: the device's lock waits on it. */
-const simDefaults = (udid, args) => new Promise((done) => {
+ * together. A required operation gets 10 s; an advisory read has a shorter bound. */
+const simDefaults = (udid, args, timeout = 10000) => new Promise((done) => {
   const p = spawn('xcrun', ['simctl', 'spawn', udid, 'defaults', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-  const timer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, 10000);
+  const timer = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} }, timeout);
   let out = '', err = '';
   p.stdout.on('data', (d) => { out += d; });
   p.stderr.on('data', (d) => { err += d; });
   p.on('error', (e) => { clearTimeout(timer); done({ status: -1, out, err: String(e) }); });
-  p.on('close', (status, signal) => { clearTimeout(timer); done({ status: signal ? -1 : status, out, err: signal ? 'no answer in 10 s' : err }); });
+  p.on('close', (status, signal) => { clearTimeout(timer); done({ status: signal ? -1 : status, out, err: signal ? `no answer in ${timeout / 1000} s` : err }); });
 });
+const accessibilityRecord = udid => resolve(homedir(), '.cache/exact/simulator-accessibility', `${udid}.json`);
+const hostedAccessibilityLock = udid => resolve(simulatorTempDirectory(), `exact-hosted-accessibility-${udid}.lock`);
+/** A hosted XCTest holds this while its temporary ApplicationAccessibilityEnabled is on, including between launches. */
+export function markHostedAccessibility(udid, before) {
+  const path = hostedAccessibilityLock(udid);
+  const release = takeLock(path, { shared: true, noFollow: true });
+  try { writeFileSync(path, before ?? ''); } catch (error) { release(); throw error; }
+  return release;
+}
+function hostedAppAccessibility(udid) {
+  const path = hostedAccessibilityLock(udid);
+  return lockHeld(path, { exclusive: true }) ? { ApplicationAccessibilityEnabled: readFileSync(path, 'utf8') || undefined } : null;
+}
+
+const checkedAccessibility = new Map((process.env.EXACT_IOS_TEST_CHECKED || '').split(',').filter(Boolean).map(entry => entry.split(':')));
+
+/** Read the domain once, before a launch changes any key. A missing domain means all three are unset. */
+async function accessibilityKeys(udid, run = simDefaults, timeout) {
+  const r = await run(udid, ['read', AX], timeout);
+  if (r.status !== 0 && !/does not exist|not found|Could not find key/.test(r.err)) throw new Error(`simulator accessibility: ${r.err}`);
+  // defaults indents domain keys four spaces; a nested dictionary may contain the same names.
+  return Object.fromEntries(AX_KEYS.flatMap(key => {
+    const match = new RegExp(`^    ${key} = (.*)`, 'm').exec(r.out);
+    return match ? [[key, match[1].trimEnd() === '1;' ? '1' : '0']] : [];
+  }));
+}
+
+/** Only a live touch session owns temporary settings. A stale recovery record is for restoration alone. */
+function reportAccessibility(udid, current, startsTouches = false) {
+  if (checkedAccessibility.get(udid) === 'warned') return;
+  let baseline = current, hosted = false, touching = false;
+  try {
+    touching = touchOwnerLive(readFileSync(touchLockPath(udid), 'utf8'));
+    if (touching) baseline = JSON.parse(readFileSync(accessibilityRecord(udid), 'utf8'));
+  }
+  catch (error) { if (error.code !== 'ENOENT') return; }
+  if (current.ApplicationAccessibilityEnabled === '1') {
+    try { hosted = !!hostedAppAccessibility(udid); }
+    catch { return; } // Unknown ownership: skip the advice.
+  }
+  const on = AX_KEYS.filter(key => current[key] === '1' && baseline?.[key] === '1'
+    && !(hosted && key === 'ApplicationAccessibilityEnabled'));
+  const status = on.length ? 'warned' : 'checked';
+  if (checkedAccessibility.get(udid) !== status) {
+    checkedAccessibility.set(udid, status);
+    if (process.env.EXACT_IOS_TEST_CHECKED !== undefined && process.connected) process.send({ checkedSimulatorAccessibility: udid, status }, () => {});
+  }
+  if (!on.length) return;
+  console.warn([
+    `warning: ${AX} settings already on for simulator ${udid}: ${on.join(', ')}. This Exact run did not enable them.`,
+    "Loading UIKit's accessibility runtime can add about 1.5 seconds to every app launch on iOS 27.2 (about 0.3 seconds on iOS 26.5).",
+    touching || startsTouches ? 'To clear these settings, wait for the Exact touch session to end, then run:' : 'If you want to clear these settings, run:',
+    ...on.map(key => `  xcrun simctl spawn ${udid} defaults delete ${AX} ${key}`),
+  ].join('\n'));
+}
+
+/** Setup inspects only the simulator a drive would use if it is already booted and its display is free. */
+export async function checkSimulatorAccessibility(dir, app) {
+  let release;
+  try {
+    app ??= dir && readManifest(dir, basename(dir)).app.id;
+    const dev = chooseSimulator(undefined, { app, dir, rememberChoice: false });
+    if (dev.state !== 'Booted' || !dev.runtime.includes('.iOS-') || checkedAccessibility.has(dev.udid)) return;
+    // setup --check can share the drive's flock before the Rust launch helper has been built.
+    const path = simulatorDisplayLockPath(dev.udid);
+    mkdirSync(dirname(path), { recursive: true });
+    release = takeLock(path, { shared: true, waitMs: 0, noFollow: true });
+    reportAccessibility(dev.udid, await accessibilityKeys(dev.udid, simDefaults, 1500));
+  } catch { /* a busy or unavailable simulator does not affect the SDK check */ }
+  finally { release?.(); }
+}
+
 /** Hold the simulator's shared launch lock through AX setup, launch and restoration.
- * The loaded runtime stays with the process. Ordinary drives perform no defaults reads or writes.
+ * The loaded runtime stays with the process. An ordinary drive only reads the defaults on its first launch.
  * `enabled` is `'try'` for a launch that reads the tree if it can (verify, LLP 1156.006.000 D15): a simulator that
  * will not say or take the setting is launched without the runtime, with a note, where `true` refuses. */
-export async function withAccessibilityRuntime(udid, enabled, launch, run = simDefaults) {
+export async function withAccessibilityRuntime(udid, enabled, launch, { run = simDefaults, check = true, touches = false } = {}) {
   return withAccessibilityLock(udid, async () => {
-    if (!enabled) return launch();
+    const status = checkedAccessibility.get(udid);
+    const inspect = check && status !== 'warned';
+    if (!enabled && (!inspect || (!touches && status))) return launch();
     const key = 'ApplicationAccessibilityEnabled', args = [AX, key];
     const refuse = (message) => {
       if (enabled !== 'try') throw new Error(message);
       console.error(`note: ${message}; launched without UIKit's accessibility runtime, so the accessibility tree is not read`);
       return launch();
     };
-    const before = await run(udid, ['read', ...args]);
-    // An unset key is no failure. `defaults` words it three ways: macOS's "does not exist", and iOS 27's "Domain … not
-    // found" and "Could not find key … in domain …", which a simulator no session has touched answers.
-    if (before.status !== 0 && !/does not exist|not found|Could not find key/.test(before.err)) return refuse(`simulator accessibility: ${before.err}`);
-    if (before.status === 0 && before.out.trim() === '1') return launch();
+    let before;
+    try { before = await accessibilityKeys(udid, run, enabled || touches ? undefined : 1500); }
+    catch (error) {
+      return enabled ? refuse(error.message) : launch(null);
+    }
+    if (inspect) reportAccessibility(udid, before, touches);
+    if (!enabled || before[key] === '1') return launch(before);
     const set = await run(udid, ['write', ...args, '-bool', 'true']);
     if (set.status !== 0) return refuse(`simulator accessibility: ${set.err}`);
     let carrier;
     try { carrier = await launch(); return carrier; }
     finally {
       try {
-        const restored = await run(udid, before.status === 0 ? ['write', ...args, '-bool', 'false'] : ['delete', ...args]);
+        const restored = await run(udid, before[key] != null ? ['write', ...args, '-bool', 'false'] : ['delete', ...args]);
         if (restored.status !== 0) throw new Error(`simulator accessibility could not be restored: ${restored.err}`);
       } catch (error) {
         try { await carrier?.close(); } catch (failure) { retainCleanupError(error, failure); }
@@ -321,28 +399,22 @@ export async function withAccessibilityRuntime(udid, enabled, launch, run = simD
     }
   });
 }
-/** The three keys as simulator `udid` has them (`'1'`, `'0'`, or undefined when unset), or null when it could not say. */
-async function accessibilityKeys(udid) {
-  const r = await simDefaults(udid, ['read', AX]);
-  if (r.status !== 0 && !/does not exist|not found/.test(r.err)) return null;
-  return Object.fromEntries(AX_KEYS.map((k) => [k, new RegExp(`^\\s*${k} = (\\d+);`, 'm').exec(r.out)?.[1]]));
-}
 /** The keys as a session finds them: the record a session killed before its end left of what it found, else read
  * now and recorded (`record`, a file; under the device's lock, so no other session's). Null when they could not be read. */
-export async function foundAccessibility(udid, record, read = accessibilityKeys) {
+export async function foundAccessibility(udid, record, read = udid => accessibilityKeys(udid).catch(() => null)) {
   try { return JSON.parse(readFileSync(record, 'utf8')); } catch { /* none: this session reads them */ }
-  const keys = await read(udid);
+  const current = await read(udid);
+  const keys = current && { ...current, ...hostedAppAccessibility(udid) };
   if (keys) { mkdirSync(dirname(record), { recursive: true }); writeFileSync(record, JSON.stringify(keys)); }
   return keys;
 }
-/** The keys put back as a session `found` them. AutomationEnabled already on means an earlier session's XCTest left
- * all three on (a person sets ApplicationAccessibilityEnabled alone, for `tree --ax`), so they go back to unset.
- * Resolves with what failed, or null. */
+/** Restore the recorded values, including automation that was on before Exact. Resolves with what failed, or null. */
 export async function restoreAccessibility(udid, found, run = simDefaults) {
   return withAccessibilityLock(udid, async () => {
-    const left = found.AutomationEnabled === '1';
+    const hosted = hostedAppAccessibility(udid);
     const failed = (await Promise.all(AX_KEYS.map(async (k) => {
-      const v = left ? undefined : found[k];
+      if (hosted && k === 'ApplicationAccessibilityEnabled') return null;
+      const v = found[k];
       const r = await run(udid, v == null ? ['delete', AX, k] : ['write', AX, k, '-bool', v === '1' ? 'true' : 'false']);
       // Deleting a key or domain that is not there fails, and leaves what was wanted.
       return r.status === 0 || (v == null && /Could not find key|not found/.test(r.err)) ? null : `${k}: ${r.err.trim() || `exit ${r.status}`}`;
@@ -365,11 +437,13 @@ export async function restoreAccessibility(udid, found, run = simDefaults) {
  * ends (`AX_KEYS`). `handoff` awaits this connection's close and returns the port and token
  * for a hosted XCTest to connect; ownership and accessibility stay held until `close` or `end`.
  */
-export async function openTouches({ udid, appId, foldable, device = false, installApp }) {
-  const lockRelease = lock(udid);
+export async function openTouches({ udid, appId, foldable, device = false, installApp, accessibility }) {
+  const lockRelease = lock(touchLockPath(udid, device ? tmpdir() : undefined));
   const started = Date.now();
   const cloak = device ? null : watchCloak(udid, foldable);
-  const axRecord = resolve(homedir(), '.cache/exact/simulator-accessibility', `${udid}.json`), axFound = device ? Promise.resolve(null) : foundAccessibility(udid, axRecord);
+  const axRecord = accessibilityRecord(udid);
+  const axFound = device ? Promise.resolve(null) : withAccessibilityLock(udid, () =>
+    foundAccessibility(udid, axRecord, accessibility === undefined ? undefined : () => accessibility));
   let restored = null;
   // Unread keys were never turned on: the session ends before a write or a runner's start (`readKeys`).
   const putBack = () => (restored ??= axFound.then(async (keys) => {

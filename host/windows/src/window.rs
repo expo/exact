@@ -986,7 +986,14 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 self.dialogs
                     .install(handle.hwnd.get(), self.modal.clone(), self.proxy.clone());
                 self.desktop.set_window(handle.hwnd.get());
-                crate::displays::install(handle.hwnd.get(), self.min_size);
+                let proxy = self.proxy.clone();
+                crate::displays::install(handle.hwnd.get(), self.min_size, move || {
+                    let _ = proxy.send_event(crate::accessibility::Event::DisplayChanged);
+                });
+                self.config
+                    .preferences
+                    .get_or_insert_with(Default::default)
+                    .orientation = crate::displays::orientation();
                 if let Err(error) = self
                     .clicks
                     .install(handle.hwnd.get())
@@ -1093,6 +1100,18 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
         match event {
             crate::accessibility::Event::TrayAccess(request) => {
                 return self.tray_access(events, request)
+            }
+            crate::accessibility::Event::DisplayChanged => {
+                if let Some(p) = self.presenter.as_mut() {
+                    let mut prefs = p.host().runner().viewport().preferences;
+                    let orientation = crate::displays::orientation();
+                    if prefs.orientation != orientation {
+                        prefs.orientation = orientation;
+                        if let Some(error) = p.set_preferences(prefs) {
+                            eprintln!("exact-windows: {error}");
+                        }
+                    }
+                }
             }
             crate::accessibility::Event::Focus => self.bring_forward(),
             crate::accessibility::Event::Hide => self.hide_by_app(),

@@ -198,6 +198,7 @@ final class InlineContextIOSTests: XCTestCase {
         var style = InlineStyle()
         try style.set("font_size", .number(18))
         p.applyParagraph(2, [InlineText(id: 10, parent: 2, props: ["text": "#tag", "contextPopover": "gone"], style: style, handlers: [], paints: true)])
+        XCTAssertTrue(node.isAccessibilityElement, "the paragraph remains the reading stop")
         node.handlers.insert("contextmenu")
         node.updateContextGestures()
         p.menus.context.sync()

@@ -16,7 +16,8 @@
 //   holds whichever of two overlapping writes settles last.
 
 const MOST_FILE = 64 * 1024 * 1024, MOST_BYTES = 2 * 1024 * 1024, MOST_PIXELS = 64_000_000, MOST_TEXT = 1024 * 1024;
-const TYPES = ['text/plain', 'image/png'];
+const READ_TYPES = ['text/plain', 'image/png'];
+const WRITE_TYPES = [...READ_TYPES, 'text/html'];
 const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 /** `{base64}` as bytes. */
@@ -37,6 +38,35 @@ async function firstFrame(bytes) {
     try { return (await decoder.decode({ frameIndex: 0 })).image; } finally { decoder.close(); }
   }
   return createImageBitmap(new Blob([bytes], { type: 'image/png' }));
+}
+
+const formatting = new Set("a b blockquote br caption code dd del div dl dt em h1 h2 h3 h4 h5 h6 hr i ins kbd li mark ol p pre s small span strong sub sup table tbody td th thead tfoot tr u ul".split(" "));
+const containers = new Set("html body main section article header footer".split(" "));
+
+/** Parse a document so a hidden html or body element keeps its children hidden. */
+function sanitizedHTML(html) {
+  const parsed = Document.parseHTML ? Document.parseHTML(html, { sanitizer: {} }) : new DOMParser().parseFromString(html, 'text/html');
+  const clean = document.createElement('template');
+  function copy(node, parent) {
+    if (node.nodeType === Node.TEXT_NODE) { parent.append(node.data); return; }
+    if (node.nodeType !== Node.ELEMENT_NODE || node.namespaceURI !== 'http://www.w3.org/1999/xhtml' || node.hasAttribute('hidden')) return;
+    const tag = node.localName;
+    if (formatting.has(tag)) {
+      const element = clean.content.ownerDocument.createElement(tag);
+      const href = tag === 'a' && node.getAttribute('href');
+      if (href && /^(?:https?:\/\/|mailto:)/i.test(href)) {
+        try {
+          const url = new URL(href);
+          if (url.protocol === 'mailto:' || url.hostname) element.setAttribute('href', href);
+        } catch { /* Keep the text of a malformed link. */ }
+      }
+      parent.append(element);
+      parent = element;
+    } else if (!containers.has(tag)) return;
+    for (const child of node.childNodes) copy(child, parent);
+  }
+  if (parsed.documentElement) copy(parsed.documentElement, clean.content);
+  return clean.innerHTML;
 }
 
 const hex = buffer => [...new Uint8Array(buffer)].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -70,11 +100,19 @@ export function implementation({ agent, log, files, clipboard = { item: null } }
     if (items.length > 1) return refused('NotAllowedError', 'Support for multiple ClipboardItems is not implemented.');
     const record = items[0];
     if (!record || typeof record !== 'object' || !Object.keys(record).length) return refused('TypeError', 'a ClipboardItem has at least one type');
-    const other = Object.keys(record).sort().find(t => !TYPES.includes(t));
+    const other = Object.keys(record).sort().find(t => !WRITE_TYPES.includes(t));
     if (other) return refused('NotAllowedError', `Type ${other} not supported on write.`);
     const text = record['text/plain'];
     if (text != null && typeof text !== 'string') return refused('TypeError', 'text/plain is a string');
     if (text != null && new TextEncoder().encode(text).length > MOST_TEXT) return refused('DataError', 'text/plain is over 1 MiB');
+    let html = record['text/html'];
+    if ('text/html' in record) {
+      if (typeof html !== 'string') return refused('TypeError', 'text/html is a string');
+      const encoder = new TextEncoder();
+      if (encoder.encode(html).length > MOST_TEXT) return refused('DataError', 'text/html is over 1 MiB');
+      try { html = sanitizedHTML(html); } catch { return refused('NotAllowedError', 'could not sanitize text/html'); }
+      if (encoder.encode(html).length > MOST_TEXT) return refused('DataError', 'sanitized text/html is over 1 MiB');
+    }
     let source = null;
     const image = record['image/png'];
     if (image && typeof image.base64 === 'string') {
@@ -108,6 +146,7 @@ export function implementation({ agent, log, files, clipboard = { item: null } }
       if (!agent) {
         const data = {};
         if (png) data['image/png'] = png.blob;
+        if (html != null) data['text/html'] = new Blob([html], { type: 'text/html' });
         if (text != null) data['text/plain'] = new Blob([text], { type: 'text/plain' });
         // After the browser write before it settles; a write superseded while it waits is never given to the browser.
         const before = browser;
@@ -121,14 +160,15 @@ export function implementation({ agent, log, files, clipboard = { item: null } }
         } catch (e) { return refused(e?.name ?? 'NotAllowedError', e?.message ?? String(e)); } finally { settled(); }
       }
     } finally { if (inFlight === mine) inFlight = null; }
-    if (agent) clipboard.item = { ...(text != null && { 'text/plain': text }), ...(png && { 'image/png': png.blob }) };
+    if (agent) clipboard.item = { ...(html != null && { 'text/html': html }), ...(text != null && { 'text/plain': text }), ...(png && { 'image/png': png.blob }) };
     writes++;
-    const shown = { types: [...(text != null ? ['text/plain'] : []), ...(png ? ['image/png'] : [])], pasteboard: agent ? 'memory' : 'navigator.clipboard' };
+    const shown = { types: [...(text != null ? ['text/plain'] : []), ...(html != null ? ['text/html'] : []), ...(png ? ['image/png'] : [])], pasteboard: agent ? 'memory' : 'navigator.clipboard' };
     if (text != null) shown.text = text.slice(0, 200);
     if (png) {
       shown.image = { width: png.width, height: png.height, bytes: png.png.length, sha256: hex(await crypto.subtle.digest('SHA-256', png.png)) };
-      say(`wrote image/png ${png.width}×${png.height} (${png.png.length.toLocaleString('en-US')} bytes)${text != null ? ' and text/plain' : ''}`);
-    } else say(`wrote text/plain (${new TextEncoder().encode(text).length} bytes)`);
+      say(`wrote image/png ${png.width}×${png.height} (${png.png.length.toLocaleString('en-US')} bytes)${shown.types.filter(t => t !== 'image/png').map(t => ' and ' + t).join('')}`);
+    } else if (html == null) say(`wrote text/plain (${new TextEncoder().encode(text).length} bytes)`);
+    else say(`wrote ${shown.types.join(' and ')}`);
     // What `state()` shows is the newest write's, though an older one's hash, awaited after its write, lands later.
     if (number > shownNumber) { shownNumber = number; last = shown; }
     return null;
@@ -153,7 +193,7 @@ export function implementation({ agent, log, files, clipboard = { item: null } }
       for (const item of items) {
         if (cancelled()) return { error: 'AbortError' };
         const record = {};
-        for (const type of item.types.filter(type => TYPES.includes(type))) {
+        for (const type of item.types.filter(type => READ_TYPES.includes(type))) {
           const data = await item.getType(type);
           if (type === 'text/plain') {
             const tooLarge = { error: 'DataError', message: 'text/plain is over 1 MiB' };

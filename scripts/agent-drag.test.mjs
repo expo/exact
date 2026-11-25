@@ -120,6 +120,38 @@ function iosDrive(host, opts = { dx: 0, dy: -300 }) {
   return { asked, run: () => dragTap({ s, carrier, node: { id: 9 }, target: 'content', host: 'ios', timing: 'agent', tapRefusal: async (_, __, e) => e }, opts) };
 }
 
+// LLP 1057.001 §8.3: a swipe's flick is one real stroke, refused from outside its target or past the viewport, never the
+// scroll view's own drag.
+test('a swipe flick from outside its target or past the viewport is refused, never a scroll drag', async () => {
+  const out = iosDrive(() => ({}), { dx: 0, dy: 120, over: 100, from: [500, 10], flick: true });
+  await expect(out.run()).rejects.toThrow('outside the target');
+  const past = iosDrive(() => ({ delivery: 'recognized' }), { dx: 0, dy: 120, over: 100, from: [10, 639], flick: true });
+  await expect(past.run()).rejects.toThrow('leaves the viewport');
+  expect(past.asked.some(r => r.scrollDrag)).toBe(false);
+});
+
+// LLP 1057.001 §8.3: the session's swipe is a flick drag under real touches, a test file's `--touch drag` among them,
+// and refused, having sent nothing, without them, at a held request and from a negative `at`.
+test('a swipe is a flick drag under real touches and refused before any input otherwise', async () => {
+  const { sessionInput } = await import('./agent-input.mjs');
+  const run = async (host, touch, target = 'bar', opts = { swipe: 'down' }) => {
+    const sent = [], s = { held: null, now: 0 };
+    Object.assign(s, sessionInput(s, { carrier: {}, host, timing: 'agent', touch }));
+    const swipe = s.tap;
+    s.tap = (t, o) => (o.swipe !== undefined ? swipe(t, o) : (sent.push([t, o]), Promise.resolve({})));
+    await s.tap(target, opts);
+    return sent;
+  };
+  for (const touch of ['platform', 'drag']) {
+    expect(await run('ios', touch)).toEqual([['bar', { drag: { dx: 0, dy: 120, over: 100, flick: true } }]]);
+  }
+  for (const [host, touch] of [['ios', 'agent'], ['host-ios', undefined], ['web', 'platform'], ['android', 'drag']]) {
+    await expect(run(host, touch)).rejects.toThrow('only a real touch');
+  }
+  await expect(run('ios', 'platform', '@7')).rejects.toThrow('held request');
+  await expect(run('ios', 'platform', 'bar', { swipe: 'down', at: [-1, 4] })).rejects.toThrow('never negative');
+});
+
 // LLP 1116.003: a drag without --touch platform answered `delivery: unsupported` and exited 0 (r5 weather, mood journal).
 test('an iOS drag without real touches scrolls the scroller it starts on', async () => {
   const d = iosDrive(() => ({ tapped: 9, at: [200, 370], scrolledBy: [0, 300], delivery: 'recognized', native: 'scroll' }), { dx: 0, dy: -300, over: 500 });
@@ -151,10 +183,10 @@ test('an iOS drag with ops during it needs a held finger', async () => {
   expect(d.asked.filter((a) => !Array.isArray(a))).toEqual([]);
 });
 
-test('an Android reader scroller uses scroll samples rather than losing a presenter contact', async () => {
+test.each(['ScrollView', 'Text', 'Column'])('an Android reader drag on %s probes the owner at the start point', async type => {
   const asked = [], s = {
     contact: null, held: null,
-    async layout() { return { nodes: [{ id: 9, type: 'ScrollView', x: 0, y: 50, w: 400, h: 640 }], viewport: { w: 400, h: 800 } }; },
+    async layout() { return { nodes: [{ id: 9, type, x: 0, y: 50, w: 400, h: 640 }], viewport: { w: 400, h: 800 } }; },
     async op() { return { lines: [], next: 0 }; },
     async landed(r) { return r; },
     async pointer() { throw new Error('the presenter cannot recognize a reader scroll'); },
@@ -173,7 +205,13 @@ test('an Android reader scroller uses scroll samples rather than losing a presen
   expect(r.scrolledBy).toEqual([0, 400]);
   expect(r.timing).toContain('native touch and fling unobserved');
   expect(s.contact).toBeNull();
-  await expect(run({ dx: 0, dy: -200, hold: 10 })).rejects.toThrow('need native input');
+  await run({ dx: 0, dy: -170, over: 400, hold: 200 });
+  expect(asked.at(-1)).toMatchObject({ scrollDrag: [0, -170], ms: 400, hold: 200 });
+  await expect(run({ dx: 0, dy: -200, press: 10 })).rejects.toThrow('need native input');
+  if (type === 'ScrollView') {
+    await run({ dx: 0, dy: 0 });
+    expect(asked.at(-1)).toMatchObject({ scrollDrag: [0, 0], ms: 0 });
+  }
   carrier.ask = async () => ({ error: 'target is covered' });
   await expect(run({ dx: 0, dy: -200 })).rejects.toThrow('target is covered');
 });

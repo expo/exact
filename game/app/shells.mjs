@@ -766,7 +766,7 @@ export function bakeGameArt(dir, env = process.env) {
   return true;
 }
 
-if (import.meta.main) {
+async function main() {
   const args = process.argv.slice(2), requested = args.find(arg => !arg.startsWith('--'));
   if (args.includes('--check')) {
     try { console.log(checkGame(resolve(requested ?? '.'))); }
@@ -810,6 +810,9 @@ if (import.meta.main) {
       const { lockSwiftPackages } = await import('../../host/apple/compose.mjs');
       const swift = lockSwiftPackages({ dir, manifest: gameDefaults(dir) });
       if (swift) console.log(swift);
+      const { reportAndroidLock } = await import('../../scripts/app-cli.mjs');
+      const android = await reportAndroidLock(dir);
+      if (android) console.log(android);
     }
     catch (error) { console.error(error.message); process.exitCode = 1; }
   } else {
@@ -824,3 +827,5 @@ if (import.meta.main) {
     }
   }
 }
+
+if (import.meta.main) main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -82,6 +82,8 @@ impl Described {
 /// The faces installed when the process first lays out text: the system's
 /// font directories and `EXACT_FONTS`. Read once; every catalog copies it.
 pub(super) struct Installed {
+    #[cfg(target_os = "android")]
+    pub symbols: Arc<super::android_symbols::Families>,
     pub collection: Collection,
     /// Each file's blob id and path, for the Canvas host (LLP 1076 §3.3).
     pub files: HashMap<u64, Arc<Path>>,
@@ -134,6 +136,8 @@ pub(super) fn installed() -> &'static Installed {
             eprintln!("exact: no fonts found; text will not shape (set EXACT_FONTS to a directory of .ttf files)");
         }
         Installed {
+            #[cfg(target_os = "android")]
+            symbols: Arc::new(super::android_symbols::Families::system(&mut registry.collection, &registry.files)),
             collection: registry.collection,
             files: registry.files,
             generics,

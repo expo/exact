@@ -1,0 +1,60 @@
+{
+  "kind": "interface",
+  "name": "@exact/face-detection",
+  "version": "1.0.0",
+  "substitute": "implementation",
+  "shapes": {
+    "Rect": {
+      "x": "number",
+      "y": "number",
+      "width": "number",
+      "height": "number"
+    },
+    "Point": {
+      "x": "number",
+      "y": "number"
+    },
+    "Landmark": {
+      "type": "option<enum<eye|mouth|nose>>",
+      "locations": "Point[]"
+    },
+    "DetectedFace": {
+      "boundingBox": "Rect",
+      "landmarks": "Landmark[]",
+      "pose": "option<FacePose>",
+      "android": "option<AndroidDetectedFace>"
+    },
+    "DetectedFaceList": {
+      "faces": "DetectedFace[]",
+      "width": "number",
+      "height": "number"
+    },
+    "FacePose": {
+      "yaw": "number",
+      "pitch": "number",
+      "roll": "number"
+    }
+  },
+  "names": [
+    {
+      "send": "detectFaces",
+      "options": {
+        "image": {
+          "type": "path",
+          "access": "read"
+        },
+        "maxDetectedFaces": "option<number>",
+        "fastMode": "option<bool>"
+      },
+      "answers": "DetectedFaceList",
+      "substitute": {
+        "unsupported": [
+          "linux",
+          "windows",
+          "terminal",
+          "watchos"
+        ]
+      }
+    }
+  ]
+}

@@ -21,6 +21,7 @@ pub(crate) fn id_refusals(checked: &contract_types::Checked<'_>) -> Vec<crate::L
     out.extend(portal::check(checked));
     out
 }
+use crate::handlers::swipe;
 use exact_kernel::{NodeType, PropId, StyleId};
 use exact_plan::BindingsRow;
 /// What an attribute lowers to.
@@ -58,7 +59,7 @@ pub struct Tag {
     /// The prop the first positional argument fills, if any.
     pub positional: Option<PropId>,
 }
-fn p(name: &str) -> PropId {
+pub(crate) fn p(name: &str) -> PropId {
     PropId::from_name(name).unwrap_or_else(|| panic!("kernel schema has no prop `{name}`"))
 }
 /// Look up a tag.
@@ -85,6 +86,7 @@ pub fn tag(name: &str) -> Option<Tag> {
             ],
             &[],
         ),
+        "spacer" => view(crate::routes::bottom_toolbar::SPACE, &[]),
         "row" => view(
             &[(StyleId::Display, "flex"), (StyleId::FlexDirection, "row")],
             &[],
@@ -546,8 +548,7 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "intersect" => AttrTarget::Handler("intersect"),
         "intersect-margin" => AttrTarget::Prop(p("intersectMargin")),
         "reachend" => AttrTarget::Handler("reachend"),
-        "swiperight" => AttrTarget::Handler("swiperight"),
-        "swipeleft" => AttrTarget::Handler("swipeleft"),
+        "swiperight" | "swipeleft" | "swipe" | "swipe-direction" => swipe::attr(name)?,
         "refresh" => AttrTarget::Handler("refresh"),
         "scroll" => AttrTarget::Handler("scroll"),
         "scrollend" => AttrTarget::Handler("scrollend"),
@@ -632,13 +633,12 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "document" => AttrTarget::Prop(p("scrollDocument")),
         "virtualized" => AttrTarget::Prop(p("virtualized")),
         "testId" => AttrTarget::Prop(p("testId")),
-        "navigationKey" => AttrTarget::Prop(p("navigationKey")),
-        "navigationBack" => AttrTarget::Prop(p("navigationBack")),
-        "navigationHistory" => AttrTarget::Prop(p("navigationHistory")),
-        "navigationPresentation" => AttrTarget::Prop(p("navigationPresentation")),
-        "navigationDetent" => AttrTarget::Prop(p("navigationDetent")),
-        "navigationInitialDetent" => AttrTarget::Prop(p("navigationInitialDetent")),
-        "navigationGrabber" => AttrTarget::Prop(p("navigationGrabber")),
+        "navigationKey" | "navigationBack" | "navigationHistory" => AttrTarget::Prop(p(name)),
+        "navigationPresentation" | "navigationDetent" => AttrTarget::Prop(p(name)),
+        "navigationInitialDetent" | "navigationGrabber" => AttrTarget::Prop(p(name)),
+        "navigationSelectedDetent" | "navigationSizing" => AttrTarget::Prop(p(name)),
+        "navigationEdgeAttachedInCompactHeight" => AttrTarget::Prop(p(name)),
+        "navigationScrollExpands" | "navigationUndimmedDetent" => AttrTarget::Prop(p(name)),
         // @ref LLP 1125 D11 — the Screen Wake Lock API's one type, on any element.
         "wakelock" => AttrTarget::Prop(p("wakelock")),
         // @ref LLP 1133.029 D1 — the Screen Orientation API's lock types, on any element.
@@ -799,8 +799,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "aria-hidden" => AttrTarget::Prop(p("accessibilityElementsHidden")),
         "aria-invalid" => AttrTarget::Prop(p("accessibilityInvalid")), // onboarding F22, spreadsheet F20
         "aria-describedby" => AttrTarget::Prop(p("accessibilityDescribedBy")),
-        // ARIA's name by reference (ledger2 Rough 3): the ids, space-separated,
-        // of the elements whose text names this one, before `aria-label`.
+        "aria-actions" => AttrTarget::Prop(p("accessibilityActions")),
+        // Referenced text takes precedence over aria-label (accname step 2B).
         "aria-labelledby" => AttrTarget::Prop(p("accessibilityLabelledBy")),
         // HTML's `tabindex`, no alias (LLP 1088 D7.3): present makes a box
         // focusable, `>= 0` a Tab stop; absent is never `0`.
@@ -1171,7 +1171,6 @@ pub(crate) fn html_tag(name: &str) -> Option<&'static str> {
         }
         "hstack" | "vstack" | "stack" | "flex" => "a horizontal stack is `row`, a vertical one `column`",
         "container" | "card" => "a box is `view` (or `column`, `row`), styled by a `style` declared in this file",
-        "spacer" => "a spacer is `view flex=1` in a `row` or `column`",
         "divider" => "a divider is `hr`",
         "br" => "a line break is a new `text`, or `\\n` in a string with `white-space=\"pre-line\"`",
         "icon" => "an icon is `image \"symbol:<role>\"`, or an `svg`",

@@ -180,13 +180,27 @@ private final class AXClient: @unchecked Sendable {
             return out
         }
     }
-    /// Its actions.
+    /// Its action identifiers as Accessibility Inspector reads them.
     func actions(of identifier: String) -> [String] {
         let app = app
         return onClient {
             var names: CFArray?
             guard let element = Self.find(identifier, in: app), AXUIElementCopyActionNames(element, &names) == .success else { return [] }
             return names as? [String] ?? []
+        }
+    }
+    func perform(actionNamed name: String, on identifier: String, matching attribute: String = "AXIdentifier") -> AXError {
+        let app = app
+        return onClient {
+            var names: CFArray?
+            guard let element = Self.find(identifier, in: app, attribute: attribute), AXUIElementCopyActionNames(element, &names) == .success else { return .noValue }
+            for action in names as? [String] ?? [] {
+                var label: CFString?
+                if AXUIElementCopyActionDescription(element, action as CFString, &label) == .success, label as String? == name {
+                    return AXUIElementPerformAction(element, action as CFString)
+                }
+            }
+            return .actionUnsupported
         }
     }
 }
@@ -230,6 +244,36 @@ final class AccessibilityClientMacTests: XCTestCase {
         p.syncAccessibility()
         window.orderFront(nil)
         return p
+    }
+
+    func testCustomActionAndRangeStepsReachTheAXClient() throws {
+        let p = try fixture([
+            ["op": "props", "id": 2, "set": ["id": "reset", "accessibilityLabel": "Reset quantity"], "clear": []],
+            ["op": "create", "id": 3, "kind": "view", "handlers": ["key"], "props": ["testId": "qty", "accessibilityRole": "spinbutton", "accessibilityLabel": "Sample quantity", "accessibilityValueNow": "2", "accessibilityActions": "reset"]],
+            ["op": "create", "id": 4, "kind": "input", "props": ["testId": "native-field", "accessibilityLabel": "Native field", "accessibilityActions": "reset"]],
+            ["op": "create", "id": 5, "kind": "view", "props": ["accessibilityLabel": "Controls", "accessibilityActions": "reset"]],
+            ["op": "children", "id": 5, "ids": [3, 4]],
+            ["op": "children", "id": 1, "ids": [2, 5]],
+            ["op": "frame", "id": 5, "w": 200, "h": 160],
+            ["op": "frame", "id": 3, "x": 0, "y": 50, "w": 100, "h": 40],
+            ["op": "frame", "id": 4, "x": 0, "y": 100, "w": 100, "h": 40],
+        ])
+        let client = AXClient()
+        XCTAssertTrue(client.ancestry(of: "qty").contains { $0.contains("AXGroup") && $0.contains("Controls") })
+        let actions = client.actions(of: "qty")
+        XCTAssertTrue(actions.contains("AXIncrement") && actions.contains("AXDecrement"), "\(actions)")
+        var presses: [UInt32] = []
+        p.onPress = { presses.append($0) }
+        XCTAssertEqual(client.perform(actionNamed: "Reset quantity", on: "qty"), .success)
+        waitFor("the AX client pressed Reset") { presses == [2] }
+        p.onPress = { target in
+            presses.append(target)
+            p.apply(wireBatch([["op": "props", "id": 2, "set": ["disabled": "true"], "clear": []]]))
+        }
+        let fieldResult = client.perform(actionNamed: "Reset quantity", on: "Native field", matching: "AXDescription")
+        guard fieldResult == .success else { return XCTFail("the native field’s Reset returned \(fieldResult)") }
+        waitFor("the native field pressed Reset") { presses == [2, 2] }
+        withExtendedLifetime(p) {}
     }
 
     func testTheAccessibilityFixturesHiddenContentAndNativeCellNamesAtTheClient() throws {

@@ -590,9 +590,8 @@ pub(crate) fn native_tag() -> Tag {
 
 /// What makes a place one a native button may not be (LLP 1069.011.000
 /// D9), for the children of the element being lowered; `None` when it adds
-/// nothing. `menu_row` is whether that element is a popover's direct child —
-/// a menu row, which may be a native button but whose own children are not
-/// rows (a host makes a menu item of a popover's direct children only).
+/// nothing. A menu row may itself be a native button. Its children form the
+/// item's face.
 pub(crate) fn button_context(
     tag: &str,
     control: Option<&str>,
@@ -610,7 +609,7 @@ pub(crate) fn button_context(
         return Some("a custom `button`");
     }
     if menu_row {
-        return Some("a menu row (a native button can be a popover's direct child, not below one)");
+        return Some("a menu row (put the button directly in the popover or its section)");
     }
     None
 }

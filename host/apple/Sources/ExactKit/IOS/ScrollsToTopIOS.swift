@@ -1,7 +1,8 @@
 // LLP 1115 wave 1: a tap on the status bar scrolls the screen's content to
 // its top, as in a hand-built app. UIKit does it only when exactly one scroll
-// view in the window has `scrollsToTop`, so every other one is turned off:
-// the one left on is the active route's content scroller (its native top
+// view in the window has `scrollsToTop`. Exact turns one on as it becomes the
+// choice, keeps the app's setting while it stays the choice, and turns off the
+// others it manages. It is the active route's content scroller (its native top
 // selection, else `navigationScroll`, else the first vertical scroller: the
 // bar's scroller too, by one rule, LLP 1115.000 D11.1), else, with no routes,
 // the viewport when it scrolls, else the first vertical scroller on the
@@ -20,16 +21,16 @@ extension Presenter {
         #else
         let chosen = scrollsToTopTarget()
         #endif
-        if let previous = navigation.scrollsToTopSelection, previous !== chosen { previous.scrollsToTop = false }
-        navigation.scrollsToTopSelection = chosen
-        if let chosen, !chosen.scrollsToTop { chosen.scrollsToTop = true }
-        if viewport.scrollsToTop != (chosen === viewport) { viewport.scrollsToTop = chosen === viewport }
-        for route in navigation.primaryRouteSurfaces {
-            route.contentViewport?.scrollsToTop = route.contentViewport === chosen
+        // Turn the chosen one on when it becomes the choice, so what the app sets on it since stands (LLP 1075.003 §3.5)
+        if navigation.scrollsToTopSelection !== chosen {
+            navigation.scrollsToTopSelection?.scrollsToTop = false
+            navigation.scrollsToTopSelection = chosen
+            chosen?.scrollsToTop = true
         }
+        if viewport !== chosen, viewport.scrollsToTop { viewport.scrollsToTop = false }
+        for route in navigation.primaryRouteSurfaces where route.contentViewport !== chosen { route.contentViewport?.scrollsToTop = false }
         for id in scrollers {
-            guard let sv = views[id]?.scrollView else { continue }
-            if sv.scrollsToTop != (sv === chosen) { sv.scrollsToTop = sv === chosen }
+            if let sv = views[id]?.scrollView, sv !== chosen, sv.scrollsToTop { sv.scrollsToTop = false }
         }
     }
 

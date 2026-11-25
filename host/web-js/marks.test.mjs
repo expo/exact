@@ -19,7 +19,7 @@ test('an open stream hides none of the page loading that holds time-to-interacti
   writeFileSync(resolve(directory, 'marks.js'), runtimeSource('marks.js'));
   writeFileSync(resolve(directory, 'held.js'), runtimeSource('held.js'));
   writeFileSync(resolve(directory, 'rt.js'), `export const inflight = { n: 0 }, Resources = [], Mutations = [], clock = { timers: [] }, After = [], Hosts = {}, Routes = [];
-export const routeAt = () => 0, busy = () => [];\nexport let Adopted = false;\n`);
+export const routeAt = () => 0, busy = () => [], pageHistory = () => null;\nexport let Adopted = false;\n`);
   try {
     const rt = await import(pathToFileURL(resolve(directory, 'rt.js')).href);
     const { counted } = await import(pathToFileURL(resolve(directory, 'held.js')).href);

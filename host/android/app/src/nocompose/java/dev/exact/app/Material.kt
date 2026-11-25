@@ -2,5 +2,5 @@ package dev.exact.app
 
 import dev.exact.canvas.Pickers
 
-/** An app with no date or time control links no Compose: the framework's dialogs are the fallback. */
+/** The framework's dialogs serve a shell built without Compose. */
 internal val materialPickers: Pickers? = null

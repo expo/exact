@@ -45,7 +45,7 @@ fn a_drawn_range_steps_by_its_authors_keys() {
     let mut p = boot(DRAWN_RANGES, (320., 400.), 0);
     let nodes = statement(&mut p).nodes;
     let flags = |nodes: &[Node], name: &str| named(nodes, name).flags;
-    let both = flag::RANGE | flag::FORWARD | flag::BACKWARD;
+    let both = flag::FOCUSABLE | flag::RANGE | flag::FORWARD | flag::BACKWARD;
     assert_eq!(flags(&nodes, "Level"), both);
     assert_eq!(
         flags(&nodes, "Floor"),
@@ -86,7 +86,7 @@ fn a_drawn_range_steps_by_its_authors_keys() {
     let nodes = statement(&mut p).nodes;
     assert_eq!(
         flags(&nodes, "Floor"),
-        flag::RANGE | flag::FORWARD,
+        flag::FOCUSABLE | flag::RANGE | flag::FORWARD,
         "at its least"
     );
     assert!(!p.access_act(named(&nodes, "Floor").id, act::BACKWARD, 0.0, 0.0));

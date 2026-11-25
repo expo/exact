@@ -115,16 +115,17 @@ final class SheetSurfaceMacTests: XCTestCase {
             throw NSError(domain: "missing grouped card", code: 1)
         }
         let windowCard = try card(above: "window-row")
-        XCTAssertEqual(windowCard.channels("background_color", dark: true), [39, 39, 39, 255])
-        XCTAssertEqual(windowCard.cgColor("background_color", dark: true)?.alpha, 1)
+        let windowFill: [Double] = [255, 255, 255, 10]
+        XCTAssertEqual(windowCard.channels("background_color", dark: true), windowFill)
+        XCTAssertEqual(try XCTUnwrap(windowCard.cgColor("background_color", dark: true)).alpha, CGFloat(10) / 255)
         try f.press("open")
         let sheetCard = try card(above: "sheet-row")
         XCTAssertTrue(sheetCard.window is SheetWindow)
         let sheet = try XCTUnwrap(sheetCard.channels("background_color", dark: true))
         XCTAssertEqual(Array(sheet.prefix(3)), [255, 255, 255])
         XCTAssertEqual(sheet[3] / 255, 0.03, accuracy: 0.002)
-        XCTAssertEqual(windowCard.channels("background_color", dark: true), [39, 39, 39, 255], "opening a sheet must not recolour the window's card")
-        XCTAssertEqual(windowCard.channels("background_color", dark: false), [249, 249, 249, 255])
+        XCTAssertEqual(windowCard.channels("background_color", dark: true), windowFill, "opening a sheet must not recolour the window's card")
+        XCTAssertEqual(windowCard.channels("background_color", dark: false), [0, 0, 0, 6])
     }
 
     func testAnAuthoredLiteralReplacesTheSheetMaterial() throws {

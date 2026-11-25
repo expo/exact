@@ -859,12 +859,11 @@ package final class MenuHost: NSObject {
     }
     private func menuItem(of row: NodeView, action: Selector?) -> NSMenuItem {
         row.rejectNativeActiveProperties(on: "NSMenuItem")
-        let item = AccessibleMenuItem(title: title(of: row), action: action, keyEquivalent: "")
+        let label = label(of: row)
+        let item = AccessibleMenuItem(title: label.title, action: action, keyEquivalent: "")
         item.owner = row
-        if #available(macOS 14.4, *), row.isNativeButton {
-            item.title = row.face?.shown ?? ""
-            item.subtitle = row.face?.subtitle
-        }
+        if #available(macOS 14.4, *) { item.subtitle = label.subtitle }
+        else if let subtitle = label.subtitle { item.title = [label.title, subtitle].filter { !$0.isEmpty }.joined(separator: " — ") }
         return item
     }
     /// The menu of `pop`, reached through `path`'s openers (each row that

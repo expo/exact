@@ -2,7 +2,7 @@
 //! with the same geometry as window management and no window activation.
 
 use exact_painted::package::{json, Context, Json, Package, Reply};
-use exact_painted::screen_capture::{fixtures, Captures, Display, Failure};
+use exact_painted::screen_capture::{Captures, Display, Failure, FixtureCapture};
 
 #[cfg(windows)]
 pub(crate) mod os;
@@ -11,57 +11,58 @@ pub(crate) mod os;
 pub struct ScreenCapture {
     context: Context,
     captures: Captures,
-    screens: Json,
+    fixture: FixtureCapture,
 }
 
 impl Package for ScreenCapture {
     fn new(context: Context) -> Self {
         Self {
+            fixture: FixtureCapture::new(context.clone()),
             context,
             captures: Captures::default(),
-            screens: Json::Null,
         }
     }
 
     fn later(&mut self, name: &str, args: &Json, preferred: Option<&Json>, reply: Reply) {
+        if self.context.agent() {
+            return self.fixture.later(name, args, preferred, reply);
+        }
         match name {
             "screenRecordingStatus" | "requestScreenRecording" => reply.send(json!({
-                "available": cfg!(windows) || self.context.agent(),
-                "state": if cfg!(windows) || self.context.agent() { "granted" } else { "denied" },
+                "available": cfg!(windows),
+                "state": if cfg!(windows) { "granted" } else { "denied" },
             })),
-            "captureScreens" => {
-                let displays = if self.context.agent() {
-                    fixtures(if self.screens.is_array() {
-                        &self.screens
-                    } else {
-                        preferred
-                            .and_then(|p| p.get("screens"))
-                            .unwrap_or(&Json::Null)
-                    })
-                } else {
-                    snapshot()
-                };
-                match displays {
-                    Ok(displays) => self.captures.start(&self.context, args, displays, reply),
-                    Err((code, why)) => reply.error(code, Some(&why)),
-                }
-            }
+            "captureScreens" => match snapshot(args) {
+                Ok(displays) => self.captures.start(&self.context, args, displays, reply),
+                Err((code, why)) => reply.error(code, Some(&why)),
+            },
             _ => reply.error("NotSupportedError", None),
         }
     }
 
-    fn preferred(&mut self, values: &Json, _: &Json) {
-        self.screens = values["screens"].clone();
+    fn preferred(&mut self, values: &Json, previous: &Json) {
+        self.fixture.preferred(values, previous);
     }
     fn cancel(&mut self, request: u64) {
+        self.fixture.cancel(request);
         self.captures.cancel(request);
     }
     fn destroy(&mut self) {
+        self.fixture.destroy();
         self.captures = Captures::default();
     }
 }
 
-fn snapshot() -> Result<Vec<Display>, Failure> {
+fn snapshot(args: &Json) -> Result<Vec<Display>, Failure> {
+    if ["screen", "rect", "window", "cursor"]
+        .iter()
+        .any(|key| !args[*key].is_null())
+    {
+        return Err((
+            "NotSupportedError",
+            "selected capture is unavailable on Windows".into(),
+        ));
+    }
     #[cfg(windows)]
     {
         crate::displays::capture_snapshot()
@@ -70,6 +71,7 @@ fn snapshot() -> Result<Vec<Display>, Failure> {
                 let (width, height) = dimensions(rect)?;
                 Ok(Display {
                     screen: screen.json(true),
+                    frame: None,
                     width,
                     height,
                     read: Box::new(move || os::capture(rect, width, height)),
@@ -107,6 +109,19 @@ fn rgba(bytes: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_selectors_cannot_fall_back_to_capturing_every_monitor() {
+        for option in [
+            json!({"screen":{}}),
+            json!({"rect":{}}),
+            json!({"window":"gone"}),
+            json!({"cursor":"always"}),
+            json!({"cursor":"never"}),
+        ] {
+            assert_eq!(snapshot(&option).err().unwrap().0, "NotSupportedError");
+        }
+    }
 
     #[test]
     fn gdi_rectangles_keep_negative_origins_and_physical_pixels() {

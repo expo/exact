@@ -26,8 +26,8 @@ function read() {
     say(`document: rendered at ${cp.location}, not ${location.pathname}; rendering fresh`);
     return { kept: null, elsewhere: true };
   }
-  // (its origin too: a path that opens with two slashes would name a host)
-  if (canonical(location.pathname) !== at) history.replaceState(history.state, '', location.origin + at + location.search + location.hash);
+  // Boot at the rendered path. The first router commit tries to put it in the address bar.
+  const alias = location.pathname === at ? null : { from: location.pathname, to: at };
   const open = new Set(cp.open),
     readers = new Set(cp.readers),
     paths = new Map(cp.instances),
@@ -39,7 +39,7 @@ function read() {
     if (!kept.has(name)) kept.set(name, { source, answers: [], next: 0 });
     kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k), paths.get(k)]);
   });
-  return { kept, revalidate: !!cp.revalidate, time: (clock.now = driven ? 0 : cp.time || 0) };
+  return { kept, alias, revalidate: !!cp.revalidate, time: (clock.now = driven ? 0 : cp.time || 0) };
 }
 /** A checkpoint value (`push_value`, host/web/src/page.rs) as a runtime value: lists and records are arrays, unit and
  * `none` null, `some(v)` v. */

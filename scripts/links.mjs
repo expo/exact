@@ -115,6 +115,24 @@ export const REMOVED_DOMAINS = {
   false: 'host.ios.associatedDomains: false was removed: delete it; nothing is claimed unless handle_links is "preferred"',
 };
 
+/** Whether a `protocol_handlers` scheme is the web's own: `http` and
+ * `https` make a native app a web browser (LLP 1030 D2, 2026-10-20), and
+ * no browser registers them (WHATWG HTML's protocol handler safelist). */
+export const isWebScheme = (protocol) => ['http', 'https'].includes(protocol.toLowerCase());
+export function protocolHandlerProblems({ protocol_handlers = [], host }) {
+  const web = protocol_handlers.filter((h) => isWebScheme(h.protocol));
+  const pair = web.length && (new Set(web.map((h) => h.protocol.toLowerCase())).size !== 2 || web.some((h) => h.url !== web[0].url || !h.distribution_only !== !web[0].distribution_only));
+  const claimed = ['ios', 'macos', 'android'].flatMap((platform) => (host?.[platform]?.urlSchemes ?? []).filter(isWebScheme).map((s) => `host.${platform}.urlSchemes: ${s} is the web's own scheme; declare http and https together in protocol_handlers`));
+  for (const scheme of host?.android?.urlSchemes ?? []) {
+    if (protocol_handlers.some(({ protocol }) => protocol.toLowerCase() === scheme.toLowerCase())) {
+      claimed.push(`host.android.urlSchemes: ${scheme} is also declared in protocol_handlers`);
+    }
+  }
+  return [...claimed, ...protocol_handlers.flatMap(({ protocol }, i) => protocol_handlers.findIndex(h => h.protocol.toLowerCase() === protocol.toLowerCase()) === i ? [] : [`protocol_handlers[${i}].protocol: ${protocol} is declared more than once`]),
+    ...(host?.ios?.webBrowser && web.length === 0 ? ['host.ios.webBrowser: declare http and https together in protocol_handlers'] : []),
+    ...(pair ? ['protocol_handlers: http and https come together, with one url and one distribution_only: a web browser claims both'] : [])];
+}
+
 /** What `handle_links`, `scope` and `scope_extensions` get wrong beyond the schema (LLP 1038 D8), every problem. */
 export function linkProblems(manifest) {
   const problems = [], { handle_links: handle, scope, scope_extensions: extensions = [] } = manifest;

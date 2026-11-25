@@ -73,7 +73,7 @@ impl SubmittedFrame {
         &self.pixels
     }
 }
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
 impl AsRef<Pixmap> for SubmittedFrame {
     fn as_ref(&self) -> &Pixmap {
         &self.pixels
@@ -494,6 +494,8 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(super) fn activate_first_pixel(&mut self) {
+        #[cfg(target_os = "android")]
+        self.open_android_module();
         self.painted = true;
         let activating = self.host.data_pending();
         match self.host.activate_data() {

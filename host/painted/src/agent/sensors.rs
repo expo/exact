@@ -21,7 +21,7 @@ pub(super) fn clock_framed<D: DataSource>(
 
 /// [`Presenter::clock`] to `to`, as a contact's hold seeks it, framed as
 /// [`clock_framed`] is: a hold may not leave a world's samples unposted.
-pub(super) fn hold_framed<D: DataSource>(p: &mut Presenter<D>, to: f64) -> (f64, Option<String>) {
+pub(crate) fn hold_framed<D: DataSource>(p: &mut Presenter<D>, to: f64) -> (f64, Option<String>) {
     framed(p, to, |p, step| p.clock(step))
 }
 

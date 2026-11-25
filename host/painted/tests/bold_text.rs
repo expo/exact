@@ -85,6 +85,7 @@ fn prefer(p: &mut Presenter<()>, bold_text: bool) {
     let device = Device {
         night: false,
         font_scale: 1.,
+        orientation: None,
         screen_reader: exact_painted::presenter::ScreenReader::Unknown,
         locale: "en-US".into(),
         rtl: false,

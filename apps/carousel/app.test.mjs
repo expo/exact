@@ -1,7 +1,57 @@
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { decodePng } from '../../scripts/png.mjs';
+import { schemeColours } from '../../scripts/scheme-colours.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { checkOp, ratio } from '../../scripts/agent-check.mjs';
+
+async function launchSurfaces(url, manifest) {
+  const failures = [];
+  const declared = schemeColours(manifest, 'background_color');
+  const browser = await suiteBrowser();
+  try {
+    for (const colorScheme of ['light', 'dark']) {
+      const page = await browser.newPage({ colorScheme, viewport: { width: 420, height: 900 } });
+      const { promise: held, resolve: mount } = Promise.withResolvers();
+      try {
+        // Run the launch document's own scheme script. Hold the application until its first pixel is sampled.
+        await page.route('**/*.js', async route => { await held; await route.continue(); });
+        await page.goto(url, { waitUntil: 'commit' });
+        await page.locator('script[data-entry]').waitFor({ state: 'attached' });
+        const root = page.getByTestId('carousel');
+        expect(await root.count()).toBe(0);
+        const pixel = async (style) => {
+          const png = await page.screenshot({ clip: { x: 0, y: 0, width: 1, height: 1 }, style });
+          return [...decodePng(png).data.subarray(0, 4)];
+        };
+        const launch = await pixel();
+        const compare = (surface, painted) => {
+          if (painted.some((channel, i) => channel !== launch[i])) {
+            failures.push({ colorScheme, surface, launch, painted });
+          }
+        };
+        mount();
+        for (const view of ['strip', 'feed']) {
+          if (view === 'feed') await page.getByTestId('feed-page').click();
+          await page.getByTestId(view).waitFor();
+          expect(await root.evaluate(el => el.contains(document.elementFromPoint(0, 0)))).toBe(true);
+          // Sample the root's own surface through the same browser output profile as the launch pixel.
+          compare(view, await pixel('[data-testid="carousel"] > * { opacity: 0 !important }'));
+        }
+        if (declared[colorScheme] !== null) {
+          await page.goto('about:blank');
+          await page.evaluate(color => {
+            document.documentElement.style.colorScheme = 'light dark';
+            document.documentElement.style.backgroundColor = color;
+          }, declared[colorScheme]);
+          compare('manifest background', await pixel());
+        }
+      } finally { mount(); await page.close(); }
+    }
+    return failures;
+  } finally { await browser.close(); }
+}
 
 // Build first with `bun host/web/build.mjs carousel`.
 test('strip and feed chrome follow the colour scheme while content cards keep their ink', async () => {
@@ -9,8 +59,8 @@ test('strip and feed chrome follow the colour scheme while content cards keep th
   const session = await open({ host: 'web', app: 'carousel', size: [420, 900],
     env: { EXACT_AGENT_EPHEMERAL_PORT: '1' } });
   try {
+    const failures = await launchSurfaces(await session.carrier.evaluate('location.href'), manifest);
     await session.clock('settle');
-    const failures = [];
     const require = (condition, detail) => { if (!condition) failures.push(detail); };
     const readPaint = page => {
       const node = id => {
@@ -65,9 +115,6 @@ test('strip and feed chrome follow the colour scheme while content cards keep th
           expect(card.ink).toEqual([255, 255, 255]);
           expect(ratio(card.ink, card.fill)).toBeGreaterThanOrEqual(4.5);
         }
-        const launch = scheme === 'light' ? manifest.background_color : manifest.color_scheme_dark?.background_color;
-        const surface = '#' + paint.page.fill.map(n => n.toString(16).padStart(2, '0')).join('');
-        require(launch === surface, { page, scheme, expected: 'launch matches page', launch, surface });
         const checked = await checkOp(session, [scheme]);
         expect(checked.check.map(report => report.scheme)).toEqual([scheme]);
         failures.push(...checked.check[0].findings.filter(f => f.kind === 'contrast')

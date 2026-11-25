@@ -146,6 +146,34 @@ fn boot(plan: Plan) -> Runner<Source> {
     .unwrap()
 }
 
+#[test]
+fn an_unknown_package_name_or_wrong_verb_rejects_a_data_call() {
+    use crate::{Dispatch, Request, Work};
+    use serde_json::{json, Value as Json};
+    let mut runner = boot(plan("later"));
+    for body in [
+        json!({"extension":"missing", "source":"steps"}),
+        json!({"extension":"test.motion", "source":"missing"}),
+        json!({"extension":"test.motion", "send":"steps"}),
+        json!({"extension":"test.motion", "source":"", "send":"steps"}),
+        json!({"extension":"test.motion", "source":null, "send":"steps"}),
+        json!({"extension":"test.motion", "source":"missing", "send":"steps"}),
+    ] {
+        let call = Request::native(body.to_string().into_bytes());
+        let Some(Dispatch::Run(Work::Now(answer))) = runner.module_call(&call) else {
+            panic!("a missing package, name or verb is refused before dispatch")
+        };
+        let Outcome::Response(response) = answer() else {
+            panic!("a response")
+        };
+        assert_eq!(response.status, 500, "{body}");
+        assert_eq!(
+            serde_json::from_slice::<Json>(&response.body).unwrap(),
+            json!({"error":"NotSupportedError"})
+        );
+    }
+}
+
 /// A scroll report the view handles: the dispatch commits and its handler runs.
 fn scroll(r: &mut Runner<Source>, at: f64) {
     let root = r.roots()[0];

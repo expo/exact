@@ -9,6 +9,17 @@ use crate::compat::{compatibility_digest, Compat};
 use exact_runner::{Capability, Uses};
 
 impl Compat {
+    /// The generated Linux entry uses the host that owns the baked store level (LLP 1030 D4).
+    /// `composed` supplies the app's packages and hatches.
+    pub fn linux_main(&self, composed: &str) -> String {
+        let host = if self.inputs["store"]["L"] == "0" {
+            "exact_linux"
+        } else {
+            "exact_linux_update"
+        };
+        format!("fn main() {{ std::process::exit({host}::run_composed::<AppData>(PLAN, COMPAT, {composed})); }}\n")
+    }
+
     /// The Rust a Windows shell includes for `exact_windows::run_baked`:
     /// `ADMIT_AGENT`, `SERVICES` (the data executor and image loader this
     /// bake selected, as constructor paths the linker sees) and `window()`.

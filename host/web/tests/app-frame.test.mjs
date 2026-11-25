@@ -31,6 +31,7 @@ test('app file frames load typed documents, report missing files, and release th
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(server.url.href);
     await page.evaluate(async () => {
+      await import('/iframes.js');
       globalThis.rt = await import('/rt.js');
       globalThis.exact = {};
       rt.data.appId = 'app-frame-test';
@@ -86,6 +87,7 @@ test('app file frames load typed documents, report missing files, and release th
 test('an unchanged app source retains the guest document across record updates', () => browserTest(async (page, server) => {
   await page.goto(server.url.href);
   await page.evaluate(async () => {
+    await import('/iframes.js');
     globalThis.rt = await import('/rt.js'); globalThis.exact = {};
     rt.data.appId = 'unchanged-frame';
     const { createFileStore } = await import('/storage-fs.js');
@@ -116,6 +118,7 @@ test('an unchanged app source retains the guest document across record updates',
 test('bound sandbox changes preserve app frames after switching from data documents', () => browserTest(async (page, server) => {
   await page.goto(server.url.href);
   await page.evaluate(async () => {
+    await import('/iframes.js');
     globalThis.rt = await import('/rt.js'); globalThis.exact = {};
     rt.data.appId = 'sandbox-source-switch';
     const { createFileStore } = await import('/storage-fs.js');
@@ -246,6 +249,7 @@ test('opaque sandbox loads app text like Chrome, while sandboxed PDFs report err
   const xref = pdf.length;
   pdf += `xref\n0 5\n0000000000 65535 f \n${offsets.slice(1).map(n => `${String(n).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   await page.evaluate(async ({literal, pdf}) => {
+    await import('/iframes.js');
     globalThis.exact = {}; globalThis.rt = await import('/rt.js'); rt.data.appId = 'sandbox-frames';
     const { createFileStore } = await import('/storage-fs.js');
     const files = createFileStore(rt.data.appId);
@@ -315,6 +319,7 @@ const ODD = ['report #2.pdf', 'a&b.pdf', 'a+b.pdf', '100%.pdf', 'my file.pdf'];
 async function givenSetup(page, server) {
   await page.goto(server.url.href);
   await page.evaluate(async ({ dot, odd }) => {
+    await import('/iframes.js');
     globalThis.rt = await import('/rt.js'); globalThis.exact = {};
     rt.data.appId = 'given-files';
     const { createFileStore } = await import('/storage-fs.js');
@@ -436,6 +441,7 @@ test('a javascript: source with an app: value never runs on either web host', ()
   const appFrameSource = glueDeclarations(glue, ['appFrameSource']);
   await page.goto(server.url.href);
   const result = await page.evaluate(async ({ appFrameSource, scripted }) => {
+    await import('/iframes.js');
     globalThis.rt = await import('/rt.js'); globalThis.exact = {};
     const nav = await import('/navigation.js'), picker = await import('/picker-glue.js');
     const settle = () => new Promise(r => setTimeout(r, 300));

@@ -110,10 +110,12 @@ pub mod action {
 }
 
 /// A statement's flags for a field: it was painted, so its box is where
-/// its view goes; and it takes no touch or focus (disabled, or under a
-/// route that covers it).
+/// its view goes; it takes no touch or focus (disabled, or under a route
+/// that covers it); and its own node takes a drop, so its editor marks no
+/// drop place under a drag (LLP 1094.001 D5).
 const PLACED: i32 = 1;
 const INERT: i32 = 2;
+const DROP_OWN: i32 = 4;
 
 /// A field's look: a `textarea`, a password, disabled, read-only, no
 /// autocorrect, no suggestions, italic, and whether Enter submits.
@@ -230,7 +232,8 @@ impl<D: DataSource> Presenter<D> {
     ///
     /// - its id, its generation, flags (bit 0 it was painted and the box
     ///   that follows is where it goes, bit 1 it takes no touch and no
-    ///   focus), and the scroller whose rows it was painted among (0 none);
+    ///   focus, bit 2 its own node takes a drop), and the scroller whose
+    ///   rows it was painted among (0 none);
     /// - as float bits its content box (x, y, width, height) and the clip
     ///   it was painted under (x, y, width, height; a negative width for
     ///   none), where the last paint put them;
@@ -300,6 +303,14 @@ impl<D: DataSource> Presenter<D> {
         Some(out)
     }
 
+    /// Whether hosted field `id` takes no touch, no focus and no drag: it is
+    /// disabled, under a route that covers it, or in flight.
+    pub(crate) fn field_inert(&self, id: ViewId) -> bool {
+        let disabled = (self.host.kernel().node(id))
+            .is_some_and(|n| n.props.bool(PropId::Disabled) == Some(true));
+        self.host.route_visibility(id).1 || disabled || self.host.flying(id)
+    }
+
     fn field_words(
         &mut self,
         id: ViewId,
@@ -309,10 +320,9 @@ impl<D: DataSource> Presenter<D> {
         out: &mut Vec<i32>,
     ) {
         let known = *self.hosted.known.entry(id).or_default();
-        let (hidden, inert) = self.host.route_visibility(id);
+        let hidden = self.host.route_visibility(id).0;
+        let inert = self.field_inert(id);
         let kernel = self.host.kernel();
-        let disabled =
-            (kernel.node(id)).is_some_and(|n| n.props.bool(PropId::Disabled) == Some(true));
         let place = painted
             .filter(|_| !hidden && self.display.allows(kernel, id))
             .zip(self.brush.field_content.get(&id).copied())
@@ -326,8 +336,11 @@ impl<D: DataSource> Presenter<D> {
         if place.is_some() {
             flags |= PLACED;
         }
-        if inert || disabled || self.host.flying(id) {
+        if inert {
             flags |= INERT;
+        }
+        if self.drop_owner(id) == 1 {
+            flags |= DROP_OWN;
         }
         let group = place.as_ref().map_or(0, |p| p.2);
         out.extend([id as i32, known.generation as i32, flags, group as i32]);
@@ -593,7 +606,13 @@ impl<D: DataSource> Presenter<D> {
             value,
             self.hosted.composing.contains_key(&id),
         );
-        if let Some(e) = self.edit_field(id, value.to_owned(), selection, now_ms, edit) {
+        if let Some(e) = self.edit_field(
+            id,
+            value.to_owned(),
+            field::EditSelection::Native(selection),
+            now_ms,
+            edit,
+        ) {
             eprintln!("exact: {e}");
         }
     }
@@ -696,9 +715,6 @@ impl<D: DataSource> Presenter<D> {
             .is_some_and(|n| n.props.str(PropId::SemanticTag) == Some("textarea"));
         self.field_key(id, "Enter", now_ms);
         if textarea {
-            // The reader's field takes the new text, and the caret from here:
-            // its own mapping would leave a replaced range's line break selected.
-            self.hosted_commanded(id, self.field_selection(id));
             return;
         }
         if self.focus != Some(id) {
@@ -732,8 +748,7 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// A command set field `id`'s selection (`setSelectionRange`,
-    /// `select()`): the reader's field takes it.
+    /// Tell the hosted field where a presenter edit or selection command placed the caret.
     pub(super) fn hosted_commanded(&mut self, id: ViewId, selection: FieldSelection) {
         if let Some(known) = self.hosted.known.get_mut(&id) {
             known.select += 1;

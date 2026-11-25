@@ -10,6 +10,12 @@ use exact_runner::{ControlValue, FieldSelection, InputDetails, SelectionDirectio
 use std::rc::Rc;
 use unicode_segmentation::UnicodeSegmentation;
 
+/// The editor that placed the selection decides whether the hosted field needs to take it.
+pub(super) enum EditSelection {
+    Presenter(FieldSelection),
+    Native(FieldSelection),
+}
+
 /// A field's selection as this host keeps it, beside the value it indexes.
 #[derive(Debug, Clone)]
 pub(crate) struct FieldMark {
@@ -872,7 +878,7 @@ impl<D: DataSource> Presenter<D> {
         &mut self,
         id: ViewId,
         next: String,
-        after: FieldSelection,
+        after: EditSelection,
         now: f64,
         mut edit: InputDetails,
     ) -> Option<String> {
@@ -929,11 +935,15 @@ impl<D: DataSource> Presenter<D> {
         &mut self,
         id: ViewId,
         next: String,
-        after: FieldSelection,
+        after: EditSelection,
         bound: String,
         now_ms: f64,
         edit: InputDetails,
     ) -> Option<String> {
+        let selection = after;
+        let after = match selection {
+            EditSelection::Presenter(at) | EditSelection::Native(at) => at,
+        };
         if !self.ime_owns(id) && !matches!(edit.input_type.as_str(), "historyUndo" | "historyRedo")
         {
             let value = self.field_text(id);
@@ -969,6 +979,10 @@ impl<D: DataSource> Presenter<D> {
         };
         let error = error.or(self.after_commit());
         self.keep_typed(id, next, bound);
+        if matches!(selection, EditSelection::Presenter(_)) {
+            // An input handler can replace the binding. The offsets index the value we send.
+            self.hosted_commanded(id, self.field_selection(id));
+        }
         error
     }
 
@@ -1110,7 +1124,7 @@ impl<D: DataSource> Presenter<D> {
         if let Some(e) = self.edit_field(
             id,
             next,
-            after,
+            EditSelection::Presenter(after),
             now_ms,
             InputDetails {
                 input_type: input_type.into(),
@@ -1166,7 +1180,7 @@ impl<D: DataSource> Presenter<D> {
         if let Some(e) = self.edit_field(
             id,
             next,
-            after,
+            EditSelection::Presenter(after),
             now_ms,
             InputDetails {
                 input_type: "insertFromPaste".into(),

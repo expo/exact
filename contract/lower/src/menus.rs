@@ -116,8 +116,8 @@ pub(crate) fn check_menu_keys(attrs: &[Attr], root: bool) -> Result<(), LowerErr
         if !valid {
             return err("lower-menu-keys", format!(
                 "`-exact-menu-keys` belongs to a root and takes a literal whitespace-separated list of id=chord, each id once, \
-                 the chord `none` or one `aria-keyshortcuts` chord with Meta (`Meta+Shift+W`) that is not one of the host's or \
-                 the system's own (⌘Q, ⌘W, ⌘H, ⌘M, ⌘-comma and the like); the ids: {}",
+                 the chord `none` or one `aria-keyshortcuts` chord with Meta or Mod (`Mod+Shift+W`) that is not one of the host's or \
+                 the system's own (⌘Q, ⌘W, ⌘H, ⌘M, ⌘-comma and the like); Mod cannot be combined with Meta or Control; the ids: {}",
                 IDS.join(", ")
             ), attr.span);
         }
@@ -134,6 +134,7 @@ type MenuChord = (Vec<&'static str>, String);
 /// character, a named key or `F1` to `F35`, after any of `Meta`, `Control`,
 /// `Alt` and `Shift`, which may repeat, as the host lets them.
 fn menu_chord(chord: &str) -> Option<MenuChord> {
+    let chord = exact_plan::shortcut::resolve(chord, "Meta")?;
     let (held, key) = match chord.strip_suffix("++") {
         Some(held) => (held, "Plus"),
         None => chord.rsplit_once('+')?,

@@ -112,3 +112,18 @@ fn projected_gradients_and_clips_resolve_within_each_component() {
         }
     }
 }
+
+#[test]
+fn the_web_host_reports_the_package_that_owns_a_placed_view() {
+    let mut plan =
+        contract::compile("component App\n  view\n    felt-haptics enabled=true\n").unwrap();
+    plan.add_view("felt-haptics", ("felt", "@fixture/felt"), false, &[], "{}");
+    exact_web::link(exact_web_capabilities::ALL);
+    let (_, batch) = Host::boot(&plan.encode(), NoData, Default::default(), "/").unwrap();
+    let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+    assert_eq!(batch["packageViewOwners"]["felt-haptics"], "@fixture/felt");
+    plan.views.clear();
+    let (_, batch) = Host::boot(&plan.encode(), NoData, Default::default(), "/").unwrap();
+    let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+    assert_eq!(batch["packageViewOwners"], serde_json::json!({}));
+}

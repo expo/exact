@@ -65,7 +65,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// Its runs' elements, kept until the runs change, and what else made
     /// them (`textAccessibilityChildren`).
     var inlineKeyViews: [UInt32: InlineKeyView] = [:]
-    var inlineAccessibility: (key: String?, elements: [NSAccessibilityElement])?
+    var hasAssignedCustomActions = false
+    var inlineAccessibility: (key: String?, actionRuns: [UInt32], elements: [NSAccessibilityElement])?
     var inlinePressed: (id: UInt32, down: NSPoint)?
     /// An SVG element a click in this `svg` went down on (LLP 1055.000 D17).
     var svgPressed: UInt32?
@@ -164,7 +165,8 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// raster, symbol, surface).
     var layerPaintCache: Bool?
     /// What the host last wrote to AppKit accessibility (props and form state).
-    struct AccessibilityWrite: Equatable { var enabled = true; var identifier: String?; var label: String?; var help: String?; var required = false; var formInitialized = false; var text: TextAccessibilityWrite? }
+    struct AccessibilityWrite: Equatable { var actionGroup = false; var enabled = true; var identifier: String?; var label: String?; var help: String?; var required = false; var formInitialized = false; var text: TextAccessibilityWrite? }
+    var hadFormActionRefs = false
     var lastAccessibilityWrite = AccessibilityWrite()
     var boxGradient: CAGradientLayer?
     var boxPattern: (any GradientPatterning)?
@@ -200,10 +202,13 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// then its depth (larger nearer); `nil` is the kernel's frame.
     /// Hit-testing inverts it, nearest child first; accessibility reports the
     /// mapped box.
-    package var placement: [Double]?
+    package var placement: [Double]? {
+        didSet { notePlacement(wasPlaced: oldValue != nil || placementHidden) }
+    }
     private var hiddenBeforePlacement = false
     package var placementHidden = false {
         didSet {
+            notePlacement(wasPlaced: placement != nil || oldValue)
             if placementHidden && !oldValue { hiddenBeforePlacement = hostHidden }
             if placementHidden { isHidden = true }
             else if oldValue { isHidden = hiddenBeforePlacement }
@@ -698,16 +703,11 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
                                port.width, port.height].map(Double.init))
     }
 
-    /// The direct child of a canvas this node is under, when that child is
-    /// placed by the surface: the node whose `placement` maps this subtree.
-    var placedAncestor: NodeView? {
-        var v: NSView? = self
-        while let n = v {
-            if let node = n as? NodeView, (node.placement != nil || node.placementHidden) { return node }
-            if n.superview?.canvasOverlayOwner != nil { return nil }
-            v = n.superview
-        }
-        return nil
+    private func notePlacement(wasPlaced: Bool) {
+        let placed = placement != nil || placementHidden
+        guard placed != wasPlaced else { return }
+        if placed { Self.placedViews.add(self) }
+        else { Self.placedViews.remove(self) }
     }
 
     /// A homography applied to a point (row major, projective).

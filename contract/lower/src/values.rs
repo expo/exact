@@ -19,7 +19,7 @@ pub(super) use templates::{
 };
 
 /// The host's names a value reads (LLP 1123 D9, D16), as a refusal lists them.
-pub(crate) const HOST_NAMES: &str = "the observations `var(--exact-<family>-inset-<edge>)`, the edge `top`, `right`, `bottom` or `left`, or `start` or `end` for any family but `safe-area`, the family `safe-area`, `keyboard`, `keyboard-undocked`, `safe-area-corners`, `layout-margins`, `layout-margins-corners`, `readable-content`, `readable-content-corners`, `readable-content-guide` or `system-minimum-layout-margins`, and a native target's raw safe area `var(--exact-<target>-safe-area-inset-<edge>)`, any of the six edges, the target `native-<n>` for the nth chain entry, from 1 to 255, `owner`, `parent`, `navigation`, `tab`, `split`, `column`, `presenter`, `session`, `root`, `window`, `tab-content`, `window-content`, `screen` or `target-<name>` for one native code registered, a name of lowercase letters, digits and inner hyphens, and a field of the owner's segment `var(--exact-viewport-segment-<field>-<x>-<y>)`, the field `width`, `height`, `top`, `left`, `bottom` or `right`, each index 0 to 15";
+pub(crate) const HOST_NAMES: &str = "the observations `var(--exact-<family>-inset-<edge>)`, the edge `top`, `right`, `bottom` or `left`, or `start` or `end` for any family but `safe-area`, the family `safe-area`, `keyboard`, `keyboard-undocked`, `safe-area-corners`, `layout-margins`, `layout-margins-corners`, `readable-content`, `readable-content-corners`, `readable-content-guide` or `system-minimum-layout-margins`, the width of route navigation on an inline side `var(--exact-bar-inset-start)` or `var(--exact-bar-inset-end)`, and a native target's raw safe area `var(--exact-<target>-safe-area-inset-<edge>)`, any of the six edges, the target `native-<n>` for the nth chain entry, from 1 to 255, `owner`, `parent`, `navigation`, `tab`, `split`, `column`, `presenter`, `session`, `root`, `window`, `tab-content`, `window-content`, `screen` or `target-<name>` for one native code registered, a name of lowercase letters, digits and inner hyphens, and a field of the owner's segment `var(--exact-viewport-segment-<field>-<x>-<y>)`, the field `width`, `height`, `top`, `left`, `bottom` or `right`, each index 0 to 15";
 
 /// A literal, as an author wrote it, for a message.
 fn literal_text(e: &Expr) -> String {
@@ -524,7 +524,7 @@ fn style_value(
             }
             if rows.contains(&StyleId::Transition) {
                 if let Err(reason) = exact_motion::Transitions::parse(v) {
-                    let supported = "translate, scale, rotate, opacity; color, background-color, border-color (and each side), -exact-tint-color, box-shadow, filter; font-weight, font-stretch, font-variation-settings; SVG fill, stroke, stroke-dashoffset, r, cx, cy, x, y, rx, ry, d; numeric height on admitted height owners";
+                    let supported = "translate, scale, rotate, opacity; color, background-color, border-color (and each side), -exact-tint-color, box-shadow, filter; font-weight, font-stretch, font-variation-settings; SVG fill, stroke, stroke-dashoffset, r, cx, cy, x, y, rx, ry, d; numeric height on supported boxes";
                     let why = match reason {
                         exact_motion::ParseError::UnknownProperty(property) => {
                             crate::motion::layout_property_refusal(&property, supported).unwrap_or_else(|| format!("`{property}` is not a supported transition property: transitions animate {supported}"))
@@ -1013,6 +1013,18 @@ pub(crate) fn check_prop_value(
     ty: &Ty,
 ) -> Result<(), LowerError> {
     media::check(name, value, span)?;
+    if let (PropId::ToolbarPlacement, Expr::Str(word, _)) = (prop, value) {
+        if !vocab::TOOLBAR_PLACEMENTS.contains(&word.as_str()) {
+            return err(
+                "lower-attr-value",
+                format!(
+                    "`toolbarPlacement` takes {}; given {word:?}",
+                    vocab::TOOLBAR_PLACEMENTS.join(", ")
+                ),
+                span,
+            );
+        }
+    }
     if prop == PropId::AccessibilityRole {
         crate::roles::check(value)?;
     }
@@ -1121,11 +1133,11 @@ pub(crate) fn check_prop_value(
     // @ref LLP 1116.004 D1.2, LLP 1116.006 D2 — a stack's split on a wide window: off, or the list column's
     // width; or, on a box in the root route, the detail pane's placeholder.
     if prop == PropId::NavigationSplit
-        && matches!(value, Expr::Str(s, _) if s != "none" && s != "placeholder" && !s.parse::<f64>().is_ok_and(|w| w.is_finite() && w > 0.0))
+        && matches!(value, Expr::Str(s, _) if s != "none" && s != "split" && s != "placeholder" && !s.parse::<f64>().is_ok_and(|w| w.is_finite() && w > 0.0))
     {
         return err(
             "lower-attr-value",
-            "`navigationSplit` takes \"none\" (the stack pushes on a wide window too) or the list column's width, a positive number, on the root route; or \"placeholder\" on a box in it, which the detail pane shows while nothing is selected",
+            "`navigationSplit` takes \"split\" (a split view in an iPad tab or window), \"none\" (the stack pushes on a wide window too) or the list column's width, a positive number, on the root route; or \"placeholder\" on a box in it, which the detail pane shows while nothing is selected",
             span,
         );
     }
@@ -1136,6 +1148,10 @@ pub(crate) fn check_prop_value(
         PropId::NavigationBar => Some((&["none", "auto", "transparent"], "`navigationBar` takes \"none\" (this route shows no navigation bar: a full-bleed screen that draws its own way back), \"transparent\" (the bar drawn clear at the top of the route's scroller, whose content starts under it: a full-bleed picture) or \"auto\" (the platform's bar, the default)")),
         // A sheet's grabber, said or left to the platform (LLP 1115 §2).
         PropId::NavigationGrabber => Some((&["visible", "hidden", "auto"], "`navigationGrabber` takes \"visible\", \"hidden\" or \"auto\" (the default: the platform's, a grabber on a sheet with several detents)")),
+        // @ref LLP 1123 D7 — a sheet route's choices, each one UIKit property.
+        PropId::NavigationEdgeAttachedInCompactHeight => Some((&["true", "false"], "`navigationEdgeAttachedInCompactHeight` takes \"true\" (in a short window, as an iPhone's in landscape, the sheet rests on the screen's bottom edge as it does in a tall one) or \"false\" (the default: the platform's, a sheet that covers the short window's height)")),
+        PropId::NavigationScrollExpands => Some((&["true", "false"], "`navigationScrollExpands` takes \"true\" (scrolling the sheet's content at its top grows the sheet to its next detent) or \"false\" (the content scrolls and the sheet keeps its height); unsaid, the platform's: it grows on a sheet with several detents")),
+        PropId::NavigationSizing => Some((&["page", "form", "automatic"], "`navigationSizing` takes \"page\" (the default: a page sheet), \"form\" (a form sheet, centred at a standard size in a regular-width window) or \"automatic\" (the platform's choice)")),
         // @ref LLP 1115.000 D5.5 — the ways the navigation root offers now.
         PropId::NavigationHistory => Some((&["back forward", "back", "forward", "none"], "`navigationHistory` takes \"back forward\" (the default: Back and Forward, wherever the router has somewhere to go), \"back\", \"forward\" or \"none\", the ways through history the navigation root offers now")),
         // @ref LLP 1115.000 D7.3 — Return presses a focused pressable under the node, as Chromium's Enter does.

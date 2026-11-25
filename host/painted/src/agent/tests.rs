@@ -9,6 +9,8 @@ impl exact_runner::HostWork for TestWork {}
 
 // The clipboard, keys, modifiers and mouse contacts.
 mod input;
+// Drops from outside the app, as the driver's `drop` makes them.
+mod drops;
 // An orderly exit's wait for the work the app must finish.
 mod exit;
 // A re-ask after a turn over its budget, which `clock settle` waits for.

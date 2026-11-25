@@ -13,6 +13,8 @@ use crate::Span;
 pub enum TokenKind {
     /// An identifier or keyword.
     Ident(String),
+    /// A package substitute, in JSON's literal grammar.
+    Json(String),
     /// A number literal.
     Number(f64),
     /// A `"…"` string literal, unescaped.
@@ -109,12 +111,16 @@ impl Lexer {
         let mut indents: Vec<usize> = vec![0];
         let mut depth = 0usize; // bracket depth
         let mut errors = Vec::new();
-        let line = |out: &mut Vec<Token>,
-                    indents: &mut Vec<usize>,
-                    depth: &mut usize,
-                    i: usize,
-                    raw: &str|
+        let mut next_line = 0;
+        let mut line = |out: &mut Vec<Token>,
+                        indents: &mut Vec<usize>,
+                        depth: &mut usize,
+                        i: usize,
+                        raw: &str|
          -> Result<(), LexError> {
+            if i < next_line {
+                return Ok(());
+            }
             let line_no = origin.line + i as u32;
             let mut first_col = if i == 0 { origin.col } else { 1 };
             let raw = if i == 0 && origin.line == 1 && origin.col == 1 {
@@ -244,6 +250,81 @@ impl Lexer {
                     break;
                 }
                 let span = col_of(pos);
+                // An extension key uses the drive's alphabet, including an implementation's import path.
+                if matches!(out.last(), Some(Token {kind: TokenKind::Ident(w), ..}) if w == "extension")
+                    && trimmed[..pos]
+                        .split_whitespace()
+                        .eq(["prefer", "extension"])
+                {
+                    let raw = trimmed[pos..].split(['=', ' ', '\t']).next().unwrap_or("");
+                    let (source, owner) = raw
+                        .split_once('#')
+                        .map_or((raw, None), |(s, p)| (s, Some(p)));
+                    let word = |s: &str, extra: &[u8]| {
+                        !s.is_empty()
+                            && s.bytes().all(|b| {
+                                b.is_ascii_alphanumeric() || b == b'_' || extra.contains(&b)
+                            })
+                    };
+                    if !source
+                        .split_once('.')
+                        .is_some_and(|(package, name)| word(package, b"-") && word(name, b""))
+                        || owner.is_some_and(|p| {
+                            !p.strip_prefix('@')
+                                .unwrap_or(p)
+                                .split('/')
+                                .all(|s| word(s, b".-"))
+                        })
+                    {
+                        return Err(LexError { id: "syntax-expected-step", message: "expected an extension key: <extension>.<name>[#<import path>]=<JSON>|clear".into(), span });
+                    }
+                    pos += raw.len();
+                    out.push(Token {
+                        kind: TokenKind::Ident(raw.into()),
+                        span: Span {
+                            end_col: col_of(pos).col,
+                            ..span
+                        },
+                    });
+                    // Read JSON in its own grammar, including exponents and surrogate pairs.
+                    let rest = trimmed[pos..].trim_start();
+                    if let Some(tail) = rest.strip_prefix('=') {
+                        let equal = bytes.len() - rest.len();
+                        let start = bytes.len() - tail.trim_start().len();
+                        if !tail.trim_start().starts_with("clear") {
+                            let offset = trimmed.as_ptr() as usize - src.as_ptr() as usize + start;
+                            let input = &src[offset..];
+                            let mut values = serde_json::Deserializer::from_str(input)
+                                .into_iter::<serde_json::Value>();
+                            let error = |why: String| LexError {
+                                id: "syntax-expected-step",
+                                message: format!("expected a JSON substitute or `clear`: {why}"),
+                                span: col_of(start),
+                            };
+                            values
+                                .next()
+                                .ok_or_else(|| error("missing value".into()))?
+                                .map_err(|e| error(e.to_string()))?;
+                            let end = values.byte_offset();
+                            let extra = input[end..].lines().next().unwrap_or("").trim();
+                            if !extra.is_empty() && !extra.starts_with("//") {
+                                return Err(error("unexpected text after the value".into()));
+                            }
+                            let json = &input[..end];
+                            next_line = i + 1 + json.bytes().filter(|&c| c == b'\n').count();
+                            out.push(Token {
+                                kind: TokenKind::Punct("="),
+                                span: col_of(equal),
+                            });
+                            out.push(Token {
+                                kind: TokenKind::Json(json.into()),
+                                span: col_of(start),
+                            });
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 // A vendor-prefixed CSS name, as the Compat Standard spells
                 // some (`-webkit-text-stroke`, LLP 1077 D7), or one Exact
                 // invents (`-exact-press-scale`, LLP 1081 D7), or a custom

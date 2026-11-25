@@ -19,7 +19,7 @@ impl<D: DataSource> Runner<D> {
         width: f64,
         height: f64,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
-        self.set_view(Some((width, height)), None)
+        self.set_view(Some((width, height)), None, None)
     }
 
     /// The software keyboard's overlap with the layout viewport, CSS's
@@ -29,10 +29,10 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         height: f64,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
-        self.set_view(None, Some(height))
+        self.set_view(None, Some(height), None)
     }
 
-    /// The size, the keyboard's overlap, or both, with the kernel's insets
+    /// The size, keyboard overlap and fold, with the kernel's insets
     /// and segments as the host has just set them: what changes of a window
     /// at once, one commit, so no reader sees the keys without the viewport
     /// they shrank or a rotation's insets without its size (LLP 1039 D9).
@@ -41,12 +41,16 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         size: Option<(f64, f64)>,
         keyboard: Option<f64>,
+        fold: Option<Fold>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let fold = fold.unwrap_or(self.viewport.fold);
+        fold.validate()?;
         let (width, height) = size.unwrap_or((self.viewport.width, self.viewport.height));
         let viewport = Viewport {
             width,
             height,
             keyboard_height: keyboard.unwrap_or(self.viewport.keyboard_height),
+            fold,
             ..self.viewport
         };
         if let Err(error) = viewport.validate() {

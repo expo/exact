@@ -13,6 +13,34 @@ const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', 
 /** The device set xcodebuild makes the simulator clones for parallel test runners in. */
 const TESTING_DEVICES = resolve(homedir(), 'Library/Developer/XCTestDevices');
 
+/** The package-screen test loads a package and its app module through their usual separate libraries. */
+export async function packageViewFixture(root, fixtureDir, triple, appId, env, runApple) {
+  const { packageCompiler, composedModule, moduleLibraryLinkArgs, moduleSeam } = await import('./compose.mjs');
+  const dir = resolve(fixtureDir, 'package-screen'), fixtures = resolve(root, 'host/apple/tests/fixtures');
+  const tags = ['probe-table', 'probe-plain'];
+  const packages = [{ extension: 'screen-probe', module: 'ScreenProbe', className: 'ScreenPackage', views: tags }];
+  packageCompiler({ packages, packageDir: dir, packagesRoot: dir, packageTargets: new Map([[dir, ['iphonesimulator', ['-target', triple]]]]),
+    seam: resolve(root, 'host/apple/modules/ExactPackage.swift'), packageCopies: [[resolve(fixtures, 'ScreenPackage.swift'), resolve(fixtures, 'AppearanceTable.swift')]],
+    ios: true, swiftc: read('xcrun', ['swiftc', '--version']).stdout }).place(dir);
+  const composition = resolve(dir, 'ExactComposed.swift');
+  writeFileSync(composition, composedModule(packages, true));
+  env.TEST_RUNNER_EXACT_PACKAGE_SCREEN_MODULE = resolve(dir, 'libexact_modules.dylib');
+  runApple('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-target', triple, '-parse-as-library', '-emit-library', '-swift-version', '5',
+    '-I', dir, resolve(dir, 'ExactPackage.o'), ...moduleSeam(resolve, root), resolve(fixtureDir, 'ExactDataKeys.swift'), composition,
+    resolve(fixtures, 'ScreenModule.swift'), resolve(fixtures, 'AppearanceTable.swift'), ...moduleLibraryLinkArgs(), '-o', env.TEST_RUNNER_EXACT_PACKAGE_SCREEN_MODULE]);
+  const name = '@fixture/screen-probe', pkg = resolve(dir, 'node_modules', name);
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ name, version: '1.0.0', kind: 'interface', names: [], views: Object.fromEntries(tags.map(tag => [tag, {}])) }));
+  writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name, version: '1.0.0', exports: './exact.json' }));
+  writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { [name]: '1.0.0' } }));
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: appId, name: 'Package screen' }, modules: ['app-table', 'reusable-table'] }));
+  for (const [file, key] of [['package-screen', 'PACKAGE_SCREEN'], ['package-screen-split', 'PACKAGE_SCREEN_SPLIT']]) {
+    cpSync(resolve(fixtures, `${file}.contract`), resolve(dir, `${file}.contract`));
+    const plan = env[`TEST_RUNNER_EXACT_${key}_PLAN`] = resolve(dir, `${file}.plan`);
+    runApple(env.EXACT_CONTRACT, ['build', resolve(dir, `${file}.contract`), '-o', plan], { env });
+  }
+}
+
 /** Rebuild fixture plans with `env.EXACT_CONTRACT`; write their paths to `<prefix>_<KEY>_PLAN`.
  * Plans embed the current schema digest. App entries need the test app's `appId` to boot. */
 export function compileFixtures(root, run, env, dir, prefix, appId) {
@@ -58,6 +86,10 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
     }
   }
   contract([resolve(root, 'host/apple/tests/fixtures/navigation-scroller.contract'), '-o', env[`${prefix}_NAVIGATION_SCROLLER_PLAN`] = resolve(dir, 'navigation-scroller.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/route-scroll-edges.contract'), '-o', env[`${prefix}_ROUTE_SCROLL_EDGES_PLAN`] = resolve(dir, 'route-scroll-edges.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/bottom-toolbar.contract'), '-o', env[`${prefix}_BOTTOM_TOOLBAR_PLAN`] = resolve(dir, 'bottom-toolbar.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/bottom-toolbar-tabs.contract'), '-o', env[`${prefix}_BOTTOM_TOOLBAR_TABS_PLAN`] = resolve(dir, 'bottom-toolbar-tabs.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/bottom-toolbar-live.contract'), '-o', env[`${prefix}_BOTTOM_TOOLBAR_LIVE_PLAN`] = resolve(dir, 'bottom-toolbar-live.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/overflowing-tabs.contract'), '-o', env[`${prefix}_OVERFLOWING_TABS_PLAN`] = resolve(dir, 'overflowing-tabs.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/shop-scroll.contract'), '-o', env[`${prefix}_SHOP_SCROLL_PLAN`] = resolve(dir, 'shop-scroll.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/quiet-scroll.contract'), '-o', env[`${prefix}_QUIET_SCROLL_PLAN`] = resolve(dir, 'quiet-scroll.plan')]);
@@ -67,6 +99,7 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([filteredFeed, '-o', env[`${prefix}_FILTERED_FEED_PLAN`] = resolve(dir, 'filtered-feed.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/quiet-edge.contract'), '-o', env[`${prefix}_QUIET_EDGE_PLAN`] = resolve(dir, 'quiet-edge.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-facts.contract'), '-o', env[`${prefix}_SCROLL_FACTS_PLAN`] = resolve(dir, 'scroll-facts.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/sheet-scroll.contract'), '-o', env[`${prefix}_SHEET_SCROLL_PLAN`] = resolve(dir, 'sheet-scroll.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/scroll-snap.contract'), '-o', env[`${prefix}_SCROLL_SNAP_PLAN`] = resolve(dir, 'scroll-snap.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/fixed-page.contract'), '-o', env[`${prefix}_FIXED_PAGE_PLAN`] = resolve(dir, 'fixed-page.plan')]);
   contract([resolve(root, 'scripts/fixtures/collection-fixed-chat.contract'), '-o', env[`${prefix}_COLLECTION_FIXED_PLAN`] = resolve(dir, 'collection-fixed.plan')]);
@@ -105,12 +138,14 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   env[`${prefix}_STRICT_LOCAL_INSETS`] = '1';
   contract([resolve(root, 'host/apple/tests/fixtures/lazy-tab-title.contract'), '-o', env[`${prefix}_LAZY_TAB_TITLE_PLAN`] = resolve(dir, 'lazy-tab-title.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/headless-reply.contract'), '-o', env[`${prefix}_HEADLESS_REPLY_PLAN`] = resolve(dir, 'headless-reply.plan')]);
-  for (const [name, key] of [['saved-scheme', 'SAVED_SCHEME'], ['grouped-card', 'GROUPED_CARD'], ['frame-health', 'FRAME_HEALTH'], ['store-refresh', 'STORE_REFRESH'], ['headless', 'HEADLESS'], ['headless-markdown', 'HEADLESS_MARKDOWN'], ['headless-hidden-markdown', 'HEADLESS_HIDDEN_MARKDOWN'], ['headless-live', 'HEADLESS_LIVE'], ['headless-back', 'HEADLESS_BACK'], ['native-navigation-scroll', 'NATIVE_SCROLL'], ['intersect', 'INTERSECT'], ['native-buttons', 'BUTTONS'], ['keyboard-form', 'KEYBOARD'], ['tab-edge', 'TAB_EDGE'], ['repaint', 'REPAINT'], ['still-title', 'STILL_TITLE'], ['navigation-bars', 'NAVIGATION_BARS'], ['large-title', 'LARGE_TITLE'], ['transparent-bar', 'TRANSPARENT_BAR'], ['bar-band', 'BAR_BAND'], ['pad-bar', 'PAD_BAR'], ['pushed-title', 'PUSHED_TITLE'], ['inline-frame', 'INLINE_FRAME'], ['fieldless', 'FIELDLESS'], ['web-documents', 'WEB_DOCUMENTS'], ['iframe-post-messages', 'IFRAME_POST_MESSAGES'], ['iframe-partition', 'IFRAME_PARTITION'], ['iframe-windows', 'IFRAME_WINDOWS'], ['iframe-pdf', 'IFRAME_PDF'], ['iframe-resident-popover', 'IFRAME_RESIDENT_POPOVER'], ['tab-owner', 'TAB_OWNER'], ['grouped-list-reveal', 'GROUPED_REVEAL'], ['due-now', 'DUE_NOW'], ['caret-reveal', 'CARET_REVEAL'], ['cover-scroll', 'COVER_SCROLL'], ['page-edges', 'PAGE_EDGES'], ['barless-route', 'BARLESS_ROUTE'], ['page-edges-grouped', 'PAGE_EDGES_GROUPED'], ['control-bars', 'CONTROL_BARS'], ['cover-tabs', 'COVER_TABS'], ['root-tabs-order', 'ROOT_TABS_ORDER'], ['layout-insert', 'LAYOUT_INSERT'], ['search-scope', 'SEARCH_SCOPE'], ['barless-tab', 'BARLESS_TAB'], ['pull-refresh', 'PULL_REFRESH'], ['edge-effect', 'EDGE_EFFECT'], ['sticky-bar', 'STICKY_BAR'], ['glass-press', 'GLASS_PRESS'], ['surface-pairs', 'SURFACE_PAIRS'], ['prevent-focus', 'PREVENT_FOCUS'], ['accent-bars', 'ACCENT_BARS'], ['accent-tabs', 'ACCENT_TABS'], ['search-tabs', 'SEARCH_TABS'], ['beside-routes', 'BESIDE_ROUTES'], ['bar-insets', 'BAR_INSETS'], ['bar-hero', 'BAR_HERO'], ['bar-control', 'BAR_CONTROL'], ['tips', 'TIPS'], ['boot-control-top', 'BOOT_CONTROL_TOP'], ['boot-control-bottom', 'BOOT_CONTROL_BOTTOM'], ['boot-control-tab', 'BOOT_CONTROL_TAB'], ['boot-dialog', 'BOOT_DIALOG'], ['boot-tabs', 'BOOT_TABS'], ['boot-clipboard', 'BOOT_CLIPBOARD'], ['boot-motion', 'BOOT_MOTION'], ['boot-plain', 'BOOT_PLAIN'], ['boot-padded', 'BOOT_PADDED'], ['boot-transform', 'BOOT_TRANSFORM'], ['boot-tip', 'BOOT_TIP'], ['split-back', 'SPLIT_BACK'], ['split-boot', 'SPLIT_BOOT'], ['split-change', 'SPLIT_CHANGE']]) {
+  for (const [name, key] of [['saved-scheme', 'SAVED_SCHEME'], ['grouped-card', 'GROUPED_CARD'], ['frame-health', 'FRAME_HEALTH'], ['store-refresh', 'STORE_REFRESH'], ['headless', 'HEADLESS'], ['headless-markdown', 'HEADLESS_MARKDOWN'], ['headless-hidden-markdown', 'HEADLESS_HIDDEN_MARKDOWN'], ['headless-live', 'HEADLESS_LIVE'], ['headless-back', 'HEADLESS_BACK'], ['native-navigation-scroll', 'NATIVE_SCROLL'], ['intersect', 'INTERSECT'], ['native-buttons', 'BUTTONS'], ['keyboard-form', 'KEYBOARD'], ['tab-edge', 'TAB_EDGE'], ['repaint', 'REPAINT'], ['still-title', 'STILL_TITLE'], ['navigation-bars', 'NAVIGATION_BARS'], ['large-title', 'LARGE_TITLE'], ['transparent-bar', 'TRANSPARENT_BAR'], ['bar-band', 'BAR_BAND'], ['pad-bar', 'PAD_BAR'], ['pushed-title', 'PUSHED_TITLE'], ['inline-frame', 'INLINE_FRAME'], ['fieldless', 'FIELDLESS'], ['web-documents', 'WEB_DOCUMENTS'], ['iframe-post-messages', 'IFRAME_POST_MESSAGES'], ['iframe-partition', 'IFRAME_PARTITION'], ['iframe-windows', 'IFRAME_WINDOWS'], ['iframe-pdf', 'IFRAME_PDF'], ['iframe-resident-popover', 'IFRAME_RESIDENT_POPOVER'], ['tab-owner', 'TAB_OWNER'], ['grouped-list-reveal', 'GROUPED_REVEAL'], ['due-now', 'DUE_NOW'], ['caret-reveal', 'CARET_REVEAL'], ['cover-scroll', 'COVER_SCROLL'], ['page-edges', 'PAGE_EDGES'], ['barless-route', 'BARLESS_ROUTE'], ['page-edges-grouped', 'PAGE_EDGES_GROUPED'], ['control-bars', 'CONTROL_BARS'], ['cover-tabs', 'COVER_TABS'], ['root-tabs-order', 'ROOT_TABS_ORDER'], ['layout-insert', 'LAYOUT_INSERT'], ['search-scope', 'SEARCH_SCOPE'], ['barless-tab', 'BARLESS_TAB'], ['pull-refresh', 'PULL_REFRESH'], ['edge-effect', 'EDGE_EFFECT'], ['sticky-bar', 'STICKY_BAR'], ['glass-press', 'GLASS_PRESS'], ['surface-pairs', 'SURFACE_PAIRS'], ['prevent-focus', 'PREVENT_FOCUS'], ['accent-bars', 'ACCENT_BARS'], ['accent-tabs', 'ACCENT_TABS'], ['search-tabs', 'SEARCH_TABS'], ['beside-routes', 'BESIDE_ROUTES'], ['bar-insets', 'BAR_INSETS'], ['bar-hero', 'BAR_HERO'], ['bar-control', 'BAR_CONTROL'], ['tips', 'TIPS'], ['boot-control-top', 'BOOT_CONTROL_TOP'], ['boot-control-bottom', 'BOOT_CONTROL_BOTTOM'], ['boot-control-tab', 'BOOT_CONTROL_TAB'], ['boot-dialog', 'BOOT_DIALOG'], ['boot-tabs', 'BOOT_TABS'], ['boot-clipboard', 'BOOT_CLIPBOARD'], ['boot-motion', 'BOOT_MOTION'], ['boot-plain', 'BOOT_PLAIN'], ['boot-padded', 'BOOT_PADDED'], ['boot-transform', 'BOOT_TRANSFORM'], ['boot-tip', 'BOOT_TIP'], ['split-custom', 'SPLIT_CUSTOM'], ['split-tabs', 'SPLIT_TABS'], ['split-back', 'SPLIT_BACK'], ['split-boot', 'SPLIT_BOOT'], ['split-change', 'SPLIT_CHANGE']]) {
     contract([resolve(root, `scripts/fixtures/${name}.contract`), '-o', env[`${prefix}_${key}_PLAN`] = resolve(dir, `${name}.plan`)]);
   }
   // NamedWindowsTests' links that name a window (LLP 1030.004).
   contract([resolve(root, 'host/apple/tests/fixtures/named-windows.contract'), '-o', env[`${prefix}_NAMED_WINDOWS_PLAN`] = resolve(dir, 'named-windows.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/sticky-transition.contract'), '-o', env[`${prefix}_STICKY_TRANSITION_PLAN`] = resolve(dir, 'sticky-transition.plan')]);
+  // DiscreteSwipeTests': `swipe` on a bar with a field and inside an inert node.
+  contract([resolve(root, 'host/apple/tests/fixtures/discrete-swipe.contract'), '-o', env[`${prefix}_DISCRETE_SWIPE_PLAN`] = resolve(dir, 'discrete-swipe.plan')]);
   // SwipeScrollDragTests': swipeleft and swiperight rows and a scroller's drag events.
   contract([resolve(root, 'host/apple/tests/fixtures/swipe-scroll-drag.contract'), '-o', env[`${prefix}_SWIPE_SCROLL_DRAG_PLAN`] = resolve(dir, 'swipe-scroll-drag.plan')]);
   // SwipeRoutesIOSTests: swipe rows in a route that pushes another.
@@ -384,15 +419,33 @@ export async function iosTestRuns({ pkg, derived, destination, udid, env, canvas
   // (AgentAccessibility.axRuntimeLoaded): on for the hosted run, then as it was.
   if (hostedOnly.length) {
     const ax = ['com.apple.Accessibility', 'ApplicationAccessibilityEnabled'];
-    let before;
+    const { markHostedAccessibility, withAccessibilityLock } = await import('./touches.mjs');
+    let before, unmark;
     try {
       run('xcrun', ['simctl', 'bootstatus', udid, '-b']);
-      before = read('xcrun', ['simctl', 'spawn', udid, 'defaults', 'read', ...ax]);
-      run('xcrun', ['simctl', 'spawn', udid, 'defaults', 'write', ...ax, '-bool', 'true']);
+      await withAccessibilityLock(udid, () => {
+        before = read('xcrun', ['simctl', 'spawn', udid, 'defaults', 'read', ...ax]);
+        if (before.status === 0 && before.stdout.trim() === '1') return;
+        unmark = markHostedAccessibility(udid, before.status === 0 ? '0' : undefined);
+        run('xcrun', ['simctl', 'spawn', udid, 'defaults', 'write', ...ax, '-bool', 'true']);
+      });
       testRun(hosted, hostedOnly.map(t => `-only-testing:${t}`), env);
     } catch (error) { failures.push(error); }
     finally {
-      if (before) read('xcrun', ['simctl', 'spawn', udid, 'defaults', ...(before.status === 0 ? ['write', ...ax, '-bool', before.stdout.trim() === '1' ? 'true' : 'false'] : ['delete', ...ax])]);
+      if (unmark) {
+        const restore = () => {
+          const release = unmark;
+          unmark = null;
+          try { read('xcrun', ['simctl', 'spawn', udid, 'defaults', ...(before.status === 0 ? ['write', ...ax, '-bool', 'false'] : ['delete', ...ax])]); }
+          catch (error) { failures.push(error); }
+          finally { release(); }
+        };
+        try { await withAccessibilityLock(udid, restore); }
+        catch (error) {
+          if (unmark) restore(); // A busy display must not strand the setting or the hosted marker.
+          else failures.push(error);
+        }
+      }
     }
   }
   if (touchOnly.length) {

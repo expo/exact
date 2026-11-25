@@ -1,8 +1,8 @@
-import { bindingMemo, catchUp, cssText, effect, end, onEnd, owner, pr, scope, viewId, write, writeItem } from './rt.js';
+import { bindingMemo, catchUp, cssText, effect, exitOf, end, onEnd, owner, pr, scope, viewId, write, writeItem } from './rt.js';
 import { rowKey } from './rows.js';
 
 const EXIT = '--exact-exit-animation', LT = '--exact-layout-transition';
-const Exits = new Map(), Bound = new Map();
+const Exits = new Map(), Fixed = new Map(), Bound = new Map();
 let Inspection = 0;
 
 function inspect(f) {
@@ -74,6 +74,7 @@ export function track(element, property, fx) {
 // shared.js defers the DOM update: its first flush can run several commits' coalesced effects.
 // A scope already absent from the logical tree keeps the snapshot taken before its removal.
 export function captureExits() {
+  if (!Exits.size) return;
   catchUp(() => inspect(() => {
     for (const [element, entry] of Exits) {
       try {
@@ -85,10 +86,32 @@ export function captureExits() {
   }));
 }
 
-export function px(element) {
-  Exits.set(element, { own: owner(), binding: () => element.style.getPropertyValue(EXIT) });
-  onEnd(() => Exits.delete(element));
+function registerExit(element, binding) {
+  const entries = binding ? Exits : Fixed;
+  entries.set(element, { own: owner(), binding });
+  onEnd(() => entries.delete(element));
   pr(element);
+}
+
+export const px = element => registerExit(element, () => element.style.getPropertyValue(EXIT));
+export const fixedExit = element => registerExit(element, null);
+
+// A region can disappear after an earlier effect has moved its siblings. Read its outgoing
+// boxes before the tree flush. A virtualized row plays its root's exit on the wrapper.
+function departures() {
+  return catchUp(() => inspect(() => {
+    const leaving = new Set();
+    for (const entries of [Exits, Fixed]) for (const [element, entry] of entries) {
+      if (!element.isConnected || (entry.binding && !exitOf(element))) continue;
+      try {
+        if (present(entry.own)) continue;
+      } catch {} // A trapped probe leaves the tree update to decide whether the box goes.
+      leaving.add(element);
+      const parent = element.parentElement;
+      if (parent?.hasAttribute('data-listitemkey') && parent.firstElementChild === element) leaving.add(parent);
+    }
+    return leaving;
+  }));
 }
 
 export function exitBinding(element, property, unit, binding) {
@@ -134,4 +157,4 @@ export function restyled() {
 }
 
 /** What rt.js calls through `usePresenceBindings`. */
-export const presenceUse = () => ({ capture: captureExits, bind: exitBinding, arm: presenceArm, rows: presenceRows, gains, restyled, track });
+export const presenceUse = () => ({ capture: captureExits, bind: exitBinding, arm: presenceArm, rows: presenceRows, gains, departures, restyled, track });

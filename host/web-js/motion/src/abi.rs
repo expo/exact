@@ -111,13 +111,13 @@ pub extern "C" fn m_observe(
         .is_ok() as u32
 }
 
-/// The height owner's numeric height at `now`.
+/// The authored pixel height at `now`.
 #[no_mangle]
 pub extern "C" fn m_height(node: f64, height: f64, now: f64) -> u32 {
     state().height(node as u64, height, now).is_ok() as u32
 }
 
-/// The node owns height no more: 1 when it had height motion.
+/// Retire a height that lost its box or its drag.
 #[no_mangle]
 pub extern "C" fn m_unheight(node: f64) -> u32 {
     state().retire_height(node as u64) as u32

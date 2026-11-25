@@ -19,6 +19,7 @@ import { rustDataOf, undeclaredDataCrate } from '../../scripts/app-shells.mjs';
 import { appCrates, linkedCrate } from '../../scripts/cargo-check.mjs';
 import { SETUP_FETCHES, withHostDeployment } from '../../scripts/filesystem.mjs';
 import { replaceBuild } from '../web/serve.mjs';
+import { webPackageBindingChanged } from '../../js/bake/src/package-config.mjs';
 import { proofInputs } from '../../game/inputs.mjs';
 import { keptProducts } from '../../scripts/kept.mjs';
 import { RustMissing, compilerFrom, fromSet, fromSets, fetchedTool, launch, rustMissing, freshCompiler } from '../../scripts/tools.mjs';
@@ -822,6 +823,10 @@ export function takeWarmGame(app, dist, env = process.env) {
     stage = mkdtempSync(resolve(app.target, 'proof-web-copy-'));
     cpSync(resolve(receipt.directory, 'dist'), stage, {recursive:true});
     if (JSON.stringify(warmFiles(stage)) !== JSON.stringify(receipt.files)) return false;
+    // The game proof's source inventory excludes installed packages. Verify what the bundler read and what it bound.
+    const markerPath = resolve(stage, '.exact-build.json');
+    const marker = existsSync(markerPath) ? JSON.parse(readFileSync(markerPath, 'utf8')) : {};
+    if (webPackageBindingChanged(app.dir, marker.packageViews)) return false;
     // Driver staleness paths are local to the captured source tree. Relocate only
     // after the complete portable input identity and copied products agree.
     // The caller refreshes the driver's path-based marker after this copy.

@@ -283,8 +283,10 @@ impl Scanout {
 }
 
 impl Wgpu {
-    /// The finished, optionally rotated Ink target for a scanout on this device.
-    pub fn scanout_view(&self, id: TextureId) -> Result<::wgpu::TextureView> {
+    /// The finished, optionally rotated Ink target for a scanout on this device,
+    /// with its passes submitted: the scanout's copy is submitted after them.
+    pub fn scanout_view(&mut self, id: TextureId) -> Result<::wgpu::TextureView> {
+        self.flush()?;
         Ok(self.texture(id)?.view.clone())
     }
 }

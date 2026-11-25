@@ -252,12 +252,13 @@ fn modules(plan: &Plan, body: &mut String) -> String {
         .map(|v| {
             let binds: Vec<&str> = plan.str(v.binds).split_whitespace().collect();
             format!(
-                "{}:[{},{},{},{}]",
+                "{}:[{},{},{},{},{}]",
                 serde_json::to_string(plan.str(v.tag)).unwrap(),
                 serde_json::to_string(plan.str(v.extension)).unwrap(),
                 v.displayed,
                 serde_json::to_string(&binds).unwrap(),
-                plan.str(v.agent)
+                plan.str(v.agent),
+                serde_json::to_string(plan.str(v.package)).unwrap(),
             )
         })
         .collect();
@@ -363,7 +364,9 @@ fn a_view_carries_its_agent_vocabulary_without_module_names() {
     );
     let mut body = String::new();
     modules(&plan, &mut body);
-    assert!(body.contains(r#""words-panel":["words",false,[],{"heard":"string"}]"#));
+    assert!(
+        body.contains(r#""words-panel":["words",false,[],{"heard":"string"},"@fixture/words"]"#)
+    );
     assert!(body.contains(r#""words":()=>import("./ext-words.js")"#));
 }
 

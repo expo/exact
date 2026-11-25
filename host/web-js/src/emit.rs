@@ -1210,6 +1210,9 @@ impl Em<'_> {
                         )
                     );
                 if !svg_animation
+                    && !(b.kind == BindingKind::Prop
+                        && b.id == PropId::AccessibilityKeyShortcuts as u16
+                        && v.as_str().is_some_and(exact_plan::shortcut::portable))
                     && (b.kind != BindingKind::Prop
                         || !exact_runner::bridge::prop_value(b.id, &v)
                             .is_err_and(|e| crate::svg_lengths::refused(&e)))
@@ -1239,7 +1242,9 @@ impl Em<'_> {
                     let name = style::prop_name(node_type, prop)?;
                     // The plan stores editable; HTML exposes the inverse, readonly.
                     // `glassGroup`'s reserved `-1` is `auto` (LLP 1053.000.000.000 D3).
-                    let f = if prop == PropId::Editable {
+                    let f = if prop == PropId::AccessibilityKeyShortcuts {
+                        format!("()=>{}(({f})())", self.uses.rt("resolveShortcuts"))
+                    } else if prop == PropId::Editable {
                         format!("()=>{{const v=({f})();return v==null?v:!v}}")
                     } else if prop == PropId::GlassGroup {
                         format!("()=>{{const v=({f})();return v===-1?\"auto\":v}}")
@@ -1280,7 +1285,6 @@ impl Em<'_> {
             self.lower(&e, &class, &parts, scope, seen)?;
         }
         self.motion_node(i, &e, scope)?;
-        self.height_owner(i, &e, scope)?;
         if self.reorder_handle(i) {
             self.motion = true;
             let on = self.uses.rt("onReorder");
@@ -1396,6 +1400,7 @@ impl Em<'_> {
                 | EventKind::Capture // and the runtime refusing a capture (`onFrameCapture`)
                 | EventKind::Userpromptopened // @ref LLP 1020.002 D9: the browser's own dialogs
                 | EventKind::Historyswipe // @ref LLP 1115.000 D5.5: the browser shows its own arrow
+                | EventKind::Swipe // @ref LLP 1057.001 §8.1: the web has no swipe of the platform's
                 | EventKind::Select => {}
                 // The motion piece's: the swipe's holds, a pan's velocity.
                 EventKind::Swiperight

@@ -768,9 +768,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         // Changed native parts configure the cell again. A custom row keeps
         // its own live views; mount carries their current box into the cell.
         // A standard row whose symbol's authored tint or written colour, whose
-        // authored `min-height` (D7) or whose `-exact-tint-adjustment` changed is too.
+        // authored `min-height` (D7), `-exact-tint-adjustment` or margins and background insets changed is too.
         let looking: [UInt32: BatchValue?] = Dictionary(uniqueKeysWithValues: snapshot.itemIdentifiers.map { ($0, .array([tint(of: $0) ?? .null, minimum(of: $0).map { .number(Double($0)) } ?? .null,
-                                                                                                                       host.presenter.views[$0]?.style["tint_adjustment"] ?? .null, activeSignature($0)])) })
+                                                                                                                       host.presenter.views[$0]?.style["tint_adjustment"] ?? .null, activeSignature($0), listInsetsLook($0)])) })
         // A row whose card changed (its section gained or lost one, or the
         // row moved between sections) is configured again.
         let wasCarded = Dictionary(previous.sections.flatMap { s in s.rows.map { ($0.view, s.card) } }, uniquingKeysWith: { a, _ in a })
@@ -1098,6 +1098,7 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         #endif
         if cell.row != id { cell.restorePressPresentation() }
         cell.row = id
+        cell.listInsets = GroupedCell.listInsets(of: host.presenter.views[id], rtl: direction == .forceRightToLeft)
         cell.target = rows[id]?.target
         #if os(iOS)
         cell.toggle = nil // `accessories` gives a toggle row its switch

@@ -177,9 +177,7 @@ impl Motion {
         Ok(())
     }
 
-    /// The height owner's numeric border-box height at `now` (the kernel's
-    /// `height_motion_sync`): a height drag holds it and releases it by the
-    /// node's `transition`.
+    /// The authored pixel height at `now`, including changes made while a drag holds it.
     pub fn height(&mut self, node: u64, height: f64, now: f64) -> Result<(), EngineError> {
         self.seek(now)?;
         self.engine.observe(Change {
@@ -192,6 +190,8 @@ impl Motion {
 
     /// The node owns height no more: its height motion retires.
     pub fn retire_height(&mut self, node: u64) -> bool {
+        self.held.remove(&(node, Property::Height));
+        self.presented.remove(&(node, Property::Height));
         self.playing.remove(&(node, Property::Height));
         self.engine.remove_property(node, Property::Height)
     }
@@ -201,6 +201,8 @@ impl Motion {
         self.engine.remove(node);
         self.enabled_translate.remove(&node);
         self.playing.retain(|(n, _), _| *n != node);
+        self.held.retain(|(n, _), _| *n != node);
+        self.presented.retain(|(n, _), _| *n != node);
         self.holds.retain(|_, token| token.node() != node);
     }
 

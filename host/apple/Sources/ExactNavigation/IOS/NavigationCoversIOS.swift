@@ -217,10 +217,10 @@ extension NavigationHost {
         #if os(iOS)
         wanted.merge(dialogBarCovers) { a, _ in a }
         #endif
-        var extras: [ObjectIdentifier: (UIScrollView, top: CGFloat, bottom: CGFloat)] = [:]
+        var extras: [ObjectIdentifier: ClearanceInset] = [:]
         for c in controllers.values where presenter.views[c.node.id] === c.node {
             // A lifted header takes no room, on a stack yet or not (`coverLifted`).
-            for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) { wanted[node.id] = NavigationHost.cover(of: node, in: c) }
+            for node in c.coveredBarNodes { wanted[node.id] = NavigationHost.cover(of: node, in: c) }
             // Include the departing route until UIKit finishes its transition
             let nav = c.navigationController
             let stacked = c.stack?.stackRoutes.contains(c) == true || nav?.transitionCoordinator?.viewController(forKey: .from) === c
@@ -282,36 +282,40 @@ extension NavigationHost {
                 edges = Self.routeEdges(safe: safe, whole: whole, covered: covered,
                                         collapses: c.collapseScroll != nil || !topPeers.isEmpty || !c.ridingBars.isEmpty || RouteGeometry.insetsNoTop(c.node),
                                         reached: reached)
-                // An edge the route opts out of has no clearance to take (LLP 1123 D4).
-                c.bottomClearance = RouteGeometry.clearanceOff(c.node) & 4 != 0 ? 0 : edges?.bottom ?? 0
+                // Keep the potential cover for discovery: restoring clearance can pad
+                // the route before its bottom scroller is selected again.
+                c.bottomClearance = edges?.bottom ?? 0
                 if let node = c.collapseScroll, let sv = node.scrollView, !RouteGeometry.insetsNoTop(c.node) {
                     let top = clearanceExtra(c, scroller: node, top: true)
-                    let held = extras[ObjectIdentifier(sv)]
-                    extras[ObjectIdentifier(sv)] = (sv, top, held?.bottom ?? 0)
+                    extras[ObjectIdentifier(sv), default: ClearanceInset(scroll: sv)].top = top
                 }
                 if let node = c.edgeScroll ?? c.collapseScroll, let sv = node.scrollView,
                    node === c.edgeScroll || RouteGeometry.clearanceOff(c.node) & 4 != 0 && !RouteGeometry.insetsNoTop(c.node) {
                     let bottom = clearanceExtra(c, scroller: node, top: false)
-                    let held = extras[ObjectIdentifier(sv)]
-                    extras[ObjectIdentifier(sv)] = (sv, held?.top ?? 0, bottom)
+                    let id = ObjectIdentifier(sv)
+                    extras[id, default: ClearanceInset(scroll: sv)].bottom = bottom
+                    if node === c.edgeScroll && sv.contentInsetAdjustmentBehavior == .never {
+                        extras[id]?.unadjustedBottom = node.safeAreaInsets.bottom
+                    }
                 }
             } else if case .edges(let e)? = covers[c.node.id] {
                 edges = e
             } else { edges = nil }
             // Unsettled, the scrollers keep the clearance they hold, as the route its cover.
             for sv in [c.collapseScrollView, c.edgeScroll?.scrollView].compactMap({ $0 }) where !settled {
-                if let held = clearance[ObjectIdentifier(sv)] { extras[ObjectIdentifier(sv)] = (sv, held.top, held.bottom) }
+                if var held = clearance[ObjectIdentifier(sv)] {
+                    if sv.contentInsetAdjustmentBehavior != .never { held.unadjustedBottom = 0 }
+                    extras[ObjectIdentifier(sv)] = held
+                }
             }
             // A scroller UIKit insets lays its content out between those
             // insets (LLP 1116.000 D1.2): content that fills its height rests
             // under the bar and above the home indicator, and scrolling
             // content still passes under both. A large title's inset is its
             // widest, at rest (CSS scrollTop 0).
-            // A transparent bar insets nothing of its scroller: the content
-            // starts under it (`collapse`), so no `.inset` is reported there.
             var insetNodes = [c.collapseScroll, c.edgeScroll].compactMap { $0 }
             for peer in topPeers + bottomPeers where !insetNodes.contains(where: { $0 === peer }) { insetNodes.append(peer) }
-            for node in insetNodes where wanted[node.id] != .whole && wanted[node.id] != .bar && node.scrollView != nil && !(node === c.collapseScroll && RouteGeometry.insetsNoTop(c.node)) {
+            for node in insetNodes where wanted[node.id] != .whole && wanted[node.id] != .bar && node.scrollView != nil {
                 if settled, let safe = node.scrollView?.safeAreaInsets {
                     // The bottom edge's scroller takes the route's bottom
                     // clearance, which the route then pads nothing of
@@ -332,11 +336,12 @@ extension NavigationHost {
                     // A band's part of the safe area is a UI inset over control bars, not layout (LLP 1131 D2).
                     let title = ownsTop ? node.scrollOrigin : 0
                     let stretched = title > 0 && node.scrollView.map { Self.stretched($0, origin: title) } == true
-                    // What an opted-out bottom takes back of UIKit's inset (ClearanceIOS.swift); what
-                    // clearance adds is the title's at the top, and the route's clearance (`reach`) below.
-                    let back = min(0, node.scrollView.flatMap { clearance[ObjectIdentifier($0)]?.bottom } ?? 0)
-                    let top = max(0, max(stretched ? min(safe.top, title) : safe.top, title) - node.pageBand.top)
-                    let bottom = max(0, max(safe.bottom, reach) + back - node.pageBand.bottom)
+                    let noTop = node === c.collapseScroll && RouteGeometry.insetsNoTop(c.node)
+                    let top = noTop ? 0 : max(0, max(stretched ? min(safe.top, title) : safe.top, title) - node.pageBand.top)
+                    // Only the scroller whose clearance takes back UIKit's inset loses it in layout.
+                    let back = min(0, node.scrollView.flatMap { extras[ObjectIdentifier($0)]?.bottom } ?? 0)
+                    let bottomOff = RouteGeometry.clearanceOff(c.node) & 4 != 0
+                    let bottom = noTop && node !== c.edgeScroll ? 0 : max(0, max(safe.bottom, bottomOff ? 0 : reach) + back - node.pageBand.bottom)
                     if top > 0 || bottom > 0 { wanted[node.id] = .inset(top: top, bottom: bottom) }
                 } else if case .inset? = covers[node.id] { wanted[node.id] = covers[node.id] }
             }

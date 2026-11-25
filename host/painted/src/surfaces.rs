@@ -22,7 +22,7 @@ mod android;
 #[cfg(any(target_os = "android", all(test, unix)))]
 mod android_init;
 #[cfg(target_os = "android")]
-pub(crate) use android_init::bind as bind_application;
+pub(crate) use android_init::{attach as attach_application, bind as bind_application};
 #[cfg(any(target_os = "android", test))]
 mod fingers;
 mod performance;

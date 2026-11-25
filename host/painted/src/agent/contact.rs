@@ -67,7 +67,7 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
         ],
         // `virtual` is the driver's flag that it will not also seek (platformer R7).
         "hold" => &["op", "session", "phase", "ms", "mouse", "virtual"],
-        "up" | "cancel" => &["op", "session", "phase", "mouse"],
+        "reorderHold" | "up" | "cancel" => &["op", "session", "phase", "mouse"],
         _ => return Err(InputError::malformed("unknown contact phase")),
     };
     if request
@@ -164,6 +164,11 @@ fn perform<D: DataSource>(p: &mut Presenter<D>, request: &Value) -> Result<Strin
                         return Err(error.into());
                     }
                     p.delay_contact_event(ms);
+                }
+            }
+            "reorderHold" => {
+                if !p.recognize_arrange_hold(from) {
+                    return Err("the contact no longer holds the reorder grip".into());
                 }
             }
             "up" => {

@@ -199,7 +199,13 @@ final class TabsIOSTests: XCTestCase {
         let route = try XCTUnwrap(tabs.selectedViewController?.stackRoutes.first as? RouteController)
         until("the route clears the sidebar") { route.view.safeAreaInsets.left > 100 }
         let text = try node(session, "text-home")
+        let start = try node(session, "bar-start-home"), end = try node(session, "bar-end-home")
         let sidebar = route.view.safeAreaInsets.left
+        until("the start reads the sidebar width") { abs(start.bounds.width - sidebar) < 1 && end.bounds.width == 0 }
+        let farColumn = UIView(frame: CGRect(x: tabs.view.bounds.midX, y: 0, width: 100, height: 100))
+        route.view.addSubview(farColumn)
+        XCTAssertEqual(tabs.barInsets(beside: farColumn), .zero)
+        farColumn.removeFromSuperview()
         until("its content is laid out beside the sidebar") { text.convert(text.bounds, to: nil).minX >= sidebar }
         XCTAssertTrue(try node(session, "tabs").isHidden, "the sidebar takes the authored tablist's place")
         let footer = try node(session, "sidebar-footer"), account = try node(session, "account")
@@ -211,6 +217,7 @@ final class TabsIOSTests: XCTestCase {
         let hit = try XCTUnwrap(window?.hitTest(center, with: nil))
         XCTAssertTrue(hit === account || hit.isDescendant(of: account), "Account at \(center), footer \(accessory.bounds), button \(account.bounds), hit \(type(of: hit))")
         tabs.sidebar.isHidden = true
+        until("both sides read zero with the sidebar hidden") { start.bounds.width == 0 && end.bounds.width == 0 }
         until("hidden, the content takes the width back") { text.convert(text.bounds, to: nil).minX < sidebar }
         tabs.sidebar.isHidden = false
         try tapNode(session, "account")
@@ -221,6 +228,102 @@ final class TabsIOSTests: XCTestCase {
         until("the app-drawn bar returns the footer to its parent") { tabs.sidebar.bottomBarView == nil && footer.superview === home }
         try tapNode(session, "account")
         until("Account selects Saved from the page") { self.topRoute(session) == "route-saved" }
+    }
+
+    func testAnIndependentSafeAreaCanBeWiderThanTheIPadSidebar() throws {
+        guard #available(iOS 18.0, *), UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("the iPad tab sidebar needs iOS 18") }
+        turned = true
+        turn(.landscapeRight)
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        tabs.sidebar.isHidden = false
+        let route = try XCTUnwrap(tabs.selectedViewController?.stackRoutes.first?.view)
+        let start = try node(session, "bar-start-home")
+        until("UIKit reserves the sidebar") { route.safeAreaInsets.left > 100 }
+        let sidebar = route.safeAreaInsets.left
+        tabs.additionalSafeAreaInsets.left = sidebar + 20
+        until("the sidebar keeps its width when the tab controller’s safe area is wider") {
+            route.safeAreaInsets.left > sidebar * 2 && abs(start.bounds.width - sidebar) < 1
+        }
+    }
+
+    func testAClippedHorizontalTabBarHasNoInlineInset() throws {
+        guard #available(iOS 27.1, *), UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the Duo’s rail needs iOS 27.1") }
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController), bar = tabs.tabBar
+        let route = try XCTUnwrap(tabs.selectedViewController?.stackRoutes.first?.view)
+        let parent = try XCTUnwrap(bar.superview), root = try XCTUnwrap(tabs.viewIfLoaded)
+        let bounds = bar.bounds, center = bar.center
+        defer { bar.bounds = bounds; bar.center = center }
+        bar.bounds.size = CGSize(width: 360, height: 49)
+        for x in [root.bounds.minX - 340, root.bounds.maxX - 20] {
+            let frame = CGRect(x: x, y: root.bounds.maxY - 49, width: 360, height: 49)
+            bar.center = root.convert(CGPoint(x: frame.midX, y: frame.midY), to: parent)
+            XCTAssertEqual(bar.convert(bar.bounds, to: root).intersection(root.bounds).width, 20, accuracy: 0.5)
+            XCTAssertEqual(tabs.barInsets(beside: route), .zero, "horizontal tab bar at \(frame)")
+        }
+
+        guard bar.traitCollection.placesVerticalBar else { return }
+        let right = root.convert(center, from: parent).x > root.bounds.midX
+        let x = right ? root.bounds.maxX - 20 : root.bounds.minX - bounds.width + 20
+        let rail = CGRect(x: x, y: root.bounds.minY, width: bounds.width, height: 200)
+        bar.bounds.size = rail.size
+        bar.center = root.convert(CGPoint(x: rail.midX, y: rail.midY), to: parent)
+        XCTAssertEqual(tabs.barInsets(beside: route), UIEdgeInsets(top: 0, left: right ? 0 : 20, bottom: 0, right: right ? 20 : 0))
+        let below = UIView(frame: route.convert(CGRect(x: root.bounds.minX, y: rail.maxY, width: root.bounds.width, height: 100), from: root))
+        route.addSubview(below)
+        XCTAssertEqual(tabs.barInsets(beside: below), .zero)
+
+        let edge = right ? tabs.contentLayoutGuide.layoutFrame.maxX : tabs.contentLayoutGuide.layoutFrame.minX
+        let middle = CGPoint(x: edge + (right ? 1 : -1) * (bounds.width / 2 - 12), y: root.bounds.midY)
+        bar.center = root.convert(middle, to: parent)
+        let insets = tabs.barInsets(beside: route)
+        XCTAssertEqual(right ? insets.right : insets.left, bounds.width, accuracy: 0.5)
+
+        let clip = UIView(frame: route.convert(CGRect(x: root.bounds.midX - 100, y: 0, width: 80, height: root.bounds.height), from: root))
+        clip.clipsToBounds = true
+        route.addSubview(clip)
+        let pane = UIView(frame: clip.convert(route.bounds, from: route))
+        clip.addSubview(pane)
+        XCTAssertEqual(tabs.barInsets(beside: pane), .zero)
+    }
+
+    func testTheDuoRailReportsItsSideOnAPushedRoute() throws {
+        guard #available(iOS 27.1, *), UIDevice.current.userInterfaceIdiom == .phone else { throw XCTSkip("the Duo’s rail needs iOS 27.1") }
+        let session = try fixture("EXACT_SEARCH_TABS_PLAN")
+        let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        guard tabs.tabBar.traitCollection.placesVerticalBar else { throw XCTSkip("this phone has no vertical rail") }
+        try tapNode(session, "open-detail")
+        until("the detail route is visible") { self.topRoute(session) == "route-detail" }
+        let start = try node(session, "bar-start-detail"), end = try node(session, "bar-end-detail")
+        let rail = tabs.tabBar.convert(tabs.tabBar.bounds, to: tabs.view)
+        XCTAssertNotNil(tabs.tabBar.window)
+        XCTAssertGreaterThan(rail.height, rail.width)
+        let right = rail.midX > tabs.view.bounds.midX
+        until("the route reads the visible rail’s width on its side") {
+            abs(start.bounds.width - (right ? 0 : rail.width)) < 1 && abs(end.bounds.width - (right ? rail.width : 0)) < 1
+        }
+
+        let split = UIArrangementViewController()
+        split.updateArrangement(UISplitArrangement().axes(.horizontal))
+        XCTAssertTrue(session.presenter.arrangements.set(try node(session, "arranged-detail").id, controller: split))
+        let first = (try node(session, "first-pane-start"), try node(session, "first-pane-end"))
+        let second = (try node(session, "second-pane-start"), try node(session, "second-pane-end"))
+        let primary = try XCTUnwrap(split.viewController(for: .primary)?.view)
+        let secondary = try XCTUnwrap(split.viewController(for: .secondary)?.view)
+        // UIKit collapses to one pane on the cover display.
+        until("the visible pane at the end reads the rail and a pane beside it reads zero") {
+            self.window?.layoutIfNeeded()
+            let visible = [(primary, first), (secondary, second)].filter { pane, _ in
+                pane.window != nil && !pane.bounds.isEmpty && sequence(first: pane, next: { $0.superview }).allSatisfy { !$0.isHidden }
+            }.sorted { $0.0.convert($0.0.bounds, to: tabs.view).midX < $1.0.convert($1.0.bounds, to: tabs.view).midX }
+            guard !visible.isEmpty else { return false }
+            return visible.enumerated().allSatisfy { index, entry in
+                let (start, end) = entry.1
+                return abs(start.bounds.width - (!right && index == 0 ? rail.width : 0)) < 1
+                    && abs(end.bounds.width - (right && index == visible.count - 1 ? rail.width : 0)) < 1
+            }
+        }
     }
 
     func testThePhonesTabBarHidesTheSidebarFooterAndReturnsItsControls() throws {

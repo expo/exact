@@ -10,26 +10,14 @@ export { webHostFiles } from '../host/web-js/glue.mjs';
 import { compilerPaths, unitDepInfo, cargoBakeInputs, cargoLibraryTarget, bakeSourceInputs, pendingSourceInputs, inputProducts, inputHashes, sourcePath, packageDirectories, directoryInputNames, buildInputCollector, binarySourceInputs, swiftTargetInputs, watchOutput } from './cargo-dep-info.mjs';
 import { notificationServiceBuildInventory, notificationServiceInputChanges, notificationServiceSourceRoot } from './notification-service.mjs';
 export { compilerPaths, unitDepInfo } from './cargo-dep-info.mjs';
-import { LIBRARY_CACHE, directDependencies, prepareLibrary } from './package-libraries.mjs';
+import { LIBRARY_CACHE, directDependencies, prepareLibrary, addedSwiftPackageInputs, swiftPackageInventories, swiftPackageInputChanged } from './package-libraries.mjs';
 import { ensureBun } from './bun.mjs';
 import { nativeResourceMappings, nativeResourceInventory, appleAssetCatalogInventory, launchImageInventory } from '../host/apple/assets.mjs';
-// Where an app lives. Inside this repo an app is `apps/<name>` — its crates
-// normally belong to the root workspace and build into `target/`; an explicit
-// package.workspace uses that workspace's lock and target. Outside it (weird-castle:
-// its own repo or a member of a surrounding workspace, depending on our crates by
-// path so the two iterate together), `EXACT_APP_DIR` names the directory and
-// everything else follows from it: the workspace cargo runs in, the target
-// directory the artifacts land in, `app.contract`, `assets/`, `gpu/`. Every
-// script that builds, serves, or drives an app resolves it here, so nothing
-// else knows the difference; `EXACT_APP_DIR` selects the app for `bun host/web/build.mjs weird-castle-web`.
-// The app manifest (LLP 1030 D2; 1030.000 D7): `app.json` beside
-// `app.contract` — the W3C Web App Manifest's own keys, which the web host
-// copies out as `manifest.json`, plus `app` (identity: the id every platform
-// derives its bundle id from, the name, the origin), `host.<platform>` (what
-// bake generates each platform's host files from), and `deploy` (policy,
-// never identity). Validated here against `scripts/app.schema.json` with a
-// validator small enough to live beside the reader; an app without one gets
-// the derived defaults it had before the manifest existed.
+// Repository apps live under apps/ and normally share the checkout's Cargo workspace and target.
+// An app with its own package.workspace uses that workspace's lock and target. EXACT_APP_DIR selects
+// an external app for the same build, serve and drive entry points.
+// scripts/app.schema.json defines the W3C manifest and Exact's app and host fields (LLP 1030 D2).
+// The app field sets identity and deploy sets policy. The reader supplies derived defaults for an app without a manifest.
 import { spawnSync } from '../host/apple/toolchain.mjs';
 import { checkDesignName } from './forma-design-path.mjs';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -599,32 +587,26 @@ export { moduleDirectory } from './launch-modules.mjs';
 import { webManifestAtBase, webCspProblems, webHeadProblems } from './web-head.mjs';
 import { appIconProblems, publishedIcons } from './app-icons.mjs';
 import { claimVariant, resolveVariant, selectedVariant, variantProblems } from './variants.mjs';
-import { REMOVED_DOMAINS, appleLinkDomains, androidLinkFilters, linkProblems, rawAppleDomains } from './links.mjs';
-export { DOCUMENT_UTIS, ownDocumentType };
-;
+import { REMOVED_DOMAINS, appleLinkDomains, androidLinkFilters, linkProblems, protocolHandlerProblems, isWebScheme, rawAppleDomains } from './links.mjs';
+export { DOCUMENT_UTIS, isWebScheme, ownDocumentType };
 
-// The launch screen's picture must be there; refused when any build reads the manifest, as the
-// icons (scripts/app-icons.mjs) and the file types are. Android's may also be `false`, never `true`.
+// Check both launch pictures wherever a build reads the manifest.
 function launchImageProblems(manifest, dir) {
   return ['ios', 'android'].flatMap((host) => {
     const launch = manifest.host?.[host]?.launchImage;
     if (launch === true) return [`host.${host}.launchImage: true is not a picture; false shows no icon, { "src", "width" } a picture`];
-    return launch?.src && !existsSync(resolve(dir, launch.src)) ? [`host.${host}.launchImage: ${launch.src}, the launch screen's picture, does not exist`] : [];
+    if (launch?.src && !existsSync(resolve(dir, launch.src))) return [`host.${host}.launchImage: ${launch.src}, the launch screen's picture, does not exist`];
+    const dark = launch?.color_scheme_dark?.src;
+    if (!dark) return [];
+    const path = resolve(dir, dark), key = `host.${host}.launchImage.color_scheme_dark`;
+    if (isAbsolute(dark) || !under(dir, path) || (existsSync(path) && !under(realpathSync(dir), realpathSync(path)))) {
+      return [`${key}: ${dark} must name a PNG inside the app directory`];
+    }
+    if (!existsSync(path)) return [`${key}: ${dark}, the launch screen's picture, does not exist`];
+    return statSync(path).isFile() ? [] : [`${key}.src: ${dark} must be a PNG file`];
   });
 }
 
-/** Whether a `protocol_handlers` scheme is the web's own: `http` and
- * `https` make a native app a web browser (LLP 1030 D2, 2026-10-20), and
- * no browser registers them (WHATWG HTML's protocol handler safelist). */
-export const isWebScheme = (protocol) => ['http', 'https'].includes(protocol.toLowerCase());
-function protocolHandlerProblems({ protocol_handlers = [], host }) {
-  const web = protocol_handlers.filter((h) => isWebScheme(h.protocol));
-  const pair = web.length && (new Set(web.map((h) => h.protocol.toLowerCase())).size !== 2 || web.some((h) => h.url !== web[0].url || !h.distribution_only !== !web[0].distribution_only));
-  const claimed = ['ios', 'macos'].flatMap((platform) => (host?.[platform]?.urlSchemes ?? []).filter(isWebScheme).map((s) => `host.${platform}.urlSchemes: ${s} is the web's own scheme; declare http and https together in protocol_handlers`));
-  return [...claimed, ...protocol_handlers.flatMap(({ protocol }, i) => protocol_handlers.findIndex(h => h.protocol.toLowerCase() === protocol.toLowerCase()) === i ? [] : [`protocol_handlers[${i}].protocol: ${protocol} is declared more than once`]),
-    ...(host?.ios?.webBrowser && web.length === 0 ? ['host.ios.webBrowser: declare http and https together in protocol_handlers'] : []),
-    ...(pair ? ['protocol_handlers: http and https come together, with one url and one distribution_only: a web browser claims both'] : [])];
-}
 /** The W3C keys of `app.json`, as the web builds write `manifest.json`
  * (LLP 1030 D2/D10; 1030.000 D7). A browser opens files only, so
  * `inode/directory` (the Apple bake's word for a folder) leaves each file handler, and one with nothing
@@ -658,7 +640,7 @@ export function webAppManifest(manifest, name, notes = [], dir = null) {
   web.lang ??= 'en';
   return web;
 }
-export function nativeManifestMetadata(manifest, platform, target = '', env = process.env) { return {...(platform !== 'web' ? nativePackageConfig(manifest, configTarget(platform, target), env) : {}),app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(platform === 'ios' && manifest.color_scheme_dark?.icons ? {dark_icons:manifest.color_scheme_dark.icons} : {}),...(platform === 'ios' && manifest.alternate_icons?.length ? {alternate_icons:manifest.alternate_icons} : {}),...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios','android'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {}),...(['macos','ios'].includes(platform) && manifest.categories ? {categories:manifest.categories} : {}),...linkMetadata(manifest, platform)}; }
+export function nativeManifestMetadata(manifest, platform, target = '', env = process.env, development) { return {...(platform !== 'web' ? nativePackageConfig(manifest, configTarget(platform, target), env, development) : {}),app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(platform === 'ios' && manifest.color_scheme_dark?.icons ? {dark_icons:manifest.color_scheme_dark.icons} : {}),...(platform === 'ios' && manifest.alternate_icons?.length ? {alternate_icons:manifest.alternate_icons} : {}),...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios','android'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {}),...(['macos','ios'].includes(platform) && manifest.categories ? {categories:manifest.categories} : {}),...linkMetadata(manifest, platform)}; }
 /** The link claims a binary bakes in (LLP 1038 D8): Apple's derived `applinks:` as signed, so a changed scope alone
  * changes only the origin's file; each Android filter's host and path, so a changed scope is a new APK. */
 const linkMetadata = (manifest, platform) => {
@@ -675,7 +657,11 @@ function schema() {
 export function mavenProblems(value, at) {
   return value === undefined ? [] : validate(value, schema().properties.host.properties.android.properties.maven, at, schema());
 }
-export const swiftPackagesProblems = (value, at) => value === undefined ? [] : validate(value, schema().$defs.swiftPackages, at, schema());
+export function swiftPackagesProblems(value, at, implementation) {
+  const root = schema(), remote = root.$defs.swiftPackages;
+  if (!implementation || !Array.isArray(value)) return value === undefined ? [] : validate(value, remote, at, root);
+  return value.flatMap((item, i) => validate(item, item && Object.hasOwn(item, 'path') ? root.$defs.shippedSwiftPackage : remote.items, `${at}[${i}]`, root));
+}
 /** The subset of JSON Schema the manifest's schema uses — type, required, properties, additionalProperties, items, minItems, enum, pattern, minLength, oneOf, $ref into $defs — checked by hand so the reader needs no dependency. Every problem in one pass. */
 export function validate(value, node, at, root) {
   const problems = [];
@@ -879,6 +865,7 @@ export function hermesLeanSysRoots(env = process.env) {
  * Apple app through host/apple/build.mjs, the Linux host by `linuxBuild`.
  * What ships is baked at `release`. */
 export const HOST_DEV = 'host-dev';
+export const appleFrameSources = ['FrameAutomation.swift', 'FrameBrowser.swift', 'FrameCapture.swift', 'FrameFiles.swift', 'FrameInspector.swift', 'FramePDF.swift', 'FramePrint.swift', 'FrameWindows.swift', 'ScriptMessageQueue.swift'];
 const linuxTarget = app => app.hasGpu || gpuModules(app.manifest, 'linux').length ? bakeTarget('linux') : null;
 /** The Linux host an agent drives: the app's development executable, or
  * another binary of its Linux crate (`<app>-render`). */
@@ -946,8 +933,13 @@ function bakeMetadata(app, target, env) {
   writeFileSync(`${kept}.${process.pid}.tmp`, JSON.stringify({ watched, metadata })); renameSync(`${kept}.${process.pid}.tmp`, kept);
   return metadata;
 }
-function buildGraph(app, target, kind, env, gpu, platform) {
-  const prepared = app.prepare?.(true, {target, env}), gpuApp = gpuView(app);
+/** Where Cargo keeps an Apple variant's generated Rust, whose bytes its receipt checks (LLP 1030.008 D4). */
+export function appleVariantBuildDir(app, env) {
+  const metadata = buildCommand('cargo', ['metadata', '--no-deps', '--format-version', '1'], app, { ...env, CARGO_TARGET_DIR: app.target });
+  return resolve(JSON.parse(metadata.stdout).build_directory, 'variants', app.id);
+}
+function buildGraph(app, target, kind, env, platform, prepared) {
+  const gpu = app.hasGpu, gpuApp = gpuView(app);
   const hostMetadata = prepared?.workspace_root === app.workspace ? prepared : bakeMetadata(app, target, env);
   const declared = gpuModules(app.manifest, target.includes('-tvos') ? 'tvos' : target.includes('-watchos') ? 'watchos' : platform);
   const workspaces = new Map(), cargoGraphs = new Map([[app.workspace, hostMetadata]]);
@@ -1115,7 +1107,9 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   if (platform === 'macos' || platform === 'ios') {
     add(resolve(app.dir, 'Package.resolved'), true);
     add(resolve(ROOT, 'host/apple/privacy.mjs'));
-    privacyManifests.push(...appleImplementations(app.dir, target.includes('-tvos') ? 'tvos' : platform, bundleGraph.extensions ?? {}, bundleGraph.contractSources ?? []).map(p => capturePrivacyManifest(p.privacyManifest)));
+    const os = target.includes('-tvos') ? 'tvos' : platform, implementations = appleImplementations(app.dir, os, bundleGraph.extensions ?? {}, bundleGraph.contractSources ?? []);
+    privacyManifests.push(...implementations.map(p => capturePrivacyManifest(p.privacyManifest)));
+    inventories.push(...swiftPackageInventories(app, implementations, os));
     const packageRoot=resolve(ROOT,'host/apple');
     const swiftEnv = {...env, EXACT_APP_COMPOSITION: compat.inputs.store.L === '0' ? 'embedded' : 'updating'}; delete swiftEnv.SDKROOT;
     // Cache SwiftPM's description by manifest, composition and source inventory.
@@ -1130,7 +1124,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     }
     const swift=JSON.parse(readFileSync(described,'utf8'));
     swiftTargetInputs(swift,packageRoot,platform==='ios'?'ExactIOS':'ExactMac',add);
-    add(resolve(packageRoot,'Package.swift'));add(resolve(packageRoot,'webarm/WebArm.swift'));add(resolve(packageRoot,'webarm/FrameBrowser.swift'));add(resolve(packageRoot,'webarm/FrameWindows.swift'));add(resolve(packageRoot,'webarm/FrameCapture.swift'));add(resolve(packageRoot,'webarm/FramePDF.swift'));add(resolve(packageRoot,'webarm/FrameAutomation.swift'));add(resolve(packageRoot,'webarm/FrameFiles.swift'));add(resolve(packageRoot,'webarm/FrameInspector.swift'));add(resolve(packageRoot,'webarm/FramePrint.swift'));add(resolve(packageRoot,'videoarm/VideoArm.swift'));add(resolve(packageRoot,'videoarm/PictureInPicture.swift'));add(resolve(packageRoot,'build.mjs'));add(resolve(packageRoot,'assets.mjs'));add(resolve(packageRoot,'bundle.mjs'));add(resolve(packageRoot,'extensions.mjs'));add(resolve(packageRoot,'widgets.mjs'));add(resolve(packageRoot,'intents.mjs'));add(resolve(packageRoot,'controls.mjs'));
+    add(resolve(packageRoot,'Package.swift'));add(resolve(packageRoot,'webarm/WebArm.swift'));for (const file of appleFrameSources) add(resolve(packageRoot, 'webarm', file));add(resolve(packageRoot,'videoarm/VideoArm.swift'));add(resolve(packageRoot,'videoarm/PictureInPicture.swift'));add(resolve(packageRoot,'build.mjs'));add(resolve(packageRoot,'assets.mjs'));add(resolve(packageRoot,'bundle.mjs'));add(resolve(packageRoot,'extensions.mjs'));add(resolve(packageRoot,'widgets.mjs'));add(resolve(packageRoot,'intents.mjs'));add(resolve(packageRoot,'controls.mjs'));
     const entries=platform==='ios'&&(app.manifest.widgets?.length||app.manifest.live_activities?.length); if(entries)add(resolve(packageRoot,'widget'),true); if(entries||env.EXACT_WIDGET_GALLERY==='1')add(resolve(packageRoot,'Sources/ExactSnapshot'),true);
   }
   if(platform==='web') {
@@ -1156,10 +1150,9 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   for (const entry of appleAssetCatalogs) add(resolve(app.dir, entry.path));
   // The launch screen's picture: its bytes are the binary's, and packaging draws the ones recorded.
   const launchImage = platform === 'ios' ? launchImageInventory(app) : null;
-  if (launchImage) add(resolve(app.dir, launchImage.src));
-  const androidImage = platform === 'android' ? app.manifest.host?.android?.launchImage?.src : null; // a resource of the APK (`androidLaunch`)
-  if (androidImage) add(resolve(app.dir, androidImage));
-  const metadata={...(appleAssetCatalogs.length ? {appleAssetCatalogs} : {}),...(launchImage ? {launchImage} : {}),...(nativeResources.length ? {nativeResources} : {}),...(env.EXACT_APPLE_EXTENSIONS!==undefined?{appleExtensions:env.EXACT_APPLE_EXTENSIONS.split(',').filter(Boolean)}:{}),...nativeManifestMetadata(app.manifest, platform, target, env),delivery:compat.delivery,store:compat.inputs.store,keys:compat.inputs.keys};
+  const picture = platform === 'android' ? app.manifest.host?.android?.launchImage : launchImage;
+  for (const src of [picture?.src, picture?.color_scheme_dark?.src]) if (src) add(resolve(app.dir, src));
+  const metadata={...(appleAssetCatalogs.length ? {appleAssetCatalogs} : {}),...(launchImage ? {launchImage} : {}),...(nativeResources.length ? {nativeResources} : {}),...(env.EXACT_APPLE_EXTENSIONS!==undefined?{appleExtensions:env.EXACT_APPLE_EXTENSIONS.split(',').filter(Boolean)}:{}),...nativeManifestMetadata(app.manifest, platform, target, env, compat.embedded?.trust !== 'production'),delivery:compat.delivery,store:compat.inputs.store,keys:compat.inputs.keys};
   const configuration={target,units:orderedBuild([...new Map(units.map(u=>[canonicalBuild(u),u])).values()]),builders:orderedBuild([...new Map(builders.map(u=>[canonicalBuild(u),u])).values()]),rustc:buildCommand('rustc',['-vV'],app,env).stdout,flags:{...Object.fromEntries(['RUSTFLAGS','CARGO_ENCODED_RUSTFLAGS','MACOSX_DEPLOYMENT_TARGET','IPHONEOS_DEPLOYMENT_TARGET','TVOS_DEPLOYMENT_TARGET','WATCHOS_DEPLOYMENT_TARGET'].map((k)=>[k,env[k]??null])),...(env.EXACT_WEB_LINK?{EXACT_WEB_LINK:env.EXACT_WEB_LINK}:{}),...(env.EXACT_WEB_SIZE?{EXACT_WEB_SIZE:env.EXACT_WEB_SIZE}:{})}};
   for (const captured of privacyManifests) {
     const name = nameOf(captured.path); inputs.delete(name); absent.delete(name);
@@ -1254,7 +1247,9 @@ export function buildBake(app, platform, target, options = {}) {
   if(rustBundle)env.EXACT_RUST_BUNDLE=rustBundle;
   const native=platform==='web'?null:nativeSource(app,env); // what the binary compiles its Rust from (Swappable::with_native)
   if(native)env.EXACT_NATIVE_SOURCE=native;else delete env.EXACT_NATIVE_SOURCE;
-  const graph=buildGraph(app,target,kind,env,app.hasGpu,platform),messages=[],roots=[];
+  const prepared = app.prepare?.(true, { target, env });
+  if (apple && app.manifest.variant) env.CARGO_BUILD_BUILD_DIR = appleVariantBuildDir(app, env);
+  const graph=buildGraph(app,target,kind,env,platform,prepared),messages=[],roots=[];
   // Production-profile game bakes (web, Apple, release Linux, deploy) hold the
   // logic to determinism lints; the gpu-dev loop runs them in its preceding check.
   if(app.manifest.game&&(options.profile??'')!=='gpu-dev')lintGame(app.dir,app.manifest.game,{env});
@@ -1415,7 +1410,12 @@ export function pendingBuildInputs(build, { includeSources = false, launch } = {
   for (const link of build.binary.links ?? []) {
     try { if (readlinkSync(link.path) !== link.target) changed.push(link.path); } catch { changed.push(link.path); }
   }
-  for (const inventory of build.binary.inventories ?? []) for (const name of notificationServiceInputChanges(inventory.path, inventory.identity)) changed.push(name===notificationServiceSourceRoot?inventory.name:`${inventory.name}/${name}`);
+  const apple = build.binary.assetCatalogApp;
+  if (apple) changed.push(...addedSwiftPackageInputs(apple.dir, apple.platform, build.graph?.extensions, build.binary.inventories));
+  for (const inventory of build.binary.inventories ?? []) {
+    if (inventory.kind === 'swift-package') { if (swiftPackageInputChanged(inventory.path, inventory.identity)) changed.push(inventory.name); }
+    else for (const name of notificationServiceInputChanges(inventory.path, inventory.identity)) changed.push(name===notificationServiceSourceRoot?inventory.name:`${inventory.name}/${name}`);
+  }
   if (includeSources) changed.push(...pendingSourceInputs(build.sourceInputs));
   return changed;
 }

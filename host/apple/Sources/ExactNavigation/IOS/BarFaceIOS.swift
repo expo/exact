@@ -98,6 +98,7 @@ extension NavigationHost {
     }
     func shownBarItem(_ id: UInt32) -> UIBarButtonItem? {
         #if os(iOS)
+        if let (item, _) = bottomItem(id) { return item }
         if let item = shownDialogBars.lazy.compactMap({ $0.barItemsMade[id]?.bar }).first { return item }
         #endif
         return controllers.values.lazy.filter { $0.viewIfLoaded?.window != nil }.compactMap { $0.barItemsMade[id]?.bar }.first

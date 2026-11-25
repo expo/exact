@@ -247,11 +247,37 @@ extension NavigationHost: NavigationHosting {
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
     #endif
 
+    /// Whether the page hides `view` only because a bar shows it: a lifted
+    /// header, or a node the bar placed, that its author did not hide.
+    func hiddenForBar(_ view: UIView) -> Bool {
+        guard let node = view as? NodeView, node.style["display"]?.string != "none" else { return false }
+        #if os(iOS)
+        if controllers.values.contains(where: { $0.liftedBottomRows.first === node }) || dialogBars.values.contains(where: { $0.lifted === node }) { return true }
+        #endif
+        return controllers.values.contains { $0.lifted === node || $0.scoped === node || $0.barNodes.contains { $0 === node } }
+    }
+
     /// The navigation bar and, in it, the frame UIKit presents from for an
     /// authored header node's item: the bar's overflow button for an item in
     /// its overflow menu.
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
         #if os(iOS)
+        if let (item, nav) = bottomItem(node.id), let window = nav.viewIfLoaded?.window {
+            guard !item.isHidden,
+                  let frame = item.frame(in: window), !frame.isEmpty,
+                  let hit = window.hitTest(CGPoint(x: frame.midX, y: frame.midY), with: nil),
+                  hit.isDescendant(of: nav.tabBarController?.view ?? nav.view),
+                  barTop(nav).map({ !hit.isDescendant(of: $0.view) }) == true else { return .failure(BarItemMissing()) }
+            let control = sequence(first: hit, next: \.superview).first { view in
+                guard view is UIControl else { return false }
+                if let id = view.accessibilityIdentifier, !id.isEmpty { return id == item.accessibilityIdentifier }
+                let rect = view.convert(view.bounds, to: window)
+                return abs(rect.midX - frame.midX) < 1 && abs(rect.midY - frame.midY) < 1
+                    && abs(rect.width - frame.width) < 1 && abs(rect.height - frame.height) < 1
+            }
+            guard let control else { return .failure(BarItemMissing()) }
+            return .success((control, window.convert(frame, to: control)))
+        }
         guard let (bar, item, navigationItem) = barButtonItem(node) else { return nil }
         // UIKit gives an item in the menu the button's frame, but none where it places a vertical bar (the iPhone Duo)
         let places = [item.frame(in: bar), item.isHidden ? nil : navigationItem.overflowPresentationSource?.frame(in: bar)]
@@ -263,6 +289,21 @@ extension NavigationHost: NavigationHosting {
     }
 
     #if EXACT_AGENT
+    private func backButtonID(_ source: BarSource?) -> UInt32? {
+        guard let source, source.bar == .header, source.canGoBack, let name = container?.props["navigationBack"] else { return nil }
+        return source.placed.first { presenter.views[$0]?.props["id"] == name }
+    }
+
+    func backButtonBar(_ node: NodeView) -> UINavigationBar? {
+        guard !ExactEnv.authoredChrome, let id = node.props["id"], id == container?.props["navigationBack"] else { return nil }
+        for route in controllers.values where backButtonID(route.projectedSource) == node.id {
+            guard let nav = route.navigationController, nav.topViewController === route, barShows(nav),
+                  route.viewIfLoaded?.window != nil else { continue }
+            return shownBar(of: nav)
+        }
+        return nil
+    }
+
     func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox] {
         var boxes: [UInt32: BarLayoutBox] = [:]
         #if os(iOS)
@@ -272,7 +313,16 @@ extension NavigationHost: NavigationHosting {
                   controller.viewIfLoaded?.window != nil else { return }
             let bar = shownBar(of: nav), item = controller.navigationItem
             let owner = bar.delegate as? UINavigationController ?? nav
-            guard !owner.isNavigationBarHidden, RouteGeometry.shownBar(bar) != nil else { return }
+            guard !owner.isNavigationBarHidden else { return }
+            if controller is RouteController, let back = backButtonID(source),
+               let control = bar.drawnBackControl() {
+                boxes[back] = BarLayoutBox(control, nil, "UINavigationBar back button")
+            }
+            for id in items where boxes[id] == nil {
+                guard let node = presenter.views[id] else { continue }
+                boxes[id] = itemBox(node)
+            }
+            guard RouteGeometry.shownBar(bar) != nil else { return }
             if let route = controller as? RouteController, let node = route.search?.field,
                let field = drawnSearch(node), RouteGeometry.shownBar(field) != nil {
                 boxes[node.id] = BarLayoutBox(field, nil, "UISearchTextField")
@@ -282,19 +332,17 @@ extension NavigationHost: NavigationHosting {
                 if let title = item.titleView, title !== (controller as? RouteController)?.titleSegments?.control,
                    RouteGeometry.shownBar(title) != nil {
                     boxes[heading] = BarLayoutBox(title, nil, "UINavigationItem title")
+                } else if item.titleView == nil, let label = bar.drawnTitleLabel(source.title) {
+                    boxes[heading] = BarLayoutBox(label, nil, "UINavigationItem title")
                 }
-            }
-            if controller is RouteController, source.canGoBack, !item.hidesBackButton, bar.backItem != nil,
-               let name = container?.props["navigationBack"], let back = source.placed.first(where: { presenter.views[$0]?.props["id"] == name }),
-               let control = bar.drawnBackControl() {
-                boxes[back] = BarLayoutBox(control, nil, "UINavigationBar back button")
-            }
-            for id in items where boxes[id] == nil {
-                guard let node = presenter.views[id] else { continue }
-                boxes[id] = itemBox(node)
             }
         }
         for route in controllers.values {
+            if let store = route.bottomToolbar {
+                for id in store.barItemsMade.keys {
+                    if let node = presenter.views[id] { boxes[id] = itemBox(node) }
+                }
+            }
             if let nav = route.navigationController, barShows(nav) {
                 read(route.projectedSource, items: Array(route.barItemsMade.keys), controller: route, nav: nav)
             }

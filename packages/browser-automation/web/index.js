@@ -44,6 +44,10 @@ async function settle(run, { sandbox, awaitPromise = true }) {
   }
 }
 
+const hasChannel = args => args?.some(arg => arg?.type === 'channel' && Object.keys(arg).length === 2 &&
+  typeof arg.value?.channel === 'string' && Object.keys(arg.value).length === 1);
+const noChannel = () => ({ error: 'NotSupportedError', message: 'script.message is not supported on the web' });
+
 const unsupported = what => async () => ({ error: 'NotSupportedError', message: `${what} is not offered on the web (LLP 1020.002 §11)` });
 
 export function implementation() {
@@ -55,11 +59,14 @@ export function implementation() {
       return settle(() => win.eval(`(${String(expression)}\n)`), { sandbox: target?.sandbox ?? sandbox, awaitPromise });
     },
     async callFunction({ id, target, functionDeclaration, arguments: args = [], sandbox, awaitPromise }) {
+      if (hasChannel(args)) return noChannel();
       const { win, ...refused } = frameWindow(id, target, sandbox);
       if (!win) return refused;
       return settle(() => win.eval(`(${functionDeclaration}\n)`)(...(args ?? [])), { sandbox: target?.sandbox ?? sandbox, awaitPromise });
     },
-    addPreloadScript: unsupported('a preload script'),
+    async addPreloadScript({ arguments: args } = {}) {
+      return hasChannel(args) ? noChannel() : unsupported('a preload script')();
+    },
     removePreloadScript: unsupported('a preload script'),
     performActions: unsupported('input to a frame'),
     releaseActions: unsupported('input to a frame'),

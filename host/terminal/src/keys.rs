@@ -273,7 +273,12 @@ fn same_chord(declared: &str, chord: &str) -> bool {
         mods.sort();
         (mods, key.to_ascii_lowercase())
     }
-    split(declared) == split(chord)
+    let primary = if cfg!(target_vendor = "apple") {
+        "Meta"
+    } else {
+        "Control"
+    };
+    exact_plan::shortcut::resolve(declared, primary).is_some_and(|d| split(&d) == split(chord))
 }
 
 /// A textarea's visual lines as (first cluster, end cluster) pairs, broken

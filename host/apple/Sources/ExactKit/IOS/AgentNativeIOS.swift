@@ -68,11 +68,59 @@ extension Agent {
 
 #if os(iOS)
 extension UINavigationBar {
-    /// UIKit's default Back has no UIBarButtonItem. In a horizontal bar it is
-    /// the leading control, ahead of every item that supplements it (LLP 1080.000 §13).
+    /// UIKit can wrap the inline label in a control sized to its text. Bar
+    /// buttons handle control events even when another view covers them.
+    package func drawnTitleLabel(_ title: String) -> UILabel? {
+        guard !title.isEmpty, let item = topItem, item.title == title, item.titleView == nil, let window else { return nil }
+        let items = (item.leftBarButtonItems ?? []) + (item.rightBarButtonItems ?? [])
+        let custom = items.compactMap(\.customView)
+        let itemFrames = items.filter { !$0.isHidden }.compactMap { $0.frame(in: self) }
+        func sameBox(_ a: CGRect, _ b: CGRect) -> Bool {
+            a.insetBy(dx: -0.5, dy: -0.5).contains(b) && b.insetBy(dx: -0.5, dy: -0.5).contains(a)
+        }
+        var visible = bounds.intersection(convert(window.bounds, from: window))
+        var ancestor = superview
+        while let view = ancestor {
+            if view.clipsToBounds { visible = visible.intersection(convert(view.bounds, from: view)) }
+            ancestor = view.superview
+        }
+        var found: UILabel?, pending = subviews.map { (view: $0, clip: visible) }
+        while let (view, clip) = pending.popLast() {
+            guard !view.isHidden, view.alpha > 0.01, !custom.contains(view),
+                  !(view is UIButton || view is UISearchBar || view is UITextField || view is UISegmentedControl) else { continue }
+            if let control = view as? UIControl, !control.allControlEvents.isEmpty { continue }
+            let frame = view.convert(view.bounds, to: self)
+            let port = view.clipsToBounds ? clip.intersection(frame) : clip
+            guard !port.isEmpty else { continue }
+            if let label = view as? UILabel, label.text == title, !clip.intersection(frame).isEmpty {
+                let middle = CGPoint(x: frame.midX, y: frame.midY)
+                let owners = sequence(first: view, next: \.superview).prefix { $0 !== self }
+                guard !itemFrames.contains(where: { $0.contains(middle) }),
+                      owners.contains(where: { $0.accessibilityTraits.contains(.header) ||
+                          $0 is UIControl && sameBox($0.convert($0.bounds, to: self), frame) }) else { continue }
+                if let found, !sameBox(found.convert(found.bounds, to: self), frame) { return nil }
+                found = label
+            }
+            pending += view.subviews.map { ($0, port) }
+        }
+        return found
+    }
+
+    /// UIKit projects Back's effective item into the rail. In a horizontal bar its default
+    /// Back is the leading control, ahead of the items that supplement it (LLP 1080.000 §13).
     package func drawnBackControl() -> UIControl? {
-        guard !traitCollection.placesVerticalBar, backItem != nil, let item = topItem, !item.hidesBackButton,
+        guard let backItem, let item = topItem, !item.hidesBackButton,
               item.leftBarButtonItems?.isEmpty != false || item.leftItemsSupplementBackButton else { return nil }
+        #if EXACT_INSPECT
+        let key = "_effectiveBackBarButtonItem"
+        let effective = backItem.backBarButtonItem ?? (backItem.responds(to: NSSelectorFromString(key)) ? backItem.value(forKey: key) as? UIBarButtonItem : nil)
+        if let control = effective?.projectedControl(in: window) as? UIControl {
+            return RouteGeometry.shownBar(control) as? UIControl
+        }
+        #endif
+        // On an ordinary iPhone or iPad this can measure an app button directly behind a hidden, transparent or detached
+        // Back because UIKit supplies no view for default Back and the horizontal bar still needs its box (LLP 1035.003).
+        guard !traitCollection.placesVerticalBar, RouteGeometry.shownBar(self) != nil else { return nil }
         let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
         let items = (item.leftBarButtonItems ?? []) + (item.rightBarButtonItems ?? [])
         let custom = items.compactMap(\.customView)
@@ -98,9 +146,8 @@ extension Agent {
     func drawnBarBoxes() -> [UInt32: BarLayoutBox] {
         let nav = presenter.navigation
         var boxes = nav.headerLayout { node in
-            guard case .success(let place)? = barItem(node) else { return nil }
-            let view = place.control ?? place.bar
-            return BarLayoutBox(view, place.bar.convert(place.item, to: view), "UIBarButtonItem")
+            guard case .success(let place)? = barItem(node), RouteGeometry.shownBar(place.bar) != nil else { return nil }
+            return BarLayoutBox(place.bar, place.item, "UIBarButtonItem")
         }
         #if os(iOS)
         for list in presenter.carrying("role:tablist") {

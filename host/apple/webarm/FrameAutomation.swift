@@ -4,6 +4,7 @@
 // under `browser.automation`. Only a partitioned frame is always the web
 // view's own top-level browsing context, so only it is driven; a picture
 // (D7) is any frame's.
+import CryptoKit
 import Foundation
 import WebKit
 
@@ -72,7 +73,13 @@ enum Automations {
 
     static let missingRealm = ["error": "no such frame", "message": "the script realm is no longer live"]
 
-    static func run(_ request: [String: Any], finish: @escaping ([String: Any]) -> Void) {
+    static func run(_ request: [String: Any], message: AutomationMessage?, finish: @escaping ([String: Any]) -> Void) {
+        if request["op"] as? String == "releaseScriptChannels", let session = request["channelSession"] as? String,
+           let owner = request["owner"] as? String, !owner.isEmpty {
+            FrameAutomation.closeMessageQueues(owner: owner, session: session)
+            for arm in arms.allObjects where arm.owner == owner { arm.automation?.releaseChannels(session) }
+            return finish([:])
+        }
         var options = request
         let id: String
         if let raw = request["target"], !(raw is NSNull) {
@@ -91,7 +98,7 @@ enum Automations {
                 for arm in arms.allObjects where !arm.invalidated && !owner.isEmpty && arm.owner == owner {
                     if arm.pdf == nil, arm.browser != nil, arm.built != nil, let automation = arm.automation, let name = automation.name(of: realm) {
                         options["sandbox"] = name.isEmpty ? nil : name
-                        return automation.run(options, reply: finish)
+                        return automation.run(options, message: message, reply: finish)
                     }
                 }
                 return finish(missingRealm)
@@ -113,7 +120,7 @@ enum Automations {
         }
         let automation = arm.automation ?? FrameAutomation(arm: arm)
         arm.automation = automation
-        automation.run(options, reply: finish)
+        automation.run(options, message: message, reply: finish)
     }
 
     static func find(owner: String, id: String) -> [WebArm] {
@@ -136,7 +143,156 @@ final class FrameAutomation {
         actingScripts.remove(number)
         if actingScripts.isEmpty && !controlled { unwatch() }
     }
-    private var preload: [(id: String, script: WKUserScript)] = []
+    private var preload: [(id: String, script: WKUserScript, session: String?, seededWorld: String?)] = []
+    private final class Messages: NSObject, WKScriptMessageHandlerWithReply {
+        let queue: ScriptMessageQueue
+        private var flushing: [ObjectIdentifier: WKWebView] = [:]
+        let handler = "_message" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        private struct Capability {
+            let channel: String
+            var pending = 0
+            var admitted = false
+        }
+        private var issued: [String: Capability] = [:]
+        func reserve(_ channel: String) -> String {
+            let key = issued.first(where: { $0.value.channel == channel })?.key ?? UUID().uuidString
+            issued[key, default: Capability(channel: channel)].pending += 1
+            return key
+        }
+
+        func finish(_ keys: [String], admitted: Bool) {
+            for key in keys {
+                guard var value = issued[key] else { continue }
+                value.pending -= 1
+                value.admitted = value.admitted || admitted
+                issued[key] = value.admitted || value.pending > 0 ? value : nil
+            }
+        }
+        var isEmpty: Bool { issued.isEmpty }
+        let world: WKContentWorld
+        let route: String
+        private var deliver: AutomationMessage?
+        weak var arm: WebArm?
+        private let views = NSHashTable<WKWebView>.weakObjects()
+        private weak var current: WKWebView?
+        private let controllers = NSHashTable<WKUserContentController>.weakObjects()
+
+        init(_ arm: WebArm, _ world: WKContentWorld, _ route: String, _ session: String, _ deliver: @escaping AutomationMessage) {
+            self.arm = arm
+            self.world = world
+            self.route = route
+            self.deliver = deliver
+            let key = SessionKey(owner: arm.owner, session: session)
+            let channels = FrameAutomation.sessions[key] ?? SessionChannels()
+            FrameAutomation.sessions[key] = channels
+            queue = channels.queue
+            super.init()
+            channels.receivers.add(self)
+        }
+
+        private final class Registration {
+            let remove: () -> Void
+            init(_ remove: @escaping () -> Void) { self.remove = remove }
+            deinit { remove() }
+        }
+
+        func install(_ view: WKWebView) {
+            current = view
+            let controller = view.configuration.userContentController
+            if !views.contains(view) {
+                views.add(view)
+                let registration = Registration { [weak self, weak controller] in
+                    DispatchQueue.main.async { [weak self, weak controller] in
+                        guard let self, let controller, self.controllers.contains(controller),
+                              !self.views.allObjects.contains(where: { $0.configuration.userContentController === controller }) else { return }
+                        controller.removeScriptMessageHandler(forName: self.handler, contentWorld: self.world)
+                        self.controllers.remove(controller)
+                    }
+                }
+                // A hatch can retain the controller after the last view using its handler dies.
+                objc_setAssociatedObject(view, Unmanaged.passUnretained(self).toOpaque(), registration, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            }
+            if !controllers.contains(controller) {
+                controllers.add(controller)
+                controller.addScriptMessageHandler(self, contentWorld: world, name: handler)
+            }
+        }
+
+        func uninstall() {
+            for controller in controllers.allObjects { controller.removeScriptMessageHandler(forName: handler, contentWorld: world) }
+            controllers.removeAllObjects()
+            for view in views.allObjects {
+                objc_setAssociatedObject(view, Unmanaged.passUnretained(self).toOpaque(), nil, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+            }
+            views.removeAllObjects()
+            issued.removeAll()
+            flushing.removeAll()
+            deliver = nil
+        }
+
+        func retire(_ view: WKWebView) {
+            guard current === view else { return }
+            current = nil
+            // WebKit discards queued callbacks when their view dies. Session close can
+            // release the view even if its renderer never services the flush.
+            let id = ObjectIdentifier(view)
+            flushing[id] = view
+            view.evaluateJavaScript("void 0", in: nil, in: world) { [weak self] _ in
+                self?.flushing.removeValue(forKey: id)
+            }
+        }
+
+        func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage,
+                                   replyHandler: @escaping (Any?, String?) -> Void) {
+            guard let view = message.webView, views.contains(view), message.frameInfo.isMainFrame,
+                  let parts = message.body as? [String] else { return replyHandler(nil, nil) }
+            if parts.first == "bind" {
+                let keys = parts.dropFirst()
+                guard view === current, !keys.isEmpty, keys.allSatisfy({ issued[$0] != nil }) else { return replyHandler(nil, "channel closed") }
+                for key in keys { issued[key]?.admitted = true }
+                return replyHandler(true, nil)
+            }
+            defer { replyHandler(nil, nil) }
+            guard parts.count == 4, let channel = issued[parts[0]]?.channel, UUID(uuidString: parts[1]) != nil else { return }
+            let start = ScriptMessageQueue.Start(handler: handler, view: ObjectIdentifier(view), turn: parts[2])
+            if parts[3].isEmpty { return queue.publish(start) }
+            guard parts[3].utf8.count <= Automations.limit else { return }
+            guard view === current, let arm, !arm.invalidated, arm.built === view else {
+                deliver?(["retiredPost": true])
+                return
+            }
+            let origin = WebArm.spelled(message.frameInfo.securityOrigin)
+            let source = ["realm": FrameAutomation.realmId(route, parts[1], origin), "origin": origin, "context": arm.element]
+            queue.admit(start, ["channel": channel, "json": parts[3], "source": source]) { [self] in deliver?($0) }
+        }
+    }
+
+    private struct SessionKey: Hashable { let owner: String, session: String }
+    private final class SessionChannels {
+        let queue = ScriptMessageQueue()
+        let receivers = NSHashTable<Messages>.weakObjects()
+    }
+    // A package handler can still be running when its last frame goes away.
+    nonisolated(unsafe) private static var sessions: [SessionKey: SessionChannels] = [:]
+
+    static func closeMessageQueues(owner: String, session: String) {
+        let key = SessionKey(owner: owner, session: session)
+        guard let channels = sessions.removeValue(forKey: key) else { return }
+        channels.queue.close()
+        for receiver in channels.receivers.allObjects { receiver.uninstall() }
+    }
+
+    private struct Destination: Hashable { let sandbox: String, session: String }
+    private var messages: [Destination: Messages] = [:]
+    private var seeds: [String: WKUserScript] = [:]
+
+    // A public realm never reveals the world's private document token. Include WebKit's origin so
+    // a token presented from another origin cannot name the original document.
+    private static func realmId(_ route: String, _ token: String, _ origin: String) -> String {
+        let digest = SHA256.hash(data: Data((origin + "\0" + token).utf8))
+        return route + "." + Data(digest).base64EncodedString()
+    }
+
     private var nextId = 0
     private struct Realm {
         let id: String, token: String, origin: String
@@ -194,7 +350,7 @@ final class FrameAutomation {
         let route = routes[name] ?? UUID().uuidString
         routes[name] = route
         func realm(_ token: String, _ origin: String) -> Realm {
-            let value = Realm(id: route + "." + token, token: token, origin: origin)
+            let value = Realm(id: Self.realmId(route, token, origin), token: token, origin: origin)
             identified[name] = value
             return value
         }
@@ -293,6 +449,10 @@ final class FrameAutomation {
 
     /// The frame unmounted or changed its web view: every call in flight ends.
     func end(_ why: String) {
+        if let view = arm?.built {
+            removeScripts(preload.map(\.script) + seeds.values, from: view)
+            messages.values.forEach { $0.retire(view) }
+        }
         let answer: [String: Any] = ["error": "NotFoundError", "message": why]
         endEvaluations(answer)
         let pending = captures.values
@@ -334,9 +494,19 @@ final class FrameAutomation {
         for (number, reply) in pending { reply(checking.contains(number) ? Automations.missingRealm : answer) }
     }
 
+    private func installSeed(_ seed: WKUserScript, on controller: WKUserContentController) {
+        let scripts = controller.userScripts.filter { $0 !== seed }
+        controller.removeAllUserScripts()
+        controller.addUserScript(seed)
+        scripts.forEach(controller.addUserScript)
+    }
+
     /// A new web view for the same frame (a partition change): the preload scripts go with it.
-    func attached(_ controller: WKUserContentController) {
-        for entry in preload { controller.addUserScript(entry.script) }
+    func attached(_ view: WKWebView) {
+        let controller = view.configuration.userContentController
+        messages.values.forEach { $0.install(view) }
+        for seed in seeds.values where !controller.userScripts.contains(where: { $0 === seed }) { installSeed(seed, on: controller) }
+        for entry in preload where !controller.userScripts.contains(where: { $0 === entry.script }) { controller.addUserScript(entry.script) }
     }
 
     /// An agent-controlled frame's dialog: no sheet; `userpromptopened` fires
@@ -350,7 +520,12 @@ final class FrameAutomation {
 
     // MARK: Calls
 
-    func run(_ request: [String: Any], reply: @escaping ([String: Any]) -> Void) {
+    private struct ScriptArguments {
+        let source: String
+        var finish: ((Bool) -> Void)?
+    }
+
+    func run(_ request: [String: Any], message: AutomationMessage?, reply: @escaping ([String: Any]) -> Void) {
         guard let arm else { return reply(["error": "NotFoundError"]) }
         let op = request["op"] as? String ?? ""
         let id = request["id"] as? String ?? ""
@@ -369,27 +544,32 @@ final class FrameAutomation {
         guard arm.pdf == nil, arm.browser != nil, let web = arm.built else {
             return reply(["error": "NotSupportedError", "message": "\(op): iframe \(id) has no partition; only a partitioned frame is driven"])
         }
+        var arguments = ScriptArguments(source: "...__exactArguments")
+        if op == "callFunction" || op == "addPreloadScript" {
+            guard let parsed = scriptArguments(request, message: message, preload: op == "addPreloadScript", web: web, reply: reply) else { return }
+            arguments = parsed
+        }
         switch op {
-        case "evaluate", "callFunction": script(op, request, web, reply)
+        case "evaluate", "callFunction":
+            script(op, request, arguments, web) { result in arguments.finish?(false); reply(result) }
         // A preload script is a read, as a script without `userActivation`
         // is: it runs in each new document, where it can watch what the page
         // does from its first script on, and leaves the frame the person's.
         case "addPreloadScript":
             guard let world = world(request, reply) else { return }
             nextId += 1
-            let script = WKUserScript(source: "(\n\(request["functionDeclaration"] as? String ?? "")\n)();", injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world)
-            preload.append(("script-\(nextId)", script))
+            let script = WKUserScript(source: "(\n\(request["functionDeclaration"] as? String ?? "")\n)(\(arguments.source));", injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world)
+            let hasChannels = !(request["arguments"] as? [Any] ?? []).isEmpty
+            preload.append(("script-\(nextId)", script, request["channelSession"] as? String, hasChannels ? request["sandbox"] as? String : nil))
             web.configuration.userContentController.addUserScript(script)
             arm.ownScripts = web.configuration.userContentController.userScripts.count
+            arguments.finish?(true)
             reply(["script": "script-\(nextId)"])
         case "removePreloadScript":
             let named = request["script"] as? String ?? ""
             guard let index = preload.firstIndex(where: { $0.id == named }) else { return reply(["error": "NotFoundError", "message": "no preload script \(named)"]) }
-            let gone = preload.remove(at: index).script, controller = web.configuration.userContentController
-            let kept = controller.userScripts.filter { $0 !== gone }
-            controller.removeAllUserScripts()
-            kept.forEach(controller.addUserScript)
-            arm.ownScripts = controller.userScripts.count
+            let removed = preload.remove(at: index)
+            removeScripts([removed.script] + unusedSeeds(), from: web)
             reply([:])
         case "performActions": perform(request["actions"] as? [[String: Any]] ?? [], web, reply)
         case "releaseActions":
@@ -410,6 +590,109 @@ final class FrameAutomation {
         }
     }
 
+    private func removeScripts(_ scripts: [WKUserScript], from web: WKWebView) {
+        guard !scripts.isEmpty else { return }
+        let controller = web.configuration.userContentController
+        let kept = controller.userScripts.filter { present in !scripts.contains(where: { $0 === present }) }
+        controller.removeAllUserScripts()
+        kept.forEach(controller.addUserScript)
+        arm?.ownScripts = controller.userScripts.count
+    }
+
+    private func unusedSeeds() -> [WKUserScript] {
+        let needed = Set(preload.compactMap(\.seededWorld))
+        return seeds.keys.filter { !needed.contains($0) }.compactMap { seeds.removeValue(forKey: $0) }
+    }
+
+    func releaseChannels(_ session: String) {
+        messages = messages.filter { $0.key.session != session }
+        let removed = preload.filter { $0.session == session }.map(\.script)
+        preload.removeAll { $0.session == session }
+        let scripts = removed + unusedSeeds()
+        if let web = arm?.built { removeScripts(scripts, from: web) }
+    }
+
+    /// A ChannelValue becomes a function in the named world. The JSON string crosses WebKit once,
+    /// after the guest checked its size, so a cyclic or oversized value throws at the call to post.
+    private func scriptArguments(_ request: [String: Any], message: AutomationMessage?, preload: Bool, web: WKWebView, reply: ([String: Any]) -> Void) -> ScriptArguments? {
+        let args = request["arguments"] as? [Any] ?? []
+        let properties: [[String: Any]?] = args.map { value in
+            guard let object = value as? [String: Any], object.count == 2, object["type"] as? String == "channel",
+                  let props = object["value"] as? [String: Any], props.count == 1, props["channel"] is String else { return nil }
+            return props
+        }
+        guard properties.contains(where: { $0 != nil }) || (preload && !args.isEmpty) else { return ScriptArguments(source: preload ? "" : "...__exactArguments") }
+        guard let name = request["sandbox"] as? String, !name.isEmpty else {
+            reply(["error": "NotSupportedError", "message": "script.message requires a named sandbox"])
+            return nil
+        }
+        guard let arm, let world = world(request, reply) else { return nil }
+        guard let message else {
+            reply(["error": "NotSupportedError", "message": "script.message has no receiver"])
+            return nil
+        }
+        if preload && properties.contains(where: { $0 == nil }) {
+            reply(["error": "invalid argument", "message": "a ChannelValue needs value: { channel: string }"])
+            return nil
+        }
+        var expressions: [String] = []
+        var reserved: [String] = []
+        let route = routes[name] ?? UUID().uuidString
+        let destination = Destination(sandbox: name, session: request["channelSession"] as? String ?? "")
+        let sink = messages[destination] ?? Messages(arm, world, route, destination.session, message)
+        for (i, props) in properties.enumerated() {
+            guard let channel = props?["channel"] as? String else { expressions.append("__exactArguments[\(i)]"); continue }
+            let capability = sink.reserve(channel)
+            reserved.append(capability)
+            expressions.append("""
+            ((token, send, capability) => {
+              let turn = null;
+              return value => {
+                const json = JSON.stringify(value);
+                if (json === undefined) throw new TypeError('script.message needs JSON');
+                if (new TextEncoder().encode(json).length > \(Automations.limit)) throw new DOMException('script.message exceeds 65536 bytes', 'QuotaExceededError');
+                if (turn === null) {
+                  turn = Array.from(crypto.getRandomValues(new Uint32Array(4))).join('.');
+                  queueMicrotask(() => { const done = turn; turn = null; send([capability, token, done, '']); });
+                }
+                send([capability, token, turn, json]);
+              };
+            })(\(Self.binding).token, webkit.messageHandlers.\(sink.handler).postMessage.bind(webkit.messageHandlers.\(sink.handler)), '\(capability)')
+            """)
+        }
+        routes[name] = route
+        messages[destination] = sink
+        sink.install(web)
+        if preload, seeds[name] == nil {
+            // The document's private lexical token is installed before any channel preload.
+            let seed = WKUserScript(source: """
+            const \(Self.binding) = Object.freeze({document, token: (() => {
+              const bytes = crypto.getRandomValues(new Uint8Array(16));
+              const hex = Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
+              return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
+            })()});
+            """, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world)
+            seeds[name] = seed
+            installSeed(seed, on: web.configuration.userContentController)
+        }
+        // Concurrent calls can reserve the same channel. A refusal releases only this call's reservation.
+        var finished = false
+        let values = expressions.joined(separator: ", ")
+        // The function can post and then await forever. Confirm it was handed out before guest code
+        // can run, so aborting the call cannot revoke a message still on its way from the old document.
+        let keys = reserved.map { "'\($0)'" }.joined(separator: ",")
+        let source = preload ? values : "...(await webkit.messageHandlers.\(sink.handler).postMessage(['bind',\(keys)]) && [\(values)])"
+        return ScriptArguments(source: source) { [weak self] admitted in
+            guard !finished else { return }
+            finished = true
+            sink.finish(reserved, admitted: admitted)
+            if sink.isEmpty, self?.messages[destination] === sink {
+                self?.messages.removeValue(forKey: destination)
+                sink.uninstall()
+            }
+        }
+    }
+
     /// The sandbox's world, or the page's without one. The arm's own worlds
     /// (`exact.*`) are refused: they hold its message handlers.
     private func world(_ request: [String: Any], _ reply: ([String: Any]) -> Void) -> WKContentWorld? {
@@ -423,7 +706,7 @@ final class FrameAutomation {
 
     /// `evaluate` takes an expression, `callFunction` a function and its
     /// arguments; the value comes back as its JSON, at most 64 KB.
-    private func script(_ op: String, _ request: [String: Any], _ web: WKWebView, _ reply: @escaping ([String: Any]) -> Void, retry: Bool = true) {
+    private func script(_ op: String, _ request: [String: Any], _ arguments: ScriptArguments, _ web: WKWebView, _ reply: @escaping ([String: Any]) -> Void, retry: Bool = true) {
         guard let world = world(request, reply) else { return }
         let target = (request["target"] as? [String: Any])?["realm"] as? String
         if target == nil && retry && request["userActivation"] as? Bool == true { take() }
@@ -447,21 +730,21 @@ final class FrameAutomation {
                 return
             }
             if request["userActivation"] as? Bool != true { self.identifying.remove(number) }
-            self.execute(op, request, web, world, realm, number) { [weak self, weak web] in
+            self.execute(op, request, arguments, web, world, realm, number) { [weak self, weak web] in
                 guard let self, let web, let answer = self.evaluations.removeValue(forKey: number) else { return }
                 if target != nil { return answer(Automations.missingRealm) }
                 self.identified.removeValue(forKey: request["sandbox"] as? String ?? "")
-                if retry { self.script(op, request, web, answer, retry: false) }
+                if retry { self.script(op, request, arguments, web, answer, retry: false) }
                 else { answer(["error": "AbortError", "message": "the document navigated away"]) }
             }
         }
     }
 
-    private func execute(_ op: String, _ request: [String: Any], _ web: WKWebView, _ world: WKContentWorld, _ realm: Realm, _ number: Int, stale: @escaping () -> Void) {
+    private func execute(_ op: String, _ request: [String: Any], _ prepared: ScriptArguments, _ web: WKWebView, _ world: WKContentWorld, _ realm: Realm, _ number: Int, stale: @escaping () -> Void) {
         let awaited = request["awaitPromise"] as? Bool ?? true
         let value = op == "evaluate"
             ? "(\n\(request["expression"] as? String ?? "")\n)"
-            : "(\n\(request["functionDeclaration"] as? String ?? "")\n)(...__exactArguments)"
+            : "(\n\(request["functionDeclaration"] as? String ?? "")\n)(\(prepared.source))"
         let settle = awaited ? "await __exactValue" : "(__exactValue && typeof __exactValue.then === 'function' ? {} : __exactValue)"
         // An exception is caught in the guest and answered as text, `!` then
         // its name and message: WebKit's error for one names it only under a

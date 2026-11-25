@@ -29,6 +29,7 @@ impl App {
         for file in [
             "package.json",
             "exact.json",
+            "android/exact.json",
             "apple/exact.json",
             "web/exact.json",
             "windows/exact.json",

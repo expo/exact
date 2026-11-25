@@ -11,6 +11,11 @@
           "type": "string",
           "maxBytes": 1048576
         },
+        "text/html": {
+          "type": "string",
+          "maxBytes": 1048576,
+          "targets": ["macos", "ios", "web"]
+        },
         "image/png": {
           "type": "path",
           "access": "read",
@@ -30,7 +35,7 @@
       "origin": "input",
       "grants": ["clipboard.read"],
       "substitute": {
-        "unsupported": ["android", "linux", "tvos", "windows"]
+        "unsupported": ["linux", "tvos", "windows"]
       }
     },
     {
@@ -42,7 +47,7 @@
       "origin": "input",
       "grants": ["clipboard.read"],
       "substitute": {
-        "unsupported": ["android", "linux", "tvos", "windows"]
+        "unsupported": ["linux", "tvos", "windows"]
       }
     },
     {

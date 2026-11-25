@@ -263,10 +263,12 @@ fn a_redirected_preload_cannot_answer_a_tools_reach_at_boot_or_on_either_core() 
             } else {
                 "https://public.test/plain"
             };
+            let mut preload = Request::get(url);
+            preload.reach.origin = CallOrigin::App;
             let set = Preloads::start(
                 vec![Definition {
                     name: "feed".into(),
-                    request: Request::get(url),
+                    request: preload,
                     deadline_ms: None,
                     secrets: vec![],
                 }],

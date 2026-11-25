@@ -97,8 +97,8 @@ use engine::{Engine, HostFn};
 use exact_plan::{Plan, Value};
 use exact_runner::failure::FailureCode;
 use exact_runner::{
-    Answer, DataError, DataSource, Dispatch, InFlight, Interrupt, Outcome, Request, Store, Target,
-    Work,
+    is_package_handler, Answer, DataError, DataSource, Dispatch, InFlight, Interrupt, Outcome,
+    Request, Store, Target, Work,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::c_void;
@@ -221,9 +221,6 @@ const TIMER: u64 = u64::MAX - 3;
 /// out (`typescriptHostWork`), which links I/O (LLP 1047.001 D12).
 pub(crate) struct ModuleTurn;
 impl exact_runner::HostWork for ModuleTurn {}
-
-/// The prefix of a handler's name as the runner asks for it (LLP 1133.016 D9).
-const TOOL: &str = "tool:";
 
 /// Bake and worker timers stay with the runner until due. A live-clock wait
 /// reaches the host now so another turn can wake it early (LLP 1162 D3).
@@ -804,9 +801,9 @@ impl Module {
         // The host's app module, when the app links no native module of its
         // own: present in agent mode too, where it substitutes its input
         // (LLP 1067.000 Q7), so it needs no storage directories.
-        if self.host.native.is_none() && self.native_slot.hosted() {
-            self.host.hosted = true;
-            self.host.later = true;
+        if self.host.native.is_none() {
+            self.host.hosted = self.native_slot.hosted();
+            self.host.later = self.native_slot.handler().is_some();
         }
         // packages live in the host's app module: their synchronous calls reach
         // it even when the app links a native module of its own (the door)
@@ -973,7 +970,7 @@ impl Module {
     fn reporter(target: Option<Target>, source: &str) -> exact_runner::Reporter {
         match target {
             Some(target) => exact_runner::Reporter::Answer(target),
-            None if source.starts_with(TOOL) => exact_runner::Reporter::Tool,
+            None if is_package_handler(source) => exact_runner::Reporter::Tool,
             None => exact_runner::Reporter::None,
         }
     }
@@ -1041,7 +1038,7 @@ impl Module {
         let mutation = match target {
             Some(Target::Mutation(_) | Target::Sent(..)) if session => "mutation",
             Some(Target::Resource(_)) if session => "resource",
-            None if session && source.starts_with(TOOL) => "tool",
+            None if session && is_package_handler(source) => "tool",
             _ => "",
         };
         self.host.turn = Some(Module::reporter(target, source));
@@ -1172,7 +1169,7 @@ impl Module {
                 // Tool invocations are independent even with equal arguments.
                 // A targeted continuation also stays until `forgotten` or
                 // `discard` identifies which call the runner kept after commit.
-                let replaced = if !source.starts_with(TOOL)
+                let replaced = if !is_package_handler(source)
                     && (target.is_none() || request.continuation.is_none())
                 {
                     self.replace_on(&key)

@@ -1,3 +1,5 @@
+import { reorderPress } from './motion-glue.js';
+
 // Dropping across lists on the web (LLP 1094 D5–D9): a grip whose list has
 // a `reorderGroup`, for `arrangeController` (motion-glue.js). The page draws
 // the lifted row as a ghost in the top layer. The pointer picks the grouped
@@ -152,9 +154,10 @@ export function groupController({ views, collections, request, applyBatch, now, 
     });
   }
 
-  // The lift: past the slop in any direction (D6), the ghost made before
-  // the begin's batch hides the row, the pin retained as the in-list drag's.
+  // Make the ghost before the begin's batch hides the row, retaining
+  // the pin as the in-list drag does (D6).
   function lift(b, e, g, v) {
+    if (!ready() || !b.el.isConnected || inert(b.el) || b.el.closest('[disabled]')) return null;
     const m = mapping(b, b.list, v.clientY);
     const lease = m && (b.section || collections.retainInteraction(b.el, e.pointerId));
     if (!m || !lease) return null;
@@ -177,6 +180,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
   }
   function drop(d) {
     if (cur !== d || d.phase !== 'active') return;
+    d.clearPress?.();
     stopPump();
     const view = d.target ?? d.b.list, m = mapping(d.b, view, centre(d)[1]);
     const r = m ? call(d, 'reorder-terminal', { targetView: view, ...geometry(m) }) : call(d, 'reorder-cancel');
@@ -184,6 +188,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
   }
   function cancel(d) {
     if (cur !== d || d.phase !== 'active') return;
+    d.clearPress?.();
     stopPump();
     after(d, call(d, 'reorder-cancel'));
   }
@@ -217,6 +222,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
     if (cur !== d) return;
     cur = null; mark();
     d.ghost?.el.remove();
+    d.clearPress?.();
     for (const [el, name, fn] of d.listeners ?? []) el.removeEventListener(name, fn);
     const f = request({ ...binding(d.b), op: 'reorder-finish', token: d.token, now: now() });
     if (!d.b.section) collections.releaseRetainedInteraction(d.lease);
@@ -242,14 +248,6 @@ export function groupController({ views, collections, request, applyBatch, now, 
   const refused = () => {
     log('reorder: a drag refused: the last drop is held until its move shows (LLP 1094 D8); a person waits for the card to land; a drive waits with `clock settle` before the next drag');
   };
-  // The scroll container under the contact, short of the grip, where `touch-action` stops.
-  const scroller = (el, grip) => {
-    for (let n = el; n && n !== grip; n = n.parentElement) {
-      const s = getComputedStyle(n);
-      if (/(auto|scroll|hidden)/.test(s.overflowX + s.overflowY)) return n;
-    }
-    return null;
-  };
   function down(b, e, g) {
     if (cur?.phase === 'landing') cur.landNow();
     if (cur && !inert(b.el)) refused();
@@ -257,29 +255,26 @@ export function groupController({ views, collections, request, applyBatch, now, 
     pending?.();
     if (!b.section) collections.reorderContact(b.el, e.pointerId);
     const start = [e.clientX, e.clientY], events = [];
-    let d = null;
+    let d = null, press;
     const on = (el, name, fn) => { el.addEventListener(name, fn); events.push([el, name, fn]); };
-    const cleanup = () => { for (const [el, name, fn] of events.splice(0)) el.removeEventListener(name, fn); if (pending === cleanup) pending = null; if (!d) collections.releaseInteraction(e.pointerId); };
-    pending = cleanup;
-    on(doc, 'pointermove', v => {
-      if (v.pointerId !== e.pointerId) return;
+    const cleanup = () => { press?.clear(); for (const [el, name, fn] of events.splice(0)) el.removeEventListener(name, fn); if (pending === cleanup) pending = null; if (!d) collections.releaseInteraction(e.pointerId); };
+    cleanup.handle = b.id; pending = cleanup;
+    const moved = (v, held = false) => {
+      if (v.pointerId !== e.pointerId || !held && !press.move(v)) return;
       if (!d) {
-        if (Math.hypot(v.clientX - start[0], v.clientY - start[1]) < SLOP) return;
-        d = lift(b, e, g, v);
+        if (!held && Math.hypot(v.clientX - start[0], v.clientY - start[1]) < SLOP) return;
+        d = lift(b, held ? v : e, g, v);
         if (!d) { cleanup(); return; }
-        d.listeners = events; pending = null;
+        d.listeners = events; d.clearPress = () => press.clear(); pending = null;
       }
       v.preventDefault(); v.stopPropagation(); move(d, v);
-    });
+    };
+    b.press = press = reorderPress(e, b.el, v => { moved(v, true); return !!d; }, cleanup);
+    on(doc, 'pointermove', moved);
     // A child's capture loss while the grip takes capture is no cancel (habits F10).
     const up = v => {
       if (v.pointerId !== e.pointerId || v.type === 'lostpointercapture' && v.target !== b.el) return;
       if (!d) {
-        // The browser took a finger before the lift (LLP 1102 §3.17): say why, as the pan glue does.
-        if (v.type === 'pointercancel' && e.pointerType !== 'mouse') {
-          const s = scroller(e.target, b.el), named = s?.dataset?.testid ? ` ("${s.dataset.testid}")` : '';
-          log(`reorder: the browser took the ${e.pointerType || 'pointer'} contact on a grip to scroll before it lifted${s ? `: a scroll container under the grip${named} (overflow-x or overflow-y hidden, as an ellipsis title) ends touch-action there; give it touch-action="none", or start the grip off it` : '; give the grip touch-action="none"'}`);
-        }
         cleanup(); return;
       }
       // A lifted drag is no press: the click its release makes is swallowed.
@@ -287,7 +282,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
     };
     for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) on(doc, name, up);
     on(doc, 'keydown', k => { if (d && k.key === 'Escape' && d.phase === 'active') { k.preventDefault(); cancel(d); } });
-    on(doc.defaultView ?? globalThis, 'blur', () => { if (d) cancel(d); });
+    on(doc.defaultView ?? globalThis, 'blur', () => { cleanup(); if (d) cancel(d); });
   }
 
   // The keys (D9): one listener on the document while a key session lives,
@@ -349,6 +344,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
       b.el.addEventListener('keydown', b.keyed);
     },
     release(b) {
+      if (pending?.handle === b.id) pending();
       if (!b.keyed) return;
       b.el.removeEventListener('keydown', b.keyed); b.keyed = null;
       if (b.tabbed) b.el.removeAttribute('tabindex');
@@ -367,6 +363,7 @@ export function groupController({ views, collections, request, applyBatch, now, 
     cancel(id) { if (cur && views.get(cur.b.list)?.id === id) cancel(cur); },
     commit() { if (cur?.phase === 'active' && cur.ghost) edges(cur); },
     reset() {
+      pending?.();
       const d = cur;
       if (!d) return;
       stopPump();

@@ -1,19 +1,10 @@
 //! UI Automation over the presenter's accessibility model.
-use accesskit::{
-    Action, ActionData, Affine, Node, NodeId, Rect, Role, ScrollHint, TreeId, TreeInfo, TreeUpdate,
-};
+use accesskit::{NodeId, TreeUpdate};
 use accesskit_winit::{Adapter, WindowEvent as AccessEvent};
-use exact_kernel::PropId;
-use exact_painted::{
-    presenter::access::{act, role},
-    presenter::desktop_access::{FieldTextLayout, FieldTextRun},
-    presenter::top::StatusMenu,
-    Presenter,
-};
-use exact_runner::{DataSource, FieldSelection, SelectionDirection};
+use exact_painted::{presenter::accesskit::WindowTree, presenter::top::StatusMenu, Presenter};
+use exact_runner::DataSource;
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use unicode_segmentation::UnicodeSegmentation;
 use winit::{
     event::WindowEvent,
     event_loop::{ActiveEventLoop, EventLoopProxy},
@@ -21,6 +12,7 @@ use winit::{
 };
 
 pub(super) enum Event {
+    DisplayChanged,
     Wake,
     Close,
     /// The app's bare `focus()`.
@@ -40,16 +32,11 @@ impl From<accesskit_winit::Event> for Event {
 
 mod model;
 pub(crate) use model::dismiss_popup;
-use model::{map_node, set_heading_level, MenuSnapshot};
-
-const ROOT: NodeId = NodeId(0);
+use model::MenuSnapshot;
 
 pub(super) struct Access {
     adapter: Adapter,
-    active: bool,
-    nodes: BTreeMap<NodeId, Node>,
-    runs: BTreeMap<NodeId, FieldRuns>,
-    focus: NodeId,
+    tree: Option<WindowTree>,
     embedded: BTreeMap<u32, (NodeId, u32)>,
 }
 
@@ -57,10 +44,7 @@ impl Access {
     pub fn new(events: &ActiveEventLoop, window: &Window, proxy: EventLoopProxy<Event>) -> Self {
         Self {
             adapter: Adapter::with_event_loop_proxy(events, window, proxy),
-            active: false,
-            nodes: BTreeMap::new(),
-            runs: BTreeMap::new(),
-            focus: ROOT,
+            tree: None,
             embedded: BTreeMap::new(),
         }
     }
@@ -71,23 +55,13 @@ impl Access {
 
     #[cfg(test)]
     pub(crate) fn root_label(&self) -> Option<&str> {
-        self.nodes.get(&ROOT)?.label()
+        self.tree.as_ref()?.title()
     }
 
     pub fn set_title(&mut self, title: &str) {
-        let Some(root) = self.nodes.get_mut(&ROOT) else {
-            return;
-        };
-        if root.label() == Some(title) {
-            return;
+        if let Some(update) = self.tree.as_mut().and_then(|tree| tree.set_title(title)) {
+            self.adapter.update_if_active(|| update);
         }
-        root.set_label(title);
-        self.adapter.update_if_active(|| TreeUpdate {
-            nodes: vec![(ROOT, root.clone())],
-            tree: None,
-            tree_id: TreeId::ROOT,
-            focus: self.focus,
-        });
     }
 
     pub fn event<D: DataSource>(
@@ -99,109 +73,18 @@ impl Access {
     ) {
         match event {
             AccessEvent::InitialTreeRequested => {
-                self.active = true;
-                self.nodes.clear();
+                self.tree = Some(WindowTree::default());
                 p.access_reset();
             }
             AccessEvent::AccessibilityDeactivated => {
-                self.active = false;
-                self.nodes.clear();
-                self.runs.clear();
+                self.tree = None;
                 p.access_reset();
                 return;
             }
             AccessEvent::ActionRequested(request) => {
-                if !self.active || request.target_tree != TreeId::ROOT {
-                    return;
-                }
                 self.sync(p, window, title);
-                if let (Action::ScrollIntoView, Some(ActionData::ScrollHint(hint))) =
-                    (request.action, &request.data)
-                {
-                    let run = request.target_node;
-                    let owner = NodeId(run.0 >> 32);
-                    let Some(line) = self.runs.get(&owner).and_then(|runs| runs.run(owner, run))
-                    else {
-                        return;
-                    };
-                    if matches!(hint, ScrollHint::TopEdge | ScrollHint::BottomEdge) {
-                        p.access_scroll_text_line(
-                            owner.0 as i32,
-                            line.start,
-                            *hint == ScrollHint::TopEdge,
-                        );
-                        self.sync(p, window, title);
-                    }
-                    return;
-                }
-                let Some(node) = self.nodes.get(&request.target_node) else {
-                    return;
-                };
-                if node.is_disabled() || !node.supports_action(request.action) {
-                    return;
-                }
-                let Ok(id) = i32::try_from(request.target_node.0) else {
-                    return;
-                };
-                let now = p.host().now();
-                match (request.action, request.data) {
-                    (Action::Focus, _) => {
-                        p.access_focus_node(id, now);
-                    }
-                    // A select's Expand and Collapse press it: the press
-                    // opens its menu, and closes it while open.
-                    (Action::Click | Action::Expand | Action::Collapse, _) => {
-                        p.access_act(id, act::CLICK, 0., now);
-                    }
-                    (Action::ShowContextMenu, _) => {
-                        p.access_act(id, act::LONG_CLICK, 0., now);
-                    }
-                    (Action::Increment, _) => {
-                        p.access_act(id, act::FORWARD, 0., now);
-                    }
-                    (Action::Decrement, _) => {
-                        p.access_act(id, act::BACKWARD, 0., now);
-                    }
-                    (Action::SetValue, Some(ActionData::NumericValue(value)))
-                        if (value as f32).is_finite() =>
-                    {
-                        p.access_act(id, act::SET, value as f32, now);
-                    }
-                    (Action::SetValue, Some(ActionData::Value(value))) => {
-                        if let Some(view) = p.access_view(id) {
-                            if let Err(error) = p.type_text(view, &value) {
-                                p.host_mut().log(error);
-                            }
-                        }
-                    }
-                    (Action::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
-                        let Some(runs) = self.runs.get(&request.target_node) else {
-                            return;
-                        };
-                        if let (Some(anchor), Some(focus)) = (
-                            runs.offset(id, selection.anchor),
-                            runs.offset(id, selection.focus),
-                        ) {
-                            p.access_select(
-                                id,
-                                FieldSelection {
-                                    start: anchor.min(focus),
-                                    end: anchor.max(focus),
-                                    direction: if focus < anchor {
-                                        SelectionDirection::Backward
-                                    } else {
-                                        SelectionDirection::Forward
-                                    },
-                                },
-                                now,
-                            );
-                        }
-                    }
-                    (action, data) => {
-                        if let Some(to) = model::scroll_target(node, action, data.as_ref()) {
-                            p.access_scroll_to(id, to);
-                        }
-                    }
+                if let Some(tree) = &self.tree {
+                    tree.action(p, request, crate::wheel::LINE);
                 }
             }
         }
@@ -209,143 +92,25 @@ impl Access {
     }
 
     pub fn sync<D: DataSource>(&mut self, p: &mut Presenter<D>, window: &Window, title: &str) {
-        if !self.active {
-            return;
-        }
-        p.reader_access(1., self.nodes.is_empty());
+        let Some(tree) = &mut self.tree else { return };
+        let scale = window.scale_factor();
+        let size = window.inner_size().to_logical::<f64>(scale);
         let detached = p.status_menu().is_some();
-        let sources = if detached { &[][..] } else { p.access_told() };
-        let origin = p.access_origin();
-        let focus = if detached {
-            ROOT
-        } else {
-            p.access_focus().map_or(ROOT, |id| NodeId(id as u64))
-        };
-        let mut next = BTreeMap::new();
-        let mut children_by_parent: BTreeMap<i32, Vec<NodeId>> = BTreeMap::new();
-        for source in sources {
-            children_by_parent
-                .entry(source.parent)
-                .or_default()
-                .push(NodeId(source.id as u64));
-        }
-        let mut root = Node::new(Role::Window);
-        root.set_label(title);
-        let size = window.inner_size().to_logical::<f64>(window.scale_factor());
-        root.set_bounds(Rect::new(0., 0., size.width, size.height));
-        root.set_transform(Affine::scale(window.scale_factor()));
-        root.set_children(children_by_parent.remove(&0).unwrap_or_default());
-        next.insert(ROOT, root);
-        let mut runs = BTreeMap::new();
-        let mut changed = Vec::new();
-        for source in sources {
-            let id = NodeId(source.id as u64);
-            let props = p.host().kernel().node(source.view).map(|n| n.props);
-            let password = props.is_some_and(|props| props.str(PropId::Type) == Some("password"));
-            let multiline =
-                props.is_some_and(|props| props.str(PropId::SemanticTag) == Some("textarea"));
-            let readonly = props.is_some_and(|props| props.bool(PropId::Editable) == Some(false));
-            let mut node = map_node(source, origin, password, multiline, readonly);
-            let field = matches!(source.role, role::EDIT | role::FIELD) && !password;
-            let selection = if field {
-                p.access_editor(source).map(|(value, selection)| {
-                    node.set_value(value);
-                    selection
+        let (update, changed) = tree.update(
+            p,
+            title,
+            (size.width, size.height),
+            scale,
+            detached,
+            |view| {
+                self.embedded.get(&view).is_some_and(|(_, generation)| {
+                    exact_ink::device::d3d11::fields::identity(view) == Some(*generation)
                 })
-            } else {
-                None
-            };
-            if source.role == role::SLIDER {
-                if let Some(props) = props.filter(|p| p.str(PropId::Type) == Some("range")) {
-                    let (small, large) = exact_kernel::Range::of(props).keyboard_steps();
-                    node.set_numeric_value_step(small);
-                    node.set_numeric_value_jump(large);
-                }
-            }
-            if source.role == role::HEADING {
-                set_heading_level(&mut node, props.and_then(|props| props.heading()));
-            }
-            let native = self
-                .embedded
-                .get(&source.view)
-                .is_some_and(|(_, generation)| {
-                    exact_ink::device::d3d11::fields::identity(source.view) == Some(*generation)
-                });
-            if native {
-                node.set_role(Role::Group);
-                node.clear_value();
-            }
-            node.set_children(children_by_parent.remove(&source.id).unwrap_or_default());
-            if field && !native {
-                let previous = self
-                    .nodes
-                    .get(&id)
-                    .and_then(Node::value)
-                    .zip(self.runs.remove(&id));
-                let value = node.value().unwrap_or_default();
-                let layout = p.access_text_layout(source.view, value);
-                let field = FieldRuns::update(id, value, layout, previous, &mut changed);
-                if let Some(selection) = selection {
-                    let (anchor, focus) = if selection.direction == SelectionDirection::Backward {
-                        (selection.end, selection.start)
-                    } else {
-                        (selection.start, selection.end)
-                    };
-                    node.set_text_selection(accesskit::TextSelection {
-                        anchor: field.position(id, anchor),
-                        focus: field.position(id, focus),
-                    });
-                }
-                let children = (0..field.runs.len())
-                    .map(|i| FieldRuns::id(id, i))
-                    .collect::<Vec<_>>();
-                if let Some((mut transform, clip)) = field
-                    .layout
-                    .as_ref()
-                    .and_then(|l| l.transform.map(|t| (t, l.clip)))
-                {
-                    // A scroll changes the text layer's placement. Every glyph remains
-                    // in its original paragraph coordinates.
-                    let layer_id = NodeId(id.0 << 32);
-                    let mut layer = Node::new(Role::GenericContainer);
-                    transform[4] += f64::from(origin.0);
-                    transform[5] += f64::from(origin.1);
-                    let (x, y, w, h) = clip;
-                    layer.set_transform(Affine::new(transform));
-                    layer.set_bounds(Rect::new(
-                        x.into(),
-                        y.into(),
-                        (x + w).into(),
-                        (y + h).into(),
-                    ));
-                    layer.set_clips_children();
-                    layer.set_children(children);
-                    next.insert(layer_id, layer);
-                    node.set_clips_children();
-                    node.set_children([layer_id]);
-                } else {
-                    node.set_children(children);
-                }
-                runs.insert(id, field);
-            }
-            next.insert(id, node);
-        }
-        changed.extend(
-            next.iter()
-                .filter(|(id, node)| self.nodes.get(id) != Some(node))
-                .map(|(id, node)| (*id, node.clone())),
+            },
         );
-        if !changed.is_empty() || focus != self.focus {
-            self.adapter.update_if_active(|| TreeUpdate {
-                nodes: changed,
-                tree: Some(TreeInfo::new(ROOT)),
-                tree_id: TreeId::ROOT,
-                focus,
-            });
+        if changed {
+            self.adapter.update_if_active(|| update);
         }
-        self.nodes = next;
-        self.runs = runs;
-        self.focus = focus;
         self.embed_fields(p, window);
     }
     fn embed_fields<D: DataSource>(&mut self, p: &Presenter<D>, window: &Window) {
@@ -400,222 +165,6 @@ impl Access {
             }
         }
     }
-}
-
-/// AccessKit indexes a grapheme within a text run. The editor indexes UTF-16 units in the whole value.
-struct FieldRuns {
-    layout: Option<FieldTextLayout>,
-    runs: Vec<FieldRun>,
-}
-
-struct FieldRun {
-    previous_on_line: bool,
-    next_on_line: bool,
-    bytes: usize,
-    start: u32,
-    offsets: Vec<u32>,
-}
-
-impl FieldRuns {
-    fn id(field: NodeId, index: usize) -> NodeId {
-        NodeId((field.0 << 32) | (index as u64 + 1))
-    }
-
-    fn update(
-        field: NodeId,
-        text: &str,
-        layout: Option<FieldTextLayout>,
-        previous: Option<(&str, Self)>,
-        changed: &mut Vec<(NodeId, Node)>,
-    ) -> Self {
-        let previous = match previous {
-            Some((before, mut runs))
-                if before == text
-                    && match (&layout, &runs.layout) {
-                        (Some(new), Some(old)) => new.same_shape(old),
-                        (None, None) => true,
-                        _ => false,
-                    } =>
-            {
-                runs.layout = layout;
-                return runs;
-            }
-            other => other,
-        };
-        let mut shapes: Vec<_> = layout.iter().flat_map(FieldTextLayout::runs).collect();
-        let positioned = layout.as_ref().is_some_and(|l| l.transform.is_some());
-        if !positioned {
-            shapes.dedup_by_key(|run| run.line);
-        }
-        let starts = layout.as_ref().map(|_| shapes.iter().map(|run| run.start));
-        let metrics = if positioned { shapes.as_slice() } else { &[] };
-        let mut runs = Self::build(field, text, starts, metrics, previous, changed);
-        runs.layout = layout;
-        runs
-    }
-
-    fn build(
-        field: NodeId,
-        text: &str,
-        starts: Option<impl Iterator<Item = u32>>,
-        shapes: &[FieldTextRun<'_>],
-        previous: Option<(&str, Self)>,
-        changed: &mut Vec<(NodeId, Node)>,
-    ) -> Self {
-        fn hard_lines(text: &str) -> impl Iterator<Item = &str> {
-            text.split_inclusive('\n')
-                .chain((text.is_empty() || text.ends_with('\n')).then_some(""))
-        }
-        let (mut before, prior) = previous.unwrap_or((
-            "",
-            Self {
-                layout: None,
-                runs: Vec::new(),
-            },
-        ));
-        let mut old_shapes = prior
-            .layout
-            .iter()
-            .filter(|l| l.transform.is_some())
-            .flat_map(FieldTextLayout::runs);
-        let mut previous = prior.runs.into_iter().map(|line| {
-            let (old, rest) = before.split_at(line.bytes);
-            before = rest;
-            (old, line)
-        });
-        let slices = if let Some(starts) = starts {
-            let mut chars = text.chars();
-            let (mut units, mut byte) = (0, 0);
-            let mut slices = Vec::new();
-            for next in starts.skip(1) {
-                while units < next {
-                    let Some(ch) = chars.next() else { break };
-                    units += ch.len_utf16() as u32;
-                }
-                let end = text.len() - chars.as_str().len();
-                slices.push(&text[byte..end]);
-                byte = end;
-            }
-            slices.push(&text[byte..]);
-            slices
-        } else {
-            hard_lines(text).collect()
-        };
-        let mut runs = Vec::new();
-        let mut start = 0;
-        for line in slices {
-            let i = runs.len();
-            let shape = shapes.get(i);
-            let older = old_shapes.next();
-            let same_geometry = || match (shape, older) {
-                (Some(new), Some(old)) => new.same_metrics(&old),
-                (None, None) => true,
-                _ => false,
-            };
-            let previous_on_line = i > 0 && shape.is_some_and(|s| shapes[i - 1].line == s.line);
-            let next_on_line = shape
-                .zip(shapes.get(i + 1))
-                .is_some_and(|(a, b)| a.line == b.line);
-            let offsets = match previous.next() {
-                Some((old, run))
-                    if old == line
-                        && previous_on_line == run.previous_on_line
-                        && next_on_line == run.next_on_line
-                        && same_geometry() =>
-                {
-                    run.offsets
-                }
-                _ => {
-                    let (lengths, offsets) = text_offsets(line, 0);
-                    let mut run = Node::new(Role::TextRun);
-                    run.set_value(line);
-                    run.set_character_lengths(lengths);
-                    if let Some(s) = shape {
-                        let (x, y, w, h) = s.bounds;
-                        run.set_bounds(Rect::new(
-                            x.into(),
-                            y.into(),
-                            (x + w).into(),
-                            (y + h).into(),
-                        ));
-                        let (positions, widths) = s.character_metrics(start, &offsets);
-                        run.set_character_positions(positions);
-                        run.set_character_widths(widths);
-                        run.set_text_direction(if s.rtl {
-                            accesskit::TextDirection::RightToLeft
-                        } else {
-                            accesskit::TextDirection::LeftToRight
-                        });
-                        if previous_on_line {
-                            run.set_previous_on_line(Self::id(field, i - 1));
-                        }
-                        if next_on_line {
-                            run.set_next_on_line(Self::id(field, i + 1));
-                        }
-                    }
-                    changed.push((Self::id(field, i), run));
-                    offsets
-                }
-            };
-            let end = start + offsets.last().unwrap();
-            runs.push(FieldRun {
-                previous_on_line,
-                next_on_line,
-                bytes: line.len(),
-                start,
-                offsets,
-            });
-            start = end;
-        }
-        Self { layout: None, runs }
-    }
-
-    fn position(&self, field: NodeId, offset: u32) -> accesskit::TextPosition {
-        let line = self
-            .runs
-            .partition_point(|line| line.start <= offset)
-            .saturating_sub(1);
-        let FieldRun { start, offsets, .. } = &self.runs[line];
-        accesskit::TextPosition {
-            node: Self::id(field, line),
-            character_index: offsets
-                .partition_point(|n| *n < offset - start)
-                .min(offsets.len() - 1),
-        }
-    }
-
-    fn run(&self, field: NodeId, run: NodeId) -> Option<&FieldRun> {
-        if run.0 >> 32 != field.0 {
-            return None;
-        }
-        self.runs.get((run.0 as u32).checked_sub(1)? as usize)
-    }
-
-    fn offset(&self, field: i32, at: accesskit::TextPosition) -> Option<u32> {
-        let line = self.run(NodeId(field as u64), at.node)?;
-        Some(line.start + line.offsets.get(at.character_index)?)
-    }
-}
-
-fn text_offsets(text: &str, mut offset: u32) -> (Vec<u8>, Vec<u32>) {
-    let mut lengths = Vec::new();
-    let mut offsets = vec![offset];
-    for grapheme in text.graphemes(true) {
-        // AccessKit's byte count is u8; an unbounded combining sequence must be split.
-        let mut push = |piece: &str| {
-            lengths.push(piece.len() as u8);
-            offset += piece.encode_utf16().count() as u32;
-            offsets.push(offset);
-        };
-        if grapheme.len() <= u8::MAX as usize {
-            push(grapheme);
-        } else {
-            for (at, ch) in grapheme.char_indices() {
-                push(&grapheme[at..at + ch.len_utf8()]);
-            }
-        }
-    }
-    (lengths, offsets)
 }
 
 /// A raw popup uses the page's node mapping and AccessKit's HWND adapter.
@@ -680,79 +229,5 @@ impl MenuAccess {
         request: accesskit::ActionRequest,
     ) {
         model::menu_action(p, request);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn a_field_reuses_unchanged_text_runs_as_utf16_positions_move() {
-        let id = NodeId(42);
-        let old = "a\r\n🦀e\u{301}\n";
-        let new = "start\r\n🦀e\u{301}\n";
-        let mut changed = Vec::new();
-        let runs = FieldRuns::update(id, old, None, None, &mut changed);
-        assert_eq!(changed.len(), 3);
-        let kept = runs.runs[1].offsets.as_ptr();
-        changed.clear();
-        let runs = FieldRuns::update(id, old, None, Some((old, runs)), &mut changed);
-        assert!(changed.is_empty());
-        let runs = FieldRuns::update(id, new, None, Some((old, runs)), &mut changed);
-        assert_eq!(changed.len(), 1);
-        assert_eq!(changed[0].0, FieldRuns::id(id, 0));
-        assert_eq!(runs.runs[1].offsets.as_ptr(), kept);
-        for offset in [0, 7, 9, 11, 12] {
-            let position = runs.position(id, offset);
-            assert_eq!(runs.offset(42, position), Some(offset));
-            assert_eq!(runs.offset(43, position), None);
-        }
-        assert_eq!(runs.position(id, 12).node, FieldRuns::id(id, 2));
-    }
-
-    #[test]
-    fn text_runs_follow_wrapping_without_splitting_graphemes_or_adding_line_breaks() {
-        let id = NodeId(42);
-        let text = "a🦀e\u{301} word\n";
-        let update = |starts: &[u32], previous| {
-            let mut changed = Vec::new();
-            let runs = FieldRuns::build(
-                id,
-                text,
-                Some(starts.iter().copied()),
-                &[],
-                previous,
-                &mut changed,
-            );
-            (runs, changed)
-        };
-        let (narrow, changed) = update(&[0, 3, 6, 11], None);
-        assert_eq!(
-            changed
-                .iter()
-                .map(|(_, n)| n.value().unwrap())
-                .collect::<Vec<_>>(),
-            ["a🦀", "e\u{301} ", "word\n", ""]
-        );
-        assert_eq!(narrow.position(id, 6).node, FieldRuns::id(id, 2));
-        let (wide, changed) = update(&[0, 11], Some((text, narrow)));
-        assert_eq!(changed[0].1.value(), Some(text));
-        assert_eq!(wide.offset(42, wide.position(id, 6)), Some(6));
-        assert!(wide.run(id, FieldRuns::id(id, 2)).is_none());
-    }
-
-    #[test]
-    fn accessibility_text_offsets_preserve_graphemes_utf16_and_crlf() {
-        let (lengths, offsets) = text_offsets("a🦀e\u{301}\r\n", 5);
-        assert_eq!(lengths, [1, 4, 3, 2]);
-        assert_eq!(offsets, [5, 6, 8, 10, 12]);
-        let long = format!("a{}", "\u{301}".repeat(200));
-        let (lengths, offsets) = text_offsets(&long, 0);
-        assert_eq!(
-            lengths.iter().map(|n| *n as usize).sum::<usize>(),
-            long.len()
-        );
-        assert_eq!(offsets.last(), Some(&201));
-        assert_eq!(text_offsets("", 5), (vec![], vec![5]));
     }
 }

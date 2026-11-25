@@ -128,6 +128,8 @@ final class NodeExtras {
     /// Where a swipe's first finger landed, in the window (its shouldBegin's edge rule).
     var swipeDownX: CGFloat?
     var swipeHold: SwipeHold?
+    /// Its `swipe`'s recognizer (`DiscreteSwipeIOS.swift`).
+    var discreteSwipe: UISwipeGestureRecognizer?
     var heightRecognizer: UIPanGestureRecognizer?
     var heightHold: DragInput?
     var contextTransform = CGAffineTransform.identity
@@ -366,6 +368,7 @@ extension NodeView {
     var swipeDownX: CGFloat? { get { extras?.swipeDownX } set { if newValue != nil || extras != nil { more.swipeDownX = newValue } } }
     var swipeArmed: Bool { get { extras?.swipeArmed ?? false } set { if newValue || extras != nil { more.swipeArmed = newValue } } }
     var swipeHold: SwipeHold? { get { extras?.swipeHold } set { if newValue != nil || extras != nil { more.swipeHold = newValue } } }
+    var discreteSwipe: UISwipeGestureRecognizer? { get { extras?.discreteSwipe } set { if newValue != nil || extras != nil { more.discreteSwipe = newValue } } }
     package var heightRecognizer: UIPanGestureRecognizer? { get { extras?.heightRecognizer } set { if newValue != nil || extras != nil { more.heightRecognizer = newValue } } }
     package var heightHold: DragInput? { get { extras?.heightHold } set { if newValue != nil || extras != nil { more.heightHold = newValue } } }
     package var reorderPan: UIPanGestureRecognizer? { get { extras?.reorderPan } set { if newValue != nil || extras != nil { more.reorderPan = newValue } } }

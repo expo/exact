@@ -20,12 +20,22 @@ fn source(params: &str, handler: &str, prop: &str) -> String {
 
 #[test]
 fn height_binding_compiles_bakes_roundtrips_and_exports_the_handler() {
-    let plan = contract::compile(&source(
-        "height: number, velocity: number",
-        "snap",
-        "\"sheet\"",
-    ))
-    .unwrap();
+    let src = r#"component App
+  state sheetPx = 360
+  action snap(height: number, velocity: number)
+    sheetPx = 180
+  view
+    column id="sheet" testId="target" height=sheetPx box-sizing="border-box"
+      column testId="header" heightDragFor="sheet" heightrelease=snap
+      scroll testId="scroll" height=40 heightDragFor="sheet" heightrelease=snap
+        text "Content" height=100
+      column
+        list testId="list" height=40 heightDragFor="sheet" heightrelease=snap
+          text "Row" height=100
+"#;
+    let (plan, warnings) = contract::compile_warned(src);
+    assert!(warnings.iter().all(|w| w.id != ELIGIBILITY), "{warnings:?}");
+    let plan = plan.unwrap();
     let plan = contract::bake(plan, boxed(NoData)).unwrap();
     let plan = Plan::decode(&plan.encode()).unwrap();
     let runner = Runner::boot(
@@ -36,19 +46,25 @@ fn height_binding_compiles_bakes_roundtrips_and_exports_the_handler() {
         "/",
     )
     .unwrap();
-    let handle = runner.kernel().find_by_test_id("handle")[0];
-    let handle = runner.kernel().node_by_key(handle).unwrap();
+    let kernel = runner.kernel();
+    let target = kernel.find_by_test_id("target")[0];
     let prop = PropId::from_name("heightDragFor").expect("schema prop");
     assert_eq!(prop as u16, 75);
-    assert_eq!(handle.props.str(prop), Some("sheet"));
     let event = EventKind::from_name("heightrelease").expect("plan event");
     assert_eq!(event as u8, 14);
-    assert_eq!(runner.handlers_of(handle.id), vec![event]);
     let tree: serde_json::Value = serde_json::from_str(&agent::tree(&runner)).unwrap();
-    assert!(tree["nodes"].as_array().unwrap().iter().any(|node| {
-        node["props"]["heightDragFor"] == "sheet"
-            && node["handlers"] == serde_json::json!(["heightrelease"])
-    }));
+    for tag in ["header", "scroll", "list"] {
+        let key = kernel.find_by_test_id(tag)[0];
+        let handle = kernel.node_by_key(key).unwrap();
+        assert_eq!(kernel.height_drag_target(key), Some(target));
+        assert_eq!(handle.props.str(prop), Some("sheet"));
+        assert_eq!(runner.handlers_of(handle.id), vec![event]);
+        assert!(tree["nodes"].as_array().unwrap().iter().any(|node| {
+            node["props"]["testId"] == tag
+                && node["props"]["heightDragFor"] == "sheet"
+                && node["handlers"] == serde_json::json!(["heightrelease"])
+        }));
+    }
 }
 
 #[test]

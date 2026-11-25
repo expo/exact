@@ -8,15 +8,16 @@
       "id": "string",
       "keys": "string",
       "registered": "bool",
-      "reason": "option<enum<in-use|reserved|not-allowed|invalid>>"
+      "reason": "option<enum<in-use|reserved|not-allowed|unsupported|invalid>>"
     },
     "GlobalShortcutCheck": {
       "keys": "string",
       "registered": "bool",
-      "reason": "option<enum<in-use|reserved|not-allowed|invalid>>"
+      "reason": "option<enum<in-use|reserved|not-allowed|unsupported|invalid>>"
     },
     "GlobalShortcutStatus": {
       "available": "bool",
+      "releaseEvents": "bool",
       "apple": "option<AppleGlobalShortcutStatus>"
     },
     "GlobalShortcutEvent": {
@@ -38,7 +39,7 @@
         "list": {
           "state": "globalShortcuts",
           "key": "id",
-          "tap": { "event": "globalshortcut", "keep": true, "args": ["id", { "id": "id", "keys": "keys" }] }
+          "tap": { "event": "globalshortcut", "releaseEvent": "globalshortcutup", "releaseTargets": ["macos"], "keep": true, "args": ["id", { "id": "id", "keys": "keys" }] }
         },
         "unsupported": ["web", "linux", "ios", "android", "tvos", "terminal"]
       }
@@ -60,10 +61,13 @@
       "answers": "GlobalShortcutStatus",
       "sync": { "name": "globalShortcutStatusSync", "from": "read" },
       "substitute": {
-        "default": { "available": true },
+        "partial": true,
+        "default": { "available": true, "releaseEvents": false },
+        "targets": { "macos": { "releaseEvents": true } },
         "unsupported": ["web", "linux", "ios", "android", "tvos", "terminal"]
       }
     },
-    { "event": "globalshortcut", "on": "root", "raised": "activation", "args": ["string", "GlobalShortcutEvent"], "hold": 16 }
+    { "event": "globalshortcut", "on": "root", "raised": "activation", "args": ["string", "GlobalShortcutEvent"], "hold": 16 },
+    { "event": "globalshortcutup", "on": "root", "raised": "activation", "args": ["string", "GlobalShortcutEvent"], "hold": 16 }
   ]
 }

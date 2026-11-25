@@ -1297,6 +1297,23 @@ final class TabEdgeIOSTests: XCTestCase {
         waitFor("dismissing the keyboard restores the row's inset") { abs(scroll.adjustedContentInset.bottom - obstruction) < 0.5 }
     }
 
+    /// A route's reactions to its safe area's change and to its layout are held apart through a change in steps: one laid
+    /// out within the steps still reports its covers once they end (LLP 1123 D11).
+    func testARouteLaidOutWithinAChangeInStepsStillReportsItsCovers() throws {
+        let navigation = try fixture().presenter.navigationHost
+        let route = try XCTUnwrap(navigation.activeRoute)
+        for laidOut in [false, true] {
+            let reported = navigation.coversReported, cover = navigation.covers[route.node.id]
+            SafeAreaSteps.stepping {
+                route.additionalSafeAreaInsets.bottom += 30
+                if laidOut { route.view.setNeedsLayout(); route.view.layoutIfNeeded() }
+            }
+            XCTAssertGreaterThan(navigation.coversReported, reported, "laid out \(laidOut): the change is reported at the end of the steps")
+            XCTAssertNotEqual(navigation.covers[route.node.id], cover)
+            waitForMainQueue()
+        }
+    }
+
     func testRouteWaitIncludesDelayedPressDelivery() throws {
         let session = try fixture(), presenter = session.presenter
         let press = presenter.onPress

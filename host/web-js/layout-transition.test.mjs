@@ -14,7 +14,7 @@ import { withLook } from '../web/look.mjs';
 import { serveBuildTree } from '../web/serve.mjs';
 import { engineTests, need } from '../../scripts/coverage.mjs';
 
-const engineTest = await engineTests(['chromium', 'webkit']);
+const engineTest = await engineTests(['chromium', 'firefox', 'webkit']);
 const test = need('chrome', chromium().unavailable, { test: bunTest });
 
 const SOURCE = `component App
@@ -910,6 +910,99 @@ test('a resized box accepts presses after its spring ends on either clock', asyn
     await page.getByText('Press me', { exact: true }).click();
     expect(await page.locator('[data-testid=repro-said]').textContent()).toBe('Last: Pressed');
   } finally { await browser?.close(); server?.close(); rmSync(dir, { recursive: true, force: true }); }
+}, 30000);
+
+// LLP 1063 D6: a resize takes new boxes without animating, what the app commits to answer it included, and ends a move
+// under way. A commit at one size plays, a viewport fact's included.
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a commit that answers a resize plays no layout transition`, async () => {
+  const app = await exitApp(engine, `shape Viewport
+  width: number
+  horizontalViewportSegments: number
+
+component App
+  resource viewport = exactViewport() as shape Viewport
+  state shown = true
+  action drop
+    shown = not shown
+  view
+    column
+      button "Drop" press=drop testId="drop"
+      if shown
+        text "First" height=40
+      if viewport.width < 600
+        text "Narrow" height=40
+      if viewport.horizontalViewportSegments == 2
+        text "Folded" height=40
+      text "Second" testId="second" height=40 -exact-layout-transition="10s linear"
+`, { viewport: { width: 800, height: 600 } });
+  try {
+    const second = app.page.getByTestId('second');
+    const moves = () => second.evaluate(el => el.getAnimations().length);
+    const top = () => second.evaluate(el => el.offsetTop);
+    const resize = async (width, expected) => {
+      await app.page.setViewportSize({ width, height: 600 });
+      await app.page.waitForFunction(([width, expected]) => innerWidth === width && document.querySelector('[data-testid="second"]').offsetTop === expected, [width, expected]);
+    };
+    const wide = await top();
+    await resize(500, wide + 40);
+    expect(await moves()).toBe(0);
+    await app.page.getByTestId('drop').click();
+    expect(await moves()).toBe(1);
+    await resize(700, wide - 40);
+    expect(await moves()).toBe(0);
+    await app.page.evaluate(() => { exact.fold.prefer({ cols: 2, rows: 1, gap: 20 }); dispatchEvent(new Event('exact-fold')); });
+    await app.page.waitForFunction(expected => document.querySelector('[data-testid="second"]').offsetTop === expected, wide);
+    expect(await moves()).toBe(1);
+  } finally { await app.close(); }
+}, 30000);
+
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: a commit preserves departing boxes and the survivor’s starting position`, async () => {
+  const app = await exitApp(engine, `keyframes out
+  to opacity=0
+
+component App
+  state long = true
+  action toggle
+    long = not long
+  view
+    column padding=20 gap=12
+      button "Toggle" press=toggle testId="toggle"
+      row margin-left=80 position=(long ? "static" : "relative")
+        if long
+          box width=30 height=20
+        for c in (long ? "abcxyz" : "abc").split("") key=c
+          if c == "y"
+            text c testId=c font-size=24 -exact-exit-animation=(long ? "out 400ms linear both" : "none")
+          else
+            text c testId=c font-size=24 -exact-exit-animation="out 400ms linear both"
+        text "!" testId="last" -exact-layout-transition="400ms linear"
+`);
+  try {
+    const shown = await app.page.evaluate(async () => {
+      const get = id => document.querySelector(`[data-testid="${id}"]`);
+      const letters = ['x', 'y', 'z'].map(get), last = get('last');
+      const positions = nodes => nodes.map(el => el.getBoundingClientRect().left);
+      const before = positions(letters), start = positions([last])[0];
+      get('toggle').click();
+      const moves = last.getAnimations();
+      for (const a of moves) { a.pause(); a.currentTime = 0; }
+      const from = positions([last])[0];
+      for (const el of letters) for (const a of el.getAnimations()) { a.pause(); a.currentTime = 80; }
+      for (const a of moves) a.currentTime = 80;
+      await new Promise(requestAnimationFrame);
+      const ghosts = letters.filter(el => el.isConnected && el.hasAttribute('data-exiting'));
+      const during = positions(ghosts), opacity = ghosts.map(el => Number(getComputedStyle(el).opacity));
+      const middle = positions([last])[0];
+      moves.forEach(a => a.finish());
+      return { before, during, opacity, start, from, middle, end: positions([last])[0] };
+    });
+    expect(shown.during).toHaveLength(3);
+    for (const opacity of shown.opacity) expect(opacity).toBeCloseTo(0.8, 2);
+    expect(Math.abs(shown.from - shown.start)).toBeLessThan(1);
+    shown.during.forEach((x, i) => expect(Math.abs(x - shown.before[i])).toBeLessThan(1));
+    expect(shown.middle).toBeLessThan(shown.start);
+    expect(shown.middle).toBeGreaterThan(shown.end);
+  } finally { await app.close(); }
 }, 30000);
 
 /** `source` compiled to the JS target and opened in `engine` with presence loaded. `drop(button)` presses `button`,

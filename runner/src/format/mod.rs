@@ -15,6 +15,7 @@
 //! are `runner/tests/it/format.rs` and `format_locales.rs`.
 
 mod locale;
+mod shortcut;
 
 use crate::stdlib::{format_time, push_number, wall_ms};
 use exact_num::date::{civil, MONTHS, WEEKDAYS};
@@ -38,6 +39,10 @@ pub fn formatting(f: Stdlib, args: &[Value], plan: &Plan) -> Option<Value> {
     let num = |i: usize| args.get(i).and_then(Value::as_number);
     let style = |i: usize| args.get(i).and_then(Value::as_str);
     Some(match f {
+        Stdlib::FormatShortcut => Value::str(&shortcut::label(
+            args.first()?.as_str()?,
+            crate::page::Keyboard::from_code(num(1).unwrap_or_default() as u32),
+        )),
         Stdlib::FormatDate => {
             let style = match style(2)? {
                 "medium" => Style::Medium,

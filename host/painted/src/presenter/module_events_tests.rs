@@ -69,6 +69,11 @@ fn iframe_load_commits_for_the_current_frame_allocation() {
     assert!(p.reader_frame_loaded(frame, key, session));
     assert_eq!(status_text(&p), "loaded");
     assert!(p.host.advance(2.).is_none());
+    assert!(!p
+        .host
+        .runner()
+        .journal()
+        .any(|line| line.contains("NoHandler")));
     assert!(p.host.kernel().node(frame).is_none());
 }
 
@@ -143,6 +148,36 @@ fn native_module_events_commit_only_for_the_view_allocation_that_emitted_them() 
         1.
     ));
     assert!(!p.reader_module_event(menu, key, session, "unsupported", "invalid".into(), 2.));
+    for kind in ["press", "input", "load", "message"] {
+        assert!(
+            !p.reader_module_event(menu, key, session, kind, String::new(), 2.),
+            "{kind}"
+        );
+    }
+    assert!(p.host.advance(2.).is_none());
+    assert!(!p
+        .host
+        .runner()
+        .journal()
+        .any(|line| line.contains("NoHandler")));
+    assert!(p.reader_module_event(menu, key, session, "focus", String::new(), 2.));
+    assert_eq!(p.focus, Some(menu));
+    let other = p.host.kernel().node(id(&p, "toggle")).unwrap().key;
+    p.host.flights.focus = Some(other);
+    assert!(p.reader_module_event(menu, key, session, "focus", String::new(), 2.));
+    assert!(p.host.flights.focus.is_none());
+    assert!(!p.reader_module_event(
+        menu,
+        key,
+        session.wrapping_add(1),
+        "blur",
+        String::new(),
+        2.
+    ));
+    assert_eq!(p.focus, Some(menu));
+    p.host.flights.focus = Some(key);
+    assert!(p.reader_module_event(menu, key, session, "blur", String::new(), 2.));
+    assert_eq!(p.focus, None);
     assert_eq!(selection(&p), "initial");
     assert!(p.reader_module_event(menu, key, session, "change", "week".into(), 3.));
     assert_eq!(selection(&p), "week");
@@ -164,6 +199,7 @@ fn native_module_events_commit_only_for_the_view_allocation_that_emitted_them() 
     let toggle = id(&p, "toggle");
     assert!(p.host.dispatch_at(toggle, Event::Press, 4.).is_none());
     assert!(p.after_commit().is_none());
+    assert!(!p.reader_module_event(menu, key, session, "focus", String::new(), 4.));
     assert!(!p.reader_module_event(menu, key, session, "change", "hidden".into(), 4.));
     assert!(p.host.dispatch_at(toggle, Event::Press, 4.).is_none());
     assert!(p.after_commit().is_none());
@@ -173,10 +209,59 @@ fn native_module_events_commit_only_for_the_view_allocation_that_emitted_them() 
         .is_none());
     assert!(p.after_commit().is_none());
     assert_eq!(p.host.kernel().node(menu).unwrap().key, key);
+    assert!(!p.reader_module_event(menu, key, session, "focus", String::new(), 4.));
     assert!(!p.reader_module_event(menu, key, session, "change", "disabled".into(), 6.));
     assert_eq!(selection(&p), "week");
     assert!(p.host.dispatch_at(remove, Event::Press, 7.).is_none());
     assert!(p.after_commit().is_none());
     assert!(!p.reader_module_event(menu, key, session, "change", "retired".into(), 8.));
     assert_eq!(selection(&p), "week");
+}
+
+#[test]
+fn handled_native_events_deliver_the_payload_and_focus_transitions_once() {
+    let source = r#"component App
+  state heard = ""
+  action record(s: string)
+    heard = heard + s
+  view
+    column width=300 height=300
+      native-menu testId="guest" width=80 height=40 load=record("L") message=record focus=record("F") blur=record("B")
+      column role="menu" id="popup" popover="auto"
+        button "Dismiss" press=record("D") popovertarget="popup" popovertargetaction="hide"
+"#;
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(source),
+        (),
+        (300., 300.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none());
+    p.serve_windows(Box::new(crate::presenter::drag_out_tests::Blank));
+    let guest = id(&p, "guest");
+    let key = p.host.kernel().node(guest).unwrap().key;
+    let session = p.brush.native_session;
+    for (kind, payload) in [
+        ("load", ""),
+        ("message", "M"),
+        ("focus", ""),
+        ("focus", ""),
+        ("blur", ""),
+    ] {
+        assert!(p.reader_module_event(guest, key, session, kind, payload.into(), 1.));
+    }
+    assert_eq!(
+        p.host
+            .runner()
+            .slot("heard")
+            .and_then(exact_runner::Value::as_str),
+        Some("LMFB")
+    );
+    p.popover_command("showPopover", &[exact_plan::Value::str("popup")]);
+    assert!(p.top_open());
+    assert!(!p.reader_module_event(guest, key, session, "focus", String::new(), 2.));
+    assert_ne!(p.focus, Some(guest));
 }

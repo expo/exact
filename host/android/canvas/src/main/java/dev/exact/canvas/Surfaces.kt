@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.drawable.ColorDrawable
 import android.graphics.fonts.Font
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
@@ -91,6 +92,8 @@ internal class Pane(
         invalidate()
     }
 
+    var legacyBack: (() -> Unit)? = null
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         val told = first ?: return
@@ -140,6 +143,16 @@ internal class Pane(
     }
 }
 
+/** On API 32 and earlier the popup decor calls dismiss for a tracked Back or an outside
+ * touch. Outside touches and our own closes go straight to the window. */
+private class MenuWindow(activity: ExactActivity, private val pane: Pane) : PopupWindow(activity) {
+    override fun dismiss() {
+        val back = pane.legacyBack
+        if (back != null) back() else close()
+    }
+    fun close() = super.dismiss()
+}
+
 /**
  * The top layer's windows (LLP 1115.001 D10). A confirmation and a menu are windows of the platform's own, not a
  * layer painted in the page: an alert is a [Dialog] and a menu a [PopupWindow], the framework's classes and no
@@ -173,7 +186,8 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
     val open: Boolean get() = shown != null
 
     /** One surface as it shows: its window, and whether exact2 already knows it is going. */
-    private class Shown(val serial: Int, val pane: Pane, val dialog: Dialog?, val popup: PopupWindow?) {
+    private class Shown(val serial: Int, val pane: Pane, val dialog: Dialog?, val popup: MenuWindow?, val cancellable: Boolean) {
+        var removeBack: (() -> Unit)? = null
         var quiet = false
         var frame = IntArray(4)
     }
@@ -210,6 +224,7 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
         val radius = java.lang.Float.intBitsToFloat(w[at + 7]); val elevation = java.lang.Float.intBitsToFloat(w[at + 8])
         val now = shown
         if (what == CLOSED) { if (now?.serial == serial) close(now); return }
+        if (activity.moduleOwners?.hasWindow(serial) == false) return
         // One surface at a time: another one's window goes before this one's comes.
         if (now != null && now.serial != serial) close(now)
         val stream = IntBuffer.wrap(w, at + 10, w[at + 9]).slice()
@@ -245,7 +260,13 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
             ALERT -> {
                 // The framework's dialog window, with the activity's own dialog theme for its dim and its motion.
                 // Nothing of the theme's is drawn: the window is clear, and the picture is the dialog.
-                val dialog = Dialog(activity)
+                val dialog = object : Dialog(activity) {
+                    @Deprecated("Called for legacy system Back")
+                    override fun onBackPressed() {
+                        val back = pane.legacyBack
+                        if (back != null) back() else @Suppress("DEPRECATION") super.onBackPressed()
+                    }
+                }
                 dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
                 dialog.setContentView(pane, ViewGroup.LayoutParams(frame[2], frame[3]))
                 dialog.window?.let { window ->
@@ -261,13 +282,13 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
                 dialog.setCanceledOnTouchOutside(flags and OUTSIDE_DISMISSES != 0)
                 dialog.setOnCancelListener { dismissed(serial) }
                 known?.headline?.let { dialog.window?.setTitle(it) }
-                Shown(serial, pane, dialog, null).also { dialog.show() }
+                Shown(serial, pane, dialog, null, flags and BACK_DISMISSES != 0).also { dialog.show() }
             }
             MENU -> {
                 // The framework's popup window in the theme's own style; its background is not used. The window
                 // casts the shadow, from the pane's outline. Placed where exact2 says, not dropped from an anchor
                 // view.
-                val popup = PopupWindow(activity)
+                val popup = MenuWindow(activity, pane)
                 popup.setBackgroundDrawable(null)
                 popup.contentView = pane
                 popup.width = frame[2]; popup.height = frame[3]
@@ -283,8 +304,8 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
                 // Focusable: Back goes to it and the page under it takes no touch; a tap outside dismisses it.
                 popup.isFocusable = true
                 popup.isOutsideTouchable = flags and OUTSIDE_DISMISSES != 0
-                pane.escape = { popup.dismiss() }
-                val s = Shown(serial, pane, null, popup)
+                pane.escape = popup::close
+                val s = Shown(serial, pane, null, popup, true)
                 popup.setOnDismissListener { if (!s.quiet) dismissed(serial) }
                 popup.showAtLocation(root, Gravity.LEFT or Gravity.TOP, frame[0], frame[1])
                 s
@@ -293,8 +314,50 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
         }
         made.frame = frame
         shown = made
+        connectBack()
         covering(true)
         pane.requestFocus()
+    }
+
+    fun connectBack() {
+        val s = shown ?: return
+        val owners = activity.moduleOwners ?: return
+        if (!s.cancellable || s.removeBack != null) return
+        if (Build.VERSION.SDK_INT < 33) {
+            s.pane.legacyBack = {
+                Exact.backHandoff?.flush()
+                if (owners.hasWindow(s.serial)) owners.receiveBack() else if (shown === s) close(s)
+            }
+            s.popup?.setTouchInterceptor { decor, event ->
+                val outside = event.action == MotionEvent.ACTION_OUTSIDE || event.action == MotionEvent.ACTION_DOWN &&
+                    (event.x < 0 || event.y < 0 || event.x >= decor.width || event.y >= decor.height)
+                if (outside) s.popup.close()
+                outside
+            }
+        } else {
+            // A popup's decor installs its own callback on attach, before its children attach.
+            if (s.pane.isAttachedToWindow) activity.backSurface(s.pane.findOnBackInvokedDispatcher()) { shown === s && owners.hasWindow(s.serial) }
+            else s.pane.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {
+                    if (shown === s) activity.backSurface(v.findOnBackInvokedDispatcher()) { shown === s && owners.hasWindow(s.serial) }
+                    v.removeOnAttachStateChangeListener(this)
+                }
+                override fun onViewDetachedFromWindow(v: View) {}
+            })
+        }
+        s.removeBack = {
+            s.pane.legacyBack = null
+            if (Build.VERSION.SDK_INT >= 33) activity.backSurface(null)
+        }
+    }
+
+    fun dismissBack(serial: Int): Boolean {
+        val s = shown?.takeIf { it.serial == serial } ?: return false
+        if (s.cancellable) {
+            close(s)
+            dismissed(serial)
+        }
+        return true
     }
 
     /** The same surface again: painted again, and its window moved or sized where its frame is another. */
@@ -314,14 +377,15 @@ internal class Surfaces(private val activity: ExactActivity, private val root: V
      * its window goes, and exact2 is told nothing of that. */
     private fun close(s: Shown) {
         s.quiet = true
+        s.removeBack?.invoke()
         if (shown === s) { shown = null; covering(false) }
-        try { s.dialog?.dismiss(); s.popup?.dismiss() } catch (e: RuntimeException) { Log.w(TAG, "surface ${s.serial}: $e") }
+        try { s.dialog?.dismiss(); s.popup?.close() } catch (e: RuntimeException) { Log.w(TAG, "surface ${s.serial}: $e") }
     }
 
     /** The system dismissed the window by its own rules (Back, Escape, a tap outside a menu): exact2 closes the
      * surface, as its cancel closes it. */
     private fun dismissed(serial: Int) {
-        if (shown?.serial == serial) { shown = null; covering(false) }
+        if (shown?.serial == serial) { shown?.removeBack?.invoke(); shown = null; covering(false) }
         Exact.surface(serial, DISMISSED, 0f, 0f)
     }
 

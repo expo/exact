@@ -48,6 +48,8 @@ mod font;
 mod generic;
 mod impl_fontconfig;
 mod matching;
+/// Returns the index matching the CSS width, style and weight in a set of faces.
+pub use matching::match_font;
 mod scan;
 mod script;
 mod source;

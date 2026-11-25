@@ -37,6 +37,12 @@ impl NodeFacts<'_> {
 }
 
 impl<'a> NodeRef<'a> {
+    /// Whether the web presents this node as a button element, regardless of its ARIA role.
+    pub fn is_button_element(&self) -> bool {
+        (self.arena.is_button(self.slot) || self.arena.is_native_button(self.slot))
+            && self.props.semantic_element().is_none()
+    }
+
     /// This node's [`NodeFacts`].
     pub fn facts(&self) -> NodeFacts<'a> {
         NodeFacts {

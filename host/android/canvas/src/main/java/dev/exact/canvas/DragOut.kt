@@ -80,7 +80,7 @@ internal object DragOut {
             when {
                 touch == null || down != touch -> Exact.journal("drag: not begun: the finger held for it lifted before its shadow was drawn")
                 busy() -> Exact.journal(UNHEARD)
-                !view.startDragAndDrop(clip, Shadow(picture, shown, finger), null, flags(false, Build.VERSION.SDK_INT)) ->
+                !view.startDragAndDrop(clip, Shadow(picture, shown, finger), OWN, flags(false, Build.VERSION.SDK_INT)) ->
                     Exact.journal("drag: the platform began no drag: another drag is under way, or the view left its window")
             }
         }
@@ -152,6 +152,10 @@ internal object DragOut {
     }
 
     private const val MOST_PIXELS = 1024.0 * 1024
+
+    /** The local state of the app's own drags: Android gives it only to the app's own windows ([DragIn] reads it), so
+     * a drop that carries it is the app's own, whose files the app may read without a grant. */
+    val OWN = Any()
 
     /** What is journaled for a drag not begun while the window has yet to hear an earlier drag's end. */
     const val UNHEARD = "drag: not begun: the window has yet to hear the end of the drag before it"

@@ -14,12 +14,16 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
 }
 
 /// An update with every field: a 47-point top band holding a 10-point contribution, a
-/// navigation controller (20) above the owner's own (10) and its window (44), margins, a
+/// navigation controller (20) above the owner's own (10) and its window (44, with its frame), margins, a
 /// docked keyboard, two columns and a bottom bar region.
 fn full() -> OwnerUpdate {
     let mut targets = controller(1, 10.0);
     targets.chain.push(entry(2, 20.0, Some(Kind::Navigation)));
-    targets.relations.push((Relation::Window, native(3, 44.0)));
+    let window = NativeTarget {
+        frame: Some([0.0, 0.0, 390.0, 844.0]),
+        ..native(3, 44.0)
+    };
+    targets.relations.push((Relation::Window, window));
     OwnerUpdate {
         band: Some([47.0, 0.0, 34.0, 0.0]),
         contributions: vec![Contribution {
@@ -77,8 +81,8 @@ fn an_owner_update_round_trips_and_a_malformed_one_is_refused() {
     presence[0] = 2;
     assert!(OwnerUpdate::decode(&presence).is_err());
     // An operation past the five, at the contribution's byte 25, and a relation past the seven,
-    // at the first relation's byte 118
-    for (at, unknown) in [(25, 5), (118, 7)] {
+    // at the first relation's byte 120
+    for (at, unknown) in [(25, 5), (120, 7)] {
         let mut bad = bytes.clone();
         bad[at] = unknown;
         assert!(OwnerUpdate::decode(&bad).is_err(), "byte {at}");
@@ -116,11 +120,13 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     // Each field in order, as the format says, written out apart from the encoder
     let mut w = Vec::new();
     let f = |w: &mut Vec<u8>, values: &[f32]| values.iter().for_each(|v| w.extend(v.to_le_bytes()));
-    let target = |w: &mut Vec<u8>, id: u64, top: f32| {
+    let target = |w: &mut Vec<u8>, id: u64, top: f32, frame: Option<[f32; 4]>| {
         w.extend(id.to_le_bytes());
         w.extend(1u64.to_le_bytes());
         w.push(1);
         f(w, &[top, 0.0, 0.0, 0.0]);
+        w.push(u8::from(frame.is_some()));
+        frame.inspect(|r| f(w, r));
     };
     w.push(1);
     f(&mut w, &[47.0, 0.0, 34.0, 0.0]);
@@ -129,13 +135,13 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.push(0);
     f(&mut w, &[10.0, 0.0, 0.0, 0.0]);
     w.extend(2u32.to_le_bytes());
-    target(&mut w, 1, 10.0);
+    target(&mut w, 1, 10.0, None);
     w.push(0);
-    target(&mut w, 2, 20.0);
+    target(&mut w, 2, 20.0, None);
     w.push(1 << 2);
     w.extend(1u32.to_le_bytes());
     w.push(3);
-    target(&mut w, 3, 44.0);
+    target(&mut w, 3, 44.0, Some([0.0, 0.0, 390.0, 844.0]));
     w.push(1);
     f(
         &mut w,
@@ -261,11 +267,12 @@ fn a_registration_round_trips_and_a_malformed_one_is_refused() {
 fn a_registrations_wire_form_is_the_one_hosts_write() {
     use crate::kernel::encode_registration;
     // The name's length and bytes, then the target after a presence byte: its id, its
-    // generation and its insets after their own
+    // generation, and its insets and frame each after their own
     let target = NativeTarget {
         id: 9,
         generation: 2,
         insets: Some([30.0, 0.0, 0.0, 0.0]),
+        frame: Some([5.0, 6.0, 7.0, 8.0]),
     };
     let mut w = vec![3];
     w.extend(b"map");
@@ -274,6 +281,10 @@ fn a_registrations_wire_form_is_the_one_hosts_write() {
     w.extend(2u64.to_le_bytes());
     w.push(1);
     [30.0f32, 0.0, 0.0, 0.0]
+        .iter()
+        .for_each(|v| w.extend(v.to_le_bytes()));
+    w.push(1);
+    [5.0f32, 6.0, 7.0, 8.0]
         .iter()
         .for_each(|v| w.extend(v.to_le_bytes()));
     assert_eq!(encode_registration("map", Some(&target)), w);

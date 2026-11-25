@@ -172,6 +172,7 @@ pub struct Context(pub(crate) Rc<Shared>);
 pub(crate) struct Shared {
     pub(crate) extension: &'static str,
     pub(crate) agent: bool,
+    development: bool,
     pub(crate) session: String,
     pub(crate) origin: RefCell<String>,
     pub(crate) request: Cell<Option<u64>>,
@@ -186,6 +187,7 @@ impl Context {
     pub(crate) fn new(
         extension: &'static str,
         agent: bool,
+        development: bool,
         native: Slot,
         now: Rc<Cell<f64>>,
         lines: Rc<RefCell<Vec<String>>>,
@@ -201,6 +203,7 @@ impl Context {
         Context(Rc::new(Shared {
             extension,
             agent,
+            development,
             session: "1".into(),
             origin: RefCell::new("none".into()),
             request: Cell::new(None),
@@ -229,6 +232,11 @@ impl Context {
     /// then opens no device (LLP 1133.006 D8).
     pub fn agent(&self) -> bool {
         self.0.agent
+    }
+
+    /// Whether the host was built with development trust.
+    pub fn development(&self) -> bool {
+        self.0.development
     }
 
     /// The session's id, unique in the process.

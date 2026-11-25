@@ -42,6 +42,23 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
     var selected: ((Int, Int) -> Unit)? = null
     var scrolled: ((Int, Int) -> Unit)? = null
 
+    /** The node the field is ([Fields.make]). */
+    var node = 0
+    /** Whether its own node takes drops, as exact2 last told it: its `EditText` then marks no drop place under a drag. */
+    var ownsDrops = false
+    /** Whether it takes no touch and no focus (disabled, or covered), as exact2 last told it. */
+    var inert = false
+
+    /** A drag over the field (LLP 1094.001 D2): the root tells exact2 where it is and may take it ([DragIn.field]);
+     * a drop the field takes itself sends the nodes under the drag their leave. */
+    override fun onDragEvent(event: android.view.DragEvent): Boolean {
+        val drags = generateSequence(parent) { it.parent }.firstNotNullOfOrNull { (it as? Root)?.drags } ?: return super.onDragEvent(event)
+        drags.field(this, event)?.let { return it }
+        val took = super.onDragEvent(event)
+        if (event.action == android.view.DragEvent.ACTION_DROP) drags.fieldDropped()
+        return took
+    }
+
     override fun onScrollChanged(x: Int, y: Int, oldX: Int, oldY: Int) {
         super.onScrollChanged(x, y, oldX, oldY)
         scrolled?.invoke(x, y)
@@ -57,6 +74,8 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
      * what its author named it; null while that tree does not have it. The field reports itself, as any `EditText`
      * does: this only says where, and by what name. */
     var stand: Access.Stand? = null
+    override fun performAccessibilityAction(action: Int, arguments: android.os.Bundle?): Boolean =
+        stand?.node?.performCustom(action) == true || super.performAccessibilityAction(action, arguments)
 
     override fun onInitializeAccessibilityNodeInfo(info: android.view.accessibility.AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
@@ -128,8 +147,9 @@ internal class FieldText(context: Context) : EditText(unadjusted(context)) {
  * it. Not seen on a phone (`QUEUE.md`): the rule is held at exact2's side (`presenter/hosted_tests.rs`).
  */
 internal class Fields(context: Context) : FrameLayout(context) {
-    /** What a field shows through: its clip, in the reader's view. A drawing-less layout the size of the clip, so
-     * that the platform, which hides a selection handle outside the field's ancestors, hides one the clip cuts. */
+    /** What a field shows through: its box within its clip, in the reader's view. A drawing-less layout of that size,
+     * so that the platform, which hides a selection handle outside the field's ancestors, hides one the clip cuts, and
+     * gives a drag over another field to that field ([position]). */
     class Port(context: Context) : FrameLayout(context) {
         init { clipChildren = false; setWillNotDraw(true) }
         override fun dispatchDraw(canvas: Canvas) {}
@@ -286,6 +306,8 @@ internal class Fields(context: Context) : FrameLayout(context) {
             val placed = w[i + 2] and PLACED != 0
             val shown = placed && f.flags and PLACED == 0
             f.flags = w[i + 2]; f.group = w[i + 3]
+            f.text.inert = f.flags and INERT != 0
+            f.text.ownsDrops = f.flags and DROP_OWN != 0
             // A field with no place (its row was not painted) has no box to tell: it keeps the size it had.
             val nw = if (placed) max(0, fl(w[i + 6]).roundToInt()) else f.w
             val nh = if (placed) max(0, fl(w[i + 7]).roundToInt()) else f.h
@@ -303,9 +325,13 @@ internal class Fields(context: Context) : FrameLayout(context) {
             if (sized) size(f) else if (shown) f.dirty = true
             position(f)
             // The value answers the field's newest edit, or it is older than what the person has typed since.
-            if (w[i + 12] == f.edits && value != f.text.text.toString()) replace(f, value)
+            val current = w[i + 12] == f.edits
+            if (current && value != f.text.text.toString()) replace(f, value)
             val rev = w[look + 15]
-            if (rev != f.select) { f.select = rev; select(f, w[look + 16], w[look + 17]) }
+            if (rev != f.select) {
+                f.select = rev
+                if (current) select(f, w[look + 16], w[look + 17])
+            }
             if (f.dirty) record(f)
             i = end
         }
@@ -316,6 +342,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
 
     private fun make(id: Int, generation: Int): Field {
         val text = bare(FieldText(context))
+        text.node = id
         if (log) text.heard = { Log.i(TAG, "field $id keyboard: $it") }
         val port = Port(context)
         port.addView(text, LayoutParams(1, 1, Gravity.TOP or Gravity.LEFT))
@@ -592,20 +619,29 @@ internal class Fields(context: Context) : FrameLayout(context) {
             if (inert || f.flags and PLACED == 0) IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS else IMPORTANT_FOR_ACCESSIBILITY_AUTO
         if (f.flags and PLACED == 0) {
             // Not painted (its row is out of the page's view): it keeps its view, its focus and its keyboard, out of
-            // sight, as a field scrolled out of a ScrollView does.
+            // sight, as a field scrolled out of a ScrollView does, its port with it.
             f.atX = -(f.w + AWAY); f.atY = f.y
-            f.port.translationX = 0f; f.port.translationY = 0f
-            f.text.translationX = f.atX; f.text.translationY = f.atY
+            f.port.translationX = f.atX; f.port.translationY = f.atY
+            f.text.translationX = 0f; f.text.translationY = 0f
             return
         }
         val g = if (f.group != 0) view?.group(f.group) else null
         f.atX = (f.x + (g?.translationX ?: 0f)).roundToInt().toFloat()
         f.atY = (f.y + (g?.translationY ?: 0f)).roundToInt().toFloat()
-        val clipped = f.clipW >= 0f
-        val px = if (clipped) f.clipX.roundToInt() else 0
-        val py = if (clipped) f.clipY.roundToInt() else 0
-        val pw = if (clipped) max(1, f.clipW.roundToInt()) else LayoutParams.MATCH_PARENT
-        val ph = if (clipped) max(1, f.clipH.roundToInt()) else LayoutParams.MATCH_PARENT
+        // The port is the field's box within its clip: Android gives a drag to the frontmost view under it that takes
+        // drags, and looks no further than that view's children, so a port larger than its field would keep a drag
+        // from the fields under it (LLP 1094.001 D5)
+        var left = f.atX; var top = f.atY; var right = f.atX + f.w; var bottom = f.atY + f.h
+        if (f.clipW >= 0f) {
+            left = max(left, f.clipX); top = max(top, f.clipY)
+            right = min(right, f.clipX + f.clipW); bottom = min(bottom, f.clipY + f.clipH)
+        }
+        val px = left.roundToInt()
+        val py = top.roundToInt()
+        // A field clipped away whole has an empty port, which no drag finds
+        val whole = right > left && bottom > top
+        val pw = if (whole) (right - left).roundToInt() else 0
+        val ph = if (whole) (bottom - top).roundToInt() else 0
         val lp = f.port.layoutParams
         if (lp.width != pw || lp.height != ph) f.port.layoutParams = LayoutParams(pw, ph, Gravity.TOP or Gravity.LEFT)
         f.port.translationX = px.toFloat(); f.port.translationY = py.toFloat()
@@ -791,6 +827,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
         private const val LOOK = 18
         private const val PLACED = 1
         private const val INERT = 2
+        private const val DROP_OWN = 4
         /** The look's first word ([Native.fields]). */
         private const val MULTILINE = 1
         private const val PASSWORD = 2

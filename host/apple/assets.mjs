@@ -144,9 +144,17 @@ function tvIcon(app, catalog) {
 export function launchImageInventory(app) {
   const image = app.manifest.host?.ios?.launchImage;
   if (!image) return null;
-  const source = resolve(app.dir, image.src);
-  if (!existsSync(source)) throw new Error(`host/apple: ${app.name}'s launch image ${image.src} does not exist`);
-  return { src: image.src, width: image.width, sha256: createHash('sha256').update(readFileSync(source)).digest('hex') };
+  const hash = (src) => {
+    const source = resolve(app.dir, src);
+    if (!existsSync(source)) throw new Error(`host/apple: ${app.name}'s launch image ${src} does not exist`);
+    return createHash('sha256').update(readFileSync(source)).digest('hex');
+  };
+  const inventory = { src: image.src, width: image.width, sha256: hash(image.src) };
+  if (image.color_scheme_dark) {
+    const { src } = image.color_scheme_dark;
+    inventory.color_scheme_dark = { src, sha256: hash(src) };
+  }
+  return inventory;
 }
 
 /** Catalogs follow the app's native module directory selection; Icon Composer
@@ -391,10 +399,15 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
     // The launch image drawn is the bytes the inventory hashed, copied once.
     let picture = null;
     if (launchImage) {
-      const bytes = readFileSync(resolve(app.dir, launchImage.src));
-      if (createHash('sha256').update(bytes).digest('hex') !== launchImage.sha256) throw new Error('the launch image changed while capturing it; rebuild before packaging');
-      picture = { path: resolve(work, 'launch.png'), width: launchImage.width, sha256: launchImage.sha256 };
-      writeFileSync(picture.path, bytes);
+      const capture = ({ src, sha256 }, filename) => {
+        const bytes = readFileSync(resolve(app.dir, src));
+        if (createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error('the launch image changed while capturing it; rebuild before packaging');
+        const path = resolve(work, filename);
+        writeFileSync(path, bytes);
+        return { path, sha256 };
+      };
+      picture = { ...capture(launchImage, 'launch.png'), width: launchImage.width };
+      if (launchImage.color_scheme_dark) picture.dark = capture(launchImage.color_scheme_dark, 'launch-dark.png');
     }
     const alternates = platform === 'ios' ? iosAlternates(app, catalogs) : [];
     // The icon is compiled in every build: only Assets.car carries its dark and tinted appearances, and actool
@@ -485,20 +498,25 @@ export function launchScreen(app, catalog, launch = 'system', picture = null, gr
   const light = colour(fixed ?? 'light'), dark = colour(fixed ?? 'dark');
   const keys = {};
   if (picture) {
-    keys.UIImageName = `ExactLaunchImage-${digest([picture.sha256, picture.width])}`;
+    const identity = [picture.sha256, picture.width];
+    if (picture.dark) identity.push(picture.dark.sha256);
+    keys.UIImageName = `ExactLaunchImage-${digest(identity)}`;
     const set = resolve(catalog, `${keys.UIImageName}.imageset`);
     mkdirSync(set, { recursive: true });
-    const images = [1, 2, 3].map(scale => {
-      const filename = `launch@${scale}x.png`;
-      run('sips', ['--resampleWidth', String(Math.round(picture.width * scale)), picture.path, '--out', resolve(set, filename)], { stdio: 'ignore' });
-      return { idiom: 'universal', filename, scale: `${scale}x` };
+    const renditions = (path, dark = false) => [1, 2, 3].map(scale => {
+      const filename = `launch${dark ? '-dark' : ''}@${scale}x.png`;
+      run('sips', ['--resampleWidth', String(Math.round(picture.width * scale)), path, '--out', resolve(set, filename)], { stdio: 'ignore' });
+      return { idiom: 'universal', filename, scale: `${scale}x`, ...(dark ? { appearances: [{ appearance: 'luminosity', value: 'dark' }] } : {}) };
     });
+    const images = renditions(picture.path);
+    if (picture.dark) images.push(...renditions(picture.dark.path, true));
     writeFileSync(resolve(set, 'Contents.json'), JSON.stringify({ images, info: { author: 'exact', version: 1 } }));
   }
   // The plan's name for the picture and its bytes' SHA-256, so an image of
   // those bytes decodes from the catalog (`RasterInput.catalog`) and loads no
   // ImageIO reader; other bytes under the name (an update's) are decoded.
-  const source = picture ? { ExactLaunchImageSource: app.manifest.host.ios.launchImage.src, ExactLaunchImageSHA256: picture.sha256 } : {};
+  // A catalog with two appearances cannot stand in for one explicit source PNG.
+  const source = picture && !picture.dark ? { ExactLaunchImageSource: app.manifest.host.ios.launchImage.src, ExactLaunchImageSHA256: picture.sha256 } : {};
   if (!light) return picture ? { UILaunchScreen: keys, ...source } : {};
   const field = (scheme) => (app.manifest[`color_scheme_${scheme}`]?.background_color ? `color_scheme_${scheme}.background_color` : named[scheme] ? 'background_color' : `the ${scheme} launch colour`);
   const components = (text, scheme) => {

@@ -830,7 +830,7 @@ export async function devJs({ app, dist, port, host, origins, gate, lan, allowHo
     // file is newer than nothing, and its target's time says nothing of it.
     if (fresh && name && !backendMoved && !movedSince(path, since)) return;
     // Frame Contract files have their own dependency watches. An app may also import one.
-    if (base === app.dir && (name === 'frames' || (path.startsWith(resolve(app.dir, 'frames') + sep) && (path.endsWith('.contract') || path.endsWith('.fixture.mts')))) && !compilerInput(path)) return;
+    if (base === app.dir && (name === 'frames' || (name?.startsWith('frames/') && (name.endsWith('.contract') || name.endsWith('.fixture.mts')))) && !compilerInput(path)) return;
     if (!timer) saved = Date.now();
     edited.add(path);
     // A resident start that failed is tried again at the next request after

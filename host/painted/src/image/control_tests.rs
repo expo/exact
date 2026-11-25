@@ -658,6 +658,28 @@ fn pinned_old_allocation_causes_downsize_and_real_visible_progress() {
 }
 
 #[test]
+fn a_decode_in_flight_does_not_shrink_a_waiting_picture() {
+    let bytes = encoded(2048, 2048, [71, 80, 90, 255]);
+    let mut images = Images::with_assets(Assets::selected(
+        PathBuf::new(),
+        Arc::new(move |_| Ok(Some(bytes.clone()))),
+    ));
+    images.backend.session.set_budget(48 * 1024 * 1024);
+    // A decode in flight: reserved, not yet held by any view.
+    let in_flight = images
+        .backend
+        .session
+        .reserve_allocation(36 * 1024 * 1024)
+        .unwrap();
+    let k = kernel(1);
+    images.sync(&k, &k.roots());
+    images.wait(Duration::from_millis(200));
+    drop(in_flight);
+    images.wait(SETTLED);
+    assert_eq!(images.bitmaps[&1].width(), 2048);
+}
+
+#[test]
 fn source_identity_survives_displayed_replacement_and_cold_unmount() {
     let mut k = kernel(1);
     let mut images = Images::with_assets(assets());

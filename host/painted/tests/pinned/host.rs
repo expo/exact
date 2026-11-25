@@ -564,27 +564,44 @@ fn agent_requests_answer_on_the_wire() {
         &mut p,
         &format!("{{\"op\":\"type\",\"id\":{field},\"text\":\"Sunny\"}}"),
     );
-    // Every host reply is tagged with the runner's epoch and incarnation
-    // (LLP 1035.002 D3); a `clock` reply keeps its own `clock`.
-    assert!(
-        ty.starts_with(&format!(
-            "{{\"typed\":{field},\"value\":\"Sunny\",\"epoch\":"
-        )),
-        "{ty}"
-    );
-    assert!(ty.contains(",\"incarnation\":"), "{ty}");
-    assert!(ty.contains(",\"clock\":"), "{ty}");
-    let c = handle(&mut p, "{\"op\":\"clock\",\"to\":1000}");
-    assert!(c.starts_with("{\"clock\":1000,\"epoch\":"), "{c}");
-    assert_eq!(c.matches("\"clock\":").count(), 1, "{c}");
-    assert!(handle(&mut p, "{\"op\":\"clock\",\"to\":500}").contains("backwards"));
-    assert!(handle(&mut p, "{\"op\":\"clock\",\"settle\":true}")
-        .starts_with("{\"clock\":1000,\"settled\":true,\"epoch\":"));
+    #[derive(serde::Deserialize)]
+    struct Reply {
+        generation: u64,
+        epoch: u64,
+        incarnation: u64,
+        clock: f64,
+        typed: Option<u32>,
+        value: Option<String>,
+        settled: Option<bool>,
+        error: Option<String>,
+    }
+    let checked = |p: &Presenter<caltrain_data::Caltrain>, raw: &str| {
+        assert!(raw.trim_start().starts_with('{'), "{raw}");
+        let reply: Reply = serde_json::from_str(raw).unwrap();
+        let runner = p.host().runner();
+        assert_eq!(reply.generation, runner.generation());
+        assert_eq!(reply.epoch, runner.kernel().epoch());
+        assert_eq!(reply.incarnation, runner.kernel().incarnation());
+        assert_eq!(reply.clock, runner.now_ms());
+        reply
+    };
+    let typed = checked(&p, &ty);
+    assert_eq!(typed.typed, Some(field));
+    assert_eq!(typed.value.as_deref(), Some("Sunny"));
+    let clock = handle(&mut p, r#"{"op":"clock","to":1000}"#);
+    assert_eq!(checked(&p, &clock).clock, 1000.);
+    let refusal = handle(&mut p, r#"{"op":"clock","to":500}"#);
+    assert!(checked(&p, &refusal).error.unwrap().contains("backwards"));
+    let settled = handle(&mut p, r#"{"op":"clock","settle":true}"#);
+    let settled = checked(&p, &settled);
+    assert_eq!(settled.clock, 1000.);
+    assert_eq!(settled.settled, Some(true));
     let path = std::env::temp_dir().join(format!("exact-painted-{}.png", std::process::id()));
     let shot = handle(
         &mut p,
         &format!("{{\"op\":\"screenshot\",\"path\":{:?}}}", path.display()),
     );
+    checked(&p, &shot);
     assert!(shot.contains("\"w\":390,\"h\":844"), "{shot}");
     let png = tiny_skia::Pixmap::load_png(&path).unwrap();
     assert_eq!((png.width(), png.height()), (390, 844));
@@ -1005,6 +1022,8 @@ fn a_context_menu_and_its_submenu_row_are_refused_as_popovers() {
 #[test]
 fn ordinary_node_state_is_not_routed_to_a_surface() {
     let mut p = fixture("scroll");
+    // Both state replies report the timing of the same completed frame.
+    p.frame();
     let id = 1;
     // `raster.processRunning` counts the process's decodes, which the
     // binary's other tests start and finish between the two reads.

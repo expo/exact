@@ -43,8 +43,9 @@ fn the_clipboard_events_reach_the_nearest_handler() {
         &format!(r#"{{"op":"type","id":{log},"clipboard":"cut"}}"#),
     );
     assert!(reply.contains("no cut handler"), "{reply}");
-    // This host pastes text only and takes no drag from outside: both
-    // are refused by name, and neither presses nor pastes.
+    // This host pastes text only, refused by name, and takes a drag from
+    // outside: one over a cell that hears no drag reaches the presenter,
+    // and neither presses nor pastes.
     let reply = handle(
         &mut p,
         &format!(
@@ -57,17 +58,39 @@ fn the_clipboard_events_reach_the_nearest_handler() {
         )),
         "{reply}"
     );
-    for form in [
-        r#""drop":["/tmp/a.png"]"#,
-        r#""dragenter":["/tmp/a.png"]"#,
-        r#""dragleave":true"#,
-    ] {
+    let mut tap = |form: &str| -> serde_json::Value {
         let reply = handle(&mut p, &format!(r#"{{"op":"tap","id":{cell},{form}}}"#));
-        assert!(
-            reply.contains(&format!("unsupported: the {HOST_NAME} host takes no drag")),
-            "{reply}"
-        );
-    }
+        serde_json::from_str(&reply).unwrap()
+    };
+    let fields = |reply: &serde_json::Value, keys: &[&str]| -> Vec<serde_json::Value> {
+        keys.iter().map(|k| reply[*k].clone()).collect()
+    };
+    let refused = tap(r#""drop":["/tmp/a.png"]"#);
+    assert_eq!(
+        refused["error"],
+        format!("view {cell} took no drop: nothing under it declares `drop`, or none of its files could be opened"),
+        "{refused}"
+    );
+    let entered = tap(r#""dragenter":["/tmp/a.png"]"#);
+    assert_eq!(
+        fields(&entered, &["tapped", "dragenter", "delivery"]),
+        [
+            serde_json::json!(cell),
+            serde_json::json!(1),
+            serde_json::json!("presenter")
+        ],
+        "{entered}"
+    );
+    let left = tap(r#""dragleave":true"#);
+    assert_eq!(
+        fields(&left, &["tapped", "dragleave", "delivery"]),
+        [
+            serde_json::json!(cell),
+            serde_json::json!(true),
+            serde_json::json!("presenter")
+        ],
+        "{left}"
+    );
     let k = p.host().kernel();
     assert_eq!(
         k.node(log).unwrap().props.str(exact_kernel::PropId::Text),
@@ -661,6 +684,7 @@ fn aria_keyshortcuts_press_their_button_before_the_key_handlers() {
     let plan = contract::compile(
         r#"component App
   state log = ""
+  state selected = false
   state armed = false
   state modal = false
   state text = ""
@@ -670,10 +694,16 @@ fn aria_keyshortcuts_press_their_button_before_the_key_handlers() {
     log = `${log}paste:${e.text};`
   action pressed(what: string)
     log = `${log}${what};`
+  action select
+    selected = true
+    log = `${log}s;`
   action arm
     armed = not armed
   action edit(v: string)
     text = v
+  action keepKey(k: string)
+    preventDefault()
+    log = `${log}kept:${k};`
   action open
     modal = true
   view
@@ -682,15 +712,29 @@ fn aria_keyshortcuts_press_their_button_before_the_key_handlers() {
       input value=text input=edit testId="field" height=24
       if armed
         button "Paste" aria-keyshortcuts="Meta+V Control+V" press=pressed("button-paste") testId="paste" height=24
+      text formatShortcut("Mod+Shift+O") testId="cap"
+      button "Choose" aria-keyshortcuts="Mod+Shift+O" press=pressed("choose") height=24
       button "F13" aria-keyshortcuts="F13" press=pressed("f13") testId="f13" height=24
       button "F24" aria-keyshortcuts="Shift+F24" press=pressed("f24") testId="f24" height=24
-      button "S" aria-keyshortcuts="s" press=pressed("s") testId="s" height=24
+      box role="button" aria-keyshortcuts="s" press=pressed("box") height=12
+      link href="https://example.org/" aria-keyshortcuts="s" press=pressed("link") height=12
+        text "Anchor"
+      link href="/next" role="button" tabindex=0 key=keepKey testId="anchor" height=12
+        text "Next"
+      input type="checkbox" checked=false key=keepKey testId="mark" height=12
+      box role="textbox"
+        box tabindex=0 key=keepKey testId="editor-child" height=12
+      button "Focused" appearance="none" role="tab" tabindex=0 key=keyed testId="focused" height=12
+      button "Elsewhere" aria-keyshortcuts="Enter Space" press=pressed("stolen") height=12
+      button "Disabled" appearance="none" role="checkbox" disabled=true aria-keyshortcuts="d" press=pressed("disabled") height=12
+      row role="radiogroup" appearance="none" aria-label="Tool"
+        button "S" appearance="none" role="radio" aria-checked=selected aria-keyshortcuts="s" press=select testId="s" height=24
       button "arm" press=arm testId="arm" height=24
       button "open" press=open testId="open" height=24
+      button "Away" appearance="none" role="link" aria-keyshortcuts="Escape" press=pressed("away") testId="away" height=24
       if modal
         column aria-modal=true testId="dialog" height=40
-          button "Close" aria-keyshortcuts="Escape" press=pressed("close") testId="close" height=24
-      button "Away" aria-keyshortcuts="Escape" press=pressed("away") testId="away" height=24
+          button "Close" appearance="none" role="menuitem" aria-keyshortcuts="Escape" press=pressed("close") testId="close" height=24
       text log testId="log" height=20
 "#,
     )
@@ -715,14 +759,21 @@ fn aria_keyshortcuts_press_their_button_before_the_key_handlers() {
         let text = k.node(id).unwrap().props.str(exact_kernel::PropId::Text);
         text.unwrap_or("").to_string()
     };
+    let cap = p.host().kernel().node(named(&p, "cap")).unwrap();
+    assert_eq!(
+        cap.props.str(exact_kernel::PropId::Text),
+        Some("Ctrl+Shift+O")
+    );
     let (pad, field, root) = (named(&p, "pad"), named(&p, "field"), named(&p, "log"));
     let key = |p: &mut Presenter<()>, id: u32, chord: &str| {
         handle(p, &format!(r#"{{"op":"type","id":{id},"key":"{chord}"}}"#))
     };
     for (chord, want) in [
+        ("Control+Shift+O", "key:Control;key:Shift;choose;"),
         ("F13", "f13;"),
         ("Shift+F24", "key:Shift;f24;"),
         ("F24", "key:F24;"),
+        ("d", ""),
         ("s", "s;"),
     ] {
         let before = log(&mut p);
@@ -730,15 +781,47 @@ fn aria_keyshortcuts_press_their_button_before_the_key_handlers() {
         assert!(!reply.contains("error"), "{chord}: {reply}");
         assert_eq!(log(&mut p), format!("{before}{want}"), "{chord}");
     }
+    let radio = p.host().kernel().node(named(&p, "s")).unwrap();
+    assert_eq!(
+        radio.props.bool(exact_kernel::PropId::AccessibilityChecked),
+        Some(true)
+    );
+    let focused = named(&p, "focused");
+    for (chord, name) in [("Enter", "Enter"), ("Space", " ")] {
+        let before = log(&mut p);
+        let reply = key(&mut p, focused, chord);
+        assert!(!reply.contains("error"), "{chord}: {reply}");
+        assert_eq!(
+            log(&mut p),
+            format!("{before}key:{name};"),
+            "{chord} reaches the focused button"
+        );
+    }
     // A target that takes no focus (a text) leaves it where it is; the
     // page's shortcuts hear the key all the same.
     let before = log(&mut p);
     assert!(!key(&mut p, root, "F13").contains("error"));
     assert_eq!(log(&mut p), format!("{before}f13;"));
+    for (target, chord) in [("anchor", "Enter"), ("editor-child", "s"), ("mark", "s")] {
+        let before = log(&mut p);
+        let id = named(&p, target);
+        let reply = key(&mut p, id, chord);
+        assert!(!reply.contains("error"), "{target}: {reply}");
+        assert_eq!(log(&mut p), format!("{before}kept:{chord};"));
+    }
     // A field keeps its plain keys: `s` is typed, not the shortcut.
     let before = log(&mut p);
     key(&mut p, field, "s");
     assert_eq!(log(&mut p), before, "a field's plain key is its typing");
+    assert_eq!(
+        p.host()
+            .kernel()
+            .node(field)
+            .unwrap()
+            .props
+            .str(exact_kernel::PropId::Value),
+        Some("s")
+    );
     // The paste chord: the key handler, then the paste, until a button declares it.
     let paste = |p: &mut Presenter<()>| {
         handle(

@@ -269,6 +269,21 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
     }
 
     fn owner(&self, source: &str) -> Result<bool, DataError> {
+        if source == exact_runner::SCRIPT_MESSAGE {
+            // The union of the two modules' grants cannot admit delivery to either child.
+            for (rust, grants) in [
+                (false, self.javascript.grants()),
+                (true, self.rust.grants()),
+            ] {
+                if grants
+                    .lines()
+                    .any(|line| line.trim() == "browser.automation")
+                {
+                    return Ok(rust);
+                }
+            }
+            return Err(unavailable("script.message requires browser.automation"));
+        }
         self.sources
             .get(source)
             .copied()

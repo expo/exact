@@ -6,7 +6,7 @@
 // starts at an input within 1 s before it, else at the commit. A page hidden
 // during startup reports no further startup marks.
 // Events go to each launch module's web service, which receives earlier events first.
-import { inflight, Resources, clock, After, Hosts, Routes, routeAt, busy, Adopted } from './rt.js';
+import { inflight, Resources, clock, After, Hosts, Routes, pageHistory, routeAt, busy, Adopted } from './rt.js';
 import { Counting } from './held.js';
 
 const STARTUP_TIMER_WINDOW_MS = 1000, TTI_TIMEOUT_MS = 30000;
@@ -61,7 +61,7 @@ async function evaluate() {
     dirty = false;
     finish(declared ? 'declared' : 'settled');
   }
-  const here = location.pathname + location.search;
+  const here = shownLocation();
   if (location0 !== null && here !== location0 && outcome) startNavigation(here);
   location0 = here;
   if (nav && nav.presented !== undefined && !out.length && !nav.done) {
@@ -79,6 +79,7 @@ function route(url) {
   return { route: r.pattern, routeParams: params };
 }
 
+const shownLocation = () => pageHistory()?.entry?.url?.split('#')[0] ?? location.pathname + location.search;
 const seen = new Set();
 function startNavigation(url) {
   const now = performance.now();
@@ -153,7 +154,7 @@ export function install(modules) {
       // the document the server sent, when the boot adopted it
       presentFrom(c0, Adopted);
       After.push(() => { dirty = true; queueMicrotask(evaluate); });
-      location0 = location.pathname + location.search;
+      location0 = shownLocation();
       seen.add(location0);
       record('navigation.launch', { ...route(location0), url: location0 });
     },

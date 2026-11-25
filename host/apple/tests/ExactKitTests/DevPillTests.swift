@@ -166,4 +166,38 @@ final class DevPillTests: XCTestCase {
         session.applyInput(wireBatch([]))
         XCTAssertNil(session.presenter.devPill)
     }
+
+    /// `EXACT_DEV_PILL=0` (ExactEnv.devPill): no pill is drawn, but the session keeps the budget warning and the app its
+    /// status, so turning the pill back on shows both as they would have been.
+    func testWithoutThePillTheWarningAndStatusAreKept() throws {
+        if ExactEnv.agentMode || ExactEnv.releaseBuild { throw XCTSkip("development window required") }
+        #if os(macOS)
+        let f = try SheetFixture()
+        fixture = f
+        f.window.orderFrontRegardless()
+        f.settle()
+        let session = f.session
+        let said = { (session.presenter.devPill as? NSTextField)?.stringValue }
+        #else
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { throw missing("scene", "the pill is in a scene's window") }
+        let (session, _) = makeWindow(scene)
+        let said = { (session.presenter.devPill as? UILabel)?.text?.trimmingCharacters(in: .whitespaces) }
+        #endif
+        let was = ExactEnv.devPill
+        ExactEnv.devPill = false
+        defer { ExactEnv.devPill = was; ExactApp.shared.showDevStatus(nil) }
+        let warning = "mutation order failed: signOrder took 150 ms of CPU time over its 100 ms turn budget"
+        let data = try JSONSerialization.data(withJSONObject: ["ops": [], "budgetWarning": warning] as [String: Any])
+        session.apply(Batch.decode(data))
+        XCTAssertNil(session.presenter.devPill, "no pill for the warning")
+        XCTAssertEqual(session.budgetWarning, warning, "the warning is still the session's")
+        ExactApp.shared.showDevStatus(.stale)
+        XCTAssertNil(session.presenter.devPill, "no pill for the status")
+        XCTAssertEqual(ExactApp.devStatusText, "Rebuild this app: its native code changed")
+        ExactEnv.devPill = true
+        ExactApp.shared.refreshDevPills()
+        XCTAssertEqual(said(), "Rebuild this app: its native code changed")
+        ExactApp.shared.showDevStatus(nil)
+        XCTAssertEqual(said(), warning)
+    }
 }

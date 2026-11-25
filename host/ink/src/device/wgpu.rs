@@ -1,7 +1,12 @@
 //! The portable device and S0 control. @ref LLP 1149 D5.1, D6.3, D11.
+//!
+//! A call encodes its commands and takes the next `Submission`. The queue gets them
+//! at the next `flush`, every call's since the last in one submit. A wait for such a
+//! call flushes, as do a readback, a presentation, a scanout and the end of a GPU
+//! span, so a frame's passes are one submit.
 
 use super::{check_region, texture_ids};
-use super::{Device, Error, Format, Info, Result, Submission, TextureDesc};
+use super::{Device, Error, Format, GpuTime, Info, Result, Submission, TextureDesc};
 use crate::instance::{flags, Batch, Bindings, Brush, Frame, Instance, Kind, Scissor, TextureId};
 use ::wgpu::util::DeviceExt;
 use std::collections::{BTreeMap, HashMap};
@@ -25,6 +30,7 @@ mod programs;
 pub mod scanout;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
+mod timing;
 
 const SHADER: &str = include_str!("../../shaders/ink.wgsl");
 const ATTRIBUTES: [::wgpu::VertexAttribute; 12] = ::wgpu::vertex_attr_array![
@@ -79,10 +85,17 @@ pub struct Buffer {
     last: Arc<AtomicU64>,
 }
 
+/// The instances and viewports of the passes one flush submits.
 struct BufferSlot {
     buffer: Buffer,
-    viewport: ::wgpu::Buffer,
     capacity: u64,
+    /// The bytes of `buffer` that hold the unflushed passes' instances, each pass's
+    /// after the last's.
+    used: u64,
+    /// One for each unflushed pass, kept for the next flush's.
+    viewports: Vec<::wgpu::Buffer>,
+    /// The unflushed passes that draw from this slot.
+    passes: usize,
 }
 
 pub struct Wgpu {
@@ -108,13 +121,21 @@ pub struct Wgpu {
     white_color: Texture,
     textures: HashMap<TextureId, Texture>,
     next_texture: u64,
+    /// The last call's number.
     submitted: Submission,
+    /// The last call the queue has. The commands of those after it are in `batch`.
+    flushed: Submission,
+    batch: Vec<::wgpu::CommandBuffer>,
+    #[cfg(test)]
+    pub(super) submits: u32,
     done: Arc<AtomicU64>,
     pending: BTreeMap<u64, Pending>,
     retired_textures: Vec<(Submission, Texture)>,
     retired_buffers: Vec<(Submission, ::wgpu::Buffer)>,
     info: Info,
     errors: Arc<Mutex<Option<Error>>>,
+    /// Made by the first `begin_gpu_span`.
+    timing: Option<timing::Timing>,
 }
 
 enum Pending {
@@ -181,7 +202,10 @@ impl Wgpu {
         Ok(::wgpu::DeviceDescriptor {
             label: Some("exact-ink"),
             required_limits: requested_limits(adapter.limits())?,
-            required_features: adapter.features() & ::wgpu::Features::PIPELINE_CACHE,
+            // This allows timestamp queries and makes none: `begin_gpu_span` makes
+            // the first.
+            required_features: adapter.features()
+                & (::wgpu::Features::PIPELINE_CACHE | ::wgpu::Features::TIMESTAMP_QUERY),
             ..Default::default()
         })
     }
@@ -341,18 +365,12 @@ impl Wgpu {
         });
         let mut initial = Vec::new();
         for _ in 0..3 {
-            let viewport = checked(&device, &failures, || {
-                device.create_buffer(&::wgpu::BufferDescriptor {
-                    label: Some("ink viewport"),
-                    size: 16,
-                    usage: ::wgpu::BufferUsages::UNIFORM | ::wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                })
-            })?;
             initial.push(BufferSlot {
-                viewport,
                 buffer: instance_buffer(&device, &failures, 192)?,
                 capacity: 192,
+                used: 0,
+                viewports: Vec::new(),
+                passes: 0,
             });
         }
         let buffers = initial.try_into().ok().unwrap();
@@ -393,11 +411,16 @@ impl Wgpu {
             textures: HashMap::new(),
             next_texture: 1,
             submitted: Submission(0),
+            flushed: Submission(0),
+            batch: Vec::new(),
+            #[cfg(test)]
+            submits: 0,
             done: Arc::new(AtomicU64::new(0)),
             pending: BTreeMap::new(),
             retired_textures: Vec::new(),
             retired_buffers: Vec::new(),
             errors: failures,
+            timing: None,
             info: Info {
                 adapter: adapter_info.name,
                 api: format!("wgpu {:?}", adapter_info.backend),
@@ -483,31 +506,66 @@ impl Wgpu {
         }))
     }
 
-    fn submit(&mut self, commands: ::wgpu::CommandBuffer) -> Result<Submission> {
+    /// Number a call and keep its `commands` for the next flush. A call that only
+    /// wrote through the queue has none.
+    ///
+    /// The queue runs a write just before the commands of the next submit, so before
+    /// every unflushed command, whichever was issued first:
+    /// <https://docs.rs/wgpu/30.0.2/wgpu/struct.Queue.html#method.write_buffer>.
+    /// A call therefore writes through the queue only to what no unflushed call
+    /// uses: a pass to its own part of a slot, an upload to a texture whose last use
+    /// is flushed.
+    fn defer(
+        &mut self,
+        commands: impl IntoIterator<Item = ::wgpu::CommandBuffer>,
+    ) -> Result<Submission> {
         failure(&self.errors)?;
         self.submitted.0 += 1;
+        self.batch.extend(commands);
+        Ok(self.submitted)
+    }
+
+    /// Submit the unflushed calls' commands in their order. The calls complete
+    /// together, as the last of them.
+    fn flush(&mut self) -> Result<()> {
+        if self.flushed == self.submitted {
+            return Ok(());
+        }
+        failure(&self.errors)?;
         let id = self.submitted;
+        self.flushed = id;
+        let commands = std::mem::take(&mut self.batch);
+        let slot = &mut self.buffers[self.next_buffer];
+        if slot.passes > 0 {
+            (slot.passes, slot.used) = (0, 0);
+            self.next_buffer = (self.next_buffer + 1) % self.buffers.len();
+        }
+        crate::counters::add(crate::counters::Counter::QueueSubmits, 1);
+        #[cfg(test)]
+        {
+            self.submits += 1;
+        }
         let done = self.done.clone();
         #[cfg(target_os = "macos")]
         if let Some(window) = &self.window {
             let queue = self.queue.clone();
             let receipt = window.thread.send(move || {
-                let index = queue.submit([commands]);
+                let index = queue.submit(commands);
                 queue.on_submitted_work_done(move || {
                     done.fetch_max(id.0, Ordering::Release);
                 });
                 Ok(index)
             })?;
             self.pending.insert(id.0, Pending::Present(receipt));
-            return Ok(id);
+            return Ok(());
         }
-        let index = self.queue.submit([commands]);
+        let index = self.queue.submit(commands);
         failure(&self.errors)?;
         self.pending.insert(id.0, Pending::Submitted(index));
         self.queue.on_submitted_work_done(move || {
             done.fetch_max(id.0, Ordering::Release);
         });
-        Ok(id)
+        Ok(())
     }
 
     fn write_buffer(&self, buffer: &::wgpu::Buffer, offset: u64, bytes: &[u8]) -> Result<()> {
@@ -528,11 +586,12 @@ impl Wgpu {
         &self,
         encoder: &mut ::wgpu::CommandEncoder,
         target: &::wgpu::TextureView,
-        buffer: &::wgpu::Buffer,
+        buffer: ::wgpu::BufferSlice<'_>,
         instances: &[Instance],
         batches: &[Batch],
         groups: &[::wgpu::BindGroup],
         clear: Option<[f64; 4]>,
+        timed: Option<u32>,
     ) {
         let load = match clear {
             Some([r, g, b, a]) => ::wgpu::LoadOp::Clear(::wgpu::Color { r, g, b, a }),
@@ -550,10 +609,11 @@ impl Wgpu {
         let mut pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
             label: Some("ink"),
             color_attachments: &attachments,
+            timestamp_writes: (timed.zip(self.timing.as_ref())).map(|(pass, t)| t.writes(pass)),
             ..Default::default()
         });
         pass.set_pipeline(&self.pipeline);
-        pass.set_vertex_buffer(0, buffer.slice(..));
+        pass.set_vertex_buffer(0, buffer);
         for (batch, bindings) in batches.iter().zip(groups) {
             let s = batch.scissor;
             if s.width == 0 || s.height == 0 || batch.instances.is_empty() {
@@ -652,12 +712,12 @@ impl Wgpu {
                 waker.wake();
             }
         });
-        let submitted = self.submit(encoder.finish())?;
+        let submitted = self.defer([encoder.finish()])?;
         self.textures.get_mut(&id).unwrap().last = submitted;
         #[cfg(not(target_arch = "wasm32"))]
         self.wait(submitted)?;
         #[cfg(target_arch = "wasm32")]
-        let _ = submitted;
+        self.flush()?;
         std::future::poll_fn(|cx| {
             let mut s = state.lock().unwrap();
             match s.result.take() {
@@ -719,11 +779,7 @@ impl Device for Wgpu {
         }
         self.wait(Submission(buffer.last.load(Ordering::Acquire)))?;
         self.write_buffer(&buffer.raw, offset, data)?;
-        let submission = self.submit(
-            self.device
-                .create_command_encoder(&Default::default())
-                .finish(),
-        )?;
+        let submission = self.defer([])?;
         buffer.last.store(submission.0, Ordering::Release);
         Ok(submission)
     }
@@ -753,14 +809,25 @@ impl Device for Wgpu {
         size: [u32; 2],
         data: &[u8],
     ) -> Result<Submission> {
-        self.wait(self.last_use(id)?)?;
-        let texture = self.texture(id)?;
-        check_region(texture.desc, origin, size)?;
-        let bytes =
-            u64::from(size[0]) * u64::from(size[1]) * u64::from(texture.desc.format.channels());
+        let last = self.last_use(id)?;
+        let desc = self.texture(id)?.desc;
+        check_region(desc, origin, size)?;
+        let bytes = u64::from(size[0]) * u64::from(size[1]) * u64::from(desc.format.channels());
         if data.len() as u64 != bytes {
             return Err(Error::Invalid("texture upload length".into()));
         }
+        if last > self.flushed {
+            // An unflushed call uses the texture, and a queue write would run
+            // before it. A copy among the commands runs in its turn.
+            return self.upload_atlas(&[super::TextureUpload {
+                texture: id,
+                origin,
+                size,
+                data: data.to_vec(),
+            }]);
+        }
+        self.wait(last)?;
+        let texture = self.texture(id)?;
         #[cfg(target_os = "macos")]
         if let Some(window) = &self.window {
             let (queue, raw, desc, data) = (
@@ -777,11 +844,7 @@ impl Device for Wgpu {
         }
         #[cfg(not(target_os = "macos"))]
         upload(&self.queue, texture, origin, size, data);
-        let submission = self.submit(
-            self.device
-                .create_command_encoder(&Default::default())
-                .finish(),
-        )?;
+        let submission = self.defer([])?;
         self.textures.get_mut(&id).unwrap().last = submission;
         Ok(submission)
     }
@@ -791,6 +854,10 @@ impl Device for Wgpu {
     }
     fn last_use(&self, id: TextureId) -> Result<Submission> {
         Ok(self.texture(id)?.last)
+    }
+
+    fn orders_upload(&self, id: TextureId) -> Result<bool> {
+        Ok(self.texture(id)?.last > self.flushed)
     }
 
     fn generate_mips(&mut self, id: TextureId) -> Result<Submission> {
@@ -849,14 +916,15 @@ impl Device for Wgpu {
             self.encode_pass(
                 &mut encoder,
                 &target,
-                &buffer,
+                buffer.slice(..),
                 &[instance],
                 &[batch],
                 &[group],
                 Some([0.; 4]),
+                None,
             );
         }
-        let submission = self.submit(encoder.finish())?;
+        let submission = self.defer([encoder.finish()])?;
         self.textures.get_mut(&id).unwrap().last = submission;
         Ok(submission)
     }
@@ -903,7 +971,7 @@ impl Device for Wgpu {
             },
             extent(size),
         );
-        let submission = self.submit(encoder.finish())?;
+        let submission = self.defer([encoder.finish()])?;
         for id in [source, target] {
             self.textures.get_mut(&id).unwrap().last = submission;
         }
@@ -952,43 +1020,67 @@ impl Device for Wgpu {
                 ));
             }
         }
+        // The unflushed passes share a slot. Each has its own viewport and its own
+        // part of the instance buffer, so its queue writes reach no other pass.
         let slot = self.next_buffer;
-        self.next_buffer = (slot + 1) % self.buffers.len();
-        self.wait(Submission(
-            self.buffers[slot].buffer.last.load(Ordering::Acquire),
-        ))?;
-        let bytes = bytemuck::cast_slice(&frame.instances);
-        if bytes.len() as u64 > self.buffers[slot].capacity {
-            let capacity = (bytes.len() as u64).next_power_of_two();
-            let buffer = self.create_buffer(capacity)?;
-            let old = std::mem::replace(&mut self.buffers[slot].buffer, buffer);
-            self.buffers[slot].capacity = capacity;
-            self.retired_buffers.push((self.submitted, old.raw));
+        let pass = self.buffers[slot].passes;
+        if pass == 0 {
+            self.wait(Submission(
+                self.buffers[slot].buffer.last.load(Ordering::Acquire),
+            ))?;
         }
+        let bytes: &[u8] = bytemuck::cast_slice(&frame.instances);
+        let mut offset = 0;
         if !bytes.is_empty() {
-            self.write_buffer(&self.buffers[slot].buffer.raw, 0, bytes)?;
+            offset = self.buffers[slot].used;
+            if offset + bytes.len() as u64 > self.buffers[slot].capacity {
+                // The earlier passes draw from the buffer they were encoded with.
+                let capacity = (offset + bytes.len() as u64).next_power_of_two();
+                let buffer = self.create_buffer(capacity)?;
+                let old = std::mem::replace(&mut self.buffers[slot].buffer, buffer);
+                self.buffers[slot].capacity = capacity;
+                self.retired_buffers.push((self.submitted, old.raw));
+                offset = 0;
+            }
+            self.buffers[slot].used = offset + bytes.len() as u64;
+            self.write_buffer(&self.buffers[slot].buffer.raw, offset, bytes)?;
         }
+        if pass == self.buffers[slot].viewports.len() {
+            let viewport = checked(&self.device, &self.errors, || {
+                self.device.create_buffer(&::wgpu::BufferDescriptor {
+                    label: Some("ink viewport"),
+                    size: 16,
+                    usage: ::wgpu::BufferUsages::UNIFORM | ::wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            })?;
+            self.buffers[slot].viewports.push(viewport);
+        }
+        self.buffers[slot].passes += 1;
+        let viewport = &self.buffers[slot].viewports[pass];
         self.write_buffer(
-            &self.buffers[slot].viewport,
+            viewport,
             0,
             bytemuck::cast_slice(&[desc.width as f32, desc.height as f32, 0., 0.]),
         )?;
         let groups = frame
             .batches
             .iter()
-            .map(|b| self.bindings(b.bindings, &self.buffers[slot].viewport, None))
+            .map(|b| self.bindings(b.bindings, viewport, None))
             .collect::<Result<Vec<_>>>()?;
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        let timed = self.timing.as_mut().and_then(timing::Timing::pass);
         self.encode_pass(
             &mut encoder,
             &self.texture(target)?.view,
-            &self.buffers[slot].buffer.raw,
+            self.buffers[slot].buffer.raw.slice(offset..),
             &frame.instances,
             &frame.batches,
             &groups,
             clear,
+            timed,
         );
-        let submission = self.submit(encoder.finish())?;
+        let submission = self.defer([encoder.finish()])?;
         self.buffers[slot]
             .buffer
             .last
@@ -1024,6 +1116,9 @@ impl Device for Wgpu {
         if submission > self.submitted {
             return Err(Error::Invalid("unknown submission".into()));
         }
+        if submission > self.flushed {
+            self.flush()?;
+        }
         if submission.0 <= self.done.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -1034,13 +1129,17 @@ impl Device for Wgpu {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let polled = self.device.poll(::wgpu::PollType::Wait {
-                submission_index: self
-                    .pending
-                    .get_mut(&submission.0)
-                    .map(Pending::index)
+                // Its flush is the first whose last call is not before it.
+                submission_index: (self.pending.range_mut(submission.0..).next())
+                    .map(|(_, flush)| flush.index())
                     .transpose()?,
                 timeout: Some(std::time::Duration::from_secs(30)),
             });
+            if polled.is_err() {
+                // A lost device takes a submit, refuses the wait for it, and
+                // reports its loss to a poll that waits for nothing.
+                let _ = self.device.poll(::wgpu::PollType::Poll);
+            }
             failure(&self.errors)?;
             polled.map_err(|e| Error::Device(e.to_string()))?;
             self.completed()?;
@@ -1075,6 +1174,7 @@ impl Device for Wgpu {
         self.wait(self.submitted)?;
         self.completed()?;
         for slot in &mut self.buffers {
+            slot.viewports.truncate(1);
             if slot.capacity > 192 {
                 let old = std::mem::replace(
                     &mut slot.buffer,
@@ -1090,6 +1190,34 @@ impl Device for Wgpu {
         }
         self.completed()?;
         Ok(())
+    }
+
+    fn begin_gpu_span(&mut self) -> Result<()> {
+        if self.timing.is_none() {
+            self.timing = Some(timing::Timing::new(&self.device, &self.queue)?);
+        }
+        self.timing.as_mut().unwrap().begin()
+    }
+
+    fn end_gpu_span(&mut self) -> Result<()> {
+        // The span's time can arrive only once its passes are submitted.
+        self.flush()?;
+        let timing = self.timing.as_mut();
+        let timing = timing.ok_or_else(|| Error::Invalid("no GPU span is open".into()))?;
+        timing.end(self.submitted)
+    }
+
+    fn gpu_times(&mut self) -> Result<Vec<Option<GpuTime>>> {
+        let done = self.completed()?;
+        let Some(timing) = &mut self.timing else {
+            return Ok(Vec::new());
+        };
+        let (times, commands) = timing.times(&self.device, done)?;
+        if !commands.is_empty() {
+            self.defer(commands)?;
+            self.flush()?;
+        }
+        Ok(times)
     }
 }
 

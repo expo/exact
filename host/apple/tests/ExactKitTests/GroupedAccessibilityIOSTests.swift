@@ -34,10 +34,18 @@ final class GroupedAccessibilityIOSTests: GroupedListFixture {
         let button = try XCTUnwrap(elements.first { $0["role"] as? String == "button" && $0["name"] as? String == control.accessibilityLabel })
         XCTAssertEqual(button["actions"] as? [String], ["Move earlier", "Move later"])
 
+        let reset = NodeView(id: 99999, kind: "button", presenter: p)
+        p.root.addSubview(reset)
+        p.views[reset.id] = reset
+        reset.handlers = ["press"]
+        p.apply(wireBatch([["op": "props", "id": Int(reset.id), "set": ["id": "reset", "accessibilityLabel": "Reset"]],
+                           ["op": "props", "id": Int(grip), "set": ["accessibilityActions": "reset"]]]))
+        XCTAssertEqual(control.accessibilityCustomActions?.map(\.name), ["Move earlier", "Move later", "Reset"])
+
         let calls = ReorderGroupRecorder()
         calls.hold = false
         p.reorderHost?.groupCalls = calls
-        for action in control.accessibilityCustomActions ?? [] {
+        for action in (control.accessibilityCustomActions ?? []).prefix(2) {
             XCTAssertEqual(action.actionHandler?(action), true)
         }
         XCTAssertEqual(calls.log, ["begin \(grip)", "step 1", "drop", "finish", "begin \(grip)", "step 2", "drop", "finish"])

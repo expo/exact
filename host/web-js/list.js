@@ -1217,7 +1217,7 @@ export function vl(el, subject, key, row, o) {
     const bodyChanged = first || !eq(inputs, previousInputs);
     previousInputs = inputs;
     untracked(() => { c.update(items, [idents, dups], bodyChanged); first = false; c.served = null; });
-  });
+  }).$listRows = true;
   load();
 }
 let jumps = null;

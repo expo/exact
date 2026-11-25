@@ -46,7 +46,7 @@ impl<D: DataSource> Presenter<D> {
 
     /// A candidate has a new runner, but belongs to the same launch.
     pub(super) fn restore_time(&self, host: &mut Host<D>) -> Result<(), HostError> {
-        host.web_mount = self.host.web_mount.clone();
+        host.incoming_links = self.host.incoming_links.clone();
         host.set_scheme(self.dark());
         // The same launch keeps what the device said about itself.
         let runner = self.host.runner();
@@ -232,8 +232,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// `devicePosture` and the viewport segments (LLP 1078 D7): what the
-    /// agent's `prefer posture` and `prefer segments` set on this host,
-    /// which has no fold of its own; kept for `layout.env`.
+    /// agent's `prefer posture` and `prefer segments` set on a host without a hinge.
     pub fn set_segments(
         &mut self,
         posture: exact_runner::Posture,
@@ -241,11 +240,13 @@ impl<D: DataSource> Presenter<D> {
         rows: u32,
         rects: Vec<exact_kernel::Rect>,
     ) -> Option<String> {
-        let error = self.host.set_segments(posture, cols, rows, rects.clone());
+        if self.window.has_hinge {
+            return Some("the device decides (it has a fold)".into());
+        }
+        let error = self.host.set_segments(posture, cols, rows, rects);
         if error.is_some() {
             return error;
         }
-        self.segments = rects;
         self.dirty = true;
         self.after_commit()
     }

@@ -9,11 +9,11 @@ const source = readFileSync(new URL('./native-glue.js', import.meta.url), 'utf8'
 // fixture's, which records each URL and answers when the test says.
 const IMPORT = 'import(url.href)';
 if (source.split(IMPORT).length !== 2) throw new Error(`native-glue.js no longer loads its artifact with ${IMPORT}`);
-function host(table) {
+function host(table, browser = {}) {
   const imports = [], timers = new Map();
   const exact = {}, context = {
     exact, URL, TextDecoder, TextEncoder, Uint8Array, atob, console, queueMicrotask, performance,
-    document: { baseURI: 'https://example.test/' },
+    document: { baseURI: 'https://example.test/' }, ...browser,
     importArtifact: url => new Promise((resolve, reject) => imports.push({ url, resolve, reject })),
     setTimeout: callback => { const id = timers.size + 1; timers.set(id, () => { timers.delete(id); callback(); }); return id; }, clearTimeout: id => timers.delete(id),
   };
@@ -98,4 +98,84 @@ test('the page loader clears its rejected cache and activation connects without 
       async () => { calls.push('connect'); return { drain: () => calls.push('drain') }; }, { pending: () => null }, () => {});
   await activate();
   expect(calls).toEqual(['ready', 'connect', 'drain']);
+});
+
+test('the wasm host identifies a package view before loading the app artifact', async () => {
+  const glue = readFileSync(new URL('./wasm/views.js', import.meta.url), 'utf8');
+  const state = { packageViewOwners: { 'swatch-box': '@fixture/swatch' } };
+  const attached = [];
+  const native = { attach: element => attached.push(element.localName) };
+  const create = Function('host', 'pageNative', 'HAS_PACKAGE_VIEWS', 'log', 'afterNativePaint', 'loadAfterPaint',
+    glueDeclarations(glue, ['nativeCreate']) + '; return nativeCreate;')(
+      state, false, false, () => {}, async () => {}, async () => () => native);
+  const swatch = { localName: 'swatch-box' };
+  create(swatch, 1);
+  expect(swatch.exactNative.status()).toEqual({
+    name: 'swatch-box', state: 'error',
+    error: 'the web wasm target cannot load the view factory for <swatch-box> from @fixture/swatch',
+  });
+  expect(state.nativeHost).toBeUndefined();
+  create({ localName: 'app-box' }, 2);
+  await state.nativeHost;
+  expect(attached).toEqual(['app-box']);
+});
+
+test('a wasm game can still supply a package tag in the app artifact', async () => {
+  const h = host({
+    abi: 1, roster: { 'swatch-box': {} }, create: tag => tag, setProps() {}, destroy() {},
+  }, { customElements: { get: () => true }, MutationObserver: class { observe() {} } });
+  const state = { packageViewOwners: { 'swatch-box': '@fixture/swatch', 'words-panel': '@fixture/words' } };
+  const glue = readFileSync(new URL('./wasm/views.js', import.meta.url), 'utf8');
+  const create = Function('host', 'pageNative', 'HAS_PACKAGE_VIEWS', 'log', 'afterNativePaint', 'loadAfterPaint',
+    glueDeclarations(glue, ['nativeCreate']) + '; return nativeCreate;')(
+      state, true, false, () => {}, async () => {}, async () => h.exact.nativeHost);
+  const place = (localName, id) => {
+    const el = { localName, getAttribute: () => null };
+    create(el, id);
+    return el.exactNative;
+  };
+  const provided = place('swatch-box', 1), absent = place('words-panel', 2), app = place('app-absent', 3);
+  await (await state.nativeHost).loaded;
+  expect(provided.handle).toBe('swatch-box');
+  expect(provided.state).toBe('ready');
+  expect(absent.error).toBe('the web wasm target cannot load the view factory for <words-panel> from @fixture/words');
+  expect(app.error).toBe('the module artifact has no factory for app-absent');
+});
+
+test('a wasm package view loads the session’s factory table after paint without an app artifact', async () => {
+  const state = { packageViewOwners: { 'swatch-box': '@fixture/swatch' } };
+  const loaded = [], attached = [];
+  const create = Function('host', 'pageNative', 'HAS_PACKAGE_VIEWS', 'PACKAGE_VIEW_OWNERS', 'agentMode', 'now', 'afterNativePaint', 'loadAfterPaint', 'log',
+    glueDeclarations(readFileSync(new URL('./wasm/views.js', import.meta.url), 'utf8'), ['nativeCreate']) + '; return nativeCreate;')(
+    state, false, true, state.packageViewOwners, false, () => 0, async () => loaded.push('paint'), async file => {
+      loaded.push(file);
+      return () => ({ attach: el => attached.push(el.localName) });
+    }, () => {});
+  create({ localName: 'swatch-box' }, 7);
+  await state.packageNative;
+  expect(loaded).toEqual(['paint', './packages/views.js']);
+  expect(attached).toEqual(['swatch-box']);
+});
+
+test('a loading package view catches up with props and retires a late handle', async () => {
+  const h = host(null, { customElements: { get: () => true }, MutationObserver: class { observe() {} disconnect() {} } });
+  const waiting = [], updates = [], destroyed = [], logs = [];
+  const table = h.exact.nativeHost({ log: line => logs.push(line), packages: {
+    serves: () => true,
+    make: (_, { view }) => new Promise(resolve => waiting.push(() => resolve({
+      setProps: p => updates.push(p.caption), destroy: () => destroyed.push(view),
+    }))),
+  } });
+  let props = '{"caption":"old"}';
+  const nodes = [1, 2].map(id => ({ exactNative: { name: 'swatch-box', id }, getAttribute: () => props }));
+  const pending = nodes.map(node => table.attach(node));
+  await Promise.resolve();
+  props = '{"caption":"new"}';
+  nodes[1].exactNative.destroyed = true;
+  table.destroy(nodes[1]);
+  for (const release of waiting) release();
+  await Promise.all(pending);
+  expect(updates).toEqual(['new']);
+  expect(destroyed).toEqual([2]);
+  expect(logs.some(line => line.includes('destroy threw'))).toBe(false);
 });

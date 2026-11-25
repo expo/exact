@@ -107,7 +107,6 @@ fn run_composed_with<D: DataSource + Default>(
     region: Option<ContentRegionRegistration>,
     composed: Composed,
 ) -> i32 {
-    row_reuse_from_env(false);
     if print_baked_receipt(compat) {
         return 0;
     }
@@ -135,6 +134,7 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
         eprintln!("exact: {why}");
         return 1;
     }
+    row_reuse_from_env(false);
     exact_painted::app::show_neutral_look();
     #[cfg(target_os = "linux")]
     if !config.headless() && use_wayland(config) {
@@ -149,6 +149,13 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
     };
     if config.headless() {
         config.output_rotation = rotation.unwrap_or_default();
+        config
+            .preferences
+            .get_or_insert_with(Default::default)
+            .orientation = Some(exact_runner::ScreenOrientation::rotated(
+            config.size.1 >= config.size.0,
+            (config.output_rotation.degrees() / 90) as u8,
+        ));
         let [w, h] = config.output_rotation.size([config.size.0, config.size.1]);
         config.size = (w, h);
         // @ref LLP 1178 D6 — the one display is the headless buffer.

@@ -1101,6 +1101,20 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// A native call the host cannot route. Package bindings read its error record
+    /// and a direct `native.later` rejects on its status.
+    pub fn module_refusal(error: &str, message: Option<&str>) -> Self {
+        let mut body = serde_json::json!({ "error": error });
+        if let Some(message) = message {
+            body["message"] = message.into();
+        }
+        Self::Response(Response {
+            status: 500,
+            headers: vec![("content-type".into(), "application/json".into())],
+            body: body.to_string().into_bytes(),
+        })
+    }
+
     /// The stream messages it carries, in arrival order: none unless it is
     /// a [`Outcome::Message`] or [`Outcome::Messages`].
     pub fn messages(&self) -> &[Message] {

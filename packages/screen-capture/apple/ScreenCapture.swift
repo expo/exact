@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 public final class ScreenCaptureModule: ExactPackage {
     private let context: ExactPackageContext
+    private var sources = CaptureSources()
     private var screens: [[String: Any]]?
     private var pending: [Int: CaptureTurn] = [:]
     private var ended = false
@@ -18,7 +19,7 @@ public final class ScreenCaptureModule: ExactPackage {
 
     public convenience init(context: ExactPackageContext) {
         self.init(context: context, preflight: CGPreflightScreenCaptureAccess, content: {
-            SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true, completionHandler: $0)
+            SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: false, completionHandler: $0)
         })
     }
 
@@ -48,10 +49,17 @@ public final class ScreenCaptureModule: ExactPackage {
             }
             context.changed("screen-capture.screenRecordingStatus")
             reply(status())
-        case "captureScreens":
+        case "getWindowAtPoint", "getFrontmostWindow", "captureScreens":
             guard context.agent || preflight() else {
                 return reply(["error": "NotAllowedError", "message": "requestScreenRecording first"])
             }
+            var point: CGPoint?
+            if name == "getWindowAtPoint" {
+                guard let x = args["x"] as? Double, let y = args["y"] as? Double,
+                      x.isFinite, y.isFinite else { return reply(["error":"TypeError"]) }
+                point = CGPoint(x: x, y: y)
+            }
+            let window = !context.agent && name != "captureScreens" ? sources.hit(point) : nil
             let turn = CaptureTurn()
             let request = context.request ?? 0
             pending[request] = turn
@@ -59,7 +67,7 @@ public final class ScreenCaptureModule: ExactPackage {
             // waits behind another capture into the same app directory.
             let fixture = (preferred as? [String: Any])?["screens"] as? [[String: Any]]
             let snapshots = context.agent ? fixtureScreens(fixture) : nativeScreens()
-            CaptureQueue.add { [self] done in
+            let run: (@escaping () -> Void) -> Void = { [self] done in
                 let finish: ([String: Any]) -> Void = { [self] answer in
                     pending.removeValue(forKey: request)
                     reply(answer)
@@ -67,8 +75,29 @@ public final class ScreenCaptureModule: ExactPackage {
                 }
                 guard turn.held, !ended else { return finish(["error": "AbortError"]) }
                 guard context.agent || preflight() else { return finish(["error":"NotAllowedError"]) }
-                capture(snapshots, args: args, turn: turn, reply: finish)
+                let select: (SCShareableContent?) -> Void = { [self] content in
+                    guard turn.held, !ended else { return finish(["error":"AbortError"]) }
+                    guard context.agent || preflight() else { return finish(["error":"NotAllowedError"]) }
+                    do {
+                        if name == "captureScreens" {
+                            let targets = try sources.targets(snapshots, args: args, content: content)
+                            capture(targets, args: args, turn: turn, reply: finish)
+                        } else {
+                            finish(try sources.lookup(point: point, hit: window, screens: snapshots, content: content))
+                        }
+                    } catch { finish(failure(error)) }
+                }
+                if context.agent { select(nil) }
+                else {
+                    content { list, error in
+                        DispatchQueue.main.async {
+                            guard let list else { return finish(self.failure(error ?? CaptureFailure("EncodingError", "no capture sources"))) }
+                            select(list)
+                        }
+                    }
+                }
             }
+            if name == "captureScreens" { CaptureQueue.add(run) } else { run({}) }
         default: reply(["error": "NotSupportedError"])
         }
     }
@@ -83,6 +112,7 @@ public final class ScreenCaptureModule: ExactPackage {
     }
     public func destroy(_ done: @escaping () -> Void) {
         ended = true
+        sources = CaptureSources()
         for turn in pending.values { turn.held = false }
         release("screenRecordingStatus")
         done()
@@ -104,7 +134,7 @@ public final class ScreenCaptureModule: ExactPackage {
             "availLeft":0,"availTop":0,"availWidth":1440,"availHeight":900,
             "devicePixelRatio":2,"isPrimary":true,"isInternal":true,"label":"Agent display",
             "clientRect":["x":0,"y":0,"width":1440,"height":900]]]
-        return records.map { record in
+        let sorted = records.map { record in
             let scale = (record["devicePixelRatio"] as? NSNumber)?.doubleValue ?? 1
             func size(_ key: String) -> Int {
                 let n = ((record[key] as? NSNumber)?.doubleValue ?? 0) * scale
@@ -114,6 +144,7 @@ public final class ScreenCaptureModule: ExactPackage {
             record["clientRect"] = record["clientRect"] ?? NSNull()
             return CaptureScreen(id: 0, record: record, width: size("width"), height: size("height"))
         }.sorted(by: CaptureScreen.ordered)
+        return sorted.enumerated().map { i, s in var copy = s; copy.index = i; return copy }
     }
 
     private func capture(_ screens: [CaptureScreen], args: [String: Any], turn: CaptureTurn,
@@ -143,81 +174,78 @@ public final class ScreenCaptureModule: ExactPackage {
                 files.append(try CaptureFile(destination, root: root))
                 answers.append(["path":path,"width":screen.width,"height":screen.height,
                                 "type":type.preferredMIMEType ?? "image/png","screen":screen.record])
+                if let frame = screen.windowFrame { answers[index]["frame"] = frame.captureRecord }
             }
         } catch { return reply(failure(error)) }
-        let complete: ([SCDisplay]) -> Void = { [self] displays in
-            guard turn.held, !ended else { return reply(["error":"AbortError"]) }
-            if !context.agent && !preflight() { return reply(["error":"NotAllowedError"]) }
-            var remaining = screens.count
-            var error: Error?
-            let finished: (Error?) -> Void = { result in
-                if let result { error = error ?? result }
-                remaining -= 1
-                guard remaining == 0 else { return }
-                guard turn.held, !self.ended else { return reply(["error":"AbortError"]) }
-                if let error { return reply(self.failure(error)) }
-                do {
-                    for (index, file) in files.enumerated() {
-                        try file.publish()
-                        context.pictureChanged(answers[index]["path"] as! String)
-                    }
-                    reply(["captures":answers])
-                } catch { reply(["error":"EncodingError", "message":"capture publication failed: \(error)"]) }
-            }
-            for (index, screen) in screens.enumerated() {
-                let encoded: (CGImage?, Error?) -> Void = { image, error in
-                    guard let image else {
-                        return DispatchQueue.main.async { finished(error ?? CaptureFailure("EncodingError", "no captured image")) }
-                    }
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        var failure: Error?
-                        do { try files[index].write(encodeCapture(image, type, quality)) }
-                        catch { failure = error }
-                        DispatchQueue.main.async { finished(failure) }
-                    }
+        var remaining = screens.count
+        var error: Error?
+        let finished: (Error?) -> Void = { result in
+            if let result { error = error ?? result }
+            remaining -= 1
+            guard remaining == 0 else { return }
+            guard turn.held, !self.ended else { return reply(["error":"AbortError"]) }
+            guard self.context.agent || self.preflight() else { return reply(["error":"NotAllowedError"]) }
+            do {
+                for screen in screens { try screen.verifyWindow() }
+            } catch { return reply(self.failure(error)) }
+            if let error { return reply(self.failure(error)) }
+            do {
+                for (index, file) in files.enumerated() {
+                    try file.publish()
+                    self.context.pictureChanged(answers[index]["path"] as! String)
                 }
-                if context.agent { encoded(captureCard(index, screen.width, screen.height), nil); continue }
-                guard let display = displays.first(where: { $0.displayID == screen.id }) else {
-                    finished(CaptureFailure("EncodingError", "display disconnected before capture")); continue
-                }
-                let configuration = SCStreamConfiguration()
-                configuration.width = screen.width
-                configuration.height = screen.height
-                configuration.showsCursor = false
-                configuration.colorSpaceName = CGColorSpace.sRGB
-                SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: display, excludingWindows: []),
-                    configuration: configuration, completionHandler: encoded)
-            }
+                reply(["captures":answers])
+            } catch { reply(["error":"EncodingError", "message":"capture publication failed: \(error)"]) }
         }
-        if context.agent { complete([]) }
-        else {
-            content { content, error in
-                DispatchQueue.main.async {
-                    guard let content else { return reply(self.failure(error ?? CaptureFailure("EncodingError", "no displays"))) }
-                    complete(content.displays)
+        for (index, screen) in screens.enumerated() {
+            let encoded: (CGImage?, Error?) -> Void = { image, error in
+                guard let image else {
+                    return DispatchQueue.main.async { finished(error ?? CaptureFailure("EncodingError", "no captured image")) }
+                }
+                DispatchQueue.global(qos: .userInitiated).async {
+                    var failure: Error?
+                    do { try files[index].write(encodeCapture(image, type, quality)) }
+                    catch { failure = error }
+                    DispatchQueue.main.async { finished(failure) }
                 }
             }
+            if context.agent {
+                encoded(captureCard(screen.index, screen.width, screen.height, pointer: args["cursor"] as? String == "always" ? screen.pointer : nil), nil)
+                continue
+            }
+            guard let filter = screen.filter else { finished(CaptureFailure("EncodingError", "no capture filter")); continue }
+            let configuration = SCStreamConfiguration()
+            configuration.width = screen.width
+            configuration.height = screen.height
+            configuration.showsCursor = args["cursor"] as? String == "always"
+            if let rect = screen.crop { configuration.sourceRect = rect }
+            if screen.windowFrame != nil {
+                configuration.ignoreShadowsSingleWindow = true
+                configuration.ignoreGlobalClipSingleWindow = true
+            }
+            configuration.colorSpaceName = CGColorSpace.sRGB
+            SCScreenshotManager.captureImage(contentFilter: filter,
+                configuration: configuration, completionHandler: encoded)
         }
+
     }
 
     private func failure(_ error: Error) -> [String: Any] {
-        (error as? CaptureFailure)?.answer ?? ["error":"EncodingError", "message":error.localizedDescription]
+        if let failure = error as? CaptureFailure { return failure.answer }
+        let system = error as NSError
+        if system.domain == SCStreamErrorDomain {
+            switch SCStreamError.Code(rawValue: system.code) {
+            case .userDeclined, .missingEntitlements: return ["error":"NotAllowedError", "message":system.localizedDescription]
+            case .noCaptureSource: return ["error":"NotFoundError", "message":system.localizedDescription]
+            default: break
+            }
+        }
+        return ["error":"EncodingError", "message":system.localizedDescription]
     }
 }
 
 private final class CaptureTurn { var held = true }
-private struct CaptureScreen {
-    let id: CGDirectDisplayID
-    let record: [String: Any]
-    let width: Int
-    let height: Int
-    static func ordered(_ a: Self, _ b: Self) -> Bool {
-        let number = { (s: Self, key: String) in (s.record[key] as? NSNumber)?.doubleValue ?? 0 }
-        return (number(a, "left"), number(a, "top")) < (number(b, "left"), number(b, "top"))
-    }
-}
-
-private func captureCard(_ index: Int, _ width: Int, _ height: Int) -> CGImage? {
+private func captureCard(_ index: Int, _ width: Int, _ height: Int, pointer: CGPoint?) -> CGImage? {
     guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
         bytesPerRow: width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue), let data = context.data else { return nil }
@@ -236,6 +264,15 @@ private func captureCard(_ index: Int, _ width: Int, _ height: Int) -> CGImage? 
                 if px < width && py < height { for c in 0..<4 { bytes[(py * width + px) * 4 + c] = 255 } }
             }}
         }}
+    }
+    if let pointer {
+        let px = Int(pointer.x), py = Int(pointer.y)
+        for y in 0..<min(12, height - py) {
+            for x in 0..<min(y / 2 + 1, width - px) {
+                let offset = ((py + y) * width + px + x) * 4
+                for c in 0..<3 { bytes[offset + c] = 255 }
+            }
+        }
     }
     return context.makeImage()
 }

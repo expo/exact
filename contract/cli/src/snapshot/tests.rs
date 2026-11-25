@@ -90,7 +90,7 @@ fn entry_shares_route_urls_and_only_reachable_types_and_helpers() {
 
 #[test]
 fn the_family_size_is_injected_and_no_resource_is_declared() {
-    let shape = "shape Viewport\n  width: number\n  height: number\n  prefersColorScheme: string";
+    let shape = "shape Viewport\n  width: number\n  height: number\n  prefersColorScheme: string\n  orientationType: string\n  orientationAngle: number";
     let inject = "  inject\n    snapshot_viewport: Viewport\n";
     let src = source(
         "    column\n      if snapshot_viewport.height < 100\n        text title testId=\"short\"\n      else\n        text `${title} ${snapshot_viewport.width}` testId=\"tall\"",

@@ -178,6 +178,10 @@ pub(crate) unsafe extern "C" fn host_door(
                     // `code: 'bake'` refusal for it (LLP 1067 D4).
                     _ if state.baking => Err("bake".into()),
                     _ if state.between_answers => Err(no_store("native.call")),
+                    (None, Some(_)) => Err(
+                        "NotSupportedError: no app native module is installed for native.call"
+                            .into(),
+                    ),
                     _ => Err(
                         "native storage is unavailable during bake or in an unconfigured host"
                             .into(),

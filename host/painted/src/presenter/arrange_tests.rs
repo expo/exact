@@ -79,6 +79,86 @@ fn start(p: &mut Presenter<Rows>) -> (NodeKey, ReorderToken, HoldToken) {
     (s.binding.wrapper, s.token, s.hold)
 }
 #[test]
+fn a_reader_grip_yields_to_scroll_until_a_long_press_or_an_authored_axis_claim() {
+    for (action, immediate) in [
+        ("auto", false),
+        ("pan-y", false),
+        ("pan-x", true),
+        ("none", true),
+    ] {
+        let mut p = boot_source(&APP.replace(
+            "reorderFor=",
+            &format!("touch-action=\"{action}\" reorderFor="),
+        ));
+        p.serve_windows(Box::new(crate::presenter::drag_out_tests::Blank));
+        p.set_pointer_kind(PointerKind::Touch);
+        let (x, y) = centre(&mut p, "grip-2");
+        assert_eq!(p.scrollers_at(x, y).claims.1, immediate, "{action}");
+        p.reader_touch(0, x, y, 0., 0.).unwrap();
+        p.reader_touch(2, x, y - 16., 16., 16.).unwrap();
+        assert_eq!(p.arrange.is_some(), immediate, "{action}");
+        p.reader_touch(3, x, y, 32., 32.).unwrap();
+
+        p.reader_touch(0, x, y, 50., 50.).unwrap();
+        let before = p.long_presses();
+        p.reader_touch(4, x, y, 550., 550.).unwrap();
+        assert!(
+            p.arrange.is_some(),
+            "the system recognized the hold on {action}"
+        );
+        assert_eq!(p.long_presses(), before.wrapping_add(1));
+        p.reader_touch(2, x, y - 64., 590., 590.).unwrap();
+        p.reader_touch(1, x, y - 64., 600., 600.).unwrap();
+        assert_eq!(p.host.runner().slot("count"), Some(&AppValue::Number(1.)));
+    }
+}
+
+#[test]
+fn a_menu_on_the_grip_yields_to_reorder_and_a_nearer_menu_takes_the_hold() {
+    for inside in [false, true] {
+        let grip = if inside {
+            "testId=`grip-${item}`\n                text item height=40 contextmenu=show"
+        } else {
+            "testId=`grip-${item}` contextmenu=show"
+        };
+        let mut p = boot_source(&APP.replace("testId=`grip-${item}`", grip));
+        p.serve_windows(Box::new(crate::presenter::drag_out_tests::Blank));
+        p.set_pointer_kind(PointerKind::Touch);
+        let (x, y) = centre(&mut p, "grip-2");
+        assert!(p.context_menu_at(x, y).is_some());
+        p.reader_touch(0, x, y, 0., 0.).unwrap();
+        p.reader_touch(4, x, y, 500., 500.).unwrap();
+        assert_eq!(p.arrange.is_some(), !inside);
+    }
+}
+
+#[test]
+fn a_reader_swipe_on_grip_text_moves_the_list_and_keeps_the_rows() {
+    let source = APP.replace(
+        "testId=`grip-${item}`",
+        "testId=`grip-${item}`\n                text item testId=`title-${item}`",
+    );
+    let mut p = boot_source(&source);
+    let list = id(&p, "list");
+    let title = id(&p, "title-2");
+    let (x, y) = centre(&mut p, "title-2");
+    let grip = id(&p, "grip-2") as i32;
+    assert_eq!(p.reader_module(x, y, 1.)[12], grip);
+    let mut request = serde_json::json!({"id":title,"scrollDrag":[0,-80],"ms":200,"probe":true,"longPressMs":400});
+    let probe = |p: &mut Presenter<Rows>, r: &serde_json::Value| -> serde_json::Value {
+        serde_json::from_str(&p.agent_scroll_drag(r).unwrap()).unwrap()
+    };
+    assert_eq!(probe(&mut p, &request)["scrollDrag"], "reader");
+    request["press"] = 395.into();
+    assert_eq!(probe(&mut p, &request)["liftAt"], 400.);
+    request["press"] = 0.into();
+    request["probe"] = false.into();
+    assert_eq!(probe(&mut p, &request)["scrolledBy"][1], 80.);
+    assert_eq!(p.scroll_of(list).1, 80.);
+    assert_eq!(p.host.runner().slot("count"), Some(&AppValue::Number(0.)));
+}
+
+#[test]
 fn the_list_owns_its_cancel_while_input_holds_the_contact() {
     let mut p = boot();
     let (_, token, _) = start(&mut p);

@@ -46,6 +46,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `flex=1 min-width=0` so it takes the space left by the heading and buttons.
   (Agents, 402-point iOS simulator, 2026-11-12.)
 
+- **Safari drops a declaration that names a viewport segment, its fallback included.** Safari on
+  iOS 27.1 parses no `env()` with indices, so `width="env(viewport-segment-width 1 0, 100%)"` leaves
+  the width `auto`. It tells a page of no fold either: on an iPhone Duo the posture, the segments and
+  the window's size are the same at 180° and 90°. Fix: write a segment only where `exactViewport()`
+  reports two, as the [foldables recipe](recipes/foldables.md) does. (A page in Safari on an iPhone
+  Duo simulator, 2026-11-24.)
 - **A layout-region inset is not a page gutter.** The web can report zero
   for `env(-exact-readable-content-corners-inset-left)` and its right-edge equivalent. Give reading
   content ordinary padding inside the safe region, and bound a full-width
@@ -794,6 +800,7 @@ What a port writes from habit, what the compiler says, and what to write (the eu
 | `backgroundColor`, `flexDirection`, `onPress`, `activeOpacity` | `lower-unknown-attr` | `background-color`, `flex-direction`, `press`, `-exact-press-opacity` |
 | `paddingHorizontal=16` | `lower-unknown-attr` | `padding-left=16 padding-right=16`, or `padding="0px 16px"` |
 | `marginVertical=8` | `lower-unknown-attr` | `margin-top=8 margin-bottom=8`, or `margin="8px 0px"` |
+| `useWindowDimensions().width` used as a pane's width | nothing: the window and pane can differ | `exactViewport().width` is the window's; use `resize=<action>` on the pane for its content-box width. A sidebar, sheet or split view can make it narrower ([viewport units](contract-for-agents.md#viewport-and-container-units)) |
 | `shadowColor`, `shadowOpacity`, `shadowRadius`, `shadowOffset`, `elevation` | `lower-unknown-attr`, `lower-attr-tag` | one `box-shadow="<x>px <y>px <2 × radius>px <colour>"` (below); nothing when the same style has `overflow: "hidden"`, which iOS draws without its shadow |
 | `` line-height=`${28 / 17}` ``, `` width=`${n}` `` for numeric `n` | `lower-attr-value` | `line-height=(28 / 17)` for a multiplier, `width=n` for pixels or `` width=`${n}px` `` |
 | `font-weight="bold"`, `"600"` | `lower-attr-value` | `font-weight=700`, `font-weight=600` |
@@ -1860,6 +1867,9 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `scripts/agent.mjs` for dates that read as intended and stay reproducible; in a test
   file, `epoch "…"` and `time-zone "…"` lines, so a run without the flags still means it.
   Against a live backend, `--epoch now` (`epoch now`) instead.
+- **Every app launches slowly on the same iOS simulator.** An XCTest UI session can leave accessibility enabled
+  across reboots. `test ios` reports the existing settings and the commands to
+  clear them. [Timing an installed build](recipes/porting-and-release.md).
 - **A simulator measurement shows a 100–200 ms stall the app never makes.** A
   plain launch's frames hold 16.7 ms, but a run driven with `axe` shows one
   stall with no batch applied about 0.4 s after `axe` first reads the screen

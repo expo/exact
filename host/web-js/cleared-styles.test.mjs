@@ -693,6 +693,12 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
     ? evaluate(`(async () => { const { pieces } = await import('/rt.js'); await pieces(); })()`)
     : page.waitForFunction(() => typeof exact.hold === 'function');
   const settle = evaluate => evaluate('Promise.all(document.getAnimations().map(a => (a.finish(), a.finished)))');
+  const release = async (evaluate, page) => {
+    await page.mouse.up();
+    // A quick tap displays its pressed frame before starting the release animation.
+    await page.locator('[data-testid="slab"]:not([data-pressed])').waitFor({ state: 'attached' });
+    await settle(evaluate);
+  };
   check(`${runtime} ${engine}: active translate composes and a stationary real pointer activates`, async () => {
     await fixture(runtime, async (evaluate, page) => {
       await feedback(evaluate, page);
@@ -705,7 +711,7 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
       expect(held.width).toBeCloseTo(base.width, 2);
       // The original left edge is now outside: the browser hit-tests the paint.
       expect(await page.evaluate(({ x, y }) => document.elementFromPoint(x + 1, y + 40)?.closest('[data-testid="slab"]') != null, base)).toBe(false);
-      await page.mouse.up(); await settle(evaluate);
+      await release(evaluate, page);
       expect(await page.locator('[data-testid="count"]').textContent()).toBe('1');
       expect(await slab.boundingBox()).toEqual(base);
     }, `component App
@@ -731,7 +737,7 @@ for (const runtime of ['JS', 'wasm']) for (const engine of ['chromium', 'webkit'
       await page.waitForFunction(() => document.querySelector('[data-testid="size"]').textContent === '200');
       const resized = await slab.boundingBox();
       expect(resized.x - base.x).toBeCloseTo((resized.width - base.width) * .1 + resized.width * .1, 2);
-      await page.mouse.up(); await settle(evaluate);
+      await release(evaluate, page);
       expect((await slab.boundingBox()).x - base.x).toBeCloseTo((resized.width - base.width) * .1, 2);
     }, `component App
   state size = 100
@@ -800,7 +806,7 @@ component App
         await page.mouse.down(); await settle(evaluate);
         expect(await child.evaluate(el => el.offsetTop)).toBe(0);
         expect((await child.boundingBox()).y - (await slab.boundingBox()).y).toBeCloseTo(0, 2);
-        await page.mouse.up(); await settle(evaluate);
+        await release(evaluate, page);
         expect((await child.boundingBox()).y).toBe(40);
       }
     }, `component App

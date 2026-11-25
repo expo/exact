@@ -7,7 +7,12 @@
     "macos"
   ],
   "shapes": {},
-  "options": {},
+  "options": {
+    "write": {
+      "localOnly": "bool",
+      "expirationDate": "number"
+    }
+  },
   "names": [],
   "views": [],
   "hatches": [],

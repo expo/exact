@@ -173,6 +173,15 @@ impl Device for Selected {
             Self::D3d11(d) => d.last_use(texture),
         }
     }
+    fn orders_upload(&self, texture: TextureId) -> Result<bool> {
+        match self {
+            Self::Wgpu(d) => d.orders_upload(texture),
+            #[cfg(exact_ink_metal)]
+            Self::Metal(d) => d.orders_upload(texture),
+            #[cfg(windows)]
+            Self::D3d11(d) => d.orders_upload(texture),
+        }
+    }
     fn generate_mips(&mut self, texture: TextureId) -> Result<Submission> {
         match self {
             Self::Wgpu(d) => d.generate_mips(texture),
@@ -273,6 +282,33 @@ impl Device for Selected {
             Self::Metal(d) => d.trim(),
             #[cfg(windows)]
             Self::D3d11(d) => d.trim(),
+        }
+    }
+    fn begin_gpu_span(&mut self) -> Result<()> {
+        match self {
+            Self::Wgpu(d) => d.begin_gpu_span(),
+            #[cfg(exact_ink_metal)]
+            Self::Metal(d) => d.begin_gpu_span(),
+            #[cfg(windows)]
+            Self::D3d11(d) => d.begin_gpu_span(),
+        }
+    }
+    fn end_gpu_span(&mut self) -> Result<()> {
+        match self {
+            Self::Wgpu(d) => d.end_gpu_span(),
+            #[cfg(exact_ink_metal)]
+            Self::Metal(d) => d.end_gpu_span(),
+            #[cfg(windows)]
+            Self::D3d11(d) => d.end_gpu_span(),
+        }
+    }
+    fn gpu_times(&mut self) -> Result<Vec<Option<GpuTime>>> {
+        match self {
+            Self::Wgpu(d) => d.gpu_times(),
+            #[cfg(exact_ink_metal)]
+            Self::Metal(d) => d.gpu_times(),
+            #[cfg(windows)]
+            Self::D3d11(d) => d.gpu_times(),
         }
     }
 }

@@ -49,11 +49,9 @@ impl Pinch {
 impl Touches {
     /// Pointer `id`'s `phase` at `(x, y)` in logical pixels. `pen` says
     /// whether a new contact is a pen's; it is asked only of a touch down.
-    /// A pen's hover (an update with no contact) does nothing, nor does a
-    /// finger after the first, except that its touch down cancels the
-    /// first's press, as Android's reader does, and over a zoomable
-    /// scroller the two fingers pinch it until either lifts. Answers
-    /// whether a contact went down.
+    /// A second finger joins an eligible transform or starts a scroller pinch.
+    /// A second contact that joins neither cancels the primary gesture.
+    /// Answers whether a primary contact went down.
     pub(crate) fn contact<D: DataSource>(
         &mut self,
         p: &mut Presenter<D>,
@@ -90,12 +88,32 @@ impl Touches {
         now: f64,
         pen: impl FnOnce() -> bool,
     ) -> bool {
+        let action = match phase {
+            Phase::Started => 0,
+            Phase::Ended => 1,
+            Phase::Moved => 2,
+            Phase::Cancelled => 3,
+        };
+        let pen = phase == Phase::Started && pen();
+        if !pen {
+            match p.transform_finger((id, (x, y)), None, action, now, now) {
+                Ok(true) => return false,
+                Err(e) => {
+                    p.host_mut().log(e);
+                    let _ = p.pointer_cancel(now);
+                    return false;
+                }
+                Ok(false) => {}
+            }
+        } else if p.tracking_transform_pinch() {
+            return false;
+        }
         if self.pinched(p, (id, phase), (x, y)) {
             return false;
         }
         let kind = match (phase, self.held) {
             (Phase::Started, None) => {
-                let kind = if pen() {
+                let kind = if pen {
                     PointerKind::Pen
                 } else {
                     PointerKind::Touch
@@ -104,12 +122,23 @@ impl Touches {
                 kind
             }
             (Phase::Started, Some((first, kind, at))) => {
-                self.held = None;
                 p.set_pointer_kind(kind);
-                let _ = p.pointer_cancel(now);
                 let both = [(first, at), (id, (x, y))];
-                let under = |p: &mut Presenter<D>, at: (f32, f32)| p.zoomable_under(at.0, at.1);
-                if kind == PointerKind::Touch {
+                let fingers = kind == PointerKind::Touch && !pen;
+                if fingers {
+                    match p.begin_transform_pinch((first, at), id, (x, y), now) {
+                        Ok(true) => {
+                            self.held = None;
+                            return false;
+                        }
+                        Err(e) => p.host_mut().log(e),
+                        Ok(false) => {}
+                    }
+                }
+                self.held = None;
+                let _ = p.pointer_cancel(now);
+                if fingers {
+                    let under = |p: &mut Presenter<D>, at: (f32, f32)| p.zoomable_under(at.0, at.1);
                     if let Some(container) = under(p, at).filter(|c| under(p, (x, y)) == Some(*c)) {
                         p.zoom_pinch_began(container);
                         self.pinch = Some(Pinch {
@@ -493,6 +522,68 @@ mod tests {
         send(&mut p, &mut t, 14, Phase::Started, (20., 120.), false);
         send(&mut p, &mut t, 14, Phase::Ended, (20., 120.), false);
         assert_eq!(seen(&p), Some(Value::str(" touch pen press press")));
+    }
+
+    #[test]
+    fn photo_fingers_release_once_after_the_survivor_pans_and_a_double_tap_calls_its_handler() {
+        let src = r#"component App
+  state scale = 1
+  state offset = 0
+  state ends = 0
+  state taps = 0
+  action geometry(w: number, h: number, pw: number, ph: number)
+    ends = ends
+  action release(x: number, y: number, s: number, vx: number, vy: number, vs: number)
+    scale = s
+    offset = x
+    ends = ends + 1
+  action doubleTapped
+    taps = taps + 1
+  view
+    box width=300 height=300 overflow="hidden" box-sizing="border-box"
+      box id="image" width="100%" height="100%" box-sizing="border-box" translate="0px 0px" scale=1
+        box transformDragFor="image" transformgeometry=geometry transformrelease=release touch-action="none" dblclick=doubleTapped width=300 height=300
+"#;
+        let plan = contract::compile(src).unwrap().encode();
+        for lift_primary in [true, false] {
+            let (mut p, _) = Presenter::boot_with(
+                &plan,
+                (),
+                (400., 400.),
+                1.,
+                Default::default(),
+                PainterChoice::Cpu,
+            )
+            .unwrap();
+            let mut t = Touches::default();
+            let mut now = 0.;
+            let mut send = |p: &mut Presenter<()>, id, phase, x| {
+                now += 10.;
+                t.contact(p, (id, phase), (x, 150.), now, || false);
+            };
+            let value = |p: &Presenter<()>, key| p.host().runner().slot(key).cloned();
+            send(&mut p, 1, Phase::Started, 100.);
+            send(&mut p, 2, Phase::Started, 200.);
+            send(&mut p, 1, Phase::Moved, 50.);
+            send(&mut p, 2, Phase::Moved, 250.);
+            let (first, second) = if lift_primary {
+                ((1, 50.), (2, 250.))
+            } else {
+                ((2, 250.), (1, 50.))
+            };
+            send(&mut p, first.0, Phase::Ended, first.1);
+            assert_eq!(value(&p, "ends"), Some(Value::Number(0.)));
+            send(&mut p, second.0, Phase::Moved, second.1 + 12.);
+            send(&mut p, second.0, Phase::Ended, second.1 + 12.);
+            assert_eq!(value(&p, "ends"), Some(Value::Number(1.)));
+            assert_eq!(value(&p, "scale"), Some(Value::Number(2.)));
+            assert_eq!(value(&p, "offset"), Some(Value::Number(12.)));
+            for id in [3, 4] {
+                send(&mut p, id, Phase::Started, 150.);
+                send(&mut p, id, Phase::Ended, 150.);
+            }
+            assert_eq!(value(&p, "taps"), Some(Value::Number(1.)));
+        }
     }
 
     #[test]

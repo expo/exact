@@ -231,6 +231,26 @@ final class SpaceHitMacTests: XCTestCase {
         XCTAssertEqual(seen.minY, expected.y - clip.bounds.origin.y, accuracy: 1e-6)
         XCTAssertEqual(seen.width, 60, accuracy: 1e-6)
         XCTAssertEqual(seen.height, 60, accuracy: 1e-6)
+
+        button.placementHidden = true
+        button.placement = nil
+        button.alphaValue = 1
+        XCTAssertFalse(hit(box, 180, 80) === button, "A hidden placement has no hit")
+        XCTAssertEqual(button.accessibilityFrame(), .zero)
+
+        let child = NodeView(id: 4, kind: "view", presenter: p)
+        button.addSubview(child)
+        button.removeFromSuperview()
+        XCTAssertTrue(child.placedAncestor === button, "A detached hidden placement still covers its children")
+        let replacement = NodeView(id: button.id, kind: "view", presenter: p)
+        replacement.addSubview(child)
+        replacement.placement = [1, 0, 0, 0, 1, 0, 0, 0, 1, 0]
+        button.placementHidden = false
+        XCTAssertTrue(child.placedAncestor === replacement, "Clearing the old view leaves its replacement placed")
+        replacement.placement = nil
+        XCTAssertNil(child.placedAncestor)
+        try XCTUnwrap(canvas.overlay).addSubview(button)
+        XCTAssertTrue(hit(box, 120, 20) === button, "Clearing placement restores the ordinary hit")
     }
 
     func testAnUnturnedBoxIsUnchanged() {

@@ -1,0 +1,7 @@
+test "Low Power Mode" on linux
+  prefer extension device.powerState={"lowPowerMode":true}
+  clock settle
+  expect state power.lowPowerMode == true
+  prefer extension device.powerState=clear
+  clock settle
+  expect state power.lowPowerMode == false

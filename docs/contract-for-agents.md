@@ -1030,6 +1030,61 @@ belongs to the root, which passes it down; name its declarations with the
 feature's prefix (`historyDays`), since the root and its members files share one
 set of names.
 
+#### Progressive tab traces
+
+In the [iOS simulator recipe](recipes/progressive-tabs.md), the warm snapshot showed
+Explore in `.state.slots.nav.tab`, rows ticket 4 in `.state.pending`, and both Stocks
+answers in `.state.instances`. Use those fields for component-owned resources.
+In this capture `.state.resourceStatus` reported a fallback while the rows were visible.
+
+The warm Explore press committed epoch 6. The journal tied the rows 503 to ticket 4,
+then recorded that rows kept its value and the failure update committed epoch 7.
+The display-link samples covering those epochs had `seq` ranges `[6,6]` and `[7,7]`.
+The first sample's `t` was 6,108.24 ms and the press was journaled at 6,126.14 ms.
+Use the epoch to identify the batch. Subtracting those times cannot give tap-to-frame
+latency. The frame's `apply` measures batch application and `commit` measures Core
+Animation commit duration. The trace has no physical presentation timestamp for the tab.
+
+In the ordered run the rows 200 journal entry reported `wall 623 ms; delivery wait 1020 ms`.
+Wall time includes the fixture holding the rows reply. Delivery wait measures the
+time from transport completion to delivery, including the wait behind history.
+History can opt into independent delivery because neither its GET nor its parser
+changes what rows will read. [Native HTTP scheduling](reference.md#what-a-data-module-can-use)
+
+To capture a slow return in your own development app on a connected iPhone, tap
+with four fingers and choose **Save Trace**. On the Mac run
+`bun scripts/agent.mjs trace --phone <phone-UDID> --app <app-directory>` from the Exact repo.
+The simulator can reach the Mac’s fixture at `127.0.0.1`. On a phone that address
+reaches the phone itself.
+
+**Linux and Chromium.**
+
+On the same Mac, leave the fixture running in terminal A. If the simulator app is
+still running, quit it from B with `xcrun simctl terminate "$sim" dev.exact.progressivetabs`.
+In B at the repo root, run the ordered comparison on the headless Linux host.
+
+```sh
+app=docs/recipes/progressive-tabs
+bun scripts/build-linux.mjs "$app"
+bun scripts/agent.mjs linux --app "$app" 'tap compare' 'tap tab-explore' 'clock until state pending == [] within 60000' logs
+```
+
+While B waits, release both replies in A within 60 seconds. After both `Held` lines,
+type `/rows/Stocks 200` and press Return, then `/history/Stocks 503` and Return.
+The rows `fulfil` line in B gives its HTTP wall time and delivery wait behind history.
+
+Browser fetch handles its own scheduling and ignores the native independence hint.
+After the Linux drive exits, run `bun host/web/dev.mjs --app "$app"` in B and open the
+printed URL in one Chromium tab. Click Explore and release the two Stocks 200s in A.
+Click Home, then Explore. With both replies held, run
+`await (await exact.attachReads())({op: 'state'})` in the browser console to read
+the route, pending tickets and epoch. Release `/rows/Stocks 503` in A. When the rows
+error appears, repeat the console read. Focus the page and press ⌥⇧T to save the
+trace, then release `/history/Stocks 503` in A. In B stop the dev server with
+Ctrl-C. Set `file` to the path the browser console printed and run
+`bun scripts/agent.mjs trace "$file"`. The Chromium trace omits the state snapshot.
+Match the epochs you read in the console to its frame callbacks’ `seq` ranges.
+
 ### Tabular numbers
 
 Use `font-variant-numeric="tabular-nums"` for **numeric columns** and **values that
@@ -2565,6 +2620,29 @@ the copy lasts until the next process launch, including after the caller cancels
 WebMCP takes JSON arguments with no file handoff, and AppFunctions' door is not built;
 a file face naming either is refused at build time. The call's existing time bounds stay the same.
 
+### Global shortcuts
+
+Import `globalShortcut`, `globalshortcut`, and `globalshortcutup` from
+`@exact/global-shortcuts` and declare the `device.global-shortcuts` grant.
+Keep the registration resource in the view. Bind the root’s press and
+release handlers to separate actions. Each receives the shortcut ID and
+can take a second argument of type `GlobalShortcutEvent` with `id` and
+`keys`. Check `globalShortcutStatus().releaseEvents` for hold actions.
+macOS delivers both events. Windows supports presses only. Linux currently
+has no global shortcut registration.
+
+On macOS, `keys="MetaRight"` binds Right ⌘ and `keys="AltRight"` binds
+Right ⌥. Each fires on press and release. The monitor sees only modifier
+changes, so Right ⌘ fires as part of ⌘C and Right ⌥ fires when someone types
+a character with it. Windows returns `reason="unsupported"` for both codes.
+Hosts without global shortcuts report `NotSupportedError` for the operation.
+
+Like modifier pairs, these triggers require the Accessibility grant. A missing
+grant gives `reason="not-allowed"`. For a modifier trigger, `registered: true`
+means the permission gate passed and the system accepted the monitor. It is
+not proof of delivery. Modifier triggers depend on the system delivering
+modifier-flag changes to a global monitor, as measured on macOS 27.2.
+
 ## Views, layout, and interaction
 
 For an attachment of any type, use `input type="file"` with no `accept` (or
@@ -3018,6 +3096,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `input type="radio"` (the radios of one `name` are a group) | the SF Symbols circle, filled at its centre when checked, at body size; in a grouped list's row no circle but the row's checkmark, which a tap on the row moves (LLP 1115.000 D13.2) |
 | `input type="range"` (as wide as what holds it; in a `row`, `flex=1 min-width=0` beside its label) | `UISlider`. VoiceOver's swipe up or down moves it by a written `step`; with no `step`, by a twentieth of the span and at least 1; under `step="any"`, by a twentieth of the span. For a move of your own and a free drag (a seek bar: 10 s a swipe), write `step="any"` and a `key` handler that changes the value on the arrows and calls `preventDefault()`. The swipe is that keydown first, as a screen reader's step is on macOS, Android and Windows and as a keyboard's arrow is: ArrowRight raises and ArrowLeft lowers (swapped where the range's `direction` is `rtl`), and a prevented one leaves the move to the handler. In a test on iOS, `type "seek" key "ArrowRight"` (or `"ArrowLeft"`) is the swipe: the slider's own accessibility increment or decrement, whichever sends that key, with the slider's step where nothing prevents it. Its `down` and `up` halves are that step's keydown with the move, then its keyup, and `for <ms>` repeats the move as a held key does. A range with `appearance="none"` shows no `UISlider`, and the arrow at it is a keyboard's: its `key` handlers hear it and the host moves nothing. On the other hosts the same line is a keyboard's arrow, which runs the same handler; there a screen reader's step is covered by the host's own tests, and on a Mac with keyboard navigation off an arrow nothing prevents does not move the slider. On the web, VoiceOver in iOS Safari steps a range itself and sends no key |
 | a box you draw with `role="slider"` or `"spinbutton"`, `aria-valuenow` (and `aria-valuemin`, `aria-valuemax`, `aria-valuetext`), `tabindex=0` and a `key` handler for the arrows | one adjustable element. VoiceOver's swipe up and down (and TalkBack's and Windows' adjust) are a keydown and keyup at it, as Safari sends them to an ARIA slider: ArrowUp and ArrowDown for a spin button or an `aria-orientation="vertical"` slider, else ArrowRight and ArrowLeft (swapped where the slider's `direction` is `rtl`). The handler changes the value, so a screen reader needs no − and + buttons |
+| `aria-actions="reset"` on the spinbutton, with `button "Reset quantity" id="reset" press=reset` beside it | VoiceOver offers “Reset quantity” on the spinbutton alongside increment and decrement. Invoking it presses the button while the cursor stays on the spinbutton. A space-separated list offers multiple actions in order. Hidden, disabled and absent targets offer none. Browsers receive the attribute directly. Android exposes the actions to TalkBack. The Windows and Wayland trees carry them. Their AccessKit adapters currently leave these named actions unpublished. The terminal has no platform accessibility tree. |
 | `input type="date"`, `"time"`, `"datetime-local"` | `UIDatePicker`; with an empty `value` its pill shows your `placeholder` (`placeholder="Add a date"`) or, with none, no words (LLP 1115.000 D13.1). Opening it accepts the current local date or time within `min`/`max`. On macOS, typing, an arrow or Return accepts the field's displayed value; focus alone leaves it empty. The web shows the browser's own empty field. Android shows Material's filled field, the value as the phone writes dates and `placeholder` its floating label, and Material 3's picker, in the control's `accent-color` where it has one (LLP 1115.001.000) |
 | `select` of `option`s (no wider than what holds it, however long its options) | a pop-up button with its menu |
 | `progress value=done max=goal` (a goal, an upload; as wide as what holds it) | `UIProgressView`, tinted by `accent-color` (LLP 1116 D8); never a drawn track and fill |
@@ -3358,8 +3437,8 @@ something to say, and change its text ([recipe](recipes/announce.md)):
 | macOS | `NSAccessibility.post(… .announcementRequested)` with the text, at low priority when polite and high when assertive; an arriving `alert` as on iOS. VoiceOver may still finish the focused control's speech first |
 | Web | the browser: the element carries its `role` and any `aria-live`, and the screen reader treats it as any page's live region |
 | Android | the node is a polite or assertive live region (`AccessibilityNodeInfo.setLiveRegion`), and a content change is sent from it when its accessible name changes and, usually, when it arrives; that is what TalkBack reads a live region by. TalkBack itself has not been heard reading one |
-| Windows | AccessKit's UI Automation adapter: the node's `LiveSetting`, and a `LiveRegionChanged` event when its name changes or it arrives with one. Not yet heard from Narrator |
-| Linux | nothing yet: the Linux host serves no screen reader (no AT-SPI) |
+| Windows | AccessKit's UI Automation adapter: the node's `LiveSetting`, and a `LiveRegionChanged` event when its name changes, when it arrives with a name, or when a named node changes to a live priority. Not yet heard from Narrator |
+| Linux on Wayland | AccessKit sends an AT-SPI `Object:Announcement` when a live name changes or arrives, with the text and its polite or assertive priority. Orca speaks it. Headless, KMS and VNC have no desktop publisher. |
 | watchOS | nothing: the watch entry refuses `aria-live`, and its SwiftUI driver posts no announcement for a `status` or `alert` |
 
 ### Sound, MIDI and media
@@ -3901,9 +3980,13 @@ A package serves a tag by declaring it in its `exact.json` `views` (LLP 1133.001
 app that depends on the package places it with no `app.json` entry. Its implementation
 makes it in each session, the same instance that answers its names: Swift
 `view(_:id:props:events:)` on the `ExactPackage` class, a `roster` of view classes from the
-web implementation, Kotlin `ExactExtension.view`; `id` is the node's. A view declared
-`"displayed": true` is told `displayed(id, shown, origin)` when it shows or hides, and a
-prop marked `"binds": true` `bound(id, prop, origin)` when it changes. Each report carries
+web implementation, Kotlin `ExactExtension.view`; `id` is the node's. On iOS and tvOS a
+Swift view that is a view controller's view returns that controller as `controller`: the
+host makes it a child of the controller its node shows in (a route's) once that
+controller exists, and moves it when the node shows in another (a dialog's sheet), as
+for an app's `ExactNativeScreen`. The package adds it to no parent itself. A view
+declared `"displayed": true` is told `displayed(id, shown, origin)` when it shows or
+hides, and a prop marked `"binds": true` `bound(id, prop, origin)` when it changes. Each report carries
 the origin of the commit that changed it. On Apple, a track view attaches its presentation through
 `context.tracks.present`. The first matching prop and committed binding subscribe under
 the less privileged of the display and binding origins. A replacement native view reads
@@ -4125,18 +4208,23 @@ An Apple implementation names Swift Package Manager products in its
 }
 ```
 
-For an app's own `modules/apple/*.swift`, put the same `swiftPackages` array
-under `host.ios` or `host.macos` in `app.json`. Swift imports the product's
-modules normally. All Apple destinations share one `Package.resolved` beside
-the app. Run `bun exact.mjs lock` after changing these declarations, bindings
-or used interfaces; review and commit the lock. Lock discovery follows the
-compiled plan, including views placed through Contract libraries. Builds
-refuse a missing or mismatched lock and disable automatic resolution.
-Conflicting direct versions name both requesters.
-SwiftPM verifies binary targets by checksum. One shared dynamic library links
-all declared products used by the app's Swift and its bound implementations,
-so SDK singletons and configuration are shared across consumers. It loads with
-the first consumer that needs it; an unused implementation stays unloaded.
+An implementation can ship a Swift package with `{"path":"LocalKit","products":["MapKitBridge"]}`.
+Write directory names separated by `/`, relative to `exact.json`, without spaces, `.` or `..` components.
+Links must stay inside the npm package. Its files count as native inputs because the Swift manifest can read them.
+SwiftPM evaluates `Package.swift` during locking and building. Exact uses the same SwiftPM manifest
+sandbox as a normal build. On macOS it permits file reads and restricts writes and network access.
+It covers manifest evaluation only. SwiftPM supplies no equivalent manifest sandbox on Linux.
+The package must declare the products. A target those products use on an Apple destination must have no
+`unsafeFlags` setting for that destination. For every remote dependency,
+require an exact version in `Package.swift` and list the same URL and version in this `swiftPackages` array.
+For an app's own `modules/apple/*.swift`, put URL entries under `host.ios` or `host.macos` in `app.json`.
+Swift imports the product's modules normally. After changing declarations, bindings or used interfaces,
+run `bun exact.mjs lock`. All Apple destinations share the app's `Package.resolved` for remote packages.
+Review and commit it. A build disables automatic resolution and checks every remote pin. A local-only
+graph needs no Swift lock. Conflicting paths, URLs or versions for one identity name both declarations.
+Lock discovery follows the compiled plan, including views placed through Contract libraries.
+SwiftPM verifies binary targets by checksum. One shared dynamic library links the products used by the
+app and its bound implementations. It loads with its first consumer and keeps one copy of SDK state.
 A dynamic framework a package brings, such as `Sparkle.framework`, goes into
 the Mac app's `Contents/Frameworks` whole, with its helpers and XPC services;
 `exact release` signs each inside out with the Developer ID and the hardened
@@ -4183,10 +4271,21 @@ target. A key typed `env` names the environment variable that holds its value:
 }
 ```
 
-The build reads the values, with each variable's value as the build runs, and
-writes them into the code it generates for the app. The package's code reads
-the declared keys for its target from its context. A key given no value is
-absent.
+For a test key, put an override in the development section of `app.json`:
+
+```json
+"development": {
+  "packages": { "exact-yandex-mapkit": { "ios": { "apiKey": { "env": "MAPKIT_TEST_KEY" } } } }
+}
+```
+
+A development-trust build uses that variable for `apiKey` and keeps the
+base values of other keys. A declared key may appear only in the development
+section. Production reads only the base variables and values, including for
+`"required": "release"`. An unset override variable leaves an optional key absent and
+refuses a build that requires the key. The package reads its target's selected
+values from its context. See the [package context](reference.md#package-configuration)
+for the build's `development` fact.
 
 | Target | What the package reads |
 | --- | --- |
@@ -4218,8 +4317,8 @@ Every build refuses these, naming the key and never its value:
 
 An `app.json` entry for a package that is not installed is a warning.
 
-**`env` keeps a value out of the repository, not out of the app.** Anything in
-`config` ships inside the APK, the IPA or the page, and anyone with the app
+An `env` reference keeps the value out of the repository. Each value selected
+for this build ships inside the APK, the IPA or the page, and anyone with the app
 can read it, as with a setting an app reads through `import.meta.env` (LLP
 1153 D4). A value that must stay secret belongs on a server. Restrict a vendor key to the
 app instead: by package name and signing certificate for Google's keys, or by
@@ -4409,6 +4508,7 @@ Exact supplies their child controllers and manages the arrangement's content
 slots and containment. Supply a detached controller with empty slots; reuse that
 controller for configuration changes. Call UIKit's `updateArrangement(_:animated:)`
 to change axes, split or overlay behavior, dimensions and placement properties.
+An animated change, from a UIKit action or the hatch's `changed`, moves the panes' content with the panes.
 Exact does not translate those settings. Navigation stays in the enclosing controller.
 UIKit may hide a pane when the allowed axes do not suit the current display.
 
@@ -4662,7 +4762,45 @@ different one with `navigationScroll`, by its `id`. The compiler refuses a liter
 name that no element of the route carries, or one whose element is a box that never
 scrolls on y (`lower-route-scroll`).
 
+For a route's bottom actions, put the scroller and then one toolbar row directly
+in the route's column. Give the scroller the remaining space.
+
+```text
+column navigationKey=`${e.id}` position="absolute" inset=0
+  scroll flex=1 min-height=0
+    …
+  row role="toolbar" toolbarPlacement="bottom"
+    button press=reshape
+      text "Reshape"
+    spacer
+    button press=openWidget
+      text "Widget"
+```
+
+On iOS and iPadOS the source row leaves the page. Its buttons become the
+route's native toolbar items and each spacer becomes a flexible space. The
+toolbar follows the route through navigation. UIKit includes it in the safe
+area, so the scroller's last row can scroll clear. Every other host lays out
+each live row where the author put it.
+
+A bottom toolbar must be a direct child of the route's column. An app that
+ships iOS can put only buttons and spacers in it. The compiler refuses two
+unconditional bottom toolbar rows and warns when an unconditional sibling
+follows a toolbar. If conditions or a loop emit several, UIKit uses the first
+in document order, leaves all source rows out of the page and writes one
+journal entry naming the route.
+
 ## Tabs and stacks
+
+On iPad a tab keeps a pushed stack by default. Write `navigationSplit="split"`
+on the first keyed route in the tabpanel to keep that route beside its detail.
+On a tab’s keyed route the value must be the literal `"split"` or `"none"`, or absent.
+To offer both presentations, declare two tabs or two routes. An untabbed route
+can still bind the value or specify a positive column width.
+UIKit keeps the tab bar and collapses the columns in a compact window.
+On iPad this also works on an untabbed first route. UIKit chooses the column
+width, including for a custom primary without a list.
+Use `navigationSplit="none"` to keep a stack at every width. [Navigation stack](recipes/navigation-stack.md)
 
 On iOS, `overflow="auto"` or `"scroll"` on the navigation root keeps the native
 container inside that scroller, sized to the root's box. Otherwise the native
@@ -5082,6 +5220,12 @@ JSON-LD. A page's own title and metas stay its `head` element's.
 
 ## Time, motion, graphics, and platform facts
 
+Desktop stills use `@exact/screen-capture`. On macOS, pass the `ScreenDetailed` from
+window management as `screen` and optionally a display-local CSS `rect`, or
+pass the session handle from `getWindowAtPoint` or `getFrontmostWindow` as
+`window`. The window still carries the frame for mapping clicks. Use
+`cursor="always"` to draw the pointer. See the [guide-step recipe](recipes/screen-capture.md).
+
 `clip-path` clips a box and its contents. Use `polygon(0% 25%, 100% 0%, 50% 100%)`
 for an outline that follows the box's size, or `inset(4px round 8px)` for an
 inset with rounded corners. Coordinates and radii take `px`, `%`, or unitless
@@ -5371,6 +5515,10 @@ and takes a file drag over a field inside its node; an app can show a drop
 overlay at `dragenter`, which the `drop` action clears when the drop lands
 and `dragleave` clears otherwise; a `paste`'s `ClipboardEvent` carries `files` too. See
 [Pointer](contract-grammar.md#pointer) and [Clipboard](contract-grammar.md#clipboard).
+A Paste button can send a mutation that calls `@exact/clipboard`'s `readText()` with the
+`clipboard.read` grant. To insert the result at the caret, call `setRangeText(id, text)`
+when the mutation answers. On Android the window needs input focus. A Paste image action uses `read()`
+and `await item.getType("image/png")` to get a sanitized PNG under `app:/tmp/`.
 
 Use `keycapture=shortcut` on a container when its shortcut must run before
 the focused field's `key=` handler. Capture runs outermost first, then the
@@ -5462,6 +5610,42 @@ A plan that binds `tip` links the `tips` capability (TipKit and SwiftUI on Apple
 driver's `state.tips` lists each tip's TipKit status, whether it shows and what it points
 at. Recipe: `tips`.
 
+#### A list inside a draggable sheet on iOS
+
+Put `heightDragFor` on the list and give its ancestor the named `id`. One
+contact expands the sheet, then scrolls the list. On the way down it takes
+the list back to its start, then lowers the sheet. A contact that moved the
+sheet sends its displayed height and its velocity in points per second to
+`heightrelease`. A contact that only scrolled can coast on its own.
+
+This sheet has stops at 160, 320 and 480. A slow release chooses the nearest
+stop (the higher one at a tie). A flick takes the next stop in its direction.
+
+```contract
+component ReadingSheet
+  state px = 320
+  action snap(height: number, velocity: number)
+    if velocity >= 250
+      px = height < 320 ? 320 : 480
+    else if velocity <= -250
+      px = height > 320 ? 320 : 160
+    else
+      px = height < 240 ? 160 : height < 400 ? 320 : 480
+  view
+    column id="sheet" height=px min-height=160 max-height=480 box-sizing="border-box" transition="height -exact-spring(300,30,1)"
+      list heightDragFor="sheet" heightrelease=snap flex=1 min-height=0
+        for n in range(24) key=n
+          text `Row ${n}` height=50
+```
+
+On iOS 26.5, UIKit settled to 320 from a held height of 399.00 and to 480
+from 400.33. At a release height of 376.33, +241.62 points/s stayed at 320
+and +266.77 advanced to 480. The example chooses 250 within that bracket.
+UIKit also stayed at 320 from 338.33 with a speed of +379.09, so a single
+cutoff only approximates its flick decisions across release heights.
+UIKit's inset sheet and an unscaled in-page box can reach different heights
+on the same finger stroke.
+
 #### Swipe to reply
 
 `swiperight` moves its node with the finger: it follows up to 64 points, then a fifth of
@@ -5508,6 +5692,35 @@ test "a swipe right answers the message"
 
 A test's drag is a real touch on an iOS simulator: start it where 100 points stay on the
 screen, and `clock settle` after it, so the spring back has ended when the screen is read.
+
+#### A flick that puts the keys away
+
+`swipe=action` with `swipe-direction="down"` is the platform's discrete swipe: nothing
+follows the finger, and the action runs once when iOS recognizes a quick flick down on the
+node or anything inside it, its field included. UIKit arbitrates it with the other gestures
+under the finger, as it does any swipe: a field whose text overflows scrolls instead. Only
+iOS has it, so give the effect a control as well (the keyboard recipe's Done). A swipe fires
+nothing where UIKit draws its own control in a node's place (tabs it draws as a segmented
+control, a bar's item, a native menu's item, a grouped list's cells): put it on what the
+page draws. `lower-swipe-unseen` names one inside a grouped list.
+
+```contract
+component Composer
+  state draft = ""
+  action edit(text: string)
+    draft = text
+  action hideKeys
+    blur("composer")
+  view
+    column swipe=hideKeys swipe-direction="down" testId="composer-bar"
+      textarea id="composer" testId="composer" value=draft input=edit field-sizing="content" max-height=120
+```
+
+`tap "composer-bar" swipe down` drives it on iOS under `--touch platform`, and in a test
+file, which takes real touches for it: a real flick, a fast drag of 120 points from inside
+the target and the viewport, which UIKit's recognizer reads. Without real touches it is
+refused, since nothing else reaches the recognizer. The reply says the touch was
+delivered, not that UIKit recognized it, so read the action's effect (the keyboard here).
 
 #### A confirmation
 
@@ -5599,10 +5812,16 @@ makes it the default button.) Only the alert's shape takes
 one field at a time: with it, a cancel and at most three buttons, no `for`
 (`lower-alertdialog` says which row breaks it).
 
-A menu row's second `text` is its item's grey subtitle on iOS when it is a line
-under the first (two texts in a block `button`, or a `flex-direction="column"`
-one), with or without an `if` around it; two texts side by side in a row, or one
-positioned `absolute` (a count at the corner), stay one title.
+On iOS and Android, a native menu button's second `text` is its subtitle.
+In a custom `button`, two block texts in a block button or two texts in a flex
+column supply the title and subtitle. The second may sit inside an `if`.
+Side-by-side texts or an absolutely positioned count form one title.
+On Android a checked item keeps its symbol leading and shows the check trailing.
+Without a symbol, the check is leading. An Android menu button’s `aria-label` names
+the action for accessibility. Otherwise the reader uses its exposed text, falling
+back to the painted title and subtitle when all the text is decorative.
+Windows window and status menu flyouts draw only the title line. When a checked
+item has a symbol, the flyout shows the symbol alone.
 
 A submenu is a row whose `popovertarget` names another menu popover (`Copy ▸
 path / link`): a submenu `NSMenuItem` on macOS, a nested `UIMenu` on iOS, and
@@ -5612,6 +5831,15 @@ it beside its row with `position-area="right span-bottom"`; give its items
 the whole menu; write no `press` on the row that opens it (a native menu never
 runs it); and draw the web's `›` as an `aria-hidden` text, since the native
 menus draw their own arrow (LLP 1021 §5.2).
+
+Use `aria-keyshortcuts="Mod+Shift+O"` for the primary shortcut on every
+host. On Apple platforms it takes Command and files in the Mac menu bar
+as a `Meta` chord. Elsewhere it takes Control. The web writes the
+resolved chord to the DOM once the browser supplies its platform.
+Draw the cap with `text formatShortcut("Mod+Shift+O")`. The server leaves it
+empty. The client shows ⇧⌘O on Apple platforms and Ctrl+Shift+O elsewhere.
+See [Apple’s modifier order](https://developer.apple.com/design/human-interface-guidelines/keyboards/)
+and [Microsoft’s key names](https://learn.microsoft.com/en-us/style-guide/a-z-word-list-term-collections/term-collections/keys-keyboard-shortcuts).
 
 For the Mac menu bar, put `-exact-menu="app"` on an ordinary button to add
 an item without a shortcut. Literal destinations are `about` (directly under
@@ -5639,7 +5867,7 @@ Other standard items remain; other hosts ignore removal.
 with no chord, so ⌘W reaches the page; declare `-exact-menu-remove="close-all"`
 with it, or AppKit's Close All ⌥⌘W shows as a row of its own.
 `close-window=Meta+Shift+W` gives it ⇧⌘W instead: one `aria-keyshortcuts`
-chord with `Meta` that is not the host's or the system's own. View has Actual Size
+chord with `Meta` or `Mod` that is not the host's or the system's own. View has Actual Size
 ⌘0, Zoom In ⌘+ and Zoom Out ⌘-, a page zoom as a browser's: the viewport,
 `px` and `rem` all follow it; an app's own zoom commands set it with
 `setPageZoom(factor)`. See the grammar’s “The Mac’s menu bar”.
@@ -5786,6 +6014,21 @@ Swift module loads that library with the app module. Under the agent,
 `state.extensions.<name>.implementation.loaded` reports whether it is mapped
 (LLP 1067.000.001).
 
+An app can answer its own data calls in Swift or Kotlin. On Apple, name the
+`ExactModule` subclass with `let exactModule` in `modules/apple`. On Android,
+define `class exact.app.Module : dev.exact.canvas.ExactModule()` in
+`modules/android`. The session owns one instance across Activity recreation.
+`native.call` runs a cheap query on main on Apple and on the caller's thread on Android. `native.later` starts on
+main and can reply from any thread. Use `context.after` for the session clock
+and `context.changed(topic)` for a source that reads `native.watch(topic)`.
+On Android, `context.activity` is the activity in front, as a package's
+`ExtensionContext.activity` is, for what needs its window (`FLAG_SECURE`,
+`screenBrightness`, a screen-capture callback); touch it on main, from `later`.
+It is null while no activity exists, and the stopped one while the app is in
+the background. A configuration change that remakes the activity drops what
+was set on its window (expo/exact#1596).
+See the [native module recipe](recipes/native-module.md).
+
 Put vendor `.xcframework` bundles beside an Apple native module's Swift files
 (`modules/apple`, or its platform-local replacement). The Apple build selects
 by platform, device or simulator, and architecture from each bundle's `Info.plist`.
@@ -5911,7 +6154,7 @@ both. Its declared shape chooses what it reads: `available`, `generation`, `size
 answer reads, 0 before the first. `observations` has an inset set (`top`, `right`,
 `bottom`, `left`) per family: `safeArea`, `keyboard`, `keyboardUndocked`,
 `safeAreaCorners`, `layoutMargins`, `layoutMarginsCorners`, `readableContent`,
-`readableContentCorners`, `readableContentGuide` and `systemMinimumLayoutMargins`.
+`readableContentCorners`, `readableContentGuide`, `systemMinimumLayoutMargins` and `bar`.
 `margins` has the `layoutMargins`, `readableContent` and `readableContentGuide`
 rectangles (`x`, `y`, `width`, `height`). Declare every field but `available` and
 `generation` an `option`, and each family and rectangle in them too: each is `none`
@@ -5941,7 +6184,13 @@ focus, may read a fact, as a UIKit app chooses a popover or a sheet by its width
 button is pressed: it runs once per event, so it cannot feed back. A fact may decide
 content: sizes, text and which content shows. A report that owes no layout, such as a
 band no style reads, reaches the facts at the next layout. `exactNativeChain(id)` answers
-`available` false, its `entries` `none`, until hosts report their native chains.
+the native targets of the owner holding the node `id` names, or the session view's outside
+every owner, as `entries`: the owner's controller and each `parent` by `number` from 1, then
+the related targets (`presenter`, `session`, `root`, `window` and the rest) by `relation`.
+Each has `kinds` (`navigation`, `tab`, `split`, `column`), `id`, `generation`, `frame` (its
+bounds in its window) and `insets` (its raw safe area in its own coordinates), the last two
+`none` while it is unavailable. It answers `available` false, its `entries` `none`, where the
+host reported no chain, as no host does yet.
 `exactSafeAreaUnsettled()` answers `available`, `count`, the boxes the last layout left
 unsettled, and `ids`, the `id`s of those that have one.
 
@@ -5992,6 +6241,11 @@ toolbarPlacement="keyboard"` at the bottom of the page or of a sheet route sits 
 the keys under every `interactive-widget`: a sheet's layout ends at the keys while
 its field has the focus, whatever the root says; on the page, `overlays-content`
 lifts the toolbar onto them and `resizes-content` ends the page there.
+On iOS a scroller's `-exact-keyboard-dismiss-padding: <length>` starts the keyboard
+following a finger that drags the scroller in an interactive `keyboardDismissMode`
+that far above the keys: give a transcript its composer's height, and the keyboard
+and the composer go down together under the finger. Unsaid it is 0, as in UIKit and
+SwiftUI; Android and the web read no padding.
 
 `exactViewport().pointer` and `.hover` are CSS's `pointer` (`fine`, `coarse`,
 `none`) and `hover` (`hover`, `none`) for the primary input: the web's media
@@ -6423,11 +6677,15 @@ these bounds do not substitute for measuring whole-hook overhead on real devices
 ### Startup marks of any build: `EXACT_OBSERVE_LOG=1`
 
 An Apple app launched with `EXACT_OBSERVE_LOG=1` prints its startup measurement to stderr once launch
-has settled, in a release build too. The one `observe: startup` line has the launch type (`cold`,
+has settled, in a release build too. The `observe: startup` line has the launch type (`cold`,
 `warm`), how the first tree booted (`baked`), how time to interactive ended, Observe's metrics, and each
 mark in ms from process start (`main`, `didFinishLaunching`, `boot`, `commit`, `present`, `interactive`
 …). The metrics are `timeToFirstRender` (the first vsync after the first tree's commit) and
-`timeToInteractive`, both from `didFinishLaunching`, and `coldLaunchTime` or `warmLaunchTime`. On a
+`timeToInteractive`, both from `didFinishLaunching`, and `coldLaunchTime` or `warmLaunchTime`.
+Time to interactive covers the native tree only, so an app with a GPU canvas (a game, a painted
+surface) also prints `observe: world <ms>` once, when the canvas's first frame reaches the screen:
+the `world` mark, in ms from process start like the startup line's marks. It may come before or after
+the startup line. A tool that captures the screen should wait for it when the app draws a canvas. On a
 simulator, give the variable to the app through `simctl`'s prefix and read its console:
 
 ```sh
@@ -6857,7 +7115,7 @@ application, so its local event monitors see them). Other carriers answer
 `delivery: "unsupported"` for forms they cannot carry; Firefox and WebKit carry
 clicks and wheels at a point, including wheels with modifiers. A word a form does
 not use is refused by name. `tap stage wheel 0 -20 modifiers Control`
-is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS, Windows). Plain canvas taps and held contacts are
+is a pinch's wheel; `tap world drop a.board` drags a file in (web, macOS, Windows, Android). Plain canvas taps and held contacts are
 fingers, so their platform pointer identity and retained press history can differ
 from a mouse's; use the intended physical input when comparing game saves.
 
@@ -7080,7 +7338,14 @@ step inside a test.
 fixture. Other single-value page facts, such as `prefer online false`, follow
 the same launch, override and reload rules and use the drive's parser and name
 aliases. Hosts refuse facts they cannot substitute. Folds (`posture`, `segments`,
-`gap`), mode pins and extension substitutes are drive-only for now.
+`gap`) and mode pins require a drive.
+
+`prefer extension store.outcome="cancel"` sets a package substitute.
+A leading line supplies it before boot. A later step changes subsequent calls,
+and `prefer extension store.outcome=clear` restores the package default.
+A package that reads its substitute only at startup sees a mid-test change
+at the next launch. Reload and verify's relaunch receive the current values.
+Each test and each replay starts again with the package defaults.
 
 Before the first step (and after a `reload`) the driver waits for the app's data
 as `clock data` does: its data module activated and every request launch started
@@ -7181,6 +7446,9 @@ before, so the app's dates agree with the server's but differ run to run. The st
 `tap "list" into "key"` (a virtualized list's row brought into view by its key,
 so the next step can tap a row outside the rendered window),
 `tap "id" pinch <scale> [at x y]` (two fingers; `scale` greater than 0),
+`tap "id" swipe <left|right|up|down> [at x y]` (the platform's swipe as a real flick, a fast
+drag of 120 points from the target's middle or `at`; iOS, where a test file takes real
+touches for it),
 `tap "id" drag dx dy [from x y] [mouse] [press ms] [over ms] [hold ms] [into keyboard] [during "op" …]`
 (a finger, `pointerType` touch, where the carrier has one, unless `mouse` names the left button; `during`
 is last: quoted reads or `clock` while that contact is down, after the move and
@@ -7400,15 +7668,26 @@ draw the system blur approximation described in LLP 1053.000 §3.
 `-exact-glass-tint` tints the glass of a box with `backgroundMaterial="glass"` or
 `"glass-clear"`: `-exact-glass-tint="rgba(232,192,99,0.9)"` is a gold button,
 `"rgba(10,12,16,0.55)"` a dark panel. It is a colour resolved in the box's colour
-scheme (`light-dark()` and the platform colours work); unset, the glass is untinted. iOS and tvOS 26 set it as `UIGlassEffect`'s
-`tintColor` and macOS 26 as `NSGlassEffectView`'s, so the glass itself takes the
-colour; a `background-color` is painted behind the glass, not into it. The web and
-Linux draw it as the material's background colour in place of the table's; Android
-and Windows draw no glass and ignore it. Glass reacts to a touch (iOS's interactive
-glass) when its box has a `press` and is not disabled; `glassInteractive=false` turns
-that off on a pressable box and `glassInteractive=true` turns it on for one without
-a press. Only iOS and tvOS 26 have interactive glass; other hosts ignore it. Neither
-applies to a native button, whose glass is its `buttonStyle`'s.
+scheme (`light-dark()` and the platform colours work). iOS and tvOS 26 set it as
+`UIGlassEffect`'s `tintColor` and macOS 26 as `NSGlassEffectView`'s; unset, these
+hosts leave the glass untinted. A `background-color` is painted behind their glass,
+not into it.
+
+The painted hosts (Android, Windows and Linux) draw the material's tint plus a
+backdrop blur, without Liquid Glass refraction or specular highlights. With no
+background colour, `"glass"` uses `#ffffffb3` in light appearance and `#262629b3`
+in dark, with a 20 px blur; `"glass-clear"` uses its lighter table tint and a 10 px
+blur. `-exact-glass-tint` replaces the table's tint. An authored nontransparent
+`background-color` replaces that tint instead; the blur remains. Android before
+12 draws the tint without the backdrop blur. The web also draws a tint and blur,
+with `-exact-glass-tint` in place of the table's tint unless a `background-color`
+overrides it.
+
+On iOS and tvOS 26, glass reacts to a touch when its box has a `press` and is not
+disabled; `glassInteractive=false` turns that off on a pressable box and
+`glassInteractive=true` turns it on for one without a press. Other hosts ignore
+`glassInteractive`. Neither it nor `-exact-glass-tint` applies to a native button,
+whose glass is its `buttonStyle`'s.
 
 `flex` accepts CSS `none`, `auto`, `initial`, `unset`, a basis, or
 `<grow> [<shrink>] [<basis>]` (including `flex="0 1 auto"`). Numeric bindings
@@ -7451,6 +7730,11 @@ small viewport until a content root declares a container there, and leaves an
 SVG attribute in one unwritten.
 Inherited font sizes and lengths in `em` follow the resolved font on resize.
 
+A route beside a native tab sidebar can be narrower than `100vw`. In a padding
+calculation, `calc(100vw - 100%)` is the window width less the containing block's
+width, not a leading-bar inset: a sheet or a trailing rail can also narrow it.
+Do not infer the side of a bar from the width difference.
+
 ### Length calculations and safe areas
 
 Dimension rows also take `env(safe-area-inset-top|right|bottom|left)` and CSS's
@@ -7482,6 +7766,10 @@ set it for its subtree, spelled as it is read:
 `--exact-safe-area-inset-bottom="0px"` (a length, no percentage; one that reads
 itself is ignored, as a CSS cycle is).
 
+Use `var(--exact-bar-inset-start)` and `var(--exact-bar-inset-end)` for the width of navigation beside the route. The reading box’s direction determines start and end. On iPad a tab sidebar beside the route counts, and on iPhone Duo a visible tab rail counts, even when it occupies the device’s side inset. A side without a bar reads `0px`, as do both sides on other hosts. A split column reads the bar on the edge it adjoins. A drawer over the route and a sheet’s own margin contribute zero.
+
+In a left-to-right box, `padding-left="max(10px, calc(22px - max(env(safe-area-inset-left), var(--exact-bar-inset-start))))"` leaves 22 points where both insets are zero and 10 where either reaches 12 points. For the same physical left padding in a right-to-left box, use `--exact-bar-inset-end`.
+
 The host clears a route's content of the chrome it did not write (LLP 1123 D3), on
 every host with bars: on each edge it pads the route by that inset, or the route's
 scroller takes it as its content inset where the scroller starts at the route's top
@@ -7508,6 +7796,11 @@ picture under the bar:
   starts under the bar, at its start the hero's background reaches the screen's top
   and its text rests below the bar. `navigationBar="transparent"` does the same and
   also hides the bar's background until the content scrolls under it.
+
+To know the area a box drawn across the whole route covers, measure that box
+with `resize=<action>` (as `resize=fit` below), not the route or
+`exactViewport()`: a route's outer box can span the window while its content
+clears a bar.
 
 A box outside every route clears the status bar with
 `top="var(--exact-safe-area-inset-top)"`.
@@ -8290,9 +8583,9 @@ name="color-scheme">` before the first paint. Android, Linux and Windows follow 
 `"dark-content"` or `"auto"` on any node, bound to state, sets an iOS or Android phone's
 status bar: of what the bar sits over, the declaration painted on top wins.
 `auto` follows the winner's `color-scheme`, else the page's scheme; without a valid
-declaration the bar follows the page's scheme. On Android, `navigation-bar-style` takes the same three values for the
-navigation buttons. It resolves independently in the same scope and defaults to
-the page's scheme (LLP 1105 D7). With gesture navigation, Android can choose the
+declaration iOS follows the page's scheme. Android resolves `navigation-bar-style` for navigation icons in the same scope, independently.
+Without an explicit icon style, each Android system bar follows its projected header’s or root tablist’s ink, then the page’s scheme (LLP 1105 D7).
+The element’s `background-color` fills the bar through the system band. Its `color` supplies the title, Up arrow, action icons and unselected destinations, defaulting to black or white on an authored background and to the device roles otherwise. On Android, the root’s `accent-color` seeds Material’s tonal-spot colours for the indicator, selected symbol and label, and enabled, untinted text actions. With gesture navigation, Android can choose the
 handle colour from what the page actually paints. Android's modal routes are
 pages that cover the bar; native sheet detents and transition completion are not
 available there (see `host/android/README.md`, Edge to edge). On iOS a flip shows in

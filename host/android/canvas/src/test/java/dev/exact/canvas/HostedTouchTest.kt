@@ -78,7 +78,7 @@ class HostedTouchTest {
                 samples.add(y to at)
                 if (action == 4 && takesLongPress) reply[3 + 11 * reply[1] + 7]++
             }
-            @Implementation @JvmStatic fun finger(action: Int, id: Int, x: Float, y: Float) {
+            @Implementation @JvmStatic fun finger(action: Int, id: Int, x: Float, y: Float, tool: Int, at: Long, primaryX: Float, primaryY: Float) {
                 fingers.add(action to id); fingerPoints.add(x to y)
             }
             @Implementation @JvmStatic fun scrolled(id: Int, x: Float, y: Float, rev: Int) {

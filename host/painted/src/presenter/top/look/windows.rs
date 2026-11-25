@@ -350,6 +350,8 @@ mod tests {
                 .map(|(i, title)| Row {
                     node: i as ViewId + 2,
                     title: title.into(),
+                    menu_label: None,
+                    subtitle: None,
                     direction: exact_kernel::Direction::Ltr,
                     symbol: None,
                     destructive: i == 1,

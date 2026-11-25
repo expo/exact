@@ -83,6 +83,9 @@ impl Device for Selected {
     fn last_use(&self, id: TextureId) -> Result<Submission> {
         self.device().last_use(id)
     }
+    fn orders_upload(&self, id: TextureId) -> Result<bool> {
+        self.device().orders_upload(id)
+    }
     forward! {
         upload_buffer(buffer: &Buffer, offset: u64, data: &[u8]) -> Result<Submission>;
         create_texture(desc: TextureDesc) -> Result<TextureId>;

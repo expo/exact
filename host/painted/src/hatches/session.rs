@@ -80,10 +80,30 @@ pub(crate) struct Published {
     pub(crate) size: (f32, f32),
 }
 
-struct After {
-    due: f64,
-    token: u64,
-    order: u64,
+/// One-shot timers in registration order. Hatches discard theirs on reload;
+/// an Android data module keeps its own queue until its session ends.
+#[derive(Default)]
+pub(crate) struct Afters<T>(Vec<(f64, T)>);
+
+impl<T: Copy> Afters<T> {
+    pub(crate) fn add(&mut self, due: f64, token: T) {
+        self.0.push((due, token));
+    }
+
+    pub(crate) fn next(&self) -> Option<f64> {
+        self.0.iter().map(|&(due, _)| due).reduce(f64::min)
+    }
+
+    pub(crate) fn take_due(&mut self, now: f64, limit: usize) -> Vec<T> {
+        if !self.0.iter().any(|&(due, _)| due <= now) {
+            return Vec::new();
+        }
+        // Stable sort preserves registration order for equal deadlines. A capped seek
+        // leaves the rest of the due timers registered for the following command.
+        self.0.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let count = self.0.partition_point(|&(due, _)| due <= now).min(limit);
+        self.0.drain(..count).map(|(_, token)| token).collect()
+    }
 }
 
 /// The frame clock's registrations: live tickets in registration order, the
@@ -92,10 +112,9 @@ struct After {
 #[derive(Default)]
 struct Clock {
     tickets: BTreeSet<u64>,
-    afters: Vec<After>,
+    afters: Afters<u64>,
     base: f64,
     k: u64,
-    order: u64,
 }
 
 impl Clock {
@@ -279,16 +298,12 @@ impl Shared {
     }
 
     pub(crate) fn after(&self, ms: f64) -> u64 {
-        let token = self.token();
-        let mut clock = self.clock.borrow_mut();
-        clock.order += 1;
-        let order = clock.order;
         let ms = if ms.is_finite() { ms.max(0.0) } else { 0.0 };
-        clock.afters.push(After {
-            due: self.now.get() + ms,
-            token,
-            order,
-        });
+        let token = self.token();
+        self.clock
+            .borrow_mut()
+            .afters
+            .add(self.now.get() + ms, token);
         self.woke.set(true);
         token
     }
@@ -305,7 +320,7 @@ impl Shared {
     pub(crate) fn stop(&self, token: u64) {
         let mut clock = self.clock.borrow_mut();
         clock.tickets.remove(&token);
-        clock.afters.retain(|a| a.token != token);
+        clock.afters.0.retain(|&(_, t)| t != token);
         self.observers.borrow_mut().retain(|(t, _)| *t != token);
         self.stops.set(self.stops.get() + 1);
     }
@@ -320,7 +335,7 @@ impl Shared {
     pub(crate) fn live(&self, token: u64) -> bool {
         let clock = self.clock.borrow();
         clock.tickets.contains(&token)
-            || clock.afters.iter().any(|a| a.token == token)
+            || clock.afters.0.iter().any(|&(_, t)| t == token)
             || self.observers.borrow().iter().any(|(t, _)| *t == token)
     }
 
@@ -338,7 +353,7 @@ impl Shared {
     /// ticket's next frame or pending `after`.
     pub(crate) fn next_instant(&self) -> Option<f64> {
         let clock = self.clock.borrow();
-        let after = clock.afters.iter().map(|a| a.due).reduce(f64::min);
+        let after = clock.afters.next();
         match clock.tickets.is_empty() {
             true => after,
             false => Some(clock.frame_due().min(after.unwrap_or(f64::INFINITY))),
@@ -347,8 +362,7 @@ impl Shared {
 
     /// The earliest pending `after`: what the wall's loop sleeps until.
     pub(crate) fn after_due(&self) -> Option<f64> {
-        let clock = self.clock.borrow();
-        clock.afters.iter().map(|a| a.due).reduce(f64::min)
+        self.clock.borrow().afters.next()
     }
 
     /// Whether the tickets' next virtual frame is due at `now`; it is then
@@ -365,23 +379,14 @@ impl Shared {
     }
 
     /// The `after`s due at `now`, taken, in due order, ties by registration.
-    pub(crate) fn due_afters(&self, now: f64) -> Vec<u64> {
-        let mut clock = self.clock.borrow_mut();
-        let mut due: Vec<(f64, u64, u64)> = clock
-            .afters
-            .iter()
-            .filter(|a| a.due <= now)
-            .map(|a| (a.due, a.order, a.token))
-            .collect();
-        clock.afters.retain(|a| a.due > now);
-        due.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        due.into_iter().map(|(_, _, token)| token).collect()
+    pub(crate) fn due_afters(&self, now: f64, limit: usize) -> Vec<u64> {
+        self.clock.borrow_mut().afters.take_due(now, limit)
     }
 
     /// A reload: what was registered before it is dropped. How many of each.
     fn reset_clock(&self) -> (usize, usize) {
         let mut clock = self.clock.borrow_mut();
-        let dropped = (clock.tickets.len(), clock.afters.len());
+        let dropped = (clock.tickets.len(), clock.afters.0.len());
         *clock = Clock::default();
         self.stops.set(self.stops.get() + 1);
         dropped
