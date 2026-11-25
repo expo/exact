@@ -1070,10 +1070,14 @@ async function openWebUnlocked({
         const settled = await readPicture();
         if (settled.error) throw new Error(settled.error);
         // A viewport-only capture can retain a rounded background painted before its image became opaque.
-        const { cssVisualViewport: v } = await call('Page.getLayoutMetrics');
+        const { cssVisualViewport: v, cssLayoutViewport: l, cssContentSize: c } = await call('Page.getLayoutMetrics');
+        // That capture's origin is the left edge of the page's scrollable overflow, which a right-to-left page has
+        // left of 0. The body's direction is the page's (CSS Writing Modes 4 §8) and inherits the root's.
+        const rtl = await evaluate("getComputedStyle(document.body).direction === 'rtl'");
+        const left = rtl ? Math.max(0, c.width - l.clientWidth) : 0;
         const { data } = await call('Page.captureScreenshot', {
           format: 'png', captureBeyondViewport: true,
-          clip: { x: v.pageX, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: v.scale },
+          clip: { x: v.pageX + left, y: v.pageY, width: v.clientWidth, height: v.clientHeight, scale: v.scale },
         });
         writeFileSync(path, Buffer.from(data, 'base64'));
         return { ...tags, screenshot: path, w: size[0], h: size[1], ...(pending ? { imagesPending: pending } : {}) };

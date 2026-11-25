@@ -126,6 +126,54 @@ need('chrome', chromium().unavailable)('scaled avatars keep identical pixels aft
   }
 }, 30000);
 
+const bar = (at, color, top, height) => `<i style="position:absolute;left:${at}px;top:${top}px;width:100px;height:${height}px;background:${color}"></i>`;
+for (const [name, html, body, scrolls] of [
+  ['right-to-left', 'dir="rtl"', '', [0, -50, -110]],
+  ['right-to-left from its body', '', 'dir="rtl"', [0, -50]],
+  ['right-to-left that clips', 'dir="rtl" style="overflow:hidden"', 'style="overflow:hidden"', [0]],
+  ['left-to-right under a right-to-left root', 'dir="rtl"', 'dir="ltr"', [0, 50]],
+  ['left-to-right', '', '', [0, 50]],
+]) {
+  need('chrome', chromium().unavailable)(`a screenshot shows the viewport of a page that is ${name} and overflows its width`, async () => {
+    const rtl = name.startsWith('right');
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(`<!doctype html><html ${html}><body ${body}>
+      <style>body{margin:0;height:900px}</style><div id="exact-root" data-boot-ms="0"></div>
+      ${bar(0, '#f00', 0, 900)}${bar(rtl ? -110 : 400, '#00f', 0, 300)}
+      <script>globalThis.exact = {ready:Promise.resolve(), agentSettled:async () => ({})};</script>`, { headers: { 'content-type': 'text/html' } }) });
+    const dir = mkdtempSync(resolve(tmpdir(), 'exact-page-capture-'));
+    let session;
+    try {
+      session = await open({ host: 'web', url: server.url.href, size: [390, 400] });
+      const { evaluate, call } = session.carrier;
+      for (const zoom of [1, 2]) {
+        await call('Emulation.setPageScaleFactor', { pageScaleFactor: zoom });
+        for (const scroll of scrolls) {
+          await evaluate(`scrollTo(${scroll}, 0)`);
+          expect(await evaluate('scrollX')).toBe(scroll);
+          await webFrame(evaluate);
+          const path = resolve(dir, `${zoom}-${scroll}.png`);
+          await session.screenshot(path);
+          const { width, data } = decodePng(readFileSync(path)), visible = await evaluate('[visualViewport.pageLeft, visualViewport.width]');
+          // Each colour's first and last column in the top row, in the page's CSS pixels.
+          const span = color => {
+            const columns = Array.from({ length: width }, (_, x) => x).filter(x => [0, 1, 2].every(k => data[x * 4 + k] === (k === color ? 255 : 0)));
+            return columns.length ? [columns[0], columns.at(-1) + 1].map(x => visible[0] + x * visible[1] / width) : null;
+          };
+          const shown = left => {
+            const from = Math.max(left, visible[0]), to = Math.min(left + 100, visible[0] + visible[1]);
+            return from < to ? [from, to] : null;
+          };
+          expect({ zoom, scroll, red: span(0), blue: span(2) }).toEqual({ zoom, scroll, red: shown(0), blue: shown(rtl ? -110 : 400) });
+          expect(await evaluate('scrollX')).toBe(scroll);
+        }
+      }
+    } finally {
+      try { await session?.close(); }
+      finally { server.stop(true); rmSync(dir, { recursive: true, force: true }); }
+    }
+  }, 30000);
+}
+
 const posix = process.platform === 'win32' ? 'SingletonLock is a POSIX symlink' : null;
 for (const source of ['SingletonLock', 'browser-owner']) {
   notApplicable(source === 'SingletonLock' ? posix : null)(

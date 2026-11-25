@@ -1,9 +1,10 @@
 // An app's `file:` dependencies, as its builds read them (#115). Bun installs a `file:` package inside the app's
-// directory as a copy of the package's directory, and one outside it as a directory of links to each of its files.
-// Either is the package as it was at the last `bun install`: an edit to a copy, a file added to either and a file
-// removed from either are not what `node_modules` holds until the next one. Every reader of a package (the bake's
-// resolver, Rolldown, the Swift, Kotlin and Rust builds) reads `node_modules`, so before a build reads it, this makes
-// it what the declared directories hold now, by Bun's own install: the one that decides what an install is.
+// directory as a copy of the package's directory (on Linux, a hard link to each file), and one outside it as a directory
+// of links to each of its files. Any of these is the package as it was at the last `bun install`: an edit to a copy, a
+// hard-linked file replaced by a new one, a file added and a file removed are not what `node_modules` holds until the
+// next one. Every reader of a package (the bake's resolver, Rolldown, the Swift, Kotlin and Rust builds) reads
+// `node_modules`, so before a build reads it, this makes it what the declared directories hold now, by Bun's own
+// install: the one that decides what an install is.
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -63,13 +64,14 @@ export function declaredSources(appDir) {
 
 const isDirectory = (path) => { try { return statSync(path).isDirectory(); } catch { return false; } };
 
-/** Every file under `dir` but the package's own installs and repository, as paths relative to it. A link is followed;
+/** Every file under `dir` but the package's own installs and repository, as paths relative to it, in name order in
+ * each directory. A link is followed;
  * one that leads nowhere is not a file of a source, and is one of an install (`dangling`), where it is the link to a
  * file removed since. */
 function files(dir, dangling = false, at = '') {
   const out = [];
   let entries;
-  try { entries = readdirSync(join(dir, at)); } catch { return out; }
+  try { entries = readdirSync(join(dir, at)).sort(); } catch { return out; }
   for (const name of entries) {
     if (!at && NOT_SOURCE.has(name)) continue;
     const path = at ? join(at, name) : name;

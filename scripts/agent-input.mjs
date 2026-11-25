@@ -29,6 +29,9 @@ import { appShareTarget, driverShare, webShareLocation } from './share-target.mj
 const FRAME_MS = 16;
 /** The longest timed move the driver steps; past it the carrier's own bound answers, as a drag's `over` is bounded. */
 const MOVE_MS = 2000;
+/** A host's refusal of a plain press whose target, scrolled in by the reveal before it, is no longer hit at its middle
+ * (`addressed_tap.rs`). */
+const MOVED_SINCE_REVEAL = /is covered or not hit at its projected center/;
 
 /** The input methods of session `s` over `carrier`, which `open` adds to `s`. */
 export function sessionInput(s, { carrier, host, timing, touch, app }) {
@@ -363,11 +366,22 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
           carrier: host,
           mode: timing,
         });
-      let r;
+      let r, again = null;
+      const press = () => carrier.input(node.id, kind, { ...opts, ...at });
       try {
-        r = await carrier.input(node.id, kind, { ...opts, ...at });
+        r = await press();
       } catch (error) {
-        throw await tapRefusal(s, target, await s.named(error));
+        // The window can change between the reveal and the press: on Android a keyboard that leaves gives the page
+        // its height back and the navigation bar its room, which can park the revealed target under the bar. A plain
+        // press refused as covered is revealed again and pressed once more when that reveal moved it; one that
+        // stays covered (nothing scrolls it clear) is refused as before.
+        again = kind === 'press' && !explicit && MOVED_SINCE_REVEAL.test(error?.message ?? '') ? await s.reveal(node.id).catch(() => null) : null;
+        if (!again) throw await tapRefusal(s, target, await s.named(error));
+        try {
+          r = await press();
+        } catch (retried) {
+          throw await tapRefusal(s, target, await s.named(retried));
+        }
       }
       if (r.error) r.error = (await tapRefusal(s, target, await s.named(new Error(r.error)))).message;
       if (kind === 'down' && r.delivery !== 'unsupported') {
@@ -379,6 +393,7 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
         tapped: node.id,
         target,
         ...(scrolled ? { scrolled } : {}),
+        ...(again ? { revealedAgain: again } : {}),
         delivery: r.delivery ?? s.input.delivery(kind),
         carrier: host,
         mode: r.mode ?? timing,

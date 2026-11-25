@@ -176,7 +176,7 @@ impl<D: DataSource> Host<D> {
         Ok(())
     }
     fn unsupported_region_paint(&self) -> bool {
-        use exact_kernel::{StyleId as S, WrapFlow};
+        use exact_kernel::{StyleId, WrapFlow};
         let Some(region) = slot_region(&self.content_region).filter(|r| r.native.is_none()) else {
             return false;
         };
@@ -206,36 +206,36 @@ impl<D: DataSource> Host<D> {
                     || !node.looks().is_empty()
                     || node.props.str(PropId::BackgroundMaterial).is_some()
                     // The worker draws glyph fills only; a stroke is inherited.
-                    || node.computed_row(S::TextStrokeWidth, |s| s.text_stroke_width > 0.)
+                    || node.computed_row(StyleId::TextStrokeWidth, |s| s.text_stroke_width > 0.)
                     // It clips lines to the owner and the scroll port alone.
                     || content
                         && node.node_type != NodeType::ScrollView
                         && style::effective_overflow(&node) != (Overflow::Visible, Overflow::Visible)
                     || [
-                        S::BackgroundColor,
-                        S::BackgroundImage,
-                        S::BackgroundClip,
-                        S::BoxShadow,
-                        S::BackdropFilter,
-                        S::BorderStyleTop,
-                        S::BorderStyleRight,
-                        S::BorderStyleBottom,
-                        S::BorderStyleLeft,
-                        S::OutlineWidth,
-                        S::OutlineStyle,
-                        S::TextShadow,
-                        S::Opacity,
-                        S::Visibility,
-                        S::Translate,
-                        S::Scale,
-                        S::Rotate,
-                        S::Transform,
-                        S::ClipPath,
-                        S::Filter,
+                        StyleId::BackgroundColor,
+                        StyleId::BackgroundImage,
+                        StyleId::BackgroundClip,
+                        StyleId::BoxShadow,
+                        StyleId::BackdropFilter,
+                        StyleId::BorderStyleTop,
+                        StyleId::BorderStyleRight,
+                        StyleId::BorderStyleBottom,
+                        StyleId::BorderStyleLeft,
+                        StyleId::OutlineWidth,
+                        StyleId::OutlineStyle,
+                        StyleId::TextShadow,
+                        StyleId::Opacity,
+                        StyleId::Visibility,
+                        StyleId::Translate,
+                        StyleId::Scale,
+                        StyleId::Rotate,
+                        StyleId::Transform,
+                        StyleId::ClipPath,
+                        StyleId::Filter,
                     ]
                     .into_iter()
                     .any(|id| {
-                        !(owner && id == S::BackgroundColor)
+                        !(owner && id == StyleId::BackgroundColor)
                             && node.computed_row(id, |s| s.mask.has(id))
                     })
                 {

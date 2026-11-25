@@ -4,6 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writ
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { appleAssets, appleAssetCatalogInventory, appleAssetsKey, appleRefusals, composerFallback, rasterIconAssets, iosAssets, iosExecutableRefusal, launchImageInventory, launchScreen, nativeResourceMappings, plistFile, RESERVED_RESOURCE_ROOTS } from './assets.mjs';
 import { pngPixels } from './image.mjs';
 import { encodePng } from '../../scripts/png.mjs';
@@ -187,7 +188,7 @@ test.skipIf(process.platform !== 'darwin')('alternate icons are the declared ros
     square('assets/paper.png', [240, 235, 220, 255]);
     square('assets/paper-dark.png', [40, 40, 40, 255]);
     square('assets/paper-glyph.png', [0, 0, 0, 255], true);
-    cpSync(new URL('../../scripts/fixtures/Primary.icon', import.meta.url).pathname, resolve(dir, 'art/Night.icon'), { recursive: true });
+    cpSync(fileURLToPath(new URL('../../scripts/fixtures/Primary.icon', import.meta.url)), resolve(dir, 'art/Night.icon'), { recursive: true });
     const catalog = resolve(dir, 'modules/apple/Assets.xcassets');
     const set = (name) => {
       mkdirSync(resolve(catalog, `${name}.appiconset`), { recursive: true });
@@ -230,7 +231,7 @@ test.skipIf(process.platform !== 'darwin')("a variant's Icon Composer project is
   useXcode();
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-variant-icon-'));
   try {
-    for (const name of ['Base', 'Dev']) cpSync(new URL('../../scripts/fixtures/Primary.icon', import.meta.url).pathname, resolve(dir, `art/${name}.icon`), { recursive: true });
+    for (const name of ['Base', 'Dev']) cpSync(fileURLToPath(new URL('../../scripts/fixtures/Primary.icon', import.meta.url)), resolve(dir, `art/${name}.icon`), { recursive: true });
     const manifest = {
       app: { id: 'com.example.v', name: 'V' }, host: { ios: { icon: 'art/Base.icon' }, macos: { icon: 'art/Base.icon' } },
       variants: { dev: { idSuffix: '.dev', name: 'V Dev', host: { ios: { icon: 'art/Dev.icon' }, macos: { icon: 'art/Dev.icon' } } } },

@@ -11,6 +11,9 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { request as httpsRequest } from 'node:https';
+import { glueNode } from '../host/web/tests/glue-fixture.mjs';
+import { engagement } from '../host/web/engagement.js';
+import { agentParameters } from '../host/web/navigation/agent-parameters.js';
 import { BODY_LIMIT, CANVAS_COOKIE, ENTRY_SCRIPT, ENTRY_SCRIPT_HASH, CHECKPOINT_LIMIT, MINT_RATE, PLACEHOLDER, canonical, canvasGateway, needs, openRemoteCanvas, rewriter } from './forma-canvas.mjs';
 import { formaServer } from './forma-server.mjs';
 import { developmentGate } from './install-page.mjs';
@@ -876,7 +879,9 @@ test('the JS loop\'s page reloads afresh when its checkpoint is refused (a canva
   const head = "const client = (n, revision, { base = '/__dev', stream = '/__dev/page', page = null } = {}) => `";
   const i = s.indexOf(head) + head.length - 1, j = s.indexOf('</script>`;', i) + '</script>`'.length;
   const names = [...new Set([...s.slice(i, j).matchAll(/\$\{([^}]*)\}/g)].flatMap(m => m[1].match(/\b[A-Z_]{3,}\b/g) ?? []))].filter(n => n !== 'JSON');
-  const html = new Function('n', 'revision', 'base', 'stream', 'page', ...names, `return ${s.slice(i, j)};`)(3, 'r', '/__dev', '/__dev/page', null, ...names.map(() => []));
+  // The client writes these functions' sources into the script (dev.mjs).
+  const written = { replacementBoundary: glueNode(s, n => n.type === 'FunctionDeclaration' && n.id.name === 'replacementBoundary' && n), engagement, agentParameters };
+  const html = new Function('n', 'revision', 'base', 'stream', 'page', ...Object.keys(written), ...names, `return ${s.slice(i, j)};`)(3, 'r', '/__dev', '/__dev/page', null, ...Object.values(written), ...names.map(() => []));
   const code = html.replace(/^<script>/, '').replace(/<\/script>$/, '');
   expect(() => new Function(code)).not.toThrow();
   // The 403 is checked before the failure that keeps the old page.
