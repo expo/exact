@@ -881,3 +881,27 @@ fn a_capture_a_content_region_withholds_is_invalid() {
     let reader = &k.arena.style(slot(&k, 10)).padding_left;
     assert_eq!(reader.at_basis(&k.env_of(10), 0.0), 5.0);
 }
+
+#[test]
+fn a_boxs_keyboard_facts_tell_a_dismissed_keyboard_from_an_unreported_one() {
+    // Shown, the guide is the keyboard's frame and the occupancy its overlap with the owner's
+    // allocation; dismissed, both rest on a bottom of no height, the guide on the box's; and
+    // where the host reports nothing, as the session has not, there are none
+    let k = column(&[], &[], docked(UP));
+    let shown = k.keyboard_facts(4).unwrap();
+    assert_eq!(shown.guide, Some([0.0, UP, 390.0, 844.0 - UP]));
+    assert_eq!(shown.occupancy, [0.0, UP, 390.0, 844.0 - UP]);
+    assert!(shown.docked);
+    let mut k = column(&[], &[], None);
+    let (x, y, width, height) = frame(&k, 4);
+    let dismissed = k.keyboard_facts(4).unwrap();
+    assert_eq!(dismissed.guide, Some([x, y + height, width, 0.0]));
+    assert_eq!(dismissed.occupancy, [0.0, 844.0, 390.0, 0.0]);
+    assert!(!dismissed.docked);
+    assert_eq!(k.keyboard_facts(1), None);
+    k.update_owner(2, crate::kernel::OwnerUpdate::default())
+        .unwrap();
+    assert_eq!(k.keyboard_facts(4), None);
+    k.set_session_keyboard(None).unwrap();
+    assert!(k.keyboard_facts(1).is_some_and(|f| !f.docked));
+}

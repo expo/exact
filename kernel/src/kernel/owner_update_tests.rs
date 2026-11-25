@@ -2,8 +2,8 @@
 //! the hosts' shared wire form.
 use super::*;
 use crate::kernel::{
-    BarRegion, Contribution, Keyboard, Operation, OwnerChrome, OwnerMargins, OwnerUpdate,
-    VerticalBarEdge,
+    BarRegion, Contribution, Keyboard, KeyboardReport, Operation, OwnerChrome, OwnerMargins,
+    OwnerUpdate, VerticalBarEdge,
 };
 use crate::style::env::{Rect, SegmentGrid};
 
@@ -42,7 +42,7 @@ fn full() -> OwnerUpdate {
             minimum: [0.0, 16.0, 0.0, 16.0],
             readable_width: 672.0,
         }),
-        keyboard: Some(Keyboard {
+        keyboard: KeyboardReport::Shown(Keyboard {
             frame: [0.0, 500.0, 390.0, 344.0],
             docked: true,
         }),
@@ -95,6 +95,15 @@ fn an_owner_update_round_trips_and_a_malformed_one_is_refused() {
         bad[at] = unknown;
         assert!(OwnerUpdate::decode(&bad).is_err(), "byte {at}");
     }
+    // The keyboard's state, at an empty update's byte 14: unreported, dismissed, and none past
+    // shown
+    let mut empty = OwnerUpdate::default().encode();
+    assert_eq!(empty[14], 0);
+    empty[14] = 1;
+    let dismissed = OwnerUpdate::decode(&empty).map(|u| u.keyboard);
+    assert_eq!(dismissed, Ok(KeyboardReport::Dismissed));
+    empty[14] = 3;
+    assert!(OwnerUpdate::decode(&empty).is_err());
 }
 
 #[test]
@@ -161,7 +170,7 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
             47.0, 16.0, 34.0, 16.0, 8.0, 8.0, 8.0, 8.0, 0.0, 16.0, 0.0, 16.0, 672.0,
         ],
     );
-    w.push(1);
+    w.push(2);
     f(&mut w, &[0.0, 500.0, 390.0, 344.0]);
     w.push(1);
     w.extend([1, 2, 1]);
@@ -226,7 +235,9 @@ fn an_owner_update_with_one_bad_field_changes_nothing() {
             u.margins.as_mut().unwrap().readable_width = -1.0
         }),
         ("keyboard", |u| {
-            u.keyboard.as_mut().unwrap().frame[1] = f32::NAN
+            if let KeyboardReport::Shown(k) = &mut u.keyboard {
+                k.frame[1] = f32::NAN
+            }
         }),
         ("segments", |u| {
             u.segments = Some(SegmentGrid {

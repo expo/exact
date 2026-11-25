@@ -4,7 +4,7 @@
 use super::*;
 use exact_kernel::style::env::{Rect, SegmentGrid};
 use exact_kernel::style::targets::NativeTarget;
-use exact_kernel::{Keyboard, OwnerUpdate};
+use exact_kernel::{Keyboard, KeyboardReport, OwnerUpdate};
 
 /// A page whose route holds two readers: `column` pads by the second column's left edge, 7
 /// where the owner lies on one segment, and `keyboard` by the docked keyboard's reach into it,
@@ -38,7 +38,7 @@ fn update() -> OwnerUpdate {
             rows: 1,
             rects: vec![rect(0.0, 190.0), rect(210.0, 180.0)],
         }),
-        keyboard: Some(Keyboard {
+        keyboard: KeyboardReport::Shown(Keyboard {
             frame: [0.0, 500.0, 390.0, 344.0],
             docked: true,
         }),
@@ -114,7 +114,9 @@ fn a_bad_update_refuses_the_whole_call() {
     assert_eq!(read(&bridge, route, readers), before);
     // One the kernel refuses, a nonfinite keyboard frame, beside another block
     let mut bad = update();
-    bad.keyboard.as_mut().unwrap().frame[1] = f32::NAN;
+    if let KeyboardReport::Shown(k) = &mut bad.keyboard {
+        k.frame[1] = f32::NAN;
+    }
     let bytes = [block(route, 300.0), record(route, &bad.encode())].concat();
     let refused = covers(&mut bridge, &bytes);
     assert!(
@@ -145,7 +147,7 @@ fn an_update_whose_block_is_refused_is_not_applied() {
     );
     let mut moved = update();
     moved.segments.as_mut().unwrap().rects[1].x = 250.0;
-    moved.keyboard = None;
+    moved.keyboard = KeyboardReport::Dismissed;
     let bytes = [block(route, f32::NAN), record(route, &moved.encode())].concat();
     let batch = covers(&mut bridge, &bytes);
     assert!(batch.contains("block: "), "{batch}");
@@ -173,7 +175,9 @@ fn an_owner_update_rides_exact_views_trailer_beside_its_block() {
     );
     // One the kernel refuses changes nothing, the block beside it included
     let mut bad = update();
-    bad.keyboard.as_mut().unwrap().frame[1] = f32::NAN;
+    if let KeyboardReport::Shown(k) = &mut bad.keyboard {
+        k.frame[1] = f32::NAN;
+    }
     let mut wire: Vec<u8> = [64u32]
         .into_iter()
         .chain([0; 9])
@@ -208,7 +212,7 @@ fn an_owner_update_rides_exact_views_trailer_beside_its_block() {
 /// `update()` with its keyboard dismissed.
 fn dismissed() -> OwnerUpdate {
     OwnerUpdate {
-        keyboard: None,
+        keyboard: KeyboardReport::Dismissed,
         ..update()
     }
 }

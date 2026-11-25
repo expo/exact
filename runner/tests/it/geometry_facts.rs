@@ -523,3 +523,68 @@ component App
     assert!(chrome[1..].iter().all(|v| *v == Value::Option(None)));
     assert_eq!(fields(&r, "o")[1], Value::Option(None));
 }
+
+#[test]
+fn a_boxs_keyboard_reaches_its_geometry_in_the_space_it_names() {
+    // `none` until the owner's host reports the keyboard; then its guide and the owner's
+    // occupancy in the owner's space and in a node's, and whether it is docked
+    use exact_kernel::{BlockAxis, HostBlock, Keyboard};
+    let mut r = boot(
+        "shape Edges
+  top: bool
+  right: bool
+  bottom: bool
+  left: bool
+shape Keys
+  guide: option<Rect>
+  occupancy: option<Rect>
+  docked: option<bool>
+  near: option<Edges>
+  away: option<Edges>
+shape G
+  available: bool
+  keyboard: option<Keys>
+component App
+  resource g = exactGeometry(\"card\", \"owner\", \"card\") as shape G
+  resource n = exactGeometry(\"card\", \"node\", \"card\") as shape G
+  view
+    column
+      column id=\"route\" width=390 height=844
+        column height=100
+        column id=\"card\" height=10
+",
+    )
+    .unwrap();
+    let slot = r.kernel().find_by_id("route")[0].index;
+    let route = r.kernel().arena().local_id(slot);
+    let block = HostBlock {
+        tactic: Default::default(),
+        width: BlockAxis::Is(390.0),
+        height: BlockAxis::Is(844.0),
+    };
+    r.kernel_mut().set_host_block(route, Some(block)).unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    assert_eq!(fields(&r, "g")[1], Value::Option(None));
+    let keyboard = Keyboard {
+        frame: [0.0, 516.0, 390.0, 328.0],
+        docked: true,
+    };
+    r.kernel_mut()
+        .set_owner_keyboard(route, Some(keyboard))
+        .unwrap();
+    lay_out(&mut r);
+    r.refresh_geometry().unwrap();
+    let keys = some(&fields(&r, "g")[1]);
+    let rect = |v: &Value| some(v).iter().map(number).collect::<Vec<_>>();
+    assert_eq!(rect(&keys[0]), [0.0, 516.0, 390.0, 328.0]);
+    assert_eq!(rect(&keys[1]), [0.0, 516.0, 390.0, 328.0]);
+    assert_eq!(keys[2], Value::some(Value::Bool(true)));
+    assert_eq!(
+        (&keys[3], &keys[4]),
+        (&Value::Option(None), &Value::Option(None))
+    );
+    // In the card's own space, 100 points down the owner
+    let node = some(&fields(&r, "n")[1]);
+    assert_eq!(rect(&node[0]), [0.0, 416.0, 390.0, 328.0]);
+}

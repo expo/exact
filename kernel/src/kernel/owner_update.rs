@@ -5,7 +5,7 @@
 //! carry.
 
 use super::provenance::{Contribution, Operation};
-use super::{Kernel, Keyboard, OwnerMargins};
+use super::{Kernel, Keyboard, KeyboardReport, OwnerMargins};
 use crate::error::{KernelError, LayoutError};
 use crate::id::IdMap;
 use crate::style::env::{Rect, SegmentGrid};
@@ -26,8 +26,9 @@ pub struct OwnerUpdate {
     /// Its margins as UIKit gives them (D8), `None` where its host reports
     /// none.
     pub margins: Option<OwnerMargins>,
-    /// Its keyboard in its block's space (D7), `None` while dismissed.
-    pub keyboard: Option<Keyboard>,
+    /// Its keyboard in its block's space (D7), shown or dismissed, or nothing where the host
+    /// does not know.
+    pub keyboard: KeyboardReport,
     /// Its segments (D16), `None` where it lies on one.
     pub segments: Option<SegmentGrid>,
     /// UIKit's bar layout region on each edge of its view, top right bottom left (D12), `None`
@@ -92,7 +93,7 @@ impl Kernel {
         owed |= self.set_owner_margins(view, update.margins)?;
         owed |= self.set_owner_segments(view, update.segments)?;
         owed |= self.set_owner_band(view, update.band, &update.contributions)?;
-        owed |= self.set_owner_keyboard(view, update.keyboard)?;
+        owed |= self.set_owner_keyboard_report(view, update.keyboard)?;
         owed |= self.set_owner_bar_regions(view, update.bar_regions)?;
         self.set_owner_chrome(view, update.chrome)?;
         Ok(owed)
@@ -122,7 +123,7 @@ impl Kernel {
         if let Some(m) = &update.margins {
             super::margins::check(m)?;
         }
-        if let Some(k) = &update.keyboard {
+        if let KeyboardReport::Shown(k) = &update.keyboard {
             super::keyboard::check(k)?;
         }
         if let Some(why) = update.segments.as_ref().and_then(SegmentGrid::refusal) {
@@ -170,7 +171,7 @@ impl OwnerUpdate {
         let mut r = Reader::new(bytes);
         let update = read(&mut r).ok_or(
             "an owner update is truncated, holds a presence byte other than 0 or 1, or names \
-             an unknown relation, operation or vertical bar edge; encode it as \
+             an unknown relation, operation, keyboard state or vertical bar edge; encode it as \
              `OwnerUpdate::encode` does",
         )?;
         match r.is_empty() {
@@ -189,8 +190,9 @@ impl OwnerUpdate {
     /// frame in its window (a rect); a chain entry
     /// a target and its kinds' bits (`u8`, `Kind::bit`); a relation its
     /// index in [`Relation::ALL`] (`u8`) and a target; the margins their
-    /// root, plain and minimum insets and the readable width (`f32`); a
-    /// keyboard its frame and a docked byte, 0 or 1; segments their columns
+    /// root, plain and minimum insets and the readable width (`f32`); the
+    /// keyboard a byte, 0 unreported, 1 dismissed or 2 shown, a shown one's
+    /// frame and a docked byte, 0 or 1, after it; segments their columns
     /// and rows (`u8` each) and the `cols × rows` rects, row-major; then each edge's bar region,
     /// top right bottom left, its distance and its two sides (`f32` each); then the chrome, its
     /// vertical bar edge's raw value (`u8`) and its sidebar's availability (a byte, 0 or 1), each
@@ -220,10 +222,15 @@ impl OwnerUpdate {
             floats(w, &m.minimum);
             w.f32(m.readable_width);
         });
-        optional(&mut w, self.keyboard.as_ref(), |w, k| {
-            floats(w, &k.frame);
-            w.u8(u8::from(k.docked));
-        });
+        match self.keyboard {
+            KeyboardReport::Unreported => w.u8(0),
+            KeyboardReport::Dismissed => w.u8(1),
+            KeyboardReport::Shown(k) => {
+                w.u8(2);
+                floats(&mut w, &k.frame);
+                w.u8(u8::from(k.docked));
+            }
+        }
         optional(&mut w, self.segments.as_ref(), |w, g| {
             w.u8(g.cols);
             w.u8(g.rows);
@@ -309,12 +316,14 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         }),
         false => None,
     };
-    let keyboard = match present(r)? {
-        true => Some(Keyboard {
+    let keyboard = match r.u8().ok()? {
+        0 => KeyboardReport::Unreported,
+        1 => KeyboardReport::Dismissed,
+        2 => KeyboardReport::Shown(Keyboard {
             frame: four(r)?,
             docked: present(r)?,
         }),
-        false => None,
+        _ => return None,
     };
     let segments = match present(r)? {
         true => {

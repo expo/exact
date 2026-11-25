@@ -13,7 +13,7 @@ use super::{ignore, Kernel};
 use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
 use crate::generated::SafeAreaIgnore;
-use crate::id::{IdMap, ViewId};
+use crate::id::{IdMap, IdSet, ViewId};
 
 /// What the host reports of the keyboard for one content owner, in its
 /// block's space (D2), or for the session, in the document's: a docked
@@ -25,6 +25,43 @@ pub struct Keyboard {
     pub frame: [f32; 4],
     /// Whether UIKit docks it: the host's guide that does not follow
     /// undocked keyboards has height (D7).
+    pub docked: bool,
+}
+
+/// What an owner's host reports of its keyboard (D2, D7): nothing, where it does not know, as
+/// before its window's first keyboard editor; that it is dismissed; or the keyboard that shows.
+/// Layout takes an unreported keyboard as a dismissed one; D6's facts tell them apart.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum KeyboardReport {
+    #[default]
+    Unreported,
+    Dismissed,
+    Shown(Keyboard),
+}
+
+impl KeyboardReport {
+    /// The keyboard that shows, if one does.
+    pub fn shown(self) -> Option<Keyboard> {
+        match self {
+            KeyboardReport::Shown(k) => Some(k),
+            _ => None,
+        }
+    }
+}
+
+/// D6's keyboard facts for a box (D7), in its owner's space, or the document's outside every
+/// owner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeyboardFacts {
+    /// The box's guide, x y width height: the keyboard's frame while one shows, docked or
+    /// undocked, as a guide that follows an undocked keyboard and leaves out the bottom safe area
+    /// gives it, and while it is dismissed a rectangle of no height along the box's bottom;
+    /// `None` where the kernel is not told where the box lies.
+    pub guide: Option<[f32; 4]>,
+    /// The owner's occupancy: the docked keyboard's overlap with its allocation, as a rectangle
+    /// along the allocation's bottom, of no height where it occupies nothing.
+    pub occupancy: [f32; 4],
+    /// Whether a docked keyboard shows.
     pub docked: bool,
 }
 
@@ -54,6 +91,10 @@ pub(crate) struct Keyboards {
     /// The session's keyboard, in the document's space, which the boxes
     /// outside every owner read (D7).
     session: Option<Keyboard>,
+    /// The owner roots whose hosts reported their keyboard, shown or dismissed.
+    reported: IdSet<u32>,
+    /// Whether the host reported the session's keyboard.
+    session_reported: bool,
 }
 
 impl Keyboards {
@@ -64,6 +105,7 @@ impl Keyboards {
         Keyboards {
             policy: self.policy,
             session: self.session,
+            session_reported: self.session_reported,
             ..Default::default()
         }
     }
@@ -71,6 +113,7 @@ impl Keyboards {
     /// Forget a freed owner's keyboard, whose slot a new node may take.
     pub(crate) fn forget(&mut self, slot: u32) {
         self.owners.remove(&slot);
+        self.reported.remove(&slot);
     }
 }
 
@@ -289,6 +332,35 @@ fn crossing(b: [f32; 4], k: [f32; 4]) -> [f32; 4] {
 }
 
 impl Kernel {
+    /// D6's keyboard facts for the box `view` (D7), from the last layout, in its owner's space or
+    /// the document's: `None` where its holder's host reported nothing of the keyboard, the
+    /// session's included.
+    pub fn keyboard_facts(&self, view: ViewId) -> Option<KeyboardFacts> {
+        let slot = self.arena.slot_of(view)?;
+        let space = super::area::band_at(self, slot);
+        let keyboards = &self.arena.observations.keyboards;
+        let keyboard = match space.owner {
+            Some(owner) if keyboards.reported.contains(&owner) => {
+                keyboards.owners.get(&owner).map(|(k, _)| *k)
+            }
+            None if keyboards.session_reported => keyboards.session,
+            _ => return None,
+        };
+        let f = self.arena.frame(slot);
+        let (x, y) = (f.x + space.origin.0, f.y + space.origin.1);
+        let guide = space.placed().then(|| match keyboard {
+            Some(k) => k.frame,
+            None => [x, y + f.height, f.width, 0.0],
+        });
+        let (width, height) = space.size;
+        let depth = docked_depth(&self.arena, &space);
+        Some(KeyboardFacts {
+            guide,
+            occupancy: [0.0, height - depth, width, depth],
+            docked: keyboard.is_some_and(|k| k.docked),
+        })
+    }
+
     /// Set the keyboard of the content owner whose root is `view`, in its
     /// block's space, or `None` while it is dismissed (LLP 1123 D2's owner
     /// update, D7). The frame is in the owner view as its bounds are now: on
@@ -308,13 +380,30 @@ impl Kernel {
         view: ViewId,
         keyboard: Option<Keyboard>,
     ) -> Result<bool, KernelError> {
+        let report = keyboard.map_or(KeyboardReport::Dismissed, KeyboardReport::Shown);
+        self.set_owner_keyboard_report(view, report)
+    }
+
+    /// [`Kernel::set_owner_keyboard`], with what the host reports of the keyboard, an unreported
+    /// one laid out as a dismissed one.
+    pub(super) fn set_owner_keyboard_report(
+        &mut self,
+        view: ViewId,
+        report: KeyboardReport,
+    ) -> Result<bool, KernelError> {
         let slot = self
             .arena
             .slot_of(view)
             .ok_or(LayoutError::UnknownView(view))?;
+        let keyboard = report.shown();
         if let Some(k) = &keyboard {
             check(k)?;
         }
+        let reported = &mut self.arena.observations.keyboards.reported;
+        match report {
+            KeyboardReport::Unreported => reported.remove(&slot),
+            _ => reported.insert(slot),
+        };
         let (cleared, laid) = (super::block::clearance(&self.arena, slot), self.laid(slot));
         let bounds = self.view_bounds(slot);
         let owners = &mut self.arena.observations.keyboards.owners;
@@ -345,6 +434,7 @@ impl Kernel {
             check(k)?;
         }
         let keyboards = &mut self.arena.observations.keyboards;
+        keyboards.session_reported = true;
         if keyboards.session == keyboard {
             return Ok(false);
         }

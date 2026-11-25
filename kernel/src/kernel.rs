@@ -62,7 +62,7 @@ pub(crate) use cover::{
 };
 pub use cover::{credited_edges, HostCover};
 pub use edge_bar::BarEdgeEffect;
-pub use keyboard::{Keyboard, KeyboardPolicy};
+pub use keyboard::{Keyboard, KeyboardFacts, KeyboardPolicy, KeyboardReport};
 pub use margins::OwnerMargins;
 pub use owner_update::{
     decode_registration, encode_registration, BarRegion, OwnerChrome, OwnerUpdate, VerticalBarEdge,

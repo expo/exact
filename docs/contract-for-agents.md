@@ -6167,7 +6167,12 @@ rectangles (`x`, `y`, `width`, `height`). `chrome` is the owner's: `verticalBarE
 (`unspecified`, `leading` or `trailing`, UIKit's preferred edge for the iPhone Duo's
 vertical bar, shown or not), `sidebarAvailable` (whether the tab controller's sidebar is
 available, not whether it shows), `overscan` and the Mac's `auxiliaryTopLeftArea` and
-`auxiliaryTopRightArea`; it is `none` outside every owner. Declare every field but `available` and
+`auxiliaryTopRightArea`; it is `none` outside every owner. `keyboard` has the box's
+`guide` (the keyboard's rectangle while one shows, docked or undocked, and while it is
+dismissed a rectangle of no height along the box's bottom), the owner's `occupancy` (the
+docked keyboard's overlap with the owner, along its bottom), `docked`, and `near` and `away`,
+`none` until hosts track them; it is `none` where the host has reported nothing of the
+keyboard. Declare every field but `available` and
 `generation` an `option`, and each family and rectangle in them too: each is `none`
 before the node is laid out and wherever the host does not have it, and the bake refuses
 a shape that does not say so. `frame` is the border box as laid out, before the scroll

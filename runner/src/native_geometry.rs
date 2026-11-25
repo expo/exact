@@ -81,6 +81,15 @@ impl Fact {
         ])
     }
 
+    fn edges([top, right, bottom, left]: [bool; 4]) -> Fact {
+        Fact::Record(vec![
+            ("top", Fact::Bool(top)),
+            ("right", Fact::Bool(right)),
+            ("bottom", Fact::Bool(bottom)),
+            ("left", Fact::Bool(left)),
+        ])
+    }
+
     fn insets([top, right, bottom, left]: [f64; 4]) -> Fact {
         Fact::Record(vec![
             ("top", Fact::Number(top)),
@@ -266,6 +275,7 @@ pub fn geometry(kernel: &Kernel, id: &str, space: &Space, generation: u64) -> Fa
         laid.size,
         frame_in(kernel, &laid, space),
         reading,
+        keyboard_fact(kernel, &laid, space),
         chrome_fact(kernel.owner_chrome(laid.view)),
     )
 }
@@ -350,6 +360,13 @@ pub fn templates(source: &str) -> Vec<Fact> {
                 Some([0.0, 0.0, 1.0, 1.0]),
                 |_| Some([0.0; 4]),
                 Fact::Record(vec![
+                    ("guide", Fact::rect(0.0, 0.0, 0.0, 0.0)),
+                    ("occupancy", Fact::rect(0.0, 0.0, 0.0, 0.0)),
+                    ("docked", Fact::Bool(false)),
+                    ("near", Fact::edges([false; 4])),
+                    ("away", Fact::edges([false; 4])),
+                ]),
+                Fact::Record(vec![
                     ("verticalBarEdge", Fact::Str(String::new())),
                     ("sidebarAvailable", Fact::Bool(false)),
                     ("overscan", Fact::Str(String::new())),
@@ -362,9 +379,16 @@ pub fn templates(source: &str) -> Vec<Fact> {
                 (1.0, 1.0),
                 None,
                 |_| None,
+                Fact::Record(vec![
+                    ("guide", Fact::Absent),
+                    ("occupancy", Fact::Absent),
+                    ("docked", Fact::Absent),
+                    ("near", Fact::Absent),
+                    ("away", Fact::Absent),
+                ]),
                 chrome_fact(Some(Default::default())),
             ),
-            answer(0, (1.0, 1.0), None, |_| None, Fact::Absent),
+            answer(0, (1.0, 1.0), None, |_| None, Fact::Absent, Fact::Absent),
             unavailable(0),
         ],
         CHAIN => {
@@ -403,12 +427,13 @@ pub fn templates(source: &str) -> Vec<Fact> {
 }
 
 /// An `exactGeometry` answer for a laid-out box of `size`, `frame` in the space read, what it
-/// observes of each family, and its owner's `chrome`.
+/// observes of each family, its `keyboard` and its owner's `chrome`.
 fn answer(
     generation: u64,
     (width, height): (f64, f64),
     frame: Option<[f64; 4]>,
     reading: impl Fn(Family) -> Option<[f64; 4]>,
+    keyboard: Fact,
     chrome: Fact,
 ) -> Fact {
     let observations = Family::ALL
@@ -453,8 +478,29 @@ fn answer(
         ("cornerRadii", Fact::Absent),
         ("regions", Fact::Absent),
         ("scroll", Fact::Absent),
-        ("keyboard", Fact::Absent),
+        ("keyboard", keyboard),
         ("chrome", chrome),
+    ])
+}
+
+/// D7's keyboard facts for `laid` in `space`: its guide and its owner's occupancy, each `none`
+/// where the kernel cannot place it there, and whether a docked keyboard shows; `none` where the
+/// host reported nothing of the keyboard. The tracking state, `near` and `away`, is `none` until a
+/// host tracks it (`UITrackingLayoutGuide`).
+fn keyboard_fact(kernel: &Kernel, laid: &Laid, space: &Space) -> Fact {
+    let Some(k) = kernel.keyboard_facts(laid.view) else {
+        return Fact::Absent;
+    };
+    let rect = |r: [f32; 4]| match rect_in(kernel, laid, space, r.map(f64::from)) {
+        Some([x, y, w, h]) => Fact::rect(x, y, w, h),
+        None => Fact::Absent,
+    };
+    Fact::Record(vec![
+        ("guide", k.guide.map_or(Fact::Absent, rect)),
+        ("occupancy", rect(k.occupancy)),
+        ("docked", Fact::Bool(k.docked)),
+        ("near", Fact::Absent),
+        ("away", Fact::Absent),
     ])
 }
 
@@ -543,15 +589,26 @@ fn laid_out(kernel: &Kernel, view: ViewId) -> Option<Laid> {
 /// are in one space; never yet in the window's, since only the host knows where it shows the
 /// document and its owners there (LLP 1123 stage 3).
 fn frame_in(kernel: &Kernel, laid: &Laid, space: &Space) -> Option<[f64; 4]> {
-    let (owner, [x, y]) = laid.placed?;
-    let (width, height) = laid.size;
+    let (_, [x, y]) = laid.placed?;
+    rect_in(kernel, laid, space, [x, y, laid.size.0, laid.size.1])
+}
+
+/// `rect`, x y width height in `laid`'s owner's space, in `space`, as [`frame_in`] places
+/// `laid`'s own border box.
+fn rect_in(
+    kernel: &Kernel,
+    laid: &Laid,
+    space: &Space,
+    [x, y, w, h]: [f64; 4],
+) -> Option<[f64; 4]> {
+    let (owner, _) = laid.placed?;
     match space {
-        Space::Owner => Some([x, y, width, height]),
+        Space::Owner => Some([x, y, w, h]),
         Space::Window => None,
         Space::Node(id) => {
             let other = view_of(kernel, id).and_then(|view| laid_out(kernel, view))?;
             let (other_owner, [ox, oy]) = other.placed?;
-            (other_owner == owner).then_some([x - ox, y - oy, width, height])
+            (other_owner == owner).then_some([x - ox, y - oy, w, h])
         }
     }
 }

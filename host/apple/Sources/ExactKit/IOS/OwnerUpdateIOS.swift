@@ -70,9 +70,23 @@ package struct OwnerUpdateIOS: Equatable {
     package var chain: [ChainEntry] = []
     package var relations: [Related] = []
     package var margins: Margins?
-    /// The keyboard in the owner's view, from its origin, and whether it is docked (D7): its window's sample
-    /// (`KeyboardSampleIOS`) converted into the view as it is now; `nil` while none shows.
-    package var keyboard: KeyboardSampleIOS.Sample?
+    /// What the host knows of the keyboard (D7), the kernel's `KeyboardReport`.
+    package var keyboard: KeyboardReport = .unreported
+
+    package enum KeyboardReport: Equatable {
+        /// The owner's window has no keyboard sampler, which comes with its first keyboard editor,
+        /// or the owner is out of a window.
+        case unreported
+        case dismissed
+        /// The keyboard in the owner's view, from its origin, and whether it is docked: its window's
+        /// sample (`KeyboardSampleIOS`) converted into the view as it is now.
+        case shown(KeyboardSampleIOS.Sample)
+
+        package var shown: KeyboardSampleIOS.Sample? {
+            if case .shown(let sample) = self { return sample }
+            return nil
+        }
+    }
     /// The owner's segments (D16): its active division regions split as the document's
     /// are (`Segments.split`); `nil` where it lies on one.
     var segments: ViewportFold?
@@ -158,9 +172,12 @@ package struct OwnerUpdateIOS: Equatable {
             readableWidth: ReadableWidthIOS.of(in: session.flatMap { $0.window === view.window ? $0 : nil } ?? view))
         // The regions are in the view's bounds; the segments and the keyboard are reported from its origin
         let origin = view.bounds.origin
-        if let window = view.window, var keys = KeyboardSampleIOS.existing(in: window)?.sample {
-            keys.frame = view.convert(keys.frame, from: window).offsetBy(dx: -origin.x, dy: -origin.y)
-            update.keyboard = keys
+        if let window = view.window, let sampler = KeyboardSampleIOS.existing(in: window) {
+            update.keyboard = .dismissed
+            if var keys = sampler.sample {
+                keys.frame = view.convert(keys.frame, from: window).offsetBy(dx: -origin.x, dy: -origin.y)
+                update.keyboard = .shown(keys)
+            }
         }
         let active = (ReservedRegions.divisions(of: view) ?? []).filter(\.active).map { $0.frame.offsetBy(dx: -origin.x, dy: -origin.y) }
         let fold = Segments.split(viewport: view.bounds.size, dividers: active)
@@ -212,7 +229,8 @@ package struct OwnerUpdateIOS: Equatable {
     /// The update in the kernel's wire form (`OwnerUpdate::encode`): each field in order, an
     /// optional one after a presence byte, a list after its `u32` length, little-endian;
     /// insets top, right, bottom, left. A contribution is its node, its operation and its
-    /// effect. The keyboard is its frame, x, y, width, height, and a docked byte. Each edge's bar
+    /// effect. The keyboard is a byte, 0 unreported, 1 dismissed or 2 shown, and a shown one's frame,
+    /// x, y, width, height, and a docked byte. Each edge's bar
     /// region, top, right, bottom, left, follows the segments, and the chrome, its vertical bar
     /// edge and its sidebar's availability each optional, follows them.
     package func encode() -> Data {
@@ -250,7 +268,11 @@ package struct OwnerUpdateIOS: Equatable {
             edges(m.minimum)
             f32(m.readableWidth)
         }
-        optional(keyboard) { k in
+        switch keyboard {
+        case .unreported: u8(0)
+        case .dismissed: u8(1)
+        case .shown(let k):
+            u8(2)
             [k.frame.minX, k.frame.minY, k.frame.width, k.frame.height].forEach(f32)
             u8(k.docked ? 1 : 0)
         }

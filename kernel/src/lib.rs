@@ -89,9 +89,9 @@ pub use id::{AxisOffer, Frame, NodeFlags, NodeKey, Offer, ViewId};
 pub use invocation::Invocation;
 pub use kernel::{
     credited_edges, decode_registration, encode_registration, BarEdgeEffect, BlockAxis,
-    BlockMeasure, BlockShown, HostBlock, HostCover, Kernel, Keyboard, KeyboardPolicy, NodeRef,
-    OwnerChrome, OwnerMargins, OwnerUpdate, PresentedHeight, ScrollTerms, StickyConstraint,
-    TablePlace, VerticalBarEdge,
+    BlockMeasure, BlockShown, HostBlock, HostCover, Kernel, Keyboard, KeyboardFacts,
+    KeyboardPolicy, KeyboardReport, NodeRef, OwnerChrome, OwnerMargins, OwnerUpdate,
+    PresentedHeight, ScrollTerms, StickyConstraint, TablePlace, VerticalBarEdge,
 };
 pub use layout::LayoutReceipt;
 pub use motion::{motion_node, MotionSync};
