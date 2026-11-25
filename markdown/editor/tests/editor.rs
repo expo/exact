@@ -531,6 +531,9 @@ fn backspace_after_return_removes_only_the_block_prefix() {
         ("- **`a b`**", 7, "- **`a `**\n**`b`**", "a \nb"),
         ("- **a😀b**", 5, "- **a**\n**😀b**", "a\n😀b"),
         ("> - [x] **bold**", 12, "> - [x] **bo**\n**ld**", "bo\nld"),
+        ("-   item", 8, "-   item\n", "item\n"),
+        ("-\titem", 4, "-\tit\nem", "it\nem"),
+        ("1.  item", 8, "1.  item\n", "item\n"),
     ] {
         let mut p = Page::open(source);
         p.caret(caret);
@@ -548,7 +551,9 @@ fn backspace_after_return_removes_only_the_block_prefix() {
 
 #[test]
 fn backspace_at_formatted_block_starts_keeps_inline_syntax() {
-    for prefix in ["# ", "- ", "1. ", "> ", "> - [x] ", "  - "] {
+    for prefix in [
+        "# ", "- ", "-   ", "-\t", "1. ", "1.  ", "> ", "> - [x] ", "-  [x]\t", "  - ",
+    ] {
         for content in ["**text**", "`code`", "[label](target)", "\\*literal"] {
             let source = format!("{prefix}{content}");
             let mut p = Page::open(&source);

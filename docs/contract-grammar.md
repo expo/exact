@@ -2692,7 +2692,9 @@ its own question, and calls the host command `close()` once it is answered,
 which closes the window without asking again (on the web, `window.close()`, which
 a browser honours only for a window a script opened). Windows asks it as the Mac
 does, before its close button, Alt+F4 or the taskbar's Close window closes the
-window (a window that `keepRunning` hides asks nothing), and its bare `close()`
+window (a window that `keepRunning` hides asks nothing) and before a sign-out,
+restart or shutdown ends the app (a handler that keeps the window keeps the
+session, and Windows names the app as preventing it), and its bare `close()`
 closes the window and ends the one-window app without asking again. A Wayland
 window asks before its title-bar close or the desktop's close command, and
 `close()` ends the app without asking again. SIGTERM, SIGINT and SIGHUP

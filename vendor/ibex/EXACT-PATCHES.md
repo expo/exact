@@ -1305,3 +1305,11 @@ including a pending Winsock connect. This lets rustls and `write_all` finish
 on cancellation. Fetch checks the signal after I/O and returns its
 `AbortError` to the caller. Replay on refresh in `transport/rustls_http.rs`
 and `transport/windows_connect.rs` (expo/exact#1578).
+
+## Windows replacement while a reader holds the target
+
+A rename that replaces its target (`fs.atomicWriteFile`, `fs.rename`, a staged
+download or capture) asks for POSIX semantics with `FileRenameInformationEx`,
+so a reader that shares deletion keeps the old file and the name takes the new
+one. A filesystem that refuses the class or flag, such as FAT, gets the legacy
+replace, which fails while another handle holds the target open.

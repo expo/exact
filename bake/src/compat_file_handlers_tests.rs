@@ -15,7 +15,7 @@ fn app(name: &str) -> crate::TempDir {
     .unwrap();
     std::fs::write(
         dir.join("app.json"),
-        r#"{"name":"App","icons":[{"src":"assets/a.png"}],"app":{"id":"com.example.app","name":"App"},"host":{"ios":{"minimumOS":"17.0","backgroundModes":["fetch"]}},"deploy":{"origin":"continuous","bundles":"continuous"}}"#,
+        r#"{"name":"App","icons":[{"src":"assets/a.png"}],"app":{"id":"com.example.app","name":"App"},"host":{"ios":{"minimumOS":"17.0","backgroundModes":["fetch"]}},"deploy":{"origin":"continuous","bundles":"continuous","store":{"windows":"0"}}}"#,
     )
     .unwrap();
     crate::TempDir(dir)

@@ -728,9 +728,9 @@ fn newline(source: &str, mut sel: B) -> Draft {
     let marker = match p.kind {
         Some(BlockKind::Ordered) => {
             // The delimiter follows the authored digits, which may be `01`.
-            let symbol = source[p.marker..p.content].trim_end();
-            let digits = symbol.bytes().take_while(|c| c.is_ascii_digit()).count();
-            format!("{}{} ", p.number + 1, &symbol[digits..])
+            let marker = &source[p.marker..p.content];
+            let digits = marker.bytes().take_while(|c| c.is_ascii_digit()).count();
+            format!("{}{}", p.number + 1, &marker[digits..])
         }
         Some(BlockKind::Task(_)) => "- [ ] ".to_string(),
         Some(BlockKind::Bullet) => source[p.marker..p.content].to_string(),

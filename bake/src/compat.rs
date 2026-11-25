@@ -272,7 +272,7 @@ impl Compat {
 }
 
 /// The compatibility id of the app at `app_dir` built for `platform`
-/// (`ios`, `macos`, `linux`, `web`) and `target` (the triple), with the
+/// (`ios`, `macos`, `linux`, `windows`, `web`) and `target` (the triple), with the
 /// data crate's grants when the caller has a `DataSource` to ask (the bake
 /// does; command-line callers can supply the declarations from its receipt),
 /// and whether that source hands the executor work no grant names
@@ -671,6 +671,11 @@ pub(crate) fn compatibility_with_trust(
             None => "0".to_string(),
             Some(value) => value.as_str().unwrap_or("").to_string(),
         }
+    } else if platform == "windows" {
+        match manifest.json.pointer("/deploy/store/windows") {
+            None => "A".to_string(),
+            Some(value) => value.as_str().unwrap_or("").to_string(),
+        }
     } else {
         store_level(manifest, platform)
     };
@@ -680,6 +685,11 @@ pub(crate) fn compatibility_with_trust(
     let binary_only = store == "0";
     if platform == "linux" && target.contains("-windows") && !binary_only {
         return Err("the headless Linux host on Windows has no update store; set deploy.store.linux to \"0\"".into());
+    }
+    if platform == "windows" && !binary_only {
+        return Err(
+            "the Windows host has no update store; set deploy.store.windows to \"0\"".into(),
+        );
     }
     let keys = if binary_only {
         Value::Null
@@ -1477,3 +1487,6 @@ mod file_handlers_tests;
 #[cfg(test)]
 #[path = "compat_watch_sync_tests.rs"]
 mod watch_sync_tests;
+#[cfg(test)]
+#[path = "compat_windows_tests.rs"]
+mod windows_tests;

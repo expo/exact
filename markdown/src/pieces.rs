@@ -190,10 +190,12 @@ pub fn pieces_with(source: &str, atoms: &Atoms) -> Vec<Piece> {
         // Spacing: none inside a run of list items or code lines, a short line
         // otherwise. A blank line between items ends the list or makes it
         // loose, and either way the browser puts the items' margins between.
+        // Only line ends and lines the block pass calls blank lie between two
+        // adjacent blocks, so a second line end is a blank line.
         let adjacent = n > 0
             && !source
                 .get(blocks[n - 1].range.end..block.range.start)
-                .is_some_and(|between| between.contains("\n\n"));
+                .is_some_and(|between| between.matches('\n').count() > 1);
         let tight = matches!(
             (&previous, kind),
             (
