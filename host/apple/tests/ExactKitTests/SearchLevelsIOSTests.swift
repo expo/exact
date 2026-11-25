@@ -633,6 +633,23 @@ final class SearchLevelsIOSTests: XCTestCase {
         XCTAssertEqual(try fixture.value(), "Asia")
     }
 
+    func testAgentTapOnTheDrawnFieldBeginsEditing() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
+        let fixture = try boot()
+        try fixture.openQuery("Fuji")
+        // End editing as a drag on the results does: the search stays open and UIKit's field stays drawn
+        XCTAssertTrue(fixture.search.bindEditor().resignFirstResponder(), fixture.searchFacts)
+        fixture.settle("the editor ends")
+        let node = try fixture.node("search")
+        XCTAssertNotNil(fixture.session.presenter.navigation.drawnSearch(node), fixture.searchFacts)
+        XCTAssertEqual(try fixture.tap("search")["native"] as? String, "search-field")
+        waitFor("the tap resumes editing", facts: { fixture.searchFacts }) { fixture.search.bindEditor().isFirstResponder }
+        XCTAssertTrue(fixture.search.controller.isActive, fixture.searchFacts)
+        XCTAssertNil(fixture.agent.type(["id": Int(node.id), "text": "Asia"])["error"], fixture.searchFacts)
+        fixture.settle("the query settles")
+        XCTAssertEqual(try fixture.value(), "Asia")
+    }
+
     func testUnpreventedCloseProducesOneEmptyEditAndLateCompletionKeepsNewerText() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search only in a window scene") }
         let fixture = try boot(regular: true)
