@@ -209,6 +209,10 @@ delivery's bake without `app.wasm`, and animated images on the agent's clock —
 1071 §7, "Retiring the wasm target on the web". Games stay on the wasm target
 (Charlie, 2026-09-29).
 
+**Expanded (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0):**
+the web JS target loads the chosen language with the entry. It fetches other languages on demand
+when the non-base tables together cost at least 4 KiB gzipped (AM2a, LLP 1071 §7, “Localized strings”).
+
 **Expanded (Charlie, 2026-09-17: one impressive demo on iPhone, macOS and web):**
 Exact Live combines crew chat, photos, a runbook and background jobs in one
 authored workspace, using existing hosts and data seams. Unblocks showing the

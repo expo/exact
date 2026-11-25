@@ -6625,7 +6625,18 @@ on the run's link is the terminal's own.
 Localized strings use `t("key", name=value)` and app `strings/<locale>.json`
 files. Compile against the files to check keys and placeholders. A language
 setting calls `setLocale("de")` (`setLocale("")` for System) in its action; the
-choice is kept across launches and read before the first frame. Formatting
+choice is kept across launches and read before the first frame. The web JS build
+keeps the base table in the entry. When the other tables together reach 4 KiB
+gzipped, it fetches each by language. A change takes effect when the table
+arrives. A failed change keeps the current language and writes a journal line.
+A failed launch fetch uses the base table on an empty shell. A rendered page keeps its
+text and direction until the client has both a usable table and the rendered answers.
+The head requests the chosen table alongside the entry. If the translation stalls, a client-only
+page with its entry loaded shows the default language five seconds after launch and switches
+when the reader’s language arrives. A rendered page reveals its existing text at the same
+deadline, even while its checkpoint is pending. The journal records the wanted language, the
+language on screen and the reason for a fallback. A failed checkpoint or missing table for the rendered language can retry
+when the reader activates the page or reconnects. Formatting
 functions accept a narrow set of literal formats; app wording is an app `fn`.
 On Apple platforms the tables are the bundle's localizations, base first, so the
 system's own words follow the table it picks. On the Mac a direction you leave

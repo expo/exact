@@ -133,6 +133,13 @@ private final class PackageView: ExactNativeInstance {
     override var view: ExactNativeView { made.view }
     #if os(iOS) || os(tvOS)
     override var controller: UIViewController? { made.controller }
+    override var safeArea: ExactNativeSafeArea? {
+        made.safeArea.map { s in
+            ExactNativeSafeArea(adjustsAdditionalSafeAreaInsets: s.adjustsAdditionalSafeAreaInsets,
+                                scrollViews: s.scrollViews.map { .init($0.view, anchor: $0.anchor, layout: $0.layout) },
+                                safeAreaRegions: s.safeAreaRegions, release: s.release)
+        }
+    }
     #endif
     override func setProps(_ props: [String: String]) throws { try made.setProps(props) }
     override func destroy() { made.destroy() }

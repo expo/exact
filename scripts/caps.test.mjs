@@ -17,6 +17,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bundleHostModule } from '../host/web-js/glue.mjs';
 import { runInNewContext } from 'node:vm';
 import { captureAssets, applyStaticChange, applyStaticTreeChange, appManifestDigest, builtAppMatches, copyStaticTree, copyStaticTreeIfPresent, installStaticCandidate, listAssets, listPublicFiles, publicFileCards, readDevGeneration, retainDevGeneration, shaderInterfaceDigests, staticFile, readStaticFile, serveStatic, syncStaticTree, watchStaticTrees, webEnvelope, devGenerationDigest, assetCards } from '../host/web/serve.mjs';
 import { assertWebDistApp, jsonLines } from './agent.mjs';
@@ -465,6 +466,7 @@ for (const [name, html, files, expectCode, expect] of [
   result('a refused dev publication leaves no blob charged, and a smaller one then fits',
     whole && afterWhole === 1 && late && afterLate === 1 && fits && read?.equals(smaller.get('assets/0.bin')), detail);
 }
+const devClientSource = await bundleHostModule(fileURLToPath(new URL('..', import.meta.url)), 'dev.js');
 // Independent dev payloads share a bounded queue; integrity still gates return.
 {
   const origin = 'http://exact.test/', body = Buffer.from('payload');
@@ -495,7 +497,7 @@ for (const [name, html, files, expectCode, expect] of [
         wake();
       });
     } };
-  runInNewContext(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../host/web/dev.js'), 'utf8'), context);
+  runInNewContext(devClientSource, context);
   const run = async (held) => {
     let done = false; asked = false;
     // The held assets are read after the envelope: a page that boots this generation holds none before.
@@ -548,7 +550,7 @@ for (const [name, html, files, expectCode, expect] of [
   const context = { TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
     performance, location: { href: origin, origin: new URL(origin).origin }, exact: { ready: Promise.resolve(), compat: { inputs: { app: 'com.exact.test' } } },
     fetch: async url => new Response(url === origin + 'exact.json' ? JSON.stringify(sealed) : url === origin + 'assets.json' ? index : body) };
-  runInNewContext(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../host/web/dev.js'), 'utf8'), context);
+  runInNewContext(devClientSource, context);
   const got = await context.fetchGeneration({ ...identity, envelope: origin + 'exact.json' }, new AbortController().signal).then(value => ({ value }), error => ({ error }));
   result('a dev generation named from cards captured on disk binds the manifest a client checks',
     got.value?.generation === generation && !got.error, got.error?.message ?? '');
@@ -557,7 +559,7 @@ for (const [name, html, files, expectCode, expect] of [
 // completions. Its LAN hash path must match SHA-256 at block boundaries.
 {
   const context = { TextEncoder, TextDecoder, AbortController, setTimeout, clearTimeout };
-  runInNewContext(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../host/web/dev.js'), 'utf8'), context);
+  runInNewContext(devClientSource, context);
   const { digest, generationClient } = context.exactDevProtocol;
   let hashes = true;
   for (const size of [0, 1, 55, 56, 63, 64, 65, 127, 128, 10000]) {
