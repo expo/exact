@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { Refusal, refuse, assetIndex, canonicalBytes, canonicalJson, envelopeBytes, portableAssetNames } from './deploy-signing.mjs';
 import { admitHead, authenticatedReleaseFloor, binaryInputFile, cohortFiles, cohortReceipt, keepRecord, nextSeq, recoverCohort, sameCohortPayload } from './deploy-heads.mjs';
 import { bakedEntryAssets, buildBake, classifyArtifacts, nativeManifestMetadata } from './app.mjs';
+import { installedNormalPermissions } from './android-manifest.mjs';
 import { directoryInputNames, watchOutput } from './cargo-dep-info.mjs';
 import { notificationServiceInputChanges, notificationServiceSourceRoot } from './notification-service.mjs';
 import { appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory } from '../host/apple/assets.mjs';
@@ -244,7 +245,7 @@ function binaryInputEvidence(bytes) {
   return evidence;
 }
 
-export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = binaryInputEvidence(bytes), env = process.env, extensions) {
+export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = binaryInputEvidence(bytes), env = process.env, extensions, frozenPermissions = []) {
   const platform = compat.inputs.platform, apple = ['ios', 'macos'].includes(platform);
   const assetApp = { ...app, appleIcons, manifest: { host: app.manifest.host } };
   const appleAssetCatalogs = apple ? appleAssetCatalogInventory(assetApp, compat.target.includes('-tvos') ? 'tvos' : platform) : [];
@@ -252,8 +253,21 @@ export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = bi
   const nativeResources = apple ? nativeResourceInventory(app, null, platform) : [];
   const metadata = { ...(appleAssetCatalogs.length ? { appleAssetCatalogs } : {}), ...(launchImage ? { launchImage } : {}), ...(nativeResources.length ? { nativeResources } : {}), ...(apple && evidence.metadata.appleExtensions !== undefined ? { appleExtensions: evidence.metadata.appleExtensions } : {}),
     ...nativeManifestMetadata(app.manifest, platform, compat.target, env, compat.embedded?.trust !== 'production'), delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys };
-  const keys = new Set([...Object.keys(metadata), ...Object.keys(evidence.metadata)]);
-  const changed = [...keys].filter(key => canonicalJson(metadata[key] ?? null) !== canonicalJson(evidence.metadata[key] ?? null));
+  const installed = { ...evidence.metadata };
+  let permissionsChanged = false;
+  if (platform === 'android' && (metadata.host?.permissions || installed.host?.permissions)) {
+    const { permissions: now = [], ...currentHost } = metadata.host ?? {};
+    const { permissions: before = [], ...installedHost } = installed.host ?? {};
+    metadata.host = currentHost;
+    installed.host = installedHost;
+    // A later package declaration cannot prove that the installed APK already had a permission.
+    const wasInstalled = new Set([...(evidence.androidPermissions ?? frozenPermissions), ...before]);
+    const willInstall = new Set(installedNormalPermissions(app, compat, extensions));
+    permissionsChanged = now.some(p => !wasInstalled.has(p)) || before.some(p => !willInstall.has(p));
+  }
+  const keys = new Set([...Object.keys(metadata), ...Object.keys(installed)]);
+  const changed = [...keys].filter(key => canonicalJson(metadata[key] ?? null) !== canonicalJson(installed[key] ?? null));
+  if (permissionsChanged && !changed.includes('host')) changed.push('host');
   const roots = { app: app.dir, exact: ROOT, workspace: app.workspace ?? app.dir };
   const skip = watchOutput([app.target, ...['dist', 'web-dist', 'dist-windows', 'artifacts'].map(name => resolve(app.dir, name))]);
   const check = (rows, matches) => {
@@ -373,7 +387,10 @@ export async function streamCandidates(app, origin, found, env, { baker = null, 
       nativeData = superseded.filter(key => key === 'dataCrate');
       // The native files and manifest metadata the binary's evidence names, which the compatibility id does not all encode.
       const unchecked = evidence === null;
-      const pendingInputs = [...superseded, ...(unchecked ? [] : binaryInputChanges(evidenceBytes, app, compat, graph.appleIcons, evidence, env, graph.extensions))];
+      const frozenPermissions = [...(inputs.androidLinked?.permissions ?? []), ...(cohort.compat.reach?.androidAppPermissions ?? [])];
+      const pendingInputs = [...superseded];
+      if (!unchecked) pendingInputs.push(...binaryInputChanges(evidenceBytes, app, compat, graph.appleIcons, evidence, env, graph.extensions, frozenPermissions));
+      else if (compat.reach?.androidAppPermissions?.some(p => !frozenPermissions.includes(p))) pendingInputs.push('host');
       // The named entries are this bake's, in place of the last generation's whole.
       const entries = [...built.entries].map(([name, bytes]) => ({ name, bytes, sha256: sha256(bytes) }));
       const staticAssets = snapshot

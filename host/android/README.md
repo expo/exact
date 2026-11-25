@@ -771,14 +771,14 @@ An app's optional native module views (LLP 1024) live in the same `modules/andro
 
 ### Kotlin data modules
 
-An app or game answers its own `native.call` and `native.later` through
-`class exact.app.Module : dev.exact.canvas.ExactModule()` in `modules/android`,
-the Kotlin counterpart to Apple's `ExactModule` (LLP 1067.000). `call` runs on
+An app or game answers `native.call` and `native.later` through `class exact.app.Module : dev.exact.canvas.ExactModule()` in `modules/android`, the Kotlin counterpart to Apple's `ExactModule` (LLP 1067.000). `call` runs on
 the calling thread. `later` starts on main and defaults to answering with
 `call(request)`. Protect state shared between those threads. The module receives
 the application Context and stays with the Canvas session through rotation and
 backgrounding. Its `app` callback receives the root's data words. Its timers and
 `app` run on the session thread. An orderly session end calls `destroy` once.
+List the module’s install-time permissions in `app.json` under `host.android.permissions`. For example, `["android.permission.DETECT_SCREEN_CAPTURE"]` lets it call `context.activity?.registerScreenCaptureCallback(…)` on API 34 and later. The app shares the allow-list with package fragments. Runtime permissions come from grant lines, and the map permission belongs only to the package that declares the POI car service.
+
 See the [native module recipe](../../docs/recipes/native-module.md).
 
 ### Compose module views

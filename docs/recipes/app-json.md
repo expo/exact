@@ -1,6 +1,6 @@
 # Recipe: app.json, assets and modules
 
-`app.json` names the app and its contents; `$schema` lists every key.
+`app.json` names the app and its contents. `$schema` lists its keys.
 
 ```json
 {
@@ -14,8 +14,7 @@
 }
 ```
 
-- **`assets/` and `deck/`** ship except `.DS_Store` files. Contract paths start at the app
-  (no leading slash): `image "assets/logo.png"`, a `sound` and `playSound`, a `font` block's
+- **`assets/` and `deck/`** ship except `.DS_Store`. Paths start at the app without a leading slash: `image "assets/logo.png"`, a `sound` and `playSound`, a `font` block's
   `400 = "assets/Inter-Regular.ttf"` (then `font-family="Inter"`).
 - **`modules/apple/*.swift`** (or `*.xcframework`) is the app's native module;
   `modules/web/index.js` answers on the web ([native module](native-module.md)). `modules`
@@ -23,8 +22,7 @@
   list lacks is `bake-unknown-module`.
 - **`audio_session`**: `ambient` (default), `playback`, or `playback-mix` for sound over
   other apps' audio. [Sessions](../reference.md#sounds).
-- **`app.id` and `app.name`** are set before the first build (`exact new --name --bundle-id`,
-  [porting and release](porting-and-release.md)); `app.ts` takes the id from here.
+- **`app.id` and `app.name`** come from `exact new --name --bundle-id`. `app.ts` reads this id. [Release](porting-and-release.md).
 - **`host.ios.launchImage`** `{ "src": "assets/splash.png", "width": 276 }`: the launch
   screen's PNG, `width` points wide, on the launch colour (Android: `host.android.launchImage`).
 - **`host.ios.icon`** `"art/App.icon"`: an Icon Composer `.icon`; dark icons are `color_scheme_dark.icons`.
@@ -44,6 +42,7 @@
   `device.photos-add purpose.savePhoto` for `NSPhotoLibraryAddUsageDescription`.
   `infoPlist` takes only a vendor SDK's keys, `entitlements` none
   ([bundle metadata](../reference.md#apple-bundle-metadata)).
+- **`host.android.permissions`** lists install-time permissions for Kotlin.
 - **Binary inputs** (`app.json`, assets, Swift, grants, `appId`, canvas surfaces, fonts,
   strings) require `bun exact.mjs ios`. Other `.contract`, `app.ts` and imported edits
   reach a running app in seconds; Rust data inputs rebuild ([driving iOS](ios-driving.md)).

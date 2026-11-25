@@ -552,6 +552,9 @@ async function rejects(action, matches) {
   const apk=({...installed,compat:{...installed.compat,inputs:{...installed.compat.inputs,hermesBytecode:96,
     androidLinked:{uses:['fetch','dates'],permissions:['android.permission.READ_CALENDAR'],extensions:['swatch']}}}});
   const android=(plan,module)=>{const c=structuredClone(moved);Object.assign(c.graph.artifacts[0].requires,plan);c.graph.artifacts.push({name:'typescript/app.hbc',requires:module});return c;};
+  const capture='android.permission.DETECT_SCREEN_CAPTURE', declared=cohortReceipt({version:1,graph:{version:1,sources:apk.sources},binary:{sha256:apk.binary},compat:{...apk.compat,reach:{androidAppPermissions:[capture]}}});
+  const screenshot=android({},{hermesBytecode:96,androidPermissions:[capture]});
+  result('an Android app permission reaches its signed cohort',classifyArtifacts(screenshot,declared).bundle && !classifyArtifacts(screenshot,apk).bundle);
   const less=classifyArtifacts(android({androidUses:['fetch'],androidExtensions:[]},{hermesBytecode:96,androidPermissions:[]}),apk);
   const capability=classifyArtifacts(android({androidUses:['fetch','camera'],androidExtensions:[]},{hermesBytecode:96,androidPermissions:[]}),apk);
   const extension=classifyArtifacts(android({androidUses:[],androidExtensions:['pedometer']},{hermesBytecode:96,androidPermissions:[]}),apk);

@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import {tmpdir, homedir} from 'node:os';
 import {resolve, relative} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import { installedNormalPermissions } from './android-manifest.mjs';
 import {bakedEntryAssets, classifyArtifacts, nativeManifestMetadata} from './app.mjs';
 import {spawnSync as realSpawnSync} from 'node:child_process';
 import {canonicalBytes, classify} from './deploy.mjs';
@@ -54,7 +55,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {appBake, bake, graphT
   const bindings={
     ...Object.fromEntries(['closeSync','existsSync','mkdirSync','openSync','readFileSync','readlinkSync','writeFileSync','mkdtempSync','rmSync'].map(name=>[name,fs[name]])), watch,
     filesystem, filesystemRead, filesystemTree, unbundledTextures, streamBundle,
-    nativeManifestMetadata, directoryInputNames, watchOutput, addedSwiftPackageInputs, swiftPackageInputChanged, notificationServiceInputChanges, notificationServiceSourceRoot, appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory,
+    installedNormalPermissions, nativeManifestMetadata, directoryInputNames, watchOutput, addedSwiftPackageInputs, swiftPackageInputChanged, notificationServiceInputChanges, notificationServiceSourceRoot, appleAssetCatalogInventory, launchImageInventory, nativeResourceInventory,
     channelOf,validateChannel,resolve,relative,homedir,ROOT:fileURLToPath(new URL('..',import.meta.url)),
     process:{env:{EXACT_GAME_PROOF_PROFILE:'gpu-dev',EXACT_UPDATE_TRUST:'development'}},
     console:{log(){}},Refusal:Error,refuse(message){throw Error(message)},
@@ -127,6 +128,29 @@ test.each([
       delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys }, files: [], directories: [], absent: [], links: [] };
     const bytes = Buffer.from(JSON.stringify(evidence));
     expect(binaryInputChanges(bytes, app, compat)).toEqual([]);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("an Android permission moves the binary only when the APK permission set changes", () => {
+  const { root, app, binaryInputChanges } = harness();
+  const grant = 'android.permission.FOREGROUND_SERVICE', capture = 'android.permission.DETECT_SCREEN_CAPTURE';
+  const network = 'android.permission.ACCESS_NETWORK_STATE';
+  const manifest = permissions => ({ app: { id: 'fixture', name: 'Fixture' }, host: { android: { permissions } } });
+  try {
+    app.target = resolve(root, 'target');
+    const compat = { target: 'aarch64-linux-android', delivery: {}, reach: { android: [grant] },
+      inputs: { platform: 'android', store: { L: 'A' }, keys: {}, capabilities: { permissions: [capture, network] } } };
+    const metadata = { ...nativeManifestMetadata(manifest([network, capture]), 'android'), delivery: {}, store: compat.inputs.store, keys: {} };
+    const evidence = { metadata, androidPermissions: [grant, capture, network], files: [], directories: [], absent: [], links: [] };
+    const changes = permissions => {
+      app.manifest = manifest(permissions);
+      return binaryInputChanges(null, app, compat, [], evidence);
+    };
+    expect(changes([grant, capture, network, capture])).toEqual([]);
+    expect(changes([network])).toEqual(['host']);
+    const added = 'android.permission.RUN_USER_INITIATED_JOBS';
+    compat.inputs.androidLinked = { permissions: [added] };
+    expect(changes([network, capture, added])).toEqual(['host']);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 

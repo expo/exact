@@ -80,6 +80,37 @@ pub fn bound(app_root: &Path, extensions: &[&str], target: &str) -> Result<Vec<B
     Ok(out)
 }
 
+/// Install-time permissions supplied by the Kotlin implementations bound to a plan.
+pub fn android_package_permissions(
+    app: &Path,
+    plan: &exact_plan::Plan,
+) -> Result<Vec<String>, String> {
+    let mut permissions = Vec::new();
+    for name in plan.package_extensions().into_values() {
+        let Some((root, _)) = located(app, name) else {
+            continue;
+        };
+        let Some((_, _, imp)) = implementation_for(app, name, &root, "android")? else {
+            continue;
+        };
+        if imp["platform"] == "android"
+            && imp["class"].as_str().is_some_and(|s| !s.is_empty())
+            && imp["sources"]["kotlin"]
+                .as_array()
+                .is_some_and(|dirs| !dirs.is_empty())
+        {
+            permissions.extend(
+                imp["manifest"]["permissions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|name| name.as_str().map(str::to_owned)),
+            );
+        }
+    }
+    Ok(permissions)
+}
+
 /// The text an app's host crate includes for `target`: each bound root as a
 /// `#[path]` module and `exact_packages()`, the table `exact_painted::Composed`
 /// takes. With nothing bound the table is empty.
@@ -211,14 +242,17 @@ fn implementation_for(
         let take = if package.starts_with('@') { 2 } else { 1 };
         let name = parts.get(..take)?.join("/");
         let subpath = parts.get(take..)?.join("/");
-        let (dir, _) = located(app_root, &name)?;
-        let manifest = read(&dir.join("package.json"))?;
         let key = if subpath.is_empty() {
             ".".into()
         } else {
             format!("./{subpath}")
         };
-        let file = dir.join(export(&manifest["exports"], &key)?);
+        let file = app_root.ancestors().find_map(|ancestor| {
+            let dir = ancestor.join("node_modules").join(&name);
+            let manifest = read(&dir.join("package.json"))?;
+            let file = dir.join(export(&manifest["exports"], &key)?);
+            (file.file_name()? == "exact.json").then_some(file)
+        })?;
         Some((file.parent()?.to_path_buf(), read(&file)?))
     };
     let manifest = read(&app_root.join("app.json")).unwrap_or_default();

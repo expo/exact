@@ -21,7 +21,8 @@ export function binaryInputFile(build) {
 export function cohortReceipt(build) {
   if (build?.version !== 1 || build.graph?.version !== 1 || !build.binary?.sha256) throw new Error('missing completed bake graph and binary receipt');
   const evidence = binaryInputFile(build);
-  return {version:1,compat:{id:build.compat.id,inputs:build.compat.inputs,target:build.compat.target},sources:build.graph.sources,surfaceCalls:build.graph.surfaceCalls??{},binary:build.binary.sha256,
+  const declared = build.compat.reach?.androidAppPermissions;
+  return {version:1,compat:{id:build.compat.id,inputs:build.compat.inputs,target:build.compat.target,...(declared?.length ? {reach:{androidAppPermissions:declared}} : {})},sources:build.graph.sources,surfaceCalls:build.graph.surfaceCalls??{},binary:build.binary.sha256,
     ...(evidence ? {binaryInputs:{sha256:evidence.sha256,bytes:evidence.bytes.length}} : {})};
 }
 

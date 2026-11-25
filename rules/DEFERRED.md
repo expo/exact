@@ -2493,11 +2493,11 @@ This half matters more than the feature half.
 
 ## Moving something off this list
 
-Write one line naming what it unblocks, and take something off the doing-list in the same PR.
-If nothing can come off, Charlie may waive the take in writing; the waiver is recorded beside the entry, in his words. Without a take or a waiver, the answer is no. **Restated (Charlie, 2026-09-27):** the take stays the default; the waiver
-exists so that an exception is a visible act and not drift.
+Write one line naming what it unblocks, and take something off the doing-list in the same PR. If nothing can come off, Charlie may waive the take in writing; the waiver is recorded beside the entry, in his words. Without a take or a waiver, the answer is no. **Restated (Charlie, 2026-09-27):** the take stays the default; the waiver exists so that an exception is a visible act and not drift.
 
 **App-owned Android queries (Charlie, 2026-11-24, "recs ok").** `host.android.queries` takes the package, action and action-with-scheme entries and allow-lists of a package’s `manifest.queries` (LLP 1133.030 D9). This lets an app’s Kotlin discover installed speech engines.
+
+**App-owned Android permissions (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).** `host.android.permissions` shares the package allow-list of install-time permissions. Adding `android.permission.DETECT_SCREEN_CAPTURE` lets Pocket Lab count system screenshots in its own Kotlin. AG1 keeps a framework screenshot event off the doing-list (LLP 1133.030 D9).
 
 **Package-owned Android POI service (Charlie, 2026-11-24, "recs ok").** LLP 1133.030 D9 admits one package's Kotlin point-of-interest service, with a ranged minimum car API, the generated template descriptor, an optional service-bound map permission and host validation enforced by Exact.
 

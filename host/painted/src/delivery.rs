@@ -328,11 +328,15 @@ pub fn within_linked(plan: &[u8], receipt: Option<&str>, compat: &str) -> Result
         ("extensions", extensions),
         ("permissions", permissions),
     ] {
-        let have = linked[key].as_array();
-        if let Some(missing) = needs
-            .iter()
-            .find(|need| !have.is_some_and(|have| have.iter().any(|h| h == need.as_str())))
-        {
+        let have = linked[key].as_array().into_iter().flatten();
+        let declared = compat["reach"]["androidAppPermissions"]
+            .as_array()
+            .into_iter()
+            .flatten();
+        if let Some(missing) = needs.iter().find(|need| {
+            !have.clone().any(|h| h == need.as_str())
+                && !(key == "permissions" && declared.clone().any(|h| h == need.as_str()))
+        }) {
             return Err(format!(
                 "the generation needs {missing}, which this binary does not link"
             ));
@@ -515,6 +519,17 @@ mod tests {
                 &plan,
                 Some(&module(&[calendar]).receipt),
                 &compat(&uses, &[calendar])
+            ),
+            Ok(())
+        );
+        let capture = "android.permission.DETECT_SCREEN_CAPTURE";
+        let mut declared: serde_json::Value = serde_json::from_str(&compat(&uses, &[])).unwrap();
+        declared["reach"]["androidAppPermissions"] = serde_json::json!([capture]);
+        assert_eq!(
+            within_linked(
+                &plan,
+                Some(&module(&[capture]).receipt),
+                &declared.to_string()
             ),
             Ok(())
         );

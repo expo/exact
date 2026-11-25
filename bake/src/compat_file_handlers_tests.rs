@@ -113,3 +113,29 @@ fn android_bakes_outgoing_schemes_independently_of_incoming_handlers() {
         serde_json::json!(["incoming"])
     );
 }
+
+#[test]
+fn an_apps_android_permissions_are_a_binary_input() {
+    let dir = app("android-permissions");
+    let mut manifest = Manifest::read(&dir).unwrap();
+    let id = |manifest: &Manifest, platform, target| {
+        super::compatibility_id(&dir, platform, target, manifest, Some(""), false)
+            .unwrap()
+            .id
+    };
+    let android = |m: &Manifest| id(m, "android", "aarch64-linux-android");
+    let mac = |m: &Manifest| id(m, "macos", "aarch64-apple-darwin");
+    let bare = android(&manifest);
+    let other = mac(&manifest);
+    let capture = "android.permission.DETECT_SCREEN_CAPTURE";
+    let network = "android.permission.ACCESS_NETWORK_STATE";
+    manifest.json["host"]["android"]["permissions"] = serde_json::json!([]);
+    assert_eq!(bare, android(&manifest));
+    manifest.json["host"]["android"]["permissions"] = serde_json::json!([capture, network]);
+    let declared = android(&manifest);
+    assert_ne!(bare, declared);
+    manifest.json["host"]["android"]["permissions"] =
+        serde_json::json!([network, capture, capture]);
+    assert_eq!(declared, android(&manifest));
+    assert_eq!(other, mac(&manifest));
+}

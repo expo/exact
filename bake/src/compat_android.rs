@@ -29,6 +29,53 @@ pub(crate) fn android_linked(
     })
 }
 
+/// A redundant app declaration changes neither the merged manifest nor the update stream.
+pub(super) fn app_permissions(
+    app: &std::path::Path,
+    manifest: &contract::Manifest,
+    plan: Option<&exact_plan::Plan>,
+    compat: &mut super::Compat,
+) -> Result<(), String> {
+    use serde_json::{json, Value};
+    use std::collections::BTreeSet;
+    let Some(names) = manifest
+        .json
+        .pointer("/host/android/permissions")
+        .and_then(Value::as_array)
+    else {
+        return Ok(());
+    };
+    if names.is_empty() {
+        return Ok(());
+    }
+    let package = plan
+        .map(|p| contract::native::android_package_permissions(app, p))
+        .transpose()?
+        .unwrap_or_default();
+    let implicit: BTreeSet<_> = compat.reach["android"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .chain(package.iter().map(String::as_str))
+        .chain(
+            compat.inputs["androidLinked"]["permissions"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str),
+        )
+        .collect();
+    let declared: BTreeSet<_> = names.iter().filter_map(Value::as_str).collect();
+    let extra: Vec<_> = declared.difference(&implicit).collect();
+    if !extra.is_empty() {
+        compat.inputs["capabilities"]["permissions"] = json!(extra);
+        compat.id = super::compatibility_digest(&compat.inputs);
+    }
+    compat.reach["androidAppPermissions"] = json!(declared);
+    Ok(())
+}
+
 /// What the APK links for the plan, by name, as its build reads it
 /// (`contract::native::android_reach`).
 pub(crate) use contract::native::android_uses;

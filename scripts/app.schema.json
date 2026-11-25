@@ -1024,8 +1024,8 @@
               {"type": "object", "required": ["package"], "properties": {"package": {"type": "string"}}, "additionalProperties": false},
               {"type": "object", "required": ["action"], "properties": {"action": {"type": "string"}, "scheme": {"type": "string"}}, "additionalProperties": false}
             ]}},
-            "maven": {
-              "description": "Pinned group:artifact:version coordinates on Google's Maven or Maven Central for the app's Kotlin in modules/android. Like a package implementation's maven array, these join the APK's locked, checksum-verified Gradle graph (LLP 1133.008 D8 item 5; host/android/README.md).",
+            "permissions": {"type": "array", "items": {"type": "string"}, "description": "Install-time permissions for modules/android, checked against the package manifest allow-list. Runtime permissions come from grant lines (LLP 1133.002 D6)."},
+            "maven": {"description": "Pinned group:artifact:version coordinates on Google's Maven or Maven Central for the app's Kotlin in modules/android. Like a package implementation's maven array, these join the APK's locked, checksum-verified Gradle graph (LLP 1133.008 D8 item 5; host/android/README.md).",
               "type": "array",
               "items": { "type": "string",
                 "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:(?!(?:[Ll][Aa][Tt][Ee][Ss][Tt]|[Rr][Ee][Ll][Ee][Aa][Ss][Ee])(?:\\.|$))(?!.*-[Ss][Nn][Aa][Pp][Ss][Hh][Oo][Tt]$)[A-Za-z0-9_.-]+$(?![\\s\\S])",
