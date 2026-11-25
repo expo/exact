@@ -349,15 +349,15 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let env = ProcessInfo.processInfo.environment
         let path = try XCTUnwrap(env["EXACT_FIXTURE_PLAN"], "build.mjs --test --ios compiles EXACT_FIXTURE_PLAN")
         let plan = try Data(contentsOf: URL(fileURLWithPath: path))
-        let size = CGSize(width: 402, height: 874)
         let session = ExactApp.shared.makeSession(label: "owner-update")
         sessions.append(session)
         let view = ExactView(session: session)
         sessionView = view
         let host = UIViewController()
         let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(origin: .zero, size: size))
-        window.frame = CGRect(origin: .zero, size: size)
+        // A scene's window fills its scene, as an app's does, so the keyboard's guides end where the screen does
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        let size = window.bounds.size
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.addSubview(view)

@@ -16,6 +16,8 @@
 - In a parallel `cargo test -p exact-kernel --test it` on the shared Mac, `svg_scene::bounds::a_use_box_stops_at_the_expansion_limit` took 6.93 s against its five-second bound. The same binary passed alone in 2.19 s and in the full suite with four test threads.
 - Consider optional types for direct imports of a development package from `app.json`. In a production build, `manifest.development.packages.swatch?.web?.label` checks against an empty package map. Packages read the selected key through `context.config` (#1608).
 
+- Size the XCTest fixtures that force a 402 × 874 window inside a scene to the scene before running their keyboard cases on the iPhone Duo (2026-11-25). On the closed Duo the scene is 466 × 678, and UIKit then places the keyboard's guides at the larger window's bottom, past the screen, as `OwnerUpdateIOSTests` did before its fixture kept the scene's size. `ContentOwnersIOSTests`, `KeyboardFocusIOSTests`, `RevealKeyboardIOSTests`, `PadBarIOSTests` and `TabEdgeIOSTests` are among them.
+
 - On an iPhone 17 simulator running iOS 26.5 at `19d272c1c`, run `bun host/apple/build.mjs --test --ios --only NavigationCollapseIOSTests`. The authored scrollTop test reads a zero expanded inset, and the in-place replacement test cannot find `list-second-taller` in the bare XCTest runner.
 - When Exact supports a new macOS version, repeat the modifier shortcut measurement in a guest with real key events and another app frontmost (#1413).
 - Apply each Linux portal binding change before submitting pending shortcuts (#1413). Bind F and K, hold F, request J, then reassign F and remove K in one `ShortcutsChanged`. The next `BindShortcuts` must contain F and J. The candidate also requests K again.
