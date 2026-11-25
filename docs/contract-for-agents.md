@@ -6729,8 +6729,8 @@ or Idle; the requested rate and any system limit; frame rate
 and missed frames for the last 0.5 s and 5 s; pacing; and charts of frame rate and
 frame time, or a table of work time, late frames, maximum frame time and pacing
 changes. A tap on a chart expands it; a tap on the title defines each figure; Share,
-at its top right, opens the system's share sheet at once with one text: the summary,
-then the agent report (two where the card measures the screen, the screen's and
+at its top right, opens the system's share sheet at once with one Markdown text: the
+summary, then the agent report (two where the card measures the screen, the screen's and
 Exact's frames'). On the Mac the picker offers Copy first. The card states no pass or fail of its own;
 Details, at the end of the line under the header, swaps the figures and charts for
 `perf frames health`'s three results over the last 5 s with their reasons and the counts
@@ -6802,8 +6802,9 @@ no screen's measurement (a video, `XCTApplicationLaunchMetric`). A simulator's n
 Run an Apple app on a connected phone with `bun host/apple/build.mjs --device --run`.
 Open the four-finger menu and choose **Frame Health**, which in a production bake starts
 collection, reproduce the hitch, then tap Share on the card; the share sheet takes
-one text: a line saying what it holds, the summary, then each JSON report under a
-heading that names its source, such as `Agent report 1 of 2, the screen's frames (ui-update):`.
+one Markdown text: the card's status, the summary, then a section on the agent reports
+that says how they relate, with each JSON report in a `json` block under a heading that
+names it, such as "The screen's frames (`ui-update`)".
 Exact creates no report file or automatic upload. A person can send
 that text to an agent. The system share destination controls any storage it creates.
 On iOS 18 and later the card measures the screen, and the text holds two reports, the

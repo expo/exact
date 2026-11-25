@@ -431,3 +431,149 @@ fn a_cancelled_call_is_dropped_while_it_waits_and_finished_once_it_runs() {
         .unwrap()
         .is_err());
 }
+
+#[test]
+fn non_app_origins_cannot_open_or_hold_auth_and_tools_end_person_required() {
+    use exact_runner::auth::{self, Arm, Browser, Session};
+    use exact_runner::{Answer, CallOrigin, DataError, DataSource, Outcome, Request, Store};
+
+    struct AuthData;
+    impl DataSource for AuthData {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            let body = Session {
+                url: "https://idp.example/authorize?state=s1".into(),
+                callback: "app.test:/cb".into(),
+                state: "s1".into(),
+                logout: false,
+                ephemeral: false,
+                prepared: None,
+                message: None,
+            }
+            .to_json();
+            Ok(Answer::Later(Request::auth(body.into_bytes())))
+        }
+        fn parse(
+            &mut self,
+            _: &mut Store,
+            _: &str,
+            _: &[Value],
+            outcome: Outcome,
+        ) -> Result<Answer, DataError> {
+            let text = match outcome {
+                Outcome::Response(r) => {
+                    format!("{}:{}", r.status, String::from_utf8_lossy(&r.body))
+                }
+                Outcome::Failed { message, .. } => message,
+                _ => "other".into(),
+            };
+            Ok(Answer::Now(Value::str(&text)))
+        }
+        fn grants(&self) -> &str {
+            "auth.session https://idp.example\nauth.callback app.test:/cb"
+        }
+    }
+
+    let src = r#"component App
+  mutation login as shape string
+  tool signIn writes "Start sign-in." = signIn
+  action signIn
+    send login = begin()
+  view
+    text "ok"
+"#;
+    let plan = contract::compile(src).unwrap();
+    let make = || {
+        Runner::boot(
+            plan.clone(),
+            boxed(AuthData),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap()
+    };
+
+    for origin in [CallOrigin::Device, CallOrigin::Wake, CallOrigin::Action] {
+        for agent_mode in [false, true] {
+            let mut r = make();
+            r.act_from(origin, "signIn", vec![]).unwrap();
+            let out = r
+                .take_requests()
+                .into_iter()
+                .find(|o| o.request.is_auth())
+                .unwrap();
+            assert_eq!(out.request.reach.origin, origin);
+            assert_eq!(
+                auth::arm(&mut r, &out, agent_mode, Browser::Native, None),
+                Arm::Settled
+            );
+            assert!(r.device_holds().is_empty());
+            let (ticket, outcome) = auth::take_any_settled(&mut r).unwrap();
+            assert_eq!(ticket, out.ticket);
+            let Outcome::Response(resp) = outcome else {
+                panic!("expected 403 response");
+            };
+            assert_eq!(resp.status, 403);
+        }
+    }
+
+    // End-to-end tool call: arm refuses 403 without opening or holding, and ends
+    // the tool call refused with reason person-required and certainty uncertain.
+    for agent_mode in [false, true] {
+        let mut r = make();
+        let id = r.call_tool("signIn", "{}", agent()).unwrap();
+        by(&mut r, 0.0);
+        let out = r
+            .take_requests()
+            .into_iter()
+            .find(|o| o.request.is_auth())
+            .unwrap();
+        assert_eq!(out.request.reach.origin, CallOrigin::Tool);
+        assert_eq!(
+            auth::arm(&mut r, &out, agent_mode, Browser::Native, None),
+            Arm::Settled
+        );
+        assert!(r.device_holds().is_empty());
+        let (ticket, outcome) = auth::take_any_settled(&mut r).unwrap();
+        assert_eq!(ticket, out.ticket);
+        let Outcome::Response(ref resp) = outcome else {
+            panic!("expected 403 response");
+        };
+        assert_eq!(resp.status, 403);
+        r.fulfill(ticket, outcome).unwrap();
+        let ended = calls(&r)
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            (
+                ended["outcome"].as_str(),
+                ended["certainty"].as_str(),
+                ended["reason"].as_str(),
+            ),
+            (Some("refused"), Some("uncertain"), Some("person-required")),
+            "{ended}"
+        );
+    }
+
+    // Person/App origin still opens or holds normally.
+    let mut r = make();
+    r.act("signIn", vec![]).unwrap();
+    let out = r
+        .take_requests()
+        .into_iter()
+        .find(|o| o.request.is_auth())
+        .unwrap();
+    assert_eq!(out.request.reach.origin, CallOrigin::App);
+    assert_eq!(
+        auth::arm(&mut r, &out, true, Browser::Native, None),
+        Arm::Held
+    );
+    assert_eq!(r.device_holds().len(), 1);
+}

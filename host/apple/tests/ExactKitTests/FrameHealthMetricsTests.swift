@@ -1421,29 +1421,31 @@ final class FrameHealthMetricsTests: XCTestCase {
         let display = FrameHealthCardText.Display(name: "ProMotion", detail: "adaptive refresh up to 120 Hz", maximumHz: 120, adaptiveSync: false)
         let rates = FrameHealthCardText.Rates(requestedHz: 120, periodMs: 1000 / 120.0)
         let text = FrameHealthCardText.summary(reader: reader, rates: rates, display: display, health: health)
-        XCTAssertLessThan(text.utf8.count, 4000)
+        let screen = FrameHealthCardText.summary(reader: reader, clock: reader, rates: rates, display: display,
+            source: .screen(refreshMs: 1000 / 120.0, exact: .init(running: true, rates: rates)), health: health)
+        XCTAssertLessThan(max(text.utf8.count, screen.utf8.count), 4000, "both summaries")
         // Two seconds of samples cover two seconds, whatever the window's nominal span
         XCTAssertTrue(text.contains("Max work time: 3.0ms (last 0.5s), 3.0ms (last 2.0s), 3.0ms (last 2.0s)"), text)
         XCTAssertTrue(text.contains("Frame rate: 120 FPS (last 0.5s)"), text)
         XCTAssertFalse(text.contains("·"), "no middots in the figures")
-        XCTAssertTrue(text.contains("\nResults for the last 2.0s\nThese come from frame timing only"), "and Details' results: \(text)")
-        XCTAssertTrue(text.contains("\nCadence, whether every frame kept to the display's schedule: "), text)
-        let screen = FrameHealthCardText.summary(reader: reader, clock: reader, rates: rates, display: display,
-            source: .screen(refreshMs: 1000 / 120.0, exact: .init(running: true, rates: rates)), health: health)
-        XCTAssertLessThan(screen.utf8.count, 4000, "the screen's summary too")
-        XCTAssertTrue(text.contains("\nFigures\nFrame rate leaves out idle time. "), text)
-        XCTAssertTrue(screen.contains("\nExact's frame clock, the display link that drives Exact's own drawing: asks for 120 FPS\n"), screen)
-        // Share's text says what it holds and the card's status, and names each report's source in words
+        XCTAssertTrue(text.contains("\n- Cadence, whether every frame kept to the display's schedule: "), "and Details' results: \(text)")
+        XCTAssertTrue(text.contains("\n## Figures for Exact's frames\n\nFrame rate leaves out idle time. "), text)
+        XCTAssertTrue(screen.contains("\n- Exact's frame clock, the display link that drives Exact's own drawing: asks for 120 FPS\n"), screen)
+        // Share's text is Markdown: the status, the summary, then a section on the reports and each under a heading naming it
         let report = Data("{}".utf8)
         let shared = FrameHealthCardText.shared(summary: screen, status: .paused,
             reports: [("ui-update", report), ("exact-app-display-link", report)])
-        XCTAssertTrue(shared.hasPrefix("Frame health, paused\nA summary, then the full data for an AI agent as 2 JSON reports.\n"
-            + "Paused: the summary's figures end when the card was paused; the reports are from now.\n"
-            + "Exact's docs/contract-for-agents.md describes each report's fields: search it for exact.frame-health/2.\n\nWhat was measured\n"), shared)
-        XCTAssertTrue(shared.hasSuffix("\n\nAgent report 1 of 2, the screen's frames (ui-update):\n{}\n\n"
-            + "Agent report 2 of 2, Exact's frame clock (exact-app-display-link):\n{}"), shared)
+        XCTAssertTrue(shared.hasPrefix("# Frame health, paused\n\nA summary of this app's frames, then the full data for an AI agent. "
+            + "Paused: the summary's figures end when the card was paused; the reports are from now.\n\n## What was measured\n\n"), shared)
+        XCTAssertEqual(shared.components(separatedBy: "\n").filter { $0.hasPrefix("#") }, ["# Frame health, paused",
+            "## What was measured", "## Figures for the screen's frames", "## Results for Exact's frames, last 2.0s", "## Reports for an agent",
+            "### The screen's frames (`ui-update`)", "### Exact's frames (`exact-app-display-link`)"])
+        XCTAssertTrue(shared.contains("\n\n## Reports for an agent\n\nTwo reports of the same moments. "), shared)
+        XCTAssertTrue(shared.hasSuffix("\n\n```json\n{}\n```"), shared)
         XCTAssertTrue(FrameHealthCardText.shared(summary: text, status: .idle, reports: [("other", report)])
-            .hasSuffix("\n\nAgent report, other:\n{}"), "a source without a name in words by its own")
+            .hasSuffix("\n\n## Report for an agent\n\nWhere the card cannot measure the screen, on the Mac and on iOS before 18, "
+                + "there is one report. Exact's docs/contract-for-agents.md describes the JSON: search it for exact.frame-health/2."
+                + "\n\n### `other`\n\n```json\n{}\n```"), "a source without a name in words by its own")
     }
 
     func testDetailsGivesTheCollectorsResultsOverTheLast5sAndTheCountsBehindThem() {
