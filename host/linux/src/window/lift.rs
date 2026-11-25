@@ -14,6 +14,7 @@ use smithay_client_toolkit::reexports::client::{
         wl_compositor::WlCompositor,
         wl_data_device_manager::DndAction,
         wl_data_source::{self, WlDataSource},
+        wl_keyboard::{self, WlKeyboard},
         wl_pointer::{self, WlPointer},
         wl_seat::{self, WlSeat},
         wl_shm::{self, WlShm},
@@ -97,15 +98,25 @@ impl Lifts {
         let (press, lift) = self.lifted.borrow_mut().take()?;
         let mut offers: Vec<(&'static str, Arc<[u8]>)> = Vec::new();
         if !lift.url.is_empty() {
-            offers.push((URI_LIST, uri_list(&[] as &[&Path], &lift.url).into_bytes().into()));
+            offers.push((
+                URI_LIST,
+                uri_list(&[] as &[&Path], &lift.url).into_bytes().into(),
+            ));
             offers.push((MOZ_URL, moz_url(&lift.url).into()));
         }
         if !lift.text.is_empty() {
             let text: Arc<[u8]> = lift.text.as_bytes().into();
             offers.extend(TEXTS.map(|mime| (mime, text.clone())));
         }
-        let icon = lift.picture.as_ref().map(|picture| Icon::of(picture, lift.hotspot));
-        Some(Command::Lift { press, offers, icon })
+        let icon = lift
+            .picture
+            .as_ref()
+            .map(|picture| Icon::of(picture, lift.hotspot));
+        Some(Command::Lift {
+            press,
+            offers,
+            icon,
+        })
     }
 }
 
@@ -177,8 +188,10 @@ impl Icon {
         let (top, height, points_high, y) = axis(hotspot.1, picture.height);
         let mut argb = vec![0; width as usize * height as usize * 4];
         for row in 0..picture.height as usize {
-            let from = &picture.rgba[row * picture.width as usize * 4..][..picture.width as usize * 4];
-            let to = &mut argb[((top as usize + row) * width as usize + left as usize) * 4..][..picture.width as usize * 4];
+            let from =
+                &picture.rgba[row * picture.width as usize * 4..][..picture.width as usize * 4];
+            let to = &mut argb[((top as usize + row) * width as usize + left as usize) * 4..]
+                [..picture.width as usize * 4];
             for (to, from) in to.chunks_exact_mut(4).zip(from.chunks_exact(4)) {
                 let pixel = u32::from_be_bytes([from[3], from[0], from[1], from[2]]);
                 to.copy_from_slice(&pixel.to_ne_bytes());
@@ -287,14 +300,22 @@ impl Out {
 
     /// Each pipe being sent to, by its place, with its descriptor.
     pub(super) fn pipes(&self) -> impl Iterator<Item = (usize, i32)> + '_ {
-        self.sends.iter().enumerate().map(|(k, s)| (k, s.pipe.as_raw_fd()))
+        self.sends
+            .iter()
+            .enumerate()
+            .map(|(k, s)| (k, s.pipe.as_raw_fd()))
     }
 
     /// How long until the next send is due, in milliseconds.
     pub(super) fn due(&self, now: Instant) -> Option<i32> {
         self.sends
             .iter()
-            .map(|s| s.deadline.saturating_duration_since(now).as_millis().min(i32::MAX as u128) as i32)
+            .map(|s| {
+                s.deadline
+                    .saturating_duration_since(now)
+                    .as_millis()
+                    .min(i32::MAX as u128) as i32
+            })
             .min()
     }
 
@@ -321,7 +342,8 @@ impl Out {
                 }
             }
         }
-        self.sends.retain(|s| s.at < s.bytes.len() && now < s.deadline);
+        self.sends
+            .retain(|s| s.at < s.bytes.len() && now < s.deadline);
     }
 
     /// Retire every source, as the window closes.
@@ -359,7 +381,12 @@ impl Listener {
     /// with the left button alone held on the window's surface; else the
     /// lift is stale, and the release or press that made it so reaches the
     /// window as usual.
-    pub(super) fn lift(&mut self, press: Press, offers: Vec<(&'static str, Arc<[u8]>)>, icon: Option<Icon>) {
+    pub(super) fn lift(
+        &mut self,
+        press: Press,
+        offers: Vec<(&'static str, Arc<[u8]>)>,
+        icon: Option<Icon>,
+    ) {
         let Some(seat) = self.seats.iter().find(|s| s.name == press.seat) else {
             return;
         };
@@ -367,7 +394,12 @@ impl Listener {
             .pointer
             .as_ref()
             .is_some_and(|p| p.on && p.held == [LEFT] && p.press == Some(press.serial));
-        let Some(origin) = self.out.origin.as_ref().filter(|_| grabbed && self.manager.version() >= 3) else {
+        let Some(origin) = self
+            .out
+            .origin
+            .as_ref()
+            .filter(|_| grabbed && self.manager.version() >= 3)
+        else {
             return;
         };
         let handle = &self.handle;
@@ -381,8 +413,11 @@ impl Listener {
             .as_ref()
             .and_then(|_| self.out.compositor.as_ref().zip(self.out.shm.as_ref()))
             .map(|(compositor, _)| compositor.create_surface(handle, ()));
-        seat.device.start_drag(Some(&source), origin, surface.as_ref(), press.serial);
-        let icon = surface.zip(icon).and_then(|(surface, icon)| self.show(surface, &icon));
+        seat.device
+            .start_drag(Some(&source), origin, surface.as_ref(), press.serial);
+        let icon = surface
+            .zip(icon)
+            .and_then(|(surface, icon)| self.show(surface, &icon));
         self.out.sources.push(Source {
             press,
             source,
@@ -393,22 +428,45 @@ impl Listener {
     }
 
     /// Show `icon` on `surface`, which `start_drag` made the drag's icon.
-    fn show(&self, surface: WlSurface, icon: &Icon) -> Option<(WlSurface, WlBuffer, Option<WpViewport>)> {
+    fn show(
+        &self,
+        surface: WlSurface,
+        icon: &Icon,
+    ) -> Option<(WlSurface, WlBuffer, Option<WpViewport>)> {
         let shm = self.out.shm.as_ref()?;
+        // A buffer with no pixels is a protocol error: such an icon is left out
+        let length = icon
+            .width
+            .checked_mul(4)
+            .and_then(|stride| stride.checked_mul(icon.height))
+            .filter(|&length| icon.width > 0 && icon.height > 0 && length as usize == icon.argb.len());
+        let Some(length) = length else {
+            surface.destroy();
+            return None;
+        };
         let stride = icon.width * 4;
-        let length = stride * icon.height;
         let memory = unsafe { libc::memfd_create(c"exact-drag-icon".as_ptr(), libc::MFD_CLOEXEC) };
         if memory < 0 {
             surface.destroy();
             return None;
         }
-        let mut memory = std::fs::File::from(unsafe { <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(memory) });
+        let mut memory = std::fs::File::from(unsafe {
+            <OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(memory)
+        });
         if memory.write_all(&icon.argb).is_err() {
             surface.destroy();
             return None;
         }
         let pool = shm.create_pool(memory.as_fd(), length, &self.handle, ());
-        let buffer = pool.create_buffer(0, icon.width, icon.height, stride, wl_shm::Format::Argb8888, &self.handle, ());
+        let buffer = pool.create_buffer(
+            0,
+            icon.width,
+            icon.height,
+            stride,
+            wl_shm::Format::Argb8888,
+            &self.handle,
+            (),
+        );
         pool.destroy();
         let viewport = match icon.scale {
             Some(scale) => {
@@ -460,6 +518,21 @@ impl Listener {
         self.tell(Heard::Ended(press));
     }
 
+    /// Retire seat `seat`'s sources whose gesture had not ended, its seat or
+    /// its pointer gone: the window lets go of their presses. A source past
+    /// its drop still serves its types until the compositor retires it.
+    pub(super) fn seat_gone(&mut self, seat: u32) {
+        while let Some(at) = self
+            .out
+            .sources
+            .iter()
+            .position(|s| s.press.seat == seat && !s.ended)
+        {
+            self.ended(at);
+            self.out.sources.remove(at).retire();
+        }
+    }
+
     fn retire(&mut self, source: &WlDataSource) {
         if let Some(at) = self.out.sources.iter().position(|s| s.source == *source) {
             self.ended(at);
@@ -469,7 +542,14 @@ impl Listener {
 }
 
 impl Dispatch<WlSeat, ()> for Listener {
-    fn event(state: &mut Self, seat: &WlSeat, event: wl_seat::Event, _: &(), _: &Connection, handle: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        seat: &WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        handle: &QueueHandle<Self>,
+    ) {
         let wl_seat::Event::Capabilities {
             capabilities: WEnum::Value(capabilities),
         } = event
@@ -479,11 +559,22 @@ impl Dispatch<WlSeat, ()> for Listener {
         let Some(entry) = state.seats.iter_mut().find(|s| s.seat == *seat) else {
             return;
         };
-        let has = capabilities.contains(wl_seat::Capability::Pointer);
-        match (has, entry.pointer.is_some()) {
+        let name = entry.name;
+        let keyboard = capabilities.contains(wl_seat::Capability::Keyboard);
+        match (keyboard, entry.keyboard.is_some()) {
+            (true, false) => entry.keyboard = Some(Keyboard::new(seat.get_keyboard(handle, name))),
+            (false, true) => {
+                if let Some(keyboard) = entry.keyboard.take() {
+                    keyboard.release();
+                }
+            }
+            _ => {}
+        }
+        let pointer = capabilities.contains(wl_seat::Capability::Pointer);
+        match (pointer, entry.pointer.is_some()) {
             (true, false) => {
                 entry.pointer = Some(Pointer {
-                    pointer: seat.get_pointer(handle, entry.name),
+                    pointer: seat.get_pointer(handle, name),
                     on: false,
                     held: Vec::new(),
                     press: None,
@@ -492,23 +583,106 @@ impl Dispatch<WlSeat, ()> for Listener {
                 });
             }
             (false, true) => {
-                let name = entry.name;
                 if let Some(pointer) = entry.pointer.take() {
                     pointer.release();
                 }
-                state.tell(Heard::Pointer {
-                    seat: name,
-                    pointed: Pointed::Lost,
-                });
+                state.seat_gone(name);
+                state.tell_pointed(name, Pointed::Lost);
             }
             _ => {}
         }
     }
 }
 
+/// A seat's keyboard as the listener holds it, for the modifiers in force
+/// at each pointer event: the effective mask of xkb's modifier indices,
+/// whose real modifiers (Shift 0, Control 2, Mod1 3, Mod4 6) winit names
+/// Shift, Control, Alt and Super.
+pub(super) struct Keyboard {
+    keyboard: WlKeyboard,
+    modifiers: u32,
+}
+
+impl Keyboard {
+    fn new(keyboard: WlKeyboard) -> Self {
+        Keyboard {
+            keyboard,
+            modifiers: 0,
+        }
+    }
+
+    /// Let go of the keyboard, its seat or its capability gone.
+    pub(super) fn release(self) {
+        if self.keyboard.version() >= 3 {
+            self.keyboard.release();
+        }
+    }
+}
+
+impl Listener {
+    /// Tell the window what seat `seat`'s pointer did, with the modifiers the
+    /// seat's keyboard holds then, when it has one.
+    pub(super) fn tell_pointed(&self, seat: u32, pointed: Pointed) {
+        let modifiers = self
+            .seats
+            .iter()
+            .find(|s| s.name == seat)
+            .and_then(|s| s.keyboard.as_ref())
+            .map(|k| k.modifiers);
+        self.tell(Heard::Pointer {
+            seat,
+            pointed,
+            modifiers,
+        });
+    }
+}
+
+impl Dispatch<WlKeyboard, u32> for Listener {
+    fn event(
+        state: &mut Self,
+        _: &WlKeyboard,
+        event: wl_keyboard::Event,
+        &seat: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(keyboard) = state
+            .seats
+            .iter_mut()
+            .find(|s| s.name == seat)
+            .and_then(|s| s.keyboard.as_mut())
+        else {
+            return;
+        };
+        // The keymap's descriptor closes as the event drops; the real modifiers' indices need no keymap
+        match event {
+            wl_keyboard::Event::Modifiers {
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                ..
+            } => keyboard.modifiers = mods_depressed | mods_latched | mods_locked,
+            wl_keyboard::Event::Leave { .. } => keyboard.modifiers = 0,
+            _ => {}
+        }
+    }
+}
+
 impl Dispatch<WlPointer, u32> for Listener {
-    fn event(state: &mut Self, wl: &WlPointer, event: wl_pointer::Event, &seat: &u32, _: &Connection, _: &QueueHandle<Self>) {
-        let Some(pointer) = state.seats.iter_mut().find(|s| s.name == seat).and_then(|s| s.pointer.as_mut()) else {
+    fn event(
+        state: &mut Self,
+        wl: &WlPointer,
+        event: wl_pointer::Event,
+        &seat: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let Some(pointer) = state
+            .seats
+            .iter_mut()
+            .find(|s| s.name == seat)
+            .and_then(|s| s.pointer.as_mut())
+        else {
             return;
         };
         let point = |x: f64, y: f64| (x as f32, y as f32);
@@ -520,12 +694,20 @@ impl Dispatch<WlPointer, u32> for Listener {
                 ..
             } => {
                 pointer.on = surface.id() == state.surface;
-                pointer.on.then(|| Pointed::Entered(point(surface_x, surface_y)))
+                pointer
+                    .on
+                    .then(|| Pointed::Entered(point(surface_x, surface_y)))
             }
-            wl_pointer::Event::Leave { .. } => std::mem::take(&mut pointer.on).then_some(Pointed::Left),
-            wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
-                pointer.on.then(|| Pointed::Moved(point(surface_x, surface_y)))
+            wl_pointer::Event::Leave { .. } => {
+                std::mem::take(&mut pointer.on).then_some(Pointed::Left)
             }
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => pointer
+                .on
+                .then(|| Pointed::Moved(point(surface_x, surface_y))),
             wl_pointer::Event::Button {
                 serial,
                 button,
@@ -534,9 +716,13 @@ impl Dispatch<WlPointer, u32> for Listener {
             } => {
                 let pressed = pressed == wl_pointer::ButtonState::Pressed;
                 pointer.held.retain(|&b| b != button);
+                // The implicit grab is the first press's: a press while another
+                // button is held does not begin one
                 if pressed {
+                    if pointer.held.is_empty() {
+                        pointer.press = Some(serial);
+                    }
                     pointer.held.push(button);
-                    pointer.press = Some(serial);
                 }
                 // The window hears a press on its surface, and the release of each press it heard
                 let told = if pressed {
@@ -559,8 +745,12 @@ impl Dispatch<WlPointer, u32> for Listener {
             }
             wl_pointer::Event::Axis { axis, value, .. } if pointer.on => {
                 match axis {
-                    WEnum::Value(wl_pointer::Axis::HorizontalScroll) => pointer.wheel.distance.0 += value,
-                    WEnum::Value(wl_pointer::Axis::VerticalScroll) => pointer.wheel.distance.1 += value,
+                    WEnum::Value(wl_pointer::Axis::HorizontalScroll) => {
+                        pointer.wheel.distance.0 += value
+                    }
+                    WEnum::Value(wl_pointer::Axis::VerticalScroll) => {
+                        pointer.wheel.distance.1 += value
+                    }
                     _ => return,
                 }
                 pointer.wheel.turned = true;
@@ -569,8 +759,12 @@ impl Dispatch<WlPointer, u32> for Listener {
             }
             wl_pointer::Event::AxisDiscrete { axis, discrete } if pointer.on => {
                 match axis {
-                    WEnum::Value(wl_pointer::Axis::HorizontalScroll) => pointer.wheel.steps.0 += discrete,
-                    WEnum::Value(wl_pointer::Axis::VerticalScroll) => pointer.wheel.steps.1 += discrete,
+                    WEnum::Value(wl_pointer::Axis::HorizontalScroll) => {
+                        pointer.wheel.steps.0 += discrete
+                    }
+                    WEnum::Value(wl_pointer::Axis::VerticalScroll) => {
+                        pointer.wheel.steps.1 += discrete
+                    }
                     _ => {}
                 }
                 None
@@ -579,7 +773,7 @@ impl Dispatch<WlPointer, u32> for Listener {
             _ => None,
         };
         if let Some(pointed) = pointed {
-            state.tell(Heard::Pointer { seat, pointed });
+            state.tell_pointed(seat, pointed);
         }
     }
 }
@@ -624,7 +818,14 @@ impl Listener {
 }
 
 impl Dispatch<WlDataSource, ()> for Listener {
-    fn event(state: &mut Self, source: &WlDataSource, event: wl_data_source::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        source: &WlDataSource,
+        event: wl_data_source::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
             wl_data_source::Event::Send { mime_type, fd } => {
                 let bytes = state
@@ -649,38 +850,96 @@ impl Dispatch<WlDataSource, ()> for Listener {
                     state.ended(at);
                 }
             }
-            wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled => state.retire(source),
+            wl_data_source::Event::DndFinished | wl_data_source::Event::Cancelled => {
+                state.retire(source)
+            }
             _ => {}
         }
     }
 }
 
 impl Dispatch<WlCompositor, ()> for Listener {
-    fn event(_: &mut Self, _: &WlCompositor, _: <WlCompositor as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WlCompositor,
+        _: <WlCompositor as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WlSurface, ()> for Listener {
-    fn event(_: &mut Self, _: &WlSurface, _: <WlSurface as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WlSurface,
+        _: <WlSurface as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WlShm, ()> for Listener {
-    fn event(_: &mut Self, _: &WlShm, _: wl_shm::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WlShm,
+        _: wl_shm::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WlShmPool, ()> for Listener {
-    fn event(_: &mut Self, _: &WlShmPool, _: <WlShmPool as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WlShmPool,
+        _: <WlShmPool as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WlBuffer, ()> for Listener {
-    fn event(_: &mut Self, _: &WlBuffer, _: <WlBuffer as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WlBuffer,
+        _: <WlBuffer as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WpViewporter, ()> for Listener {
-    fn event(_: &mut Self, _: &WpViewporter, _: <WpViewporter as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WpViewporter,
+        _: <WpViewporter as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WpViewport, ()> for Listener {
-    fn event(_: &mut Self, _: &WpViewport, _: <WpViewport as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WpViewport,
+        _: <WpViewport as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 #[cfg(test)]

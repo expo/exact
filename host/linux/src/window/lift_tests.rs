@@ -79,7 +79,10 @@ fn a_uri_list_names_each_file_then_the_link_and_a_drop_reads_it_back() {
         "file:///srv/app/assets/caltrain.png\r\nfile:///tmp/caf%E9%20%231.jpg\r\nhttps://example.com/fuji\r\n"
     );
     let dropped = items(list.as_bytes(), b"", b"");
-    assert_eq!(dropped.paths, [PathBuf::from("/srv/app/assets/caltrain.png"), raw]);
+    assert_eq!(
+        dropped.paths,
+        [PathBuf::from("/srv/app/assets/caltrain.png"), raw]
+    );
     assert_eq!(dropped.url, "https://example.com/fuji");
 }
 
@@ -106,18 +109,30 @@ fn an_icon_at_an_integer_scale_grows_to_whole_points_around_the_press() {
     assert_eq!((icon.size, icon.offset), ((11, 5), (-3, -2)));
     assert_eq!(pixel(&icon, 0, 0), 0, "the gained column is clear");
     assert_eq!(pixel(&icon, 1, 0), 0x40102030, "premultiplied ARGB");
-    assert_eq!(pixel(&icon, 21, 9), 0x40102030, "the picture's last pixel is its own");
+    assert_eq!(
+        pixel(&icon, 21, 9),
+        0x40102030,
+        "the picture's last pixel is its own"
+    );
 }
 
 #[test]
 fn an_icon_at_a_fractional_scale_is_shown_at_its_size_in_points() {
     let icon = Icon::of(&picture(30, 15, 1.5), (4., 4.));
     assert_eq!(icon.scale, None, "a viewport shows it");
-    assert_eq!(icon.offset, (-4, -4), "held 6 pixels in, whole points already");
+    assert_eq!(
+        icon.offset,
+        (-4, -4),
+        "held 6 pixels in, whole points already"
+    );
     assert_eq!(icon.size, (20, 10));
     assert_eq!((icon.width, icon.height), (30, 15));
     // Held 4.5 pixels in, taken as 5: a pixel gained before puts the press 4 points in
     let held = Icon::of(&picture(31, 15, 1.5), (3., 0.5));
     assert_eq!(held.offset, (-4, -1));
-    assert_eq!((held.width, held.size.0), (33, 22), "the picture and the gained pixel, to whole points");
+    assert_eq!(
+        (held.width, held.size.0),
+        (33, 22),
+        "the picture and the gained pixel, to whole points"
+    );
 }

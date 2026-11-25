@@ -269,14 +269,18 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
                 if let Some(live) = self.live.as_mut() {
                     let now = self.started.elapsed().as_secs_f64() * 1000.0;
                     let heard = match heard {
-                        drop::Heard::Pointer { seat, pointed } => {
+                        drop::Heard::Pointer {
+                            seat,
+                            pointed,
+                            modifiers,
+                        } => {
                             if matches!(pointed, drop::Pointed::Button { pressed: true, .. }) {
                                 live.caret.restart(now);
                             }
                             warn(live.presenter.advance(now));
                             let now = live.presenter.host().now();
                             let p = &mut live.presenter;
-                            live.input.pointed(p, &live.window, seat, pointed, now)
+                            live.input.pointed(p, &live.window, seat, pointed, modifiers, now)
                         }
                         drop::Heard::Gone => {
                             live.presenter.set_lifter(None);

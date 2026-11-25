@@ -1,55 +1,18 @@
 //! One native primary contact; property-specific policy stays in its helper.
 use super::*;
+mod candidate;
 mod hold;
 mod mouse;
 mod pinch;
 mod time;
 use crate::host::press::Edge;
+pub(super) use candidate::Candidate;
 use exact_kernel::{NodeKey, TransformDragBinding};
 use exact_motion::{HoldEnd, HoldStart, Value, VelocityTracker};
 pub(super) use hold::Hold;
 #[cfg(any(target_os = "android", all(test, unix)))]
 pub(crate) use time::InputClock;
 
-#[derive(Clone, Copy)]
-pub(super) enum Candidate {
-    Arrange(exact_runner::ReorderBinding),
-    /// A grip in a list with a `reorderGroup` (LLP 1094 D6).
-    Group(exact_runner::ReorderBinding),
-    Swipe(NodeKey),
-    Pan(NodeKey),
-    Transform(TransformDragBinding),
-    Height {
-        handle: NodeKey,
-        target: NodeKey,
-    },
-    /// A mouse's lift of `source`, armed at the press with a digest of what
-    /// it carried (LLP 1094.000 D13).
-    Lift { source: NodeKey, carried: u64 },
-}
-impl Candidate {
-    fn node(&self) -> NodeKey {
-        match *self {
-            Candidate::Arrange(b) | Candidate::Group(b) => b.handle,
-            Candidate::Transform(b) => b.handle,
-            Candidate::Height { handle, .. } => handle,
-            Candidate::Swipe(key) | Candidate::Pan(key) => key,
-            Candidate::Lift { source, .. } => source,
-        }
-    }
-    /// The candidate's own axis rule, at the slop (LLP 1057.001 §1).
-    fn accepts(&self, dx: f64, dy: f64) -> bool {
-        match self {
-            Candidate::Arrange(_) | Candidate::Height { .. } => dy.abs() > dx.abs(),
-            Candidate::Swipe(_) => dx.abs() > dy.abs(),
-            // A grouped row lifts in any direction (LLP 1094 D6).
-            Candidate::Transform(_)
-            | Candidate::Pan(_)
-            | Candidate::Group(_)
-            | Candidate::Lift { .. } => true,
-        }
-    }
-}
 #[derive(Clone, Copy)]
 pub(super) enum HeldKind {
     Arrange(exact_runner::ReorderToken),
@@ -343,64 +306,6 @@ impl<D: DataSource> Presenter<D> {
             let _ = self.end_contact(contact.hold.as_ref().unwrap(), HoldEnd::Cancel, now_ms);
         }
         result
-    }
-
-    /// Every candidate of a contact on `hit`: innermost first, then reorder >
-    /// transform > height > pan > swipe > a mouse's lift on one node (LLP
-    /// 1057.001 §1; LLP 1094.000 D8, D13).
-    pub(super) fn candidates(&self, hit: NodeKey) -> Vec<Candidate> {
-        let lift = (!self.direct())
-            .then(|| self.mouse_lift(hit))
-            .flatten()
-            .map(|(source, carried)| Candidate::Lift { source, carried });
-        let ranked = [
-            self.arrange_candidate(hit),
-            self.transform_candidate(hit),
-            self.height_candidate(hit),
-            self.pan_candidate(hit),
-            self.swipe_candidate(hit).map(Candidate::Swipe),
-            lift,
-        ];
-        let mut found: Vec<_> = ranked
-            .into_iter()
-            .enumerate()
-            .filter_map(|(rank, c)| Some((self.depth(hit, c?.node())?, rank, c?)))
-            .collect();
-        found.sort_by_key(|&(depth, rank, _)| (depth, rank));
-        found.into_iter().map(|(_, _, c)| c).collect()
-    }
-    pub(super) fn depth(&self, hit: NodeKey, candidate: NodeKey) -> Option<usize> {
-        let kernel = self.host.kernel();
-        let mut at = kernel.node_by_key(hit);
-        let mut steps = 0;
-        while let Some(node) = at {
-            if node.key == candidate {
-                return Some(steps);
-            }
-            at = node.parent.and_then(|id| kernel.node(id));
-            steps += 1;
-        }
-        None
-    }
-    // @ref LLP 1043.000 §3 D8 — ordinary commits move layout, not a motion hold.
-    // Nearest explicit pan handler owns one contact; an editor boundary stops
-    // it. A press between keeps the contact only within the slop (the pan
-    // that begins takes the press), as a draggable element hears a drag that
-    // starts on a button inside it (LLP 1057.001 rule 3; kanban F6).
-    fn pan_candidate(&self, hit: NodeKey) -> Option<Candidate> {
-        let mut at = self.host.kernel().node_by_key(hit).map(|n| n.id);
-        while let Some(id) = at {
-            let n = self.host.kernel().node(id)?;
-            let handlers = self.host.runner().handlers_of(id);
-            if self.input_live(n.key) && handlers.contains(&EventKind::Pan) {
-                return Some(Candidate::Pan(n.key));
-            }
-            if n.node_type == NodeType::TextInput {
-                return None;
-            }
-            at = n.parent;
-        }
-        None
     }
 
     /// Record the pointer before any handler can move focus. Android also
@@ -928,28 +833,20 @@ impl<D: DataSource> Presenter<D> {
                 contact.candidate = contact.candidate.filter(takes_move);
                 rest.retain(takes_move);
             }
-            // A mouse's swipe takes only a direction it would start in, so
-            // another falls through to the candidates after it, a lift's
-            // among them (LLP 1094.000 D13)
-            let starts = |c: &Candidate| match *c {
-                Candidate::Swipe(key) if !self.direct() => {
-                    let ways = match &contact.retained {
-                        Some(retained) => retained.swipe_ways(),
-                        None => self.swipe_ways(key),
-                    };
-                    let view = self.host.kernel().node_by_key(key).map(|n| n.id);
-                    let shown = view.map_or(0., |v| self.host.presented(v).translate.0 as f64);
-                    ways.starts(dx, shown)
-                }
-                _ => true,
-            };
             let mut queue = contact.candidate.into_iter().chain(rest);
-            if let Some(next) = queue.find(|c| c.accepts(dx, dy) && starts(c)) {
+            while let Some(next) = queue
+                .find(|c| c.accepts(dx, dy) && self.starts_toward(c, contact.retained.as_ref(), dx))
+            {
                 contact.candidate = Some(next);
-                // Keep the candidates after a lift for the host to decline it to
-                if matches!(next, Candidate::Lift { .. }) {
-                    contact.rest = queue.collect();
+                if !matches!(next, Candidate::Lift { .. }) {
+                    break;
                 }
+                // The host takes the drag and the contact ends, or declines it
+                // and the candidates after it go on with this move
+                let Some(back) = self.lift_contact(contact, now_ms) else {
+                    return Ok(true);
+                };
+                contact = back;
             }
         }
         if let Some(Candidate::Pan(key)) = contact.candidate {
@@ -1001,18 +898,6 @@ impl<D: DataSource> Presenter<D> {
             if dx.abs().max(dy.abs()) <= slop {
                 self.contact = Some(contact);
                 return Ok(false);
-            }
-            if let Some(Candidate::Lift { source, carried }) = contact.candidate {
-                // The host takes the drag from here, and the contact ends; a
-                // lift the press no longer arms, or the host declines, goes
-                // on as if none had armed, the candidates after it next
-                let (hit, origin) = (contact.hit, contact.origin);
-                self.contact = Some(contact);
-                if self.mouse_lifts(hit, source, carried, origin, now_ms) {
-                    return Ok(true);
-                }
-                contact = self.contact.take().unwrap();
-                contact.candidate = None;
             }
             if contact.candidate.is_some() {
                 if let Some(key) = contact.feedback.take() {

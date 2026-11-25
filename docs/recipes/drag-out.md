@@ -21,10 +21,10 @@ link href=path("landmark", l.id) press=open(path("landmark", l.id)) aria-label=l
   `button` or an `image`, not on a run of text or anywhere inside a grouped
   list (`list appearance="auto"`).
 - **`dataTransfer=DataTransfer(text=, url=, files=[…])`** is what the drag
-  carries; give at least one. `text` is offered as `text/plain`, `url` as
-  `text/uri-list` (Android: `text/plain`; Linux: also `text/x-moz-url`, the
-  form browsers read a link in), and each file as itself, its type from its
-  extension:
+  carries; give at least one. `text` is offered as `text/plain` (Linux:
+  `text/plain;charset=utf-8` and `UTF8_STRING`), `url` as `text/uri-list`
+  (Android: `text/plain`; Linux: also `text/x-moz-url`, the form browsers
+  read a link in), and each file as itself, its type from its extension:
   - `url` is an absolute `http:` or `https:` URL, never an app path, which
     another app cannot open;
   - a file the app ships is written as an `image` names one,

@@ -339,13 +339,23 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             if node.props.bool(PropId::Disabled) == Some(true) || !self.input_live(node.key) {
                 return None;
             }
-            let offered = |prop| node.props.str(prop).is_some_and(|value: &str| !value.is_empty());
+            let offered = |prop| {
+                node.props
+                    .str(prop)
+                    .is_some_and(|value: &str| !value.is_empty())
+            };
+            // A source hidden by `visibility` lifts nothing, as the Mac's checks
             if node.props.bool(PropId::Draggable) == Some(true) && offers.props().any(offered) {
-                return Some((node.key, Self::carried(&node, offers)));
+                return crate::paint::paints(kernel, node.id, None)
+                    .then(|| (node.key, Self::carried(&node, offers)));
             }
             let presses = node.props.link().is_some()
                 || exact_kernel::ControlKind::of(node.node_type, node.props).is_some()
-                || self.host.runner().handlers_of(node.id).contains(&EventKind::Press);
+                || self
+                    .host
+                    .runner()
+                    .handlers_of(node.id)
+                    .contains(&EventKind::Press);
             if node.node_type == NodeType::TextInput || presses {
                 return None;
             }
@@ -392,7 +402,13 @@ impl<D: exact_runner::DataSource> Presenter<D> {
         true
     }
 
-    fn mouse_lift_of(&mut self, hit: Option<NodeKey>, source: NodeKey, carried: u64, origin: (f32, f32)) -> Option<Lift> {
+    fn mouse_lift_of(
+        &mut self,
+        hit: Option<NodeKey>,
+        source: NodeKey,
+        carried: u64,
+        origin: (f32, f32),
+    ) -> Option<Lift> {
         if self.mouse_lift(hit?)? != (source, carried) {
             return None;
         }
@@ -403,20 +419,20 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             return None;
         }
         // The box, its scale and its pixels are one acknowledged frame's
-        let picture = self.shown.as_ref().and_then(|(pixels, scale)| {
-            let px = |v: f32| (v * scale).round() as i32;
-            let cut = [px(rect.0), px(rect.1), px(rect.2), px(rect.3)];
-            crop(pixels, cut).map(|rgba| LiftPicture {
-                width: cut[2] as u32,
-                height: cut[3] as u32,
-                scale: *scale,
-                rgba,
-            })
-        });
-        let hotspot = (origin.0 - rect.0, origin.1 - rect.1);
+        let cut = self
+            .shown
+            .as_ref()
+            .and_then(|(pixels, scale)| crop(pixels, *scale, rect));
+        let corner = cut.as_ref().map_or((rect.0, rect.1), |(_, corner)| *corner);
+        let picture = cut.map(|(picture, _)| picture);
+        let hotspot = (origin.0 - corner.0, origin.1 - corner.1);
         let offers = self.lifter.as_ref()?.offers;
         Some(Lift {
-            text: if offers.text { drag.text } else { String::new() },
+            text: if offers.text {
+                drag.text
+            } else {
+                String::new()
+            },
             url: if offers.url { drag.url } else { String::new() },
             files: if offers.files { drag.files } else { Vec::new() },
             picture,
@@ -431,23 +447,37 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             && *self.plan_drags.get_or_insert_with(|| {
                 exact_runner::uses(self.host.runner().plan()).has(exact_runner::Capability::DragOut)
             });
-        self.shown = pixels.filter(|_| drags).map(|pixels| (pixels.clone(), scale));
+        self.shown = pixels
+            .filter(|_| drags)
+            .map(|pixels| (pixels.clone(), scale));
     }
 }
 
-/// The premultiplied RGBA rows of `pixmap` within `rect` (x, y, width,
-/// height in pixels), when all of it lies in the pixmap.
-fn crop(pixmap: &Pixmap, rect: [i32; 4]) -> Option<Vec<u8>> {
-    let [x, y, width, height] = rect.map(|v| usize::try_from(v).ok());
-    let (x, y, width, height) = (x?, y?, width?, height?);
-    let stride = pixmap.width() as usize * 4;
-    if x + width > pixmap.width() as usize || y + height > pixmap.height() as usize {
+/// The pixels of `pixmap`, drawn `scale` pixels a point, within `rect` (in
+/// points) and the frame, its edges rounded to whole pixels, and that cut's
+/// corner in points; none when no whole pixel of it shows.
+fn crop(
+    pixmap: &Pixmap,
+    scale: f32,
+    rect: (f32, f32, f32, f32),
+) -> Option<(LiftPicture, (f32, f32))> {
+    let (width, height) = (pixmap.width() as usize, pixmap.height() as usize);
+    let edge = |v: f32, most: usize| ((v * scale).round().max(0.) as usize).min(most);
+    let (left, right) = (edge(rect.0, width), edge(rect.0 + rect.2, width));
+    let (top, bottom) = (edge(rect.1, height), edge(rect.1 + rect.3, height));
+    if right <= left || bottom <= top {
         return None;
     }
-    let data = pixmap.data();
-    let mut rgba = Vec::with_capacity(width * height * 4);
-    for row in y..y + height {
-        rgba.extend_from_slice(&data[row * stride + x * 4..row * stride + (x + width) * 4]);
+    let (stride, data) = (width * 4, pixmap.data());
+    let mut rgba = Vec::with_capacity((right - left) * (bottom - top) * 4);
+    for row in top..bottom {
+        rgba.extend_from_slice(&data[row * stride + left * 4..row * stride + right * 4]);
     }
-    Some(rgba)
+    let picture = LiftPicture {
+        width: (right - left) as u32,
+        height: (bottom - top) as u32,
+        scale,
+        rgba,
+    };
+    Some((picture, (left as f32 / scale, top as f32 / scale)))
 }

@@ -97,6 +97,7 @@ pub(in crate::window) enum Heard {
     Pointer {
         seat: u32,
         pointed: Pointed,
+        modifiers: Option<u32>,
     },
     Ended(Press),
     Gone,
@@ -324,6 +325,7 @@ struct Seat {
     seat: WlSeat,
     device: WlDataDevice,
     pointer: Option<lift::Pointer>,
+    keyboard: Option<lift::Keyboard>,
 }
 
 /// A drag the window follows, on the device it entered by. `accepted` is
@@ -501,6 +503,7 @@ impl Listener {
             seat,
             device,
             pointer: None,
+            keyboard: None,
         });
     }
 
@@ -857,16 +860,22 @@ impl Dispatch<WlRegistry, GlobalListContents> for Listener {
                     seat,
                     device,
                     pointer,
+                    keyboard,
                     ..
                 } = state.seats.remove(at);
+                if let Some(keyboard) = keyboard {
+                    keyboard.release();
+                }
                 if state.drag.as_ref().is_some_and(|d| d.device == device.id()) {
                     state.left();
                 }
+                state.seat_gone(name);
                 if let Some(pointer) = pointer {
                     pointer.release();
                     state.tell(Heard::Pointer {
                         seat: name,
                         pointed: Pointed::Lost,
+                        modifiers: None,
                     });
                 }
                 if device.version() >= 2 {

@@ -55,9 +55,9 @@ mod device;
 mod display_frame;
 pub mod drag_out;
 #[cfg(test)]
-mod drag_out_tests;
-#[cfg(test)]
 mod drag_out_mouse_tests;
+#[cfg(test)]
+mod drag_out_tests;
 pub mod edit_menu;
 mod events;
 mod feedback;
