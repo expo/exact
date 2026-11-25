@@ -50,11 +50,11 @@ function sampler(png, { x = 0, y = 0, w, h }) {
 }
 
 /** What a text stands on: the commonest of its box's four corners (a glyph rarely reaches one), or null where they disagree (an image).
- *  A corner the host says another view is drawn over (`drawnOver`) is not read. */
-function backdrop(pixel, it) {
+ *  A corner the host says another view is drawn over (`drawnOver`), or that lies under a control in `above`, is not read. */
+function backdrop(pixel, it, above = []) {
   const inset = Math.min(1.5, it.w / 4, it.h / 4);
   const corners = [[it.x + inset, it.y + inset], [it.x + it.w - inset, it.y + inset], [it.x + inset, it.y + it.h - inset], [it.x + it.w - inset, it.y + it.h - inset]]
-    .map(([x, y], k) => (it.drawnOver?.includes(k) ? null : pixel(x, y))).filter(Boolean);
+    .map(([x, y], k) => (it.drawnOver?.includes(k) || above.some((c) => x >= c.x && x <= c.x + c.w && y >= c.y && y <= c.y + c.h) ? null : pixel(x, y))).filter(Boolean);
   let best = null, count = 0;
   for (const c of corners) { const n = corners.filter((d) => near(c, d, 12)).length; if (n > count || (n === count && best && ratio(c, it.fg) > ratio(best, it.fg))) { best = c; count = n; } }
   return count >= 2 ? best : null;
@@ -148,6 +148,9 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   const add = (kind, it, detail, hint) => found.push({ kind, id: it.id ?? null, ...(it.of != null ? { of: it.of } : {}), name: it.name, text: it.text, box: [r0(it.x), r0(it.y), r0(it.w), r0(it.h)], detail, ...(hint ? { hint } : {}) });
   const unit = host === 'web' ? 'px' : 'pt';
   const targets = new Map(items.filter(it => it.control && !it.disabled).map(it => [it, tapTarget(it)]));
+  const controls = items.filter((it) => it.control && !it.overlay);
+  // The controls that stay over what is scrolled under them, whose pixels are theirs
+  const staying = (it) => controls.filter((c) => c !== it && clears(obs, it, c));
   for (const it of items) {
     if (it.squeezed?.axis) {
       const { axis, port, content } = it.squeezed;
@@ -175,10 +178,11 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
       : 'let it wrap (`flex-wrap: wrap` with a `flex-basis` in rem, `min-width: 0`, `max-width: 100%`), or scroll it inside its own box');
     else if (it.spill) add('overflow', it, { past: r0(it.spill.dx), of: it.spill.by, unit }, 'a flex item\'s width stops at its content: let it shrink (`min-width: 0`, a smaller `padding`), or let the row wrap (`flex-wrap: wrap`) or scroll');
     // A target the author sized under the platform's minimum (on the web 44 px on a touch device, `any-pointer: coarse`, and otherwise WCAG 2.5.8's 24 px, with its spacing exception; 44 pt on iOS).
+    // One passing its scroller's end, under a bar or not, which scrolling shows whole (`passing`), is judged by its box
     const tap = targets.get(it);
     const [dx, dy] = it.scrollGain ?? [0, 0];
     if (tap && !it.inline && it.sized === 'author' && (it.reach?.length || !covers(it, obs.keyboard)) &&
-        Math.min(tap.w + dx, tap.h + dy) < obs.target - 0.5 &&
+        Math.min(tap.w + dx, tap.h + dy) < obs.target - 0.5 && !(it.passing && Math.min(it.w, it.h) >= obs.target - 0.5) &&
         (host !== 'web' || !tap.rects.length || !spacedTarget(tap, targets, obs.target))) {
       const keyboardCuts = obs.keyboard != null && it.y < obs.keyboard && it.y + it.h > obs.keyboard && it.w >= obs.target && it.h >= obs.target;
       add('target', it, { min: obs.target, unit, tap: [r0(tap.w), r0(tap.h)] },
@@ -187,7 +191,7 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
     // Contrast against what it stands on: the fill the host found painted under it (LLP 1116.006 D5), else what the
     // pixels show behind it, read where it is presented (a bar's glass over it is not what it stands on, LLP 1116.007 D3.8).
     if (it.text && it.fg && (it.bg || pixel) && !covers(it, obs.keyboard)) {
-      const need = floor(it, obs.scheme, palette), bg = need && (it.bg ?? backdrop(pixel, shown(it, obs.keyboard)));
+      const need = floor(it, obs.scheme, palette), bg = need && (it.bg ?? backdrop(pixel, shown(it, obs.keyboard), staying(it)));
       if (bg) {
         const ink = over(it.fg, bg), got = ratio(ink, bg);
         if (got < need - 0.005) add('contrast', it, { got: Math.floor(got * 10) / 10, need, fg: hex(ink), bg: hex(bg), ...(it.bg ? { on: it.on ?? 'page' } : {}) },
@@ -241,7 +245,6 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   // it): neither holds the other and they share more than a sliver of what is presented of each (`vis`: a row its list
   // or scroller cuts overlaps nothing past that edge, LLP 1116.006 D5). A pressable run of a paragraph that wraps meets
   // others only where its lines are.
-  const controls = items.filter((it) => it.control && !it.overlay);
   const where = (it) => (it.control && !it.lines ? [shown(it, obs.keyboard)] : drawn(it));
   for (const { it, kind, detail } of regionFindings(obs)) add(kind, it, { ...detail, unit }, regionHint(kind));
   // A list's section header (`pinned`) lies over the rows passing under it, as UIKit pins it, and an announcement laid
@@ -260,9 +263,11 @@ export function judge(obs, png, { host = 'web', nodes = new Map(), capture = obs
   // A text drawn on the opaque fill of the view laid over another's middle (a bar over its list's row) hides that
   // one where they meet, if that view's box holds all of the meeting: they do not run together there (the host's
   // `beneath`, `on` and `solid`; a label running past its bar's edge still meets the row outside it).
+  // A control's own label goes with it over what scrolls under it
+  const labels = (a, b) => controls.some((c) => c.id === b.of && clears(obs, a, c));
   const hides = (top, below, i) => below.beneath != null && top.on === below.beneath.by && top.solid && holds(below.beneath, i);
   for (const [k, a] of texts.entries()) for (const b of texts.slice(k + 1)) {
-    if (holds(a, b) || holds(b, a) || a.pinned || b.pinned || a.overlay || b.overlay) continue;
+    if (holds(a, b) || holds(b, a) || a.pinned || b.pinned || a.overlay || b.overlay || labels(a, b) || labels(b, a)) continue;
     const i = meeting(drawn(a), drawn(b));
     if (hides(a, b, i) || hides(b, a, i)) continue;
     if (i.w > 0.5 && i.h >= 2) add('overlap', a, { with: b.id, by: [Math.round(i.w * 10) / 10, r0(i.h)] }, 'give them room (a gap, or let the row wrap)');

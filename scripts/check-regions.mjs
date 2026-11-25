@@ -1,8 +1,8 @@
 // Where the device keeps content clear (LLP 1188 D4): a control, or a text, that lies outside its owner's safe area where no
-// scroller can bring it in (`edge`), or across an active fold that no scroller holds it over (`fold`). The iOS host says, under
-// UIKit's own bars, whose safe area an item is in (`owner`, a place in `obs.owners`: the owner's box and its `safe` area, in the
-// window), how far a scroller can move it from each edge (`room`), what its clips leave of it (`clip`), and the window's active
-// divisions, with the margins UIKit keeps clear (`obs.divisions`); this file judges.
+// scroller can bring it in (`edge`), or across an active fold that no scroller holds it over (`fold`). The iOS host says, under UIKit's
+// own bars, whose safe area an item is in (`owner`, a place in `obs.owners`: the owner's box and its `safe` area, in the window),
+// whether a scroller holds it (`scrolls`) and how far one can move it from each edge (`room`), what its clips leave of it (`clip`),
+// and the window's active divisions, with the margins UIKit keeps clear (`obs.divisions`); this file judges.
 
 const EDGES = {
   top: { axis: 'y', at: (r) => r.y, inward: 1 },
@@ -43,8 +43,10 @@ export function regionFindings(obs) {
       .flatMap((edge) => rects.map((r) => past(r, owner, edge)).filter((p) => p && (it.room?.[edge] ?? 0) < p.by));
     const worst = edges.sort((a, b) => b.by - a.by)[0];
     if (worst) found.push({ it, kind: 'edge', detail: worst });
-    // What a scroller holds runs across a fold, as UIKit's own lists do
-    const fold = it.room ? null : (obs.divisions ?? []).find((d) => rects.some((r) => { const m = meet(r, d); return m.w > 0.5 && m.h > 0.5; }));
+    // What a scroller holds runs across a fold, as UIKit's own lists do: all of it where it has room to move, and in one that
+    // fits its rows, which cross the fold and are at least half as long as the safe area is
+    const runs = (r, d) => (d.h >= d.w ? r.x < d.x && r.x + r.w > d.x + d.w && r.w * 2 >= owner.safe.w : r.y < d.y && r.y + r.h > d.y + d.h && r.h * 2 >= owner.safe.h);
+    const fold = it.room ? null : (obs.divisions ?? []).find((d) => rects.some((r) => { const m = meet(r, d); return m.w > 0.5 && m.h > 0.5 && !(it.scrolls && runs(r, d)); }));
     if (fold) found.push({ it, kind: 'fold', detail: fold.h >= fold.w ? { axis: 'x', from: fold.x, to: fold.x + fold.w } : { axis: 'y', from: fold.y, to: fold.y + fold.h } });
   }
   return found;

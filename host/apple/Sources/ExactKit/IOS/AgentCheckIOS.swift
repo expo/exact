@@ -114,10 +114,10 @@ extension Agent {
         // The views that hold a safe area (a route's, a pane's, a sheet's, the session's own), each with its area in the
         // window; an item names its own by its place here.
         var owners: [(view: UIView, rects: [String: Any])] = []
-        /// Where `n` stands against the device (LLP 1188 D4): the view whose safe area it is in, and how far a scroller
-        /// can move it from each edge (`room`). Nothing of what UIKit's bars and containers place themselves (a bar's
+        /// Where `n` stands against the device (LLP 1188 D4): the view whose safe area it is in, whether a scroller holds
+        /// it (`scrolls`), the route's own viewport aside, and how far one can move it from each edge (`room`). Nothing of what UIKit's bars and containers place themselves (a bar's
         /// item, a tab accessory), nor under the driver's own bars, which are not the device's.
-        func place(_ n: NodeView, into item: inout [String: Any]) {
+        func place(_ n: UIView, into item: inout [String: Any]) {
             guard !ExactEnv.authoredChrome,
                   let controller = sequence(first: n as UIResponder, next: \.next).first(where: { $0 is UIViewController }) as? UIViewController,
                   !(controller is UINavigationController || controller is UITabBarController || controller is UISplitViewController),
@@ -126,6 +126,7 @@ extension Agent {
             while let cur = at, cur !== view {
                 if Agent.isBar(cur) { return }
                 if let sv = cur as? UIScrollView, sv.isScrollEnabled, !sv.isHidden, movesWith(n, sv) {
+                    if !(sv is Viewport) { item["scrolls"] = true }
                     let i = sv.adjustedContentInset, o = sv.contentOffset
                     for (edge, by) in [("top", o.y + i.top), ("bottom", sv.contentSize.height + i.bottom - sv.bounds.height - o.y),
                                        ("left", o.x + i.left), ("right", sv.contentSize.width + i.right - sv.bounds.width - o.x)] where by > 0.5 {
@@ -669,6 +670,7 @@ extension Agent {
                list.visibleSupplementaryViews(ofKind: UICollectionView.elementKindSectionHeader).contains(where: { label.isDescendant(of: $0) }) {
                 item["pinned"] = true
             }
+            if item["of"] != nil { place(label, into: &item) } // it scrolls with what it is the label of
             items.append(item)
         }
 
@@ -742,8 +744,9 @@ extension Agent {
         func owner(_ v: UIView) -> NodeView? {
             sequence(first: v, next: presenter.pressParent).lazy.compactMap { controlViews[$0] }.first
         }
-        var bounds = [UInt32: CGRect](), edges = boxEdges, curved = [CGRect](), clips = [UIView: CGRect]()
+        var bounds = [UInt32: CGRect](), edges = boxEdges, curved = [CGRect](), clips = [UIView: CGRect](), pinned = Set<UIView>()
         for n in presenter.views.values where n.window === win {
+            if ["sticky", "fixed"].contains(n.style["position"]?.string ?? "") { pinned.insert(n) }
             let local = n.hitBounds, b = n.convert(local, to: win)
             if n.overflowClips {
                 var clip = n.convert(n.overflowPaddingBox, to: win)
@@ -793,27 +796,35 @@ extension Agent {
             }
             let reach = witness.map { [$0] } ?? Self.hitStrips(in: r, edges: edges, curved: curved, takes: takes)
             var dx: CGFloat = 0, dy: CGFloat = 0, revealable = box
+            // Whether a scroller's port cuts it, and each that does and moves it can show it whole
+            var cut = false, whole = true, stuck = pinned.contains(n)
             Self.scrollClips(of: n, clipped: { ancestor in
                 if let clip = clips[ancestor] { revealable = revealable.intersection(clip) }
+                stuck = stuck || pinned.contains(ancestor)
             }) { sv, clip in
-                guard sv.isScrollEnabled, !revealable.isEmpty, reach.count == 1 else { return }
-                let i = sv.adjustedContentInset, offset = sv.contentOffset, seen = reach[0]
+                guard sv.isScrollEnabled, !revealable.isEmpty else { return }
+                let i = sv.adjustedContentInset, offset = sv.contentOffset, seen = reach.count == 1 ? reach[0] : .null
                 let origin = sv.convert(CGPoint.zero, to: win)
                 let x = sv.convert(CGPoint(x: 1, y: 0), to: win), y = sv.convert(CGPoint(x: 0, y: 1), to: win)
                 guard abs(x.y - origin.y) < 0.001, abs(y.x - origin.x) < 0.001 else { return }
                 let sx = x.x - origin.x, sy = y.y - origin.y
                 func gain(_ l: CGFloat, _ r: CGFloat, _ lo: CGFloat, _ hi: CGFloat, _ back: CGFloat, _ end: CGFloat) -> CGFloat {
-                    max(0, min(r - l, hi - lo, r + back - lo, hi - (l - end)) - max(0, min(r, hi) - max(l, lo)))
+                    let most = min(r - l, hi - lo, r + back - lo, hi - (l - end))
+                    if !stuck, l < lo - 0.01 || r > hi + 0.01 { cut = true; whole = whole && most > r - l - 0.01 }
+                    return max(0, most - max(0, min(r, hi) - max(l, lo)))
                 }
-                if sx > 0, abs(seen.minX - clip.minX) < 0.01 || abs(seen.maxX - clip.maxX) < 0.01 {
-                    dx = max(dx, gain(revealable.minX, revealable.maxX, clip.minX, clip.maxX, sx * (offset.x + i.left),
-                                      sx * (sv.contentSize.width + i.right - sv.bounds.width - offset.x)))
+                if sx > 0 {
+                    let more = gain(revealable.minX, revealable.maxX, clip.minX, clip.maxX, sx * (offset.x + i.left),
+                                    sx * (sv.contentSize.width + i.right - sv.bounds.width - offset.x))
+                    if abs(seen.minX - clip.minX) < 0.01 || abs(seen.maxX - clip.maxX) < 0.01 { dx = max(dx, more) }
                 }
-                if sy > 0, abs(seen.minY - clip.minY) < 0.01 || abs(seen.maxY - clip.maxY) < 0.01 {
-                    dy = max(dy, gain(revealable.minY, revealable.maxY, clip.minY, clip.maxY, sy * (offset.y + i.top),
-                                      sy * (sv.contentSize.height + i.bottom - sv.bounds.height - offset.y)))
+                if sy > 0 {
+                    let more = gain(revealable.minY, revealable.maxY, clip.minY, clip.maxY, sy * (offset.y + i.top),
+                                    sy * (sv.contentSize.height + i.bottom - sv.bounds.height - offset.y))
+                    if abs(seen.minY - clip.minY) < 0.01 || abs(seen.maxY - clip.maxY) < 0.01 { dy = max(dy, more) }
                 }
             }
+            if cut, whole, !revealable.isEmpty { items[index]["passing"] = true }
             if dx > 0 || dy > 0 { items[index]["scrollGain"] = [Agent.r2(dx), Agent.r2(dy)] }
             if reach != [box] {
                 items[index]["reach"] = reach.map { [$0.minX, $0.minY, $0.maxX, $0.maxY].map(Agent.r2) }
