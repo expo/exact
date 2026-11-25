@@ -5,6 +5,7 @@ mod accessibility;
 mod caret;
 mod drop;
 mod input;
+mod signals;
 
 use crate::event_loop::LocalPlan;
 use exact_painted::app::{boot_presenter, Config};
@@ -29,6 +30,11 @@ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant
         .build()
         .map_err(|e| e.to_string())
         .and_then(|events| {
+            let quit = events.create_proxy();
+            let _signals = signals::Signals::install(move || {
+                let _ = quit.send_event(Event::Quit);
+            })
+            .map_err(|e| format!("termination signals: {e}"))?;
             let mut app = App::<D> {
                 proxy: events.create_proxy(),
                 local_plan: config.dev_plan.as_deref().map(LocalPlan::new),
@@ -40,9 +46,10 @@ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant
                 closed: Rc::new(Cell::new(false)),
             };
             let result = app.run(events);
-            if let Some(live) = &mut app.live {
-                live.presenter.end_hatches();
-                live.presenter.end_packages();
+            // Release the Wayland surface while the presenter finishes its work.
+            if let Some(mut presenter) = app.live.take().map(|live| live.presenter) {
+                use exact_painted::teardown::{finish, EXIT_BOUND};
+                finish(&mut presenter, EXIT_BOUND);
             }
             result
         });
@@ -57,6 +64,7 @@ pub(super) fn run<D: DataSource + Default>(config: &mut Config, started: Instant
 
 enum Event {
     Wake,
+    Quit,
     Settings(WindowSettings),
     Access(accesskit_winit::Event),
     Drag(drop::Heard),
@@ -199,6 +207,9 @@ fn theme(dark: bool) -> Theme {
 
 impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
     fn about_to_wait(&mut self, events: &ActiveEventLoop) {
+        if events.exiting() {
+            return;
+        }
         let Some(live) = self.live.as_mut() else {
             return;
         };
@@ -248,7 +259,10 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
         events.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
-    fn user_event(&mut self, _: &ActiveEventLoop, event: Event) {
+    fn user_event(&mut self, events: &ActiveEventLoop, event: Event) {
+        if events.exiting() {
+            return;
+        }
         let settings = match event {
             Event::Access(event) => {
                 if let Some(live) = self
@@ -313,6 +327,10 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
             }
             Event::Settings(settings) => settings,
             Event::Wake => return,
+            Event::Quit => {
+                events.exit();
+                return;
+            }
         };
         let previous = std::mem::replace(&mut self.settings, settings);
         if let Some(live) = &mut self.live {
@@ -343,6 +361,9 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
     }
 
     fn resumed(&mut self, events: &ActiveEventLoop) {
+        if events.exiting() {
+            return;
+        }
         if self.live.is_none() {
             match self.open(events) {
                 Ok(live) => self.live = Some(live),
@@ -355,6 +376,9 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
     }
 
     fn window_event(&mut self, events: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if events.exiting() {
+            return;
+        }
         let Some(live) = self.live.as_mut().filter(|live| live.window.id() == id) else {
             return;
         };

@@ -2690,8 +2690,13 @@ which closes the window without asking again (on the web, `window.close()`, whic
 a browser honours only for a window a script opened). Windows asks it as the Mac
 does, before its close button, Alt+F4 or the taskbar's Close window closes the
 window (a window that `keepRunning` hides asks nothing), and its bare `close()`
-closes the window and ends the one-window app without asking again. iOS and
-Linux close no window. `head edited=…` marks the document
+closes the window and ends the one-window app without asking again. A Wayland
+window asks before its title-bar close or the desktop's close command, and
+`close()` ends the app without asking again. SIGTERM, SIGINT and SIGHUP
+end the Wayland app without asking. A second termination signal ends the
+process immediately. iOS has no window-close event.
+
+`head edited=…` marks the document
 as unsaved: on macOS the dot in the window's close button, beside the proxy icon
 of the file the window opened;
 other hosts show nothing (a declared deviation: the web has no unsaved mark).
