@@ -7744,8 +7744,9 @@ gaps, border widths, border spacing and shape margin accept these units too.
 Dimension rows also accept the container units `cqw`, `cqh`, `cqi`, `cqb`,
 `cqmin` and `cqmax`, alone or in a math function: a share of the nearest
 content owner's content root on each axis its host fixes,
-else of the small viewport (LLP 1123 D16). The scalar rows above, custom
-properties and inset overrides refuse them. The web writes them as CSS's, which resolve against the
+else of the small viewport (LLP 1123 D16). The text and spacing rows above take
+them too, against the same content root and again when it resizes; custom properties
+and inset overrides refuse them. The web writes them as CSS's, which resolve against the
 small viewport until a content root declares a container there, and leaves an
 SVG attribute in one unwritten.
 Inherited font sizes and lengths in `em` follow the resolved font on resize.

@@ -38,7 +38,8 @@ component App
 Dimension rows also accept container units (`cqw`, `cqh`, `cqi`, `cqb`, `cqmin`,
 `cqmax`), alone or in a math function: a share of the nearest content owner's
 content root on each axis its host fixes, else of the small viewport
-(LLP 1123 D16). Scalar rows, custom properties and inset overrides refuse them.
+(LLP 1123 D16). The text and spacing rows that take viewport units take them
+too; custom properties and inset overrides refuse them.
 The web keeps CSS's units, which use the small viewport until a content root
 declares a container there; an SVG attribute using one is left unwritten.
 

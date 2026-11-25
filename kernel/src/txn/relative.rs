@@ -255,13 +255,24 @@ pub(crate) fn resolve(
         let mut next = StyleProps::clone(arena.style(slot));
         let mut changed = StyleMask::EMPTY;
         let relative: Vec<_> = next.relative.iter().collect();
+        // A container unit is a share of the box's query containers, the content roots it lies
+        // in (LLP 1123 D16), which the arena's environment does not hold
+        let contained = relative.iter().any(|(_, unit, _)| unit.is_container());
+        let env = match contained {
+            true => {
+                let mut env = arena.env().clone();
+                env.container = Some(crate::kernel::owner::container_at(arena, slot));
+                std::borrow::Cow::Owned(env)
+            }
+            false => std::borrow::Cow::Borrowed(arena.env()),
+        };
         // `font-size` first: an `em` elsewhere on the node is its font size.
         let mut font = arena.computed_source(slot, StyleId::FontSize).font_size;
         for (id, unit, n) in relative.iter().copied() {
             if id != StyleId::FontSize {
                 continue;
             }
-            let px = unit.px(n, root, parent, device, arena.env());
+            let px = unit.px(n, root, parent, device, &env);
             if next.set_resolved(id, px) {
                 changed.set(id);
             }
@@ -273,7 +284,7 @@ pub(crate) fn resolve(
             if id == StyleId::FontSize {
                 continue;
             }
-            let px = unit.px(n, root, font, device, arena.env());
+            let px = unit.px(n, root, font, device, &env);
             if next.set_resolved(id, px) {
                 changed.set(id);
             }

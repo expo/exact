@@ -63,6 +63,11 @@ pub enum Unit {
 }
 
 impl Unit {
+    /// Whether it is a container unit, which a box's query containers size (LLP 1123 D16).
+    pub fn is_container(self) -> bool {
+        matches!(self, Unit::Viewport(u) if u.is_container())
+    }
+
     /// The pixels one of this unit is, given the root's and the
     /// reference (the parent's or the element's) font size, and the pixels
     /// one device pixel is ([`device_pixel`]), and the viewport environment.
@@ -407,14 +412,6 @@ pub(crate) fn of(id: StyleId, value: &StyleValue) -> Result<Option<(Unit, f32)>,
             } else {
                 "no length: relative units are lengths"
             },
-        });
-    }
-    // A row's relative length resolves against the document's environment,
-    // where no box's containers are known (LLP 1123 D16)
-    if matches!(unit, Unit::Viewport(u) if u.is_container()) {
-        return Err(StyleValueError::WrongKind {
-            style: id,
-            expected: "a length here: a container unit (cqw, cqh, cqi, cqb, cqmin, cqmax) is not built on this row; write a viewport unit, px, rem or em",
         });
     }
     if n < 0.0 && nonnegative_row(id) {
@@ -767,12 +764,12 @@ mod tests {
                 matches!(opacity, Err(StyleValueError::WrongKind { expected, .. }) if expected.starts_with("no length")),
                 "{unit:?}"
             );
-            // A container unit is not built on a row that takes relative lengths
+            // A row that takes relative lengths takes every viewport and container unit
             let spacing = of(
                 StyleId::LetterSpacing,
                 &StyleValue::Text(format!("-1{}", unit.name()).into()),
             );
-            assert_eq!(spacing.is_ok(), !unit.is_container(), "{unit:?}");
+            assert!(spacing.is_ok(), "{unit:?}");
         }
         for text in [
             "vw",
