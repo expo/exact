@@ -330,6 +330,10 @@ fn a_source_laid_out_away_since_the_frame_shown_keeps_that_frames_icon() {
     let (x, y, t) = (rect.0 + 10., rect.1 + 5., p.host().now() + 10.);
     // It arms, then its pointerdown takes it out of the layout, no frame shown since
     p.pointer_down(x, y, t).unwrap();
+    assert!(
+        p.box_of(view(&p, "fold")).is_none(),
+        "its display is none now"
+    );
     p.pointer_move(x + 40., y, t + 16.).unwrap();
     p.pointer_up(x + 40., y, t + 32.).unwrap();
     let lift = lifts.borrow_mut().pop().expect("layout rejects nothing");
