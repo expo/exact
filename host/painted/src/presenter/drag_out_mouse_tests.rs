@@ -39,6 +39,10 @@ const APP: &str = r##"component App
       box testId="hiding" draggable=true dataTransfer=DataTransfer(text="hiding") visibility=(hidden ? "hidden" : "visible") pointerdown=hide width=300 height=40
       box testId="hidden-source" draggable=true dataTransfer=DataTransfer(text="hidden") visibility="hidden" width=300 height=40
         box testId="shown-child" visibility="visible" width=300 height=40
+      box testId="clear" draggable=true dataTransfer=DataTransfer(text="clear") opacity=0 width=300 height=20
+      column overflow="hidden" height=0
+        box testId="cut" draggable=true dataTransfer=DataTransfer(text="cut") width=300 height=20
+      box testId="gone" draggable=true dataTransfer=DataTransfer(text="gone") display="none" width=300 height=20
       box testId="wide" draggable=true dataTransfer=DataTransfer(text="wide") width=500 height=20
       box testId="files" draggable=true dataTransfer=DataTransfer(files=["assets/a.png"]) width=300 height=40
       box testId="around-files" draggable=true dataTransfer=DataTransfer(text="around") width=300 height=60
@@ -127,6 +131,9 @@ fn texts(lifts: &Lifts) -> Vec<String> {
 #[test]
 fn a_mouse_drag_past_the_slop_lifts_what_the_node_carries() {
     let (mut p, lifts) = boot();
+    let frame = p.display_frame().unwrap();
+    assert!(p.display_complete(&frame));
+    drop(frame);
     drag(&mut p, "card", 2., 0.);
     assert!(
         lifts.borrow().is_empty(),
@@ -271,11 +278,34 @@ fn a_source_hidden_at_the_press_or_by_the_lift_lifts_nothing() {
         texts(&lifts).is_empty(),
         "its pointerdown hid it after it armed"
     );
-    drag(&mut p, "shown-child", 40., 0.);
-    assert!(
-        texts(&lifts).is_empty(),
+    let child = p.host().kernel().find_by_test_id("shown-child")[0];
+    assert_eq!(
+        p.mouse_lift(child),
+        None,
         "a child shown inside a hidden source arms nothing"
     );
+    drag(&mut p, "shown-child", 40., 0.);
+    assert!(texts(&lifts).is_empty());
+}
+
+#[test]
+fn the_values_go_without_a_picture_when_the_frame_did_not_show_the_source() {
+    let (mut p, _) = boot();
+    let frame = p.display_frame().unwrap();
+    assert!(p.display_complete(&frame));
+    drop(frame);
+    for name in ["hidden-source", "clear", "cut"] {
+        let (picture, _) = p.icon_of(view(&p, name), (0., 0.));
+        assert!(picture.is_none(), "{name} showed nothing of itself");
+    }
+    // A source the frame left out still carries its values
+    let gone = p.host().kernel().find_by_test_id("gone")[0];
+    let (source, carried) = p.mouse_lift(gone).expect("it arms from the tree");
+    let lift = p
+        .mouse_lift_of(Some(gone), source, carried, (5., 5.))
+        .unwrap();
+    assert_eq!(lift.text, "gone");
+    assert!(lift.picture.is_none());
 }
 
 #[test]

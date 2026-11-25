@@ -311,7 +311,8 @@ pub struct PaintedBox {
     pub scroll: Option<(f32, f32)>,
     /// Generic pointer eligibility of this painted scene, including inheritance.
     pub(crate) pointer_hit: bool,
-    /// Whether the node showed, by its `visibility` or a ghost's reveal.
+    /// Whether the node showed: by its `visibility` or a ghost's reveal, and
+    /// outside any transparent (`opacity: 0`) subtree.
     pub(crate) visible: bool,
     /// Rounded box or control face in local space, used for scrollbar coverage.
     rounded_border: Option<Rc<exact_kernel::svg::Path>>,
@@ -1085,7 +1086,13 @@ impl Painter {
             self.backend.pop_mask(&Shape::rect(rect), mask, ts);
         }
         match drawn {
-            Some(picture) => drop(self.restore_picture_backend(walk.scene.kernel, picture)),
+            Some(picture) => {
+                // Nothing of a transparent subtree shows, though it is hit
+                walk.boxes[hit_start..]
+                    .iter_mut()
+                    .for_each(|b| b.visible = false);
+                drop(self.restore_picture_backend(walk.scene.kernel, picture))
+            }
             None if opacity < 1.0 => self.backend.pop_opacity(),
             None => {}
         }

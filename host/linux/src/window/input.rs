@@ -99,12 +99,16 @@ impl Input {
         modifiers: Option<u32>,
         now_ms: f64,
     ) -> Result<(), String> {
-        if !self.admit(seat, &pointed) {
+        let Some(turned) = self.admit(seat, &pointed) else {
             return Ok(());
-        }
-        // The event's own modifiers, a seat with no keyboard holding none
-        let modifiers = key_modifiers(modifiers.unwrap_or(0));
+        };
+        let modifiers = pointer_modifiers(modifiers);
         let result = presenter.with_pointer_modifiers(modifiers, |presenter| {
+            // The window turned to this seat: hover and the cursor go to its point first
+            let pressed = matches!(pointed, Pointed::Button { .. } | Pointed::Wheel { .. });
+            if let Some(point) = self.pointer.filter(|_| turned && pressed) {
+                self.moved(presenter, window, point, now_ms)?;
+            }
             self.deliver(presenter, window, pointed, now_ms)
         });
         self.sync_held();
@@ -136,11 +140,12 @@ impl Input {
     }
 
     /// Keep what seat `seat`'s pointer did, and whether the presenter hears
-    /// it. Each seat's point and held buttons are kept; while a seat holds a
-    /// button the window heard pressed, only that seat is heard, and a
-    /// release whose press the window did not hear is not. A heard event
+    /// it (none), and if so whether the window turned to that seat from
+    /// another. Each seat's point and held buttons are kept; while a seat
+    /// holds a button the window heard pressed, only that seat is heard, and
+    /// a release whose press the window did not hear is not. A heard event
     /// is at its own seat's point.
-    fn admit(&mut self, seat: u32, pointed: &Pointed) -> bool {
+    fn admit(&mut self, seat: u32, pointed: &Pointed) -> Option<bool> {
         let state = self.seats.entry(seat).or_default();
         match pointed {
             Pointed::Entered(point) | Pointed::Moved(point) => state.point = Some(*point),
@@ -170,11 +175,11 @@ impl Input {
                 self.seats.remove(&seat);
             }
             self.sync_held();
-            return false;
+            return None;
         }
         match *pointed {
             Pointed::Entered(_) | Pointed::Moved(_) => self.inside = true,
-            Pointed::Left => return followed,
+            Pointed::Left => return followed.then_some(false),
             Pointed::Button {
                 serial,
                 button,
@@ -184,7 +189,7 @@ impl Input {
                 let heard = &mut self.seats.entry(seat).or_default().heard;
                 if bit == 0 || !pressed && *heard & bit == 0 {
                     self.sync_held();
-                    return false;
+                    return None;
                 }
                 if pressed {
                     *heard |= bit;
@@ -199,13 +204,13 @@ impl Input {
             Pointed::Lost => {
                 self.seats.remove(&seat);
                 if !followed {
-                    return false;
+                    return None;
                 }
                 self.pointer = None;
                 self.inside = false;
                 self.previous_click = None;
                 self.release_all();
-                return true;
+                return Some(false);
             }
         }
         // Another seat's pointer is the window's from here: its place, and a
@@ -216,7 +221,7 @@ impl Input {
             self.inside = point.is_some();
             self.previous_click = None;
         }
-        true
+        Some(!followed)
     }
 
     /// Keep the left press a lift may name: the followed seat's, while the
@@ -616,6 +621,12 @@ fn bit_of(code: u32) -> u32 {
     }
 }
 
+/// The modifiers a pointer event is dispatched holding: its seat's, none for
+/// a seat without a keyboard.
+fn pointer_modifiers(mask: Option<u32>) -> exact_runner::KeyModifiers {
+    key_modifiers(mask.unwrap_or(0))
+}
+
 /// The modifiers an effective xkb mask holds, by its real modifiers' fixed
 /// indices, as winit reads them: Shift 0, Control 2, Mod1 (Alt) 3 and Mod4
 /// (Super, the meta key) 6.
@@ -661,7 +672,7 @@ mod tests {
             } => Some((bit_of(button), pressed)),
             _ => None,
         };
-        let heard = input.admit(seat, &pointed);
+        let heard = input.admit(seat, &pointed).is_some();
         if let Some((bit, pressed)) = delivered.filter(|_| heard) {
             if pressed {
                 input.buttons |= bit;
@@ -704,11 +715,21 @@ mod tests {
             !hear(&mut input, 2, button(10, LEFT, false)),
             "its press was not heard"
         );
-        assert!(hear(&mut input, 2, button(11, LEFT, true)));
+        input.previous_click = Some((0., (200., 200.), 1));
+        assert_eq!(
+            input.admit(2, &button(11, LEFT, true)),
+            Some(true),
+            "the window turns to it"
+        );
         assert_eq!(
             input.pointer,
             Some((200., 200.)),
             "where that seat moved meanwhile"
+        );
+        assert!(input.inside, "and over the window, as that seat is");
+        assert_eq!(
+            input.previous_click, None,
+            "with no click of the other seat's to double"
         );
     }
 
@@ -757,15 +778,24 @@ mod tests {
     #[test]
     fn a_pointer_event_holds_its_own_modifiers_and_the_keyboard_keeps_its_own() {
         let mut presenter = editor();
-        presenter.hold_modifier("ControlLeft", true);
-        let shift = key_modifiers(1);
+        presenter.hold_modifier("ControlRight", true);
+        let shift = pointer_modifiers(Some(1));
         let during = presenter.with_pointer_modifiers(shift, |p| p.modifiers());
         assert!(
             during.shift && !during.ctrl,
             "the pointer event's seat held Shift alone"
         );
+        let keyless = presenter.with_pointer_modifiers(pointer_modifiers(None), |p| p.modifiers());
+        assert_eq!(
+            keyless,
+            exact_runner::KeyModifiers::default(),
+            "a seat with no keyboard holds none"
+        );
         let after = presenter.modifiers();
-        assert!(after.ctrl && !after.shift, "the keyboard's Control is back");
+        assert!(
+            after.ctrl && !after.shift,
+            "the keyboard's right Control is back"
+        );
     }
 
     #[test]

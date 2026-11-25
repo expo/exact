@@ -199,24 +199,7 @@ impl<D: exact_runner::DataSource> Presenter<D> {
     /// clip (a card a scroller cuts off is dragged as its shown part).
     fn drag_of(&mut self, id: ViewId, x: f32, y: f32, service: bool) -> Option<DragOut> {
         let rect = self.shown_box(id)?;
-        let props = |prop| {
-            self.host
-                .kernel()
-                .node(id)
-                .and_then(|node| node.props.str(prop))
-                .unwrap_or_default()
-                .to_string()
-        };
-        let (text, url, listed) = (
-            props(PropId::DataTransferText),
-            props(PropId::DataTransferUrl),
-            props(PropId::DataTransferFiles),
-        );
-        let files: Vec<String> = listed
-            .split('\n')
-            .filter(|entry| !entry.is_empty())
-            .map(str::to_string)
-            .collect();
+        let (text, url, files) = self.carried_values(id);
         if text.is_empty() && url.is_empty() && files.is_empty() {
             return None;
         }
@@ -235,6 +218,28 @@ impl<D: exact_runner::DataSource> Presenter<D> {
 }
 
 impl<D: exact_runner::DataSource> Presenter<D> {
+    /// What `id` carries: its `text`, its `url` and each of its files.
+    fn carried_values(&self, id: ViewId) -> (String, String, Vec<String>) {
+        let props = |prop| {
+            self.host
+                .kernel()
+                .node(id)
+                .and_then(|node| node.props.str(prop))
+                .unwrap_or_default()
+                .to_string()
+        };
+        let files = props(PropId::DataTransferFiles)
+            .split('\n')
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_string)
+            .collect();
+        (
+            props(PropId::DataTransferText),
+            props(PropId::DataTransferUrl),
+            files,
+        )
+    }
+
     /// `id`'s box as it shows, in points: within its clip, so a card a
     /// scroller cuts off is dragged as its shown part.
     fn shown_box(&mut self, id: ViewId) -> Option<(f32, f32, f32, f32)> {
@@ -402,7 +407,7 @@ impl<D: exact_runner::DataSource> Presenter<D> {
         true
     }
 
-    fn mouse_lift_of(
+    pub(in crate::presenter) fn mouse_lift_of(
         &mut self,
         hit: Option<NodeKey>,
         source: NodeKey,
@@ -413,29 +418,39 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             return None;
         }
         let id = self.host.kernel().node_by_key(source)?.id;
-        let drag = self.drag_of(id, origin.0, origin.1, false)?;
-        let rect = self.shown_box(id)?;
-        // The box, its scale and its pixels are one acknowledged frame's, and
-        // a frame that hid the source shows none of it
-        let shown = self.box_of(id).is_some_and(|b| b.visible);
-        let cut = (self.shown.as_ref())
-            .filter(|_| shown)
-            .and_then(|(pixels, scale)| crop(pixels, *scale, rect));
-        let corner = cut.as_ref().map_or((rect.0, rect.1), |(_, corner)| *corner);
-        let picture = cut.map(|(picture, _)| picture);
-        let hotspot = (origin.0 - corner.0, origin.1 - corner.1);
+        // The values are the source's now; the picture is the frame's, when
+        // it showed the source
+        let (text, url, files) = self.carried_values(id);
+        let (picture, hotspot) = self.icon_of(id, origin);
         let offers = self.lifter.as_ref()?.offers;
         Some(Lift {
-            text: if offers.text {
-                drag.text
-            } else {
-                String::new()
-            },
-            url: if offers.url { drag.url } else { String::new() },
-            files: if offers.files { drag.files } else { Vec::new() },
+            text: if offers.text { text } else { String::new() },
+            url: if offers.url { url } else { String::new() },
+            files: if offers.files { files } else { Vec::new() },
             picture,
             hotspot,
         })
+    }
+
+    /// `id`'s picture held at `origin`, and the press relative to it: its
+    /// box, within its clip and the frame, cut from the pixels of the frame
+    /// last shown, whose boxes and scale they are. None when that frame did
+    /// not show the source: no box, a `visibility` or a transparent subtree
+    /// that hid it, or no whole pixel of it.
+    pub(in crate::presenter) fn icon_of(
+        &mut self,
+        id: ViewId,
+        origin: (f32, f32),
+    ) -> (Option<LiftPicture>, (f32, f32)) {
+        let shown = self.box_of(id).is_some_and(|b| b.visible);
+        let rect = self.shown_box(id).filter(|_| shown);
+        let cut = rect
+            .zip(self.shown.as_ref())
+            .and_then(|(rect, (pixels, scale))| crop(pixels, *scale, rect));
+        match cut {
+            Some((picture, corner)) => (Some(picture), (origin.0 - corner.0, origin.1 - corner.1)),
+            None => (None, (0., 0.)),
+        }
     }
 
     /// Keep the frame `pixels` shown at `scale`, for a lift's picture, while
