@@ -47,7 +47,7 @@ package struct ScrollInsetsIOS: Equatable {
             let atEnd = (scroll as? ScrollView).flatMap { !free && $0.restsAtEnd ? $0 : nil }
             if scroll.contentInsetAdjustmentBehavior != rows.adjustment { scroll.contentInsetAdjustmentBehavior = rows.adjustment }
             if scroll.automaticallyAdjustsScrollIndicatorInsets { scroll.automaticallyAdjustsScrollIndicatorInsets = false }
-            if let own = scroll as? ScrollView, !own.writtenWhole { own.writtenWhole = true }
+            if let own = scroll as? any SafeIndicators, !own.writtenWhole { own.writtenWhole = true }
             let adjusted = scroll.adjustedContentInset, inset = scroll.contentInset
             let platform = edges(UIEdgeInsets(top: adjusted.top - inset.top, left: adjusted.left - inset.left,
                                               bottom: adjusted.bottom - inset.bottom, right: adjusted.right - inset.right))

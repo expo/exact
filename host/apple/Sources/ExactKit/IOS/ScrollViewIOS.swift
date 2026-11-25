@@ -38,13 +38,47 @@ extension UIEdgeInsets {
     }
 }
 
+/// A scroll view whose indicators take its own safe area where UIKit's adjustment gives them none
+/// (`SafeIndicatorTerm`): Exact's `ScrollView` and a grouped list's collection.
+package protocol SafeIndicators: UIScrollView {
+    /// D14's writer writes the indicator insets whole (`ScrollInsetsIOS.write`), the side bands among its terms, and
+    /// the term is none of them.
+    var writtenWhole: Bool { get set }
+}
+
+/// What a scroll view's own safe area adds to both indicators' insets where UIKit's adjustment gives them none: its
+/// sides always, and its top and bottom too while that adjustment is off. UIKit's adjustment, on, adds the safe area's
+/// top and bottom (under a large title it hangs over, a top of its own), never its sides, so a scroll view filling
+/// the iPhone Duo's cover screen keeps its indicator under the button strip; with this term it lies beside it, clear
+/// of the system's controls (HIG Layout). A page band turns the adjustment off while it bands the scroll view, so the
+/// band and the safe area are each counted once (`NodeView.bandScroll`). The term moves as a difference, as the
+/// padding edge's (`ScrollView.paddingInset`), the keyboard's and a page band's do, so each leaves the others' in
+/// place; its scroll view syncs it as its safe area, its adjustment or `writtenWhole` changes.
+package struct SafeIndicatorTerm {
+    private var applied = UIEdgeInsets.zero
+
+    package init() {}
+
+    package mutating func sync(_ scroll: some SafeIndicators) {
+        let safe = scroll.safeAreaInsets
+        let term = scroll.writtenWhole ? .zero
+            : scroll.automaticallyAdjustsScrollIndicatorInsets ? UIEdgeInsets(top: 0, left: safe.left, bottom: 0, right: safe.right) : safe
+        guard term != applied else { return }
+        let moved = UIEdgeInsets(top: term.top - applied.top, left: term.left - applied.left,
+                                 bottom: term.bottom - applied.bottom, right: term.right - applied.right)
+        applied = term
+        scroll.verticalScrollIndicatorInsets = scroll.verticalScrollIndicatorInsets.adding(moved)
+        scroll.horizontalScrollIndicatorInsets = scroll.horizontalScrollIndicatorInsets.adding(moved)
+    }
+}
+
 /// A scroll container — the viewport over the document, and a node whose
 /// effective `overflow` scrolls. The platform pans it (LLP 1002 D4: scroll
 /// always wins; UIKit does not chain a pan out of a nested scroll view at
 /// its edge). Which axes it scrolls comes from the node's rows; a tap's
 /// wheel (the agent's) applies the web's chaining rule itself
 /// (`AgentIOS.swift`).
-package class ScrollView: UIScrollView {
+package class ScrollView: UIScrollView, SafeIndicators {
     var scrollingNode: NodeView? { (superview as? NodeView) ?? (self as? Viewport)?.documentNode }
     /// Where it last came to rest along x and y, and on which snap area (`ScrollSnapIOS.swift`).
     var snapRested = [ScrollSnap.Rested(), ScrollSnap.Rested()]
@@ -101,34 +135,12 @@ package class ScrollView: UIScrollView {
             horizontalScrollIndicatorInsets = horizontalScrollIndicatorInsets.adding(moved)
         }
     }
-    /// What the scroll view's own safe area adds to both indicators' insets where UIKit's adjustment gives them none:
-    /// its sides always, and its top and bottom too while that adjustment is off. UIKit's adjustment, on, adds the
-    /// safe area's top and bottom (under a large title it hangs over, a top of its own), never its sides, so a scroll
-    /// view filling the iPhone Duo's cover screen keeps its indicator under the button strip; here it lies beside it,
-    /// clear of the system's controls (HIG Layout). A page band turns the adjustment off while it bands the scroll
-    /// view, so the band and the safe area are each counted once (`NodeView.bandScroll`). It moves as a difference, as
-    /// `paddingInset` does; D14's writer writes the insets whole, the side bands among its terms, and takes none of it
-    /// (`writtenWhole`).
-    private var safeIndicatorInset = UIEdgeInsets.zero {
-        didSet {
-            guard safeIndicatorInset != oldValue else { return }
-            let moved = UIEdgeInsets(top: safeIndicatorInset.top - oldValue.top, left: safeIndicatorInset.left - oldValue.left,
-                                     bottom: safeIndicatorInset.bottom - oldValue.bottom, right: safeIndicatorInset.right - oldValue.right)
-            verticalScrollIndicatorInsets = verticalScrollIndicatorInsets.adding(moved)
-            horizontalScrollIndicatorInsets = horizontalScrollIndicatorInsets.adding(moved)
-        }
-    }
-    /// D14's writer writes the indicator insets whole (`ScrollInsetsIOS.write`).
-    package var writtenWhole = false { didSet { syncSafeIndicators() } }
-    package override var automaticallyAdjustsScrollIndicatorInsets: Bool { didSet { syncSafeIndicators() } }
+    private var safeIndicators = SafeIndicatorTerm()
+    package var writtenWhole = false { didSet { safeIndicators.sync(self) } }
+    package override var automaticallyAdjustsScrollIndicatorInsets: Bool { didSet { safeIndicators.sync(self) } }
     package override func safeAreaInsetsDidChange() {
         super.safeAreaInsetsDidChange()
-        syncSafeIndicators()
-    }
-    private func syncSafeIndicators() {
-        let safe = safeAreaInsets
-        safeIndicatorInset = writtenWhole ? .zero
-            : automaticallyAdjustsScrollIndicatorInsets ? UIEdgeInsets(top: 0, left: safe.left, bottom: 0, right: safe.right) : safe
+        safeIndicators.sync(self)
     }
     /// UIKit exposes an indicator and its thumb to accessibility even when
     /// the axis has no range. Keep the requested visibility across resizes

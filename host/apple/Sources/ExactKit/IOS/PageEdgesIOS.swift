@@ -275,8 +275,8 @@ extension NodeView {
         sv.contentInset = inset
         sv.verticalScrollIndicatorInsets = bars
         // UIKit's indicator adjustment would add its own top and bottom to the band; the scroll view adds its safe area
-        // instead while it is off (`ScrollView.safeIndicatorInset`)
-        if let scroll = sv as? ScrollView, scroll.automaticallyAdjustsScrollIndicatorInsets != (own == .zero) {
+        // instead while it is off (`SafeIndicatorTerm`)
+        if let scroll = sv as? any SafeIndicators, scroll.automaticallyAdjustsScrollIndicatorInsets != (own == .zero) {
             scroll.automaticallyAdjustsScrollIndicatorInsets = own == .zero
         }
         fitScroll()
