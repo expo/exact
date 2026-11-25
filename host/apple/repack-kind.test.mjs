@@ -1,10 +1,11 @@
 // A repack's build kind (ExactBuildKind) is its base's full build's: `bun test host/apple/repack-kind.test.mjs`.
 import { test, expect } from 'bun:test';
+import { fileURLToPath } from 'node:url';
 import { plistFile } from './assets.mjs';
 import { buildInfo } from './buildinfo.mjs';
 import { archivedBase } from './repack.mjs';
 
-const root = new URL('../..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('../..', import.meta.url));
 const stampOf = (options) => plistFile(buildInfo({ dir: root, manifest: {} }, { root, env: {}, ...options }));
 
 test('a repack stamps the kind its base was stamped with, as bundle.mjs stamps a full build', () => {

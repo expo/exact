@@ -1392,6 +1392,9 @@ the app's own control to press it.
 `type` on a `select` chooses an enabled option by value, else by its one label;
 on a date, time or range input it sets the value in HTML's format; on a checkbox
 it takes `true` or `false`, on a radio `true`. A target out of view is scrolled into view first.
+A plain `tap` the host refuses as covered is scrolled into view again and pressed once more when that
+moved it (an Android keyboard leaving between the two gives the navigation bar its room back, which
+can park the target under it); one nothing scrolls clear is refused.
 An input step ends with what it settled (an answer given in the input's turn,
 and its mutation's `then`; on a native host, not one given while another
 answer's storage is in flight, LLP 1097); otherwise the clock stands still between steps:

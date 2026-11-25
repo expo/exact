@@ -41,7 +41,7 @@ package final class LentScrollIOS {
     package func write(in owner: UIView, terms: ScrollInsetsIOS.Terms, rows: ScrollInsetsIOS.Rows) {
         guard view.window != nil, view.isDescendant(of: owner) else { return }
         if borrowed == nil { borrowed = Borrowed(view) }
-        let allowed = ScrollInsetsIOS.container(terms: terms, band: ScrollInsetsIOS.band(of: view, in: owner))
+        let allowed = terms.container(band: ScrollInsetsIOS.band(of: view, in: owner))
         let said = layout.map { ScrollInsetsIOS.edges($0(ScrollInsetsIOS.edgeInsets(allowed))) } ?? [0, 0, 0, 0]
         let consumed = (0..<4).map { e in said[e].isFinite ? min(max(0, said[e]), allowed[e]) : 0 }
         ScrollInsetsIOS.write(view, in: owner, terms: terms, rows: rows, consumed: consumed)

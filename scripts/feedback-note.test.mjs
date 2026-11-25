@@ -8,7 +8,8 @@ import { redact, send, setStanding } from './feedback.mjs';
 import { DISCLOSURE, DONE, FRICTION, addNote, note, nudge } from './feedback-note.mjs';
 
 function app() {
-  const parent = mkdtempSync(resolve(tmpdir(), 'exact-feedback-note-'));
+  // Its name leaves out "feedback": a build prints its checkout's path, and the tests look for that word in the output.
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-note-'));
   const dir = resolve(parent, 'field-log');
   mkdirSync(resolve(dir, '.exact'), { recursive: true });
   writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Field Log', app: { id: 'com.acme.fieldlog' } }));
@@ -140,6 +141,9 @@ test('an app\'s command nudges at the end of stderr on failure and success, and 
     mkdirSync(resolve(sdk, 'host/apple'), { recursive: true });
     writeFileSync(resolve(sdk, 'host/apple/build.mjs'), 'console.error("ios: the signing team is unset\\n  4 | top-secret-source"); process.exit(1);');
     writeFileSync(resolve(sdk, 'scripts/verify.mjs'), 'console.log("verified");');
+    // A web drive or verify names its private build before it runs (app-cli.mjs); nothing here builds.
+    writeFileSync(resolve(sdk, 'scripts/app.mjs'), 'export const resolveApp = dir => ({ dir });');
+    writeFileSync(resolve(sdk, 'scripts/web-build.mjs'), 'export const privateWebBuild = () => ({ env: {}, close() {} });');
     const driver = resolve(parent, 'driver.mjs');
     writeFileSync(driver, `import { run } from ${JSON.stringify(resolve(root, 'scripts/app-cli.mjs'))};\nprocess.exit(await run({ dir: ${JSON.stringify(dir)}, name: 'field-log', exact2: ${JSON.stringify(sdk)}, args: process.argv.slice(2) }));\n`);
     const drive = (args, more = {}) => spawnSync(process.execPath, [driver, ...args], { encoding: 'utf8', env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', ...more }, stdio: ['ignore', 'pipe', 'pipe'] });
