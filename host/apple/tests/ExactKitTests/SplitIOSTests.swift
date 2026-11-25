@@ -6,13 +6,14 @@ import ExactCore
 @testable import ExactNavigation
 @testable import ExactGroupedLists
 
-/// LLP 1127 on UIKit: a stack whose list rows push is a `.doubleColumn`
-/// split, the root route in the list's navigation controller (N0) and the
-/// routes above it in the detail's (N1). Collapsed (a compact width), UIKit
-/// nests N1 in N0, so Back from the detail is N0's pop of N1, with N1 still
-/// holding its routes. The size class is set on the window or the split, as
-/// an unfolding display sets it, so each test runs the same on any
-/// simulator: bun host/apple/build.mjs --test --ios --only SplitIOSTests
+/// LLP 1127 on UIKit: a stack whose root route asks (on an iPad outside a
+/// tab, also one whose list rows push) is a `.doubleColumn` split, the root
+/// route in the list's navigation controller (N0) and the routes above it in
+/// the detail's (N1). Collapsed (a compact width), UIKit nests N1 in N0, so
+/// Back from the detail is N0's pop of N1, with N1 still holding its routes.
+/// The size class is set on the window or the split, as an unfolding display
+/// sets it, so each test runs the same on any simulator:
+/// bun host/apple/build.mjs --test --ios --only SplitIOSTests
 final class SplitIOSTests: XCTestCase {
     private var window: UIWindow?
     private var session: ExactSession?
@@ -258,18 +259,52 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertFalse(try begins(split.list), "the list's would take the whole detail stack")
     }
 
-    /// Whether a stack splits is read again with each batch, its routes
-    /// kept: a list whose rows come later makes a split, and a root that
-    /// says `navigationSplit="none"` later makes a stack again.
-    func testAStackSplitsWhenItsRowsComeAndPushesWhenItsRootSaysNone() throws {
-        let session = try boot("SPLIT_CHANGE")
+    /// An iPad splits a stack whose list rows push, asked or not, and any other
+    /// device only one whose root route asks (LLP 1127 D1, D19), whichever
+    /// device runs the test.
+    func testAnIPadSplitsAListWhoseRowsPushAndAnIPhoneOnlyWhereTheRouteAsks() {
+        let found = StackSplit(list: 1, width: nil, rows: [:]), asked = StackSplit(asked: true, list: nil, width: nil, rows: [:])
+        XCTAssertNil(NavigationHost.admitted(found, idiom: .phone), "an iPhone pushes a stack whose route does not ask")
+        XCTAssertEqual(NavigationHost.admitted(found, idiom: .pad), found, "an iPad splits the list the rule finds")
+        for idiom in [UIUserInterfaceIdiom.phone, .pad] {
+            XCTAssertEqual(NavigationHost.admitted(asked, idiom: idiom), asked, "a route that asks splits on either")
+            XCTAssertNil(NavigationHost.admitted(nil, idiom: idiom), "a stack the runner splits on no host pushes")
+        }
+    }
+
+    /// A root route that says nothing splits by the rule on an iPad outside a
+    /// tab, read again with each batch: a list whose rows come later makes a
+    /// split, its route kept; any other device keeps the stack pushed (LLP 1127
+    /// D19, D22).
+    func testAnUnaskedStackSplitsOnAnIPadWhenItsRowsComeAndStaysPushedElsewhere() throws {
+        let session = try boot("SPLIT_LATE")
         let navigation = session.presenter.navigationHost, agent = Agent(session: session)
         until("the stack is up") { navigation.primaryNavigation != nil && !agent.nativeInFlight() }
         XCTAssertNil(navigation.split, "no row pushes yet")
         let root = try XCTUnwrap(navigation.primaryNavigation?.viewControllers.first as? RouteController)
         try tap(session, "fill")
-        until("the rows came: a split") { navigation.split != nil && !agent.nativeInFlight() }
-        XCTAssertTrue(navigation.split?.list.viewControllers.first === root, "the same route, in the list's column")
+        until("the rows came") { self.has(session, "row-a") && !agent.nativeInFlight() }
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            until("the rows came: a split") { navigation.split != nil && !agent.nativeInFlight() }
+            XCTAssertTrue(navigation.split?.list.viewControllers.first === root, "the same route, in the list's column")
+        } else {
+            XCTAssertNil(navigation.split, "a device other than an iPad splits only where the route asks")
+        }
+    }
+
+    /// Whether a stack splits is what its root route says (LLP 1127 D2), read
+    /// again with each batch, its routes kept: a root that asks is a split
+    /// before its list has a row, stays the same split as the rows come, and
+    /// is a stack again once it says `navigationSplit="none"`.
+    func testAStackThatAsksSplitsBeforeItsRowsComeAndPushesWhenItsRootSaysNone() throws {
+        let session = try boot("SPLIT_CHANGE")
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("the split is up, with no row yet") { navigation.split != nil && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        let root = try XCTUnwrap(split.list.viewControllers.first as? RouteController)
+        try tap(session, "fill")
+        until("the rows came") { self.has(session, "row-a") && !agent.nativeInFlight() }
+        XCTAssertTrue(navigation.split === split, "the rows' coming keeps the split")
         try tap(session, "row-a")
         until("the book is in the detail") { navigation.split?.shown.count == 2 && !agent.nativeInFlight() }
         XCTAssertNil(agent.back()["error"])

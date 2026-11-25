@@ -146,7 +146,8 @@ extension NavigationHost {
     /// Make the controller the tab's root asks for, even before UIKit shows it.
     func makeTabStack(_ panel: UInt32, _ routes: [RouteController], navigation: Bool) -> UIViewController {
         if tabWantsSplit(routes.first) {
-            let requested = StackSplit(list: nil, width: nil, rows: [:])
+            // The tab's first route asked (LLP 1127 D19), whatever the runner has yet answered
+            let requested = StackSplit(asked: true, list: nil, width: nil, rows: [:])
             let rule = splitRule(routes.first) ?? nil
             let columns = makeSplit(first: routes, rule: rule ?? requested)
             tabSplits[panel] = columns

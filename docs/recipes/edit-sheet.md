@@ -1,9 +1,9 @@
 # Recipe: an edit sheet a row opens
 
-A row that opens its item's sheet is a `link`: a tap, a deep link and Back arrive at
-`follow`, which runs nothing of the row's, so an action that fills a draft (`openEdit`)
+A row that opens its item's sheet is a `link`: a tap, a deep link and Back reach
+`follow`, which runs none of the row's, so an action filling a draft (`openEdit`)
 never runs and the sheet shows the last draft. Make the form a child whose states start
-from the item when its route shows it; the item's `key` makes it again for another item.
+from the item when its route shows it; its `key` makes it anew for each item.
 The child's root is the route (`navigationKey` is the entry's id, passed in), so its
 `header` is the route's first child: iOS draws it as the sheet's bar.
 
@@ -30,7 +30,7 @@ component App
     main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
       for e in stack(nav) key=e.id
         if e.name == "lifts"
-          column navigationKey=`${e.id}` position="absolute" inset=0
+          column navigationKey=`${e.id}` navigationSplit="none" position="absolute" inset=0
             list appearance="auto" listStyle="inset-grouped" flex=1 min-height=0
               section
                 for l in lifts key=l.id
