@@ -282,6 +282,8 @@ extension NodeView {
         switch props["keyboardDismissMode"] {
         case "interactive": return .interactive
         case "on-drag": return .onDrag
+        case "interactive-with-accessory": return .interactiveWithAccessory
+        case "on-drag-with-accessory": return .onDragWithAccessory
         case "none": return .none
         default:
             guard scrollsVertically else { return .none }

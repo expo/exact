@@ -571,13 +571,16 @@ final class RevealKeyboardIOSTests: XCTestCase {
         window.makeKeyAndVisible()
         XCTAssertTrue(field.becomeFirstResponder())
         setKeyboard(p, top: 460)
-        for (tracking, dragging) in [(true, false), (false, true)] {
-            scroll.simulatedTracking = tracking
-            scroll.simulatedDragging = dragging
-            scroll.contentOffset = .zero
-            p.revealEditorAsTheKeysMove()
-            p.revealSettledEditor()
-            XCTAssertEqual(scroll.contentOffset, .zero, "tracking \(tracking), dragging \(dragging): the finger owns the offset")
+        for dismissal in [UIScrollView.KeyboardDismissMode.interactive, .interactiveWithAccessory] {
+            scroll.keyboardDismissMode = dismissal
+            for (tracking, dragging) in [(true, false), (false, true)] {
+                scroll.simulatedTracking = tracking
+                scroll.simulatedDragging = dragging
+                scroll.contentOffset = .zero
+                p.revealEditorAsTheKeysMove()
+                p.revealSettledEditor()
+                XCTAssertEqual(scroll.contentOffset, .zero, "mode \(dismissal.rawValue), tracking \(tracking), dragging \(dragging): the finger owns the offset")
+            }
         }
         scroll.simulatedTracking = false
         scroll.simulatedDragging = false

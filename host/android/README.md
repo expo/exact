@@ -508,7 +508,8 @@ keyboard goes. `interactive`, up and down: once the finger reaches the keyboard,
 the platform's control of the IME's inset animation (`controlWindowInsetsAnimation`, Android 11 and later); at the
 lift it goes, and the field lets go of the focus, when the finger was moving down or had pulled it more than half
 away, and comes back otherwise. The page is laid out for where the keyboard ends, not each step of the follow. Before
-Android 11 the finger reaching the keyboard puts it away.
+Android 11 the finger reaching the keyboard puts it away. UIKit's `on-drag-with-accessory` and
+`interactive-with-accessory` are `on-drag` and `interactive` here: Android shows no accessory bar over its keyboard.
 
 **The ends and the indicator.** The stretch is `EdgeEffect`'s own: it stretches the `RenderNode` it is drawn into, so
 while an edge is stretched the scroller's rows are drawn through a node the size of its box (`Scrolling.record`).

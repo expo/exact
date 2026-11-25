@@ -121,6 +121,8 @@ const NODE: i32 = 4;
 const BARLESS: i32 = 8;
 /// Bits 6 and 7: what a drag of it does to the keyboard, its authored
 /// `keyboardDismissMode`; unsaid, Android's: nothing (LLP 1115.001 D12).
+/// Android shows no accessory bar over its keyboard, so UIKit's accessory
+/// modes are the plain ones (LLP 1123 D7).
 const DISMISS_ON_DRAG: i32 = 64;
 const DISMISS_INTERACTIVE: i32 = 128;
 /// Bits 4 and 5: it hears `refresh`, and its `refreshing` is true: the
@@ -760,8 +762,8 @@ impl<D: DataSource> Presenter<D> {
             .filter(|_| s.id != PAGE)
             .and_then(|n| n.props.str(exact_kernel::PropId::KeyboardDismissMode))
         {
-            Some("on-drag") => DISMISS_ON_DRAG,
-            Some("interactive") => DISMISS_INTERACTIVE,
+            Some("on-drag" | "on-drag-with-accessory") => DISMISS_ON_DRAG,
+            Some("interactive" | "interactive-with-accessory") => DISMISS_INTERACTIVE,
             _ => 0,
         };
         let refresh = if s.id == PAGE
