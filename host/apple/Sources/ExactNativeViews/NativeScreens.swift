@@ -8,6 +8,9 @@ extension NativeViews {
 
     func mountView(_ entry: NativeEntry, table: NativeTable) {
         guard let owner = entry.owner, let view = entry.view else { return }
+        entry.safeArea = entry.handle.flatMap { table.safeArea?($0) }.flatMap {
+            NativeSafeArea(Unmanaged<NSDictionary>.fromOpaque($0).takeRetainedValue())
+        }
         guard let handle = entry.handle, let raw = table.platformController?(handle) else {
             return owner.addSubview(view)
         }

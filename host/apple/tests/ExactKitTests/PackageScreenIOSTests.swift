@@ -79,6 +79,39 @@ final class PackageScreenIOSTests: XCTestCase {
         XCTAssertNil(screen(), file: file, line: line)
     }
 
+    /// LLP 1123 D15: a native view's safe-area declaration crosses the module's table as it mounts, a
+    /// package's through the package seam and an app's through its own, and one that declares none has none.
+    func testANativeViewsSafeAreaDeclarationReachesTheHost() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "native views mount in a window") }
+        try boot(scene)
+        let natives = try XCTUnwrap(session.nativeViews)
+        let home = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation?.topViewController)
+        func mount(_ tag: String, _ id: UInt32) -> NodeView {
+            let owner = NodeView(id: id, kind: "native", presenter: session.presenter)
+            home.view.addSubview(owner)
+            natives.create(owner: owner)
+            owner.props = ["nativeViewModuleName": tag]
+            natives.update(owner)
+            natives.loadIfNeeded()
+            waitForMainQueue()
+            return owner
+        }
+        let plain = mount("probe-plain", 100010), clearing = mount("clearing-table", 100011), table = mount("app-table", 100012)
+        defer { [plain, clearing, table].forEach { natives.destroy(id: $0.id) } }
+        let declared = try XCTUnwrap(natives.safeArea(of: plain.id), "the package's declaration")
+        XCTAssertFalse(declared.adjustsAdditionalSafeAreaInsets)
+        let lent = try XCTUnwrap(declared.scrollViews.first)
+        XCTAssertEqual(declared.scrollViews.count, 1)
+        XCTAssertTrue(lent.view.superview === plain.subviews.first, "the package's own scroll view")
+        XCTAssertEqual(lent.anchor, "list")
+        XCTAssertEqual(lent.layout?(UIEdgeInsets(top: 0, left: 84, bottom: 0, right: 0)), UIEdgeInsets(top: 0, left: 20, bottom: 0, right: 0))
+        XCTAssertEqual(declared.safeAreaRegions, 1)
+        declared.release()
+        XCTAssertEqual(lent.view.accessibilityHint, "released", "the package's release ran")
+        XCTAssertEqual(natives.safeArea(of: clearing.id)?.adjustsAdditionalSafeAreaInsets, true, "the app's declaration")
+        XCTAssertNil(natives.safeArea(of: table.id), "a view that declares nothing")
+    }
+
     func testPushPopTabsRotationAndSheet() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "push/pop, tabs, rotation, and a sheet") }
         try pushPopTabsRotationAndSheet(scene, appScreen: false)

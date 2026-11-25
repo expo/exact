@@ -72,6 +72,8 @@
 //        changes (LLP 1133.027 D17 item 3)
 //
 // 256  module_bindings(module, json, len)             size ≥ 264; committed track bindings
+// 264  safe_area(handle) → NSDictionary *, retained    size ≥ 272; nullable:
+//        the view's safe-area declaration (LLP 1123 D15, `ExactNativeSafeArea`)
 //
 //   event(ctx, nonce, kind, bytes, len)          kind: EventKind 0–8 — press,
 //     change, hover, focus, blur, key, submit, load, message; change, key and
@@ -157,6 +159,8 @@ final class NativeTable {
     var connect: HatchConnectFn?, navigationHatch: HatchNavigationFn?, routeHatch: HatchRouteFn?
     /// Tabs and native screens, in a table of 168 bytes or more.
     var tabsHatch: HatchTabsFn?, tabContainerHatch: HatchTabContainerFn?, platformController: ViewFn?
+    /// A view's safe-area declaration (LLP 1123 D15), in a table of 272 bytes or more.
+    var safeArea: ViewFn?
     /// Hatched nodes (LLP 1075.003.000), in a table of 176 bytes or more;
     /// the window toolbar's hatch (macOS), in one of 184 or more.
     var elementHatch: HatchElementFn?, toolbarHatch: HatchToolbarFn?
@@ -265,6 +269,7 @@ final class NativeTable {
         if size >= 248 { loaded.image = pointer(240).map { unsafeBitCast($0, to: PackageImageFn.self) } }
         if size >= 256 { loaded.sessionView = pointer(248).map { unsafeBitCast($0, to: SessionViewFn.self) } }
         if size >= 264 { loaded.bindings = pointer(256).map { unsafeBitCast($0, to: BindingsFn.self) } }
+        if size >= 272 { loaded.safeArea = pointer(264).map { unsafeBitCast($0, to: ViewFn.self) } }
         return .success(loaded)
     }
 }
@@ -300,6 +305,8 @@ final class NativeEntry {
     #if os(iOS) || os(tvOS)
     /// A native screen's controller, a child of its route's while it lives.
     var screen: UIViewController?
+    /// What the view declares of its safe area, read as it mounts (LLP 1123 D15).
+    var safeArea: NativeSafeArea?
     #endif
     var intrinsicSize: CGSize?
     var hasIntrinsicReport = false
