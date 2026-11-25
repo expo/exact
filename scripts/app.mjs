@@ -304,8 +304,8 @@ export function authClientMetadata(app, callbacks) {
 /** A build's module artifact against the app's roster (LLP 1024 D1, D8.4):
  * a roster tag the artifact has no factory for fails a release build, named,
  * and is a warning in development, where the node reports its status. */
-export function checkModuleRoster(app, provided, where, release) {
-  const missing = app.modules.tags.filter((tag) => !provided.includes(tag));
+export function checkModuleRoster(required, provided, where, release) {
+  const missing = required.filter((tag) => !provided.includes(tag));
   if (!missing.length) return;
   const message = `${where}: the roster (app.json modules) names ${missing.join(', ')}, which the module artifact lacks${provided.length ? ` (it serves ${provided.join(', ')})` : ''}`;
   if (release) throw new Error(message);
@@ -479,6 +479,7 @@ export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
       return metadata;
     }
   };
+  const roster = moduleRoster(manifest.modules);
   const platformKind = kind => platformCrateKind(dir, kind);
   const crate = kind => `${name}-${platformKind(kind)}`;
   const cargoPackage = kind => {
@@ -506,19 +507,14 @@ export function resolveApp(nameOrCrate, { useOutput = true } = {}) {
       const named = (() => { try { return Bun.TOML.parse(readFileSync(resolve(gpu, 'Cargo.toml'), 'utf8')).package?.name; } catch { return undefined; } })();
       throw new Error(named === crate('gpu') ? `${gpu}/Cargo.toml (${named}) is not a member of the app's Cargo workspace: add "gpu" to its members` : `${gpu}/Cargo.toml names the package ${named ?? 'nothing'}; the app's GPU module must be named ${crate('gpu')}`);
     },
-    /** The native-module roster (LLP 1024 D1) and its sources: the Swift under
-     * `modules/apple` that becomes `libexact_modules.dylib`, and the web
-     * executor `modules/web/index.js`. Empty tags: the app has no module
-     * views; its web executor may still answer `native.later` on the page
-     * (LLP 1067 D5), and its Swift still makes the artifact, for `later` and
-     * the hatches (LLP 1075.003 §3.2). */
-    modulesFor(platform) {
-      const folder = moduleDirectory(dir, platform);
+    /** Native view tags and artifact sources for the selected host (LLP 1024 D1). */
+    modulesFor(platform, sourcePlatform = platform) {
+      const folder = moduleDirectory(dir, sourcePlatform);
       const under = suffix => existsSync(folder) ? readdirSync(folder).filter(f => f.endsWith(suffix)).sort().map(f => resolve(folder, f)) : [];
-      return { tags: manifest.modules ?? [], apple: under('.swift'), frameworks: under('.xcframework'), web: existsSync(resolve(folder, 'index.js')) ? resolve(folder, 'index.js') : null };
+      return { tags: roster.tagsFor(platform), apple: under('.swift'), frameworks: under('.xcframework'), web: existsSync(resolve(folder, 'index.js')) ? resolve(folder, 'index.js') : null };
     },
     get modules() {
-      return { ...this.modulesFor('apple'), web: this.modulesFor('web').web };
+      return { ...this.modulesFor('apple'), tags: [...roster.hostsByTag.keys()], web: this.modulesFor('web').web };
     },
     /** The manifest, validated; the derived defaults when the app has none. */
     manifest,
@@ -582,7 +578,7 @@ export function readManifest(dir, name) {
 }
 import { androidHostMetadata, permissionProblems } from './android-manifest.mjs';
 import { DOCUMENT_UTIS, ownDocumentType, documentTypeProblems, canonicalizeDocumentExtensions } from './document-utis.mjs';
-import { launchModules, moduleDirectory } from './launch-modules.mjs';
+import { launchModules, moduleDirectory, moduleRoster } from './launch-modules.mjs';
 export { moduleDirectory } from './launch-modules.mjs';
 import { webManifestAtBase, webCspProblems, webHeadProblems } from './web-head.mjs';
 import { appIconProblems, publishedIcons } from './app-icons.mjs';
@@ -687,12 +683,13 @@ export function validate(value, node, at, root) {
   if (actual === 'number' && (!Number.isFinite(value) || (node.minimum != null && value < node.minimum) || (node.exclusiveMinimum != null && value <= node.exclusiveMinimum) || (node.maximum != null && value > node.maximum))) problems.push(`${where}: outside the allowed numeric range`);
   if (actual === 'array' && node.minItems != null && value.length < node.minItems) problems.push(`${where}: fewer than ${node.minItems} items`);
   if (actual === 'array' && node.maxItems != null && value.length > node.maxItems) problems.push(`${where}: more than ${node.maxItems} items`);
+  if (actual === 'array' && node['x-uniqueModuleTag']) moduleRoster(value, problems);
   if (actual === 'array' && node.items) value.forEach((v, i) => problems.push(...validate(v, node.items, `${at}[${i}]`, root)));
   if (actual === 'object') {
     if (node.maxProperties != null && Object.keys(value).length > node.maxProperties) problems.push(`${where}.${Object.keys(value)[node.maxProperties]}.name: at most ${node.maxProperties} entries`); if (node.propertyNames) for (const key of Object.keys(value)) problems.push(...validate(key, node.propertyNames, `${at}.${key}.name`, root));
     for (const key of node.required ?? []) if (!(key in value)) problems.push(`${where}: missing required ${JSON.stringify(key)}`);
     for (const [key, v] of Object.entries(value)) {
-      const sub = node.properties?.[key];
+      const sub = node.properties && Object.hasOwn(node.properties, key) ? node.properties[key] : null;
       const path = at ? `${at}.${key}` : key;
       if (sub) problems.push(...validate(v, sub, path, root));
       else if (node.additionalProperties && typeof node.additionalProperties === 'object') problems.push(...validate(v, node.additionalProperties, path, root));

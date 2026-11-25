@@ -3,7 +3,7 @@ import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 test('launch modules must provide a part for every declared host', async () => {
   const { buildBake, readManifest } = await import('./app.mjs');
@@ -1432,4 +1432,38 @@ test('the web manifest keeps a file handler’s file types and drops only its fo
   ];
   assert.deepEqual(webAppManifest({ file_handlers }, 'Docs').file_handlers,
     [{ action: '/', name: 'Documents', accept: { 'application/pdf': ['.pdf'] } }]);
+});
+
+test('the module roster validates each tag once and checks factories on their host', async () => {
+  const { checkModuleRoster, readManifest, resolveApp, validate } = await import('./app.mjs');
+  const { moduleRoster } = await import('./launch-modules.mjs');
+  const schema = JSON.parse(readFileSync(new URL('./app.schema.json', import.meta.url)));
+  const dir = mkdtempSync(resolve(tmpdir(), 'module-roster-'));
+  const read = modules => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'R', app: { id: 'dev.test.roster', name: 'R' }, modules }));
+    return readManifest(dir, 'roster');
+  };
+  try {
+    for (const items of [
+      ['phone-view', { tag: 'phone-view' }], [{ tag: 'phone-view' }, { tag: 'phone-view', hosts: ['ios'] }],
+      [{ tag: 'phone-view', hosts: [] }], [{ tag: 'phone-view', hosts: ['phone'] }], [{ tag: 'phone-view', slots: [] }],
+    ]) {
+      assert.match(validate(items, schema.properties.modules, 'modules', schema).join('\n'), /modules\[\d\].*phone-view/);
+      assert.throws(() => read(items), /modules\[\d\].*phone-view/);
+    }
+    assert.throws(() => read([{ tag: 'font-face' }]), /font-face/);
+    assert.throws(() => read([{ tag: 'phone-view', constructor: 0 }]), /constructor/);
+    const roster = moduleRoster(read(['shared-view', { tag: 'other-view' }, { tag: 'phone-view', hosts: ['android'] }]).modules);
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    shared-view\n');
+    mkdirSync(resolve(dir, 'ios/modules'), { recursive: true });
+    writeFileSync(resolve(dir, 'ios/modules/Input.swift'), '');
+    const app = resolveApp(dir, { useOutput: false });
+    assert.deepEqual(app.modules.tags, ['shared-view', 'other-view', 'phone-view']);
+    const tv = app.modulesFor('tvos', 'ios');
+    assert.deepEqual(tv.tags, ['shared-view', 'other-view']);
+    assert.deepEqual(tv.apple.map(file => basename(file)), ['Input.swift']);
+    assert.deepEqual(roster.tagsFor('ios'), ['shared-view', 'other-view']);
+    checkModuleRoster(roster.tagsFor('ios'), ['shared-view', 'other-view', 'phone-view'], 'ios', true);
+    assert.throws(() => checkModuleRoster(roster.tagsFor('android'), ['shared-view', 'other-view'], 'android', true), /phone-view/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

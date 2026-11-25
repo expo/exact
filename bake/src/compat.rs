@@ -771,6 +771,11 @@ pub(crate) fn compatibility_with_trust(
         })
         .unwrap_or_default();
     icons.sort();
+    // The TV and the watch bake as "ios"; a package's `targets` names them apart.
+    let module_platform = ["tvos", "watchos"]
+        .into_iter()
+        .find(|p| target.contains(&format!("-{p}")))
+        .unwrap_or(platform);
     let mut inputs = json!({
         "kernelSchema": format!("{:016x}", exact_kernel::SCHEMA_DIGEST),
         "formatVersion": exact_plan::FORMAT_VERSION,
@@ -805,7 +810,7 @@ pub(crate) fn compatibility_with_trust(
         "gpuSurfaces": gpu_surfaces(app_dir, manifest)?,
         // @ref LLP 1024 D3/D4 — the roster and the table's ABI: a new tag
         // is a binary change, never a bundle (LLP 1047 D8).
-        "nativeModules": match contract::native::roster(manifest)? {
+        "nativeModules": match contract::native::roster(manifest)?.tags_on(module_platform) {
             tags if tags.is_empty() => Value::Null,
             tags => json!({ "appleAbi": 3, "webAbi": 1, "tags": tags }),
         },
@@ -930,12 +935,7 @@ pub(crate) fn compatibility_with_trust(
     // Which GPU artifact owns which surface (LLP 1009 D6): the manifest's
     // modules, bound into the cohort — a routing change is a new binary. An
     // app with one artifact carries no key, so its id and bytes are as before.
-    // The TV and the watch bake as "ios"; a package's `targets` names them apart.
-    let gpu_platform = ["tvos", "watchos"]
-        .into_iter()
-        .find(|p| target.contains(&format!("-{p}")))
-        .unwrap_or(platform);
-    let modules = contract::package_gpu::modules(app_dir, &manifest.json, gpu_platform)?;
+    let modules = contract::package_gpu::modules(app_dir, &manifest.json, module_platform)?;
     if modules.as_object().is_some_and(|m| !m.is_empty()) {
         inputs["gpuModules"] = modules;
     }

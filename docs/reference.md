@@ -6787,7 +6787,19 @@ bun scripts/exact.mjs hatch avatar <app>     # in an app `exact new` made: bun e
 bun scripts/exact.mjs hatch --app <app>      # the app scope; --window for the window's
 ```
 
-The verb writes a stub for each target the app builds (Swift in
+Native view factories have their own roster in `app.json`. Each `modules` item is
+a unique tag string or an object with `tag` and optional `hosts`. Omitting
+`hosts` means every host. A list names one or more of `ios`, `tvos`, `macos`,
+`web`, `linux`, `windows` and `android`. For example,
+`{"tag":"compose-card","hosts":["android"]}` needs a factory in the Android
+artifact. Place `compose-card` under `if page.platform == "android"`, with
+`page` bound to `exactPage()`. Every host's build checks the use. Apple, Android
+and web builds report missing factories for their host as release errors or
+development warnings. A web factory table that needs the DOM at import time runs
+in system WebKit on macOS or the browser installed by web setup on Linux and Windows.
+The painted Linux and Windows hosts report native views as unavailable.
+
+The hatch verb writes a stub for each target the app builds (Swift in
 `modules/apple/`, the page module in `modules/web/`, Rust in
 `modules/linux/`), adds the word to
 `app.json` `hatches` with those platforms, and tells you the node to mark:

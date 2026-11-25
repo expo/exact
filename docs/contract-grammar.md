@@ -729,7 +729,7 @@ view-if       = "if" expr block(node) [ "else" ( view-if | block(node) ) ] ;
 for           = "for" IDENT [ "," IDENT ] "in" expr "key" "=" expr block(node) ;
 view-match    = "match" expr block(view-case) ;
 view-case     = "case" "some" "(" IDENT ")" block(node)
-              | "case" "none" block(node) ;
+              | "case" "none" block(node) | "case" STRING block(node) ;
 children      = "children" NL ;
 special-word  = "document" | "switch" | "multiple" ;
 ```
@@ -748,7 +748,8 @@ arguments; its name starts uppercase to distinguish it from an element.
 
 A `for` key is a string, number, or boolean, with unique stable values required
 for useful row identity. Its optional second binding is the numeric row index.
-`if` conditions are boolean and `match` subjects are options. Root regions are
+`if` conditions are boolean. Match an option with `case some(value)` and
+`case none`. Match `page.platform` with a quoted host name per case. Root regions are
 refused: wrap them in an element. `children` requires a declared slot.
 
 ## Expressions and types

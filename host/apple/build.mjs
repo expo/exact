@@ -645,7 +645,7 @@ async function main(args, lockHeld = false) {
   const cleanup = [], beside = []; // what to remove, and the steps started beside the build, when it ends
   try {
   const crate = app.crate(ios ? 'ios' : 'macos');
-  const modules = app.modulesFor(ios ? 'ios' : 'macos');
+  const modules = app.modulesFor(tv ? 'tvos' : ios ? 'ios' : 'macos', tv ? 'ios' : undefined); // tvOS builds the iOS shell’s Swift sources.
   const gpuCrate = app.crate('gpu');
   const hasGpu = app.hasGpu;
   let ph, prof;
@@ -1305,7 +1305,7 @@ async function main(args, lockHeld = false) {
       console.warn(`${why}\nThe manifest's roster stands, and no tag joins the first frame (docs/recipes/native-views.md)`);
     }
     // A roster read that lacks a tag's factory fails here: another route is not tried.
-    checkModuleRoster(app, provided, `host/apple ${ios ? 'iOS' : 'macOS'}`, production);
+    checkModuleRoster(modules.tags, provided, `host/apple ${tv ? 'tvOS' : ios ? 'iOS' : 'macOS'}`, production);
   }
   const tArms = Date.now(); buildStep('modules');
   // The SVG island module (@ref LLP 1055.000 §8 ruling 4: exact-svg-raster,

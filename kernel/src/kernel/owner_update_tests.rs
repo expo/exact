@@ -3,7 +3,7 @@
 use super::*;
 use crate::kernel::{
     BarRegion, Contribution, Keyboard, KeyboardReport, Operation, OwnerChrome, OwnerMargins,
-    OwnerUpdate, VerticalBarEdge, WindowMap,
+    OwnerUpdate, RegionKind, ReservedRegion, VerticalBarEdge, WindowMap,
 };
 use crate::style::env::{Rect, SegmentGrid};
 
@@ -66,6 +66,13 @@ fn full() -> OwnerUpdate {
         }),
         window_map: Some(WindowMap([0.9, 0.1, 0.2, 0.8, 5.0, 62.0])),
         configuration: Some(7),
+        regions: Some(vec![ReservedRegion {
+            id: 11,
+            kind: RegionKind::Division,
+            frame: [175.0, 0.0, 40.0, 844.0],
+            margins: [0.0, 10.0, 0.0, 10.0],
+            active: true,
+        }]),
     }
 }
 
@@ -91,9 +98,15 @@ fn an_owner_update_round_trips_and_a_malformed_one_is_refused() {
     presence[0] = 2;
     assert!(OwnerUpdate::decode(&presence).is_err());
     // An operation past the five, at the contribution's byte 25, a relation past the seven, at the
-    // first relation's byte 120, and a vertical bar edge past the three, before the sidebar's two
-    // bytes, the window map's 25 and the configuration's 9
-    for (at, unknown) in [(25, 5), (120, 7), (bytes.len() - 37, 3)] {
+    // first relation's byte 120, a vertical bar edge past the three, before the sidebar's two
+    // bytes, the window map's 25, the configuration's 9 and the regions' 47, and a region's kind
+    // past the two, 34 bytes from the end
+    for (at, unknown) in [
+        (25, 5),
+        (120, 7),
+        (bytes.len() - 84, 3),
+        (bytes.len() - 34, 2),
+    ] {
         let mut bad = bytes.clone();
         bad[at] = unknown;
         assert!(OwnerUpdate::decode(&bad).is_err(), "byte {at}");
@@ -187,9 +200,15 @@ fn an_owner_updates_wire_form_is_the_one_hosts_write() {
     w.extend([1, 1, 2, 1, 0]);
     w.push(1);
     f(&mut w, &[0.9, 0.1, 0.2, 0.8, 5.0, 62.0]);
-    // and the configuration's identity
+    // and the configuration's identity, then the one region
     w.push(1);
     w.extend(7u64.to_le_bytes());
+    w.push(1);
+    w.extend(1u32.to_le_bytes());
+    w.extend(11u64.to_le_bytes());
+    w.push(0);
+    f(&mut w, &[175.0, 0.0, 40.0, 844.0, 0.0, 10.0, 0.0, 10.0]);
+    w.push(1);
     assert_eq!(full().encode(), w);
 }
 
@@ -220,6 +239,8 @@ fn an_owner_update_applies_every_field() {
         (k.window_map(3), k.window_map(1)),
         (full().window_map, None)
     );
+    let regions = k.reserved_regions(3).map(|r| r.to_vec());
+    assert_eq!((regions, k.reserved_regions(1)), (full().regions, None));
     assert_eq!(
         (k.owner_chrome(3), k.owner_chrome(1)),
         (full().chrome, None)
@@ -386,6 +407,7 @@ fn session() -> crate::kernel::SessionUpdate {
         keyboard_policy: Some(crate::kernel::KeyboardPolicy::ResizesVisual),
         window_map: Some(WindowMap([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])),
         configuration: Some(3),
+        regions: Some(Vec::new()),
     }
 }
 
@@ -403,9 +425,9 @@ fn a_session_update_round_trips_and_a_malformed_one_is_refused() {
         assert!(SessionUpdate::decode(&bytes[..n]).is_err(), "{n} bytes");
     }
     assert!(SessionUpdate::decode(&[bytes.clone(), vec![0]].concat()).is_err());
-    // The policy, before the window map's 25 bytes and the configuration's 9: 2 is
+    // The policy, before the window map's 25 bytes, the configuration's 9 and the regions' 5: 2 is
     // `resizes-visual`, and none past the three
-    let policy = bytes.len() - 35;
+    let policy = bytes.len() - 40;
     assert_eq!(bytes[policy], 2);
     let mut bad = bytes.clone();
     bad[policy] = 4;
@@ -507,4 +529,14 @@ fn an_observed_max_reader_keeps_the_largest_band_of_its_configuration() {
         50.0,
         "with no configuration it reads the band live"
     );
+}
+
+#[test]
+fn a_reserved_region_of_negative_size_refuses_the_update() {
+    let mut k = owner(390.0, 844.0, create(3..=3));
+    lay_out(&mut k);
+    let mut bad = full();
+    bad.regions.as_mut().unwrap()[0].frame[2] = -1.0;
+    assert!(k.update_owner(2, bad).is_err());
+    assert_eq!(k.reserved_regions(3), None);
 }

@@ -29,6 +29,27 @@ export function launchModules(dir, manifest, platforms = []) {
   });
 }
 
+/** A web artifact supplies factories through the ABI the page host loads (LLP 1024 D7). */
+export function factoryTags(table) {
+  if (table.abi !== 1 || !table.roster || !['create', 'setProps', 'destroy'].every(key => typeof table[key] === 'function')) return [];
+  return Object.keys(table.roster);
+}
+
+/** Index a validated roster by tag. A null host list serves every platform. */
+export function moduleRoster(items = [], problems = []) {
+  const hostsByTag = new Map();
+  for (const [i, item] of items.entries()) {
+    const tag = typeof item === 'string' ? item : item?.tag;
+    if (typeof tag !== 'string') continue;
+    if (hostsByTag.has(tag)) problems.push(`modules[${i}]: duplicate tag ${tag}`);
+    hostsByTag.set(tag, item?.hosts ?? null);
+  }
+  return {
+    hostsByTag,
+    tagsFor: platform => [...hostsByTag].filter(([, hosts]) => !hosts || hosts.includes(platform)).map(([tag]) => tag),
+  };
+}
+
 /** Platform-specific source folder; shared Apple modules remain valid for existing apps. */
 export function moduleDirectory(dir, platform) {
   const own = resolve(dir, platform, 'modules');

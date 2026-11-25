@@ -12,6 +12,7 @@ impl Parser {
             view_ranges: false,
             depth: 0,
             view_depth: 0,
+            platform_matches: Vec::new(),
             last: 0,
             free: Vec::new(),
             methods: Vec::new(),
