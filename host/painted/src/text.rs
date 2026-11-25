@@ -15,6 +15,8 @@
 //! in the box. Glyphs are rasterized by swash once per (glyph, color) into
 //! small premultiplied pixmaps.
 
+#[cfg(target_os = "android")]
+pub(crate) mod android_advances;
 #[cfg(test)]
 mod background_tests;
 pub(crate) mod backgrounds;

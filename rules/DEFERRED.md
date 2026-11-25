@@ -745,7 +745,7 @@ commands, writes on the location (`todo add milk`), and printing a GUI app
   - **Its host work:** the Canvas host (LLP 1076 §3.3) and the GPU painter.
     **Expanded (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).**
     Pocket Lab may colour Android’s bars through their elements and the root accent (LLP 1115.001 D11).
-  - **Parley's Android arm** (`text/parley-android`, LLP 1085.000).
+  - **Parley's Android arm** (`text/parley-android`, LLP 1085.000). **Decided for advances (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).** Every Android painted label measures and draws with the glyph advances of a default `TextView` in the same font and size, and breaks where those advances say. Read them from Android or verify them against it across fonts and API levels. A hard-coded rounding rule cannot supply them. Break strategies, fallback and complex-script shaping remain open (LLP 1085.000 §8).
   - **Hosted Back (Charlie, 2026-11-24, "recs ok"; panel 4–0).** Module and hatch views share system Back and its predictive gesture with the route and dismissible layers through the root dispatcher (LLP 1115.001 D6).
   - **A place in the sweep.**
 

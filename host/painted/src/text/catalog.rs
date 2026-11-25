@@ -101,6 +101,8 @@ pub(super) struct Catalog {
     /// Each file-backed blob's path (LLP 1076 §3.3).
     pub(super) files: Arc<HashMap<u64, Arc<Path>>>,
     pub(super) locale: String,
+    #[cfg(target_os = "android")]
+    pub(super) density: f32,
     scale: ScaleContext,
     pub(super) ink_catalog: Rc<()>,
     pub(super) envelopes: ink::Envelopes,
@@ -144,6 +146,8 @@ impl Catalog {
             self.files.clone(),
             &self.locale,
         );
+        #[cfg(target_os = "android")]
+        catalog.use_density(self.density);
         catalog.sans = self.sans.clone();
         catalog.install_picture(lists);
         catalog
@@ -223,9 +227,17 @@ impl Catalog {
         files: Arc<HashMap<u64, Arc<Path>>>,
         locale: &str,
     ) -> Self {
+        #[cfg(target_os = "android")]
+        let density = crate::fields::hosting().map_or(1., |h| h.scale);
+        #[cfg(target_os = "android")]
+        let layout = super::android_advances::context(&files, density);
+        #[cfg(not(target_os = "android"))]
+        let layout = LayoutContext::new();
         Self {
             fonts,
-            layout: LayoutContext::new(),
+            layout,
+            #[cfg(target_os = "android")]
+            density,
             files,
             locale: locale.to_owned(),
             scale: ScaleContext::new(),
@@ -301,6 +313,8 @@ impl Catalog {
     pub(super) fn with_locale(&self, locale: &str) -> Self {
         let mut next =
             Self::with_collection(self.fonts.collection.clone(), self.files.clone(), locale);
+        #[cfg(target_os = "android")]
+        next.use_density(self.density);
         next.families = self.families.clone();
         next.declared_faces = self.declared_faces.clone();
         next.sans = self.sans.clone();
@@ -460,6 +474,10 @@ impl Catalog {
             let mut files = (*next.files).clone();
             files.extend(registry.files.drain());
             next.files = Arc::new(files);
+            #[cfg(target_os = "android")]
+            {
+                next.layout = super::android_advances::context(&next.files, next.density);
+            }
             for (stack_index, primary, alias, staged) in declared {
                 for (weight, italic, info) in staged.iter().filter(|_| primary) {
                     let face = match info.source().kind() {
@@ -805,7 +823,14 @@ impl Catalog {
     /// spike), and a new one costs about 60 µs.
     pub(super) fn release_scratch(&mut self, text_bytes: usize) {
         if text_bytes >= 256 * 1024 {
-            self.layout = LayoutContext::new();
+            #[cfg(target_os = "android")]
+            {
+                self.layout = super::android_advances::context(&self.files, self.density);
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                self.layout = LayoutContext::new();
+            }
         }
     }
 }

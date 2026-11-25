@@ -18,21 +18,54 @@ use crate::convert::script_to_harfrust;
 use crate::inline_box::InlineBox;
 use crate::lru_cache::LruCache;
 use crate::util::nearly_eq;
-use crate::{FontData, convert};
+use crate::{convert, FontData};
 use fontique::Language;
-use icu_properties::CodePointSetData;
 use icu_properties::props::{
     Emoji, EmojiModifier, EmojiModifierBase, EmojiPresentation, ExtendedPictographic, Script,
 };
+use icu_properties::CodePointSetData;
 use skrifa::{
-    GlyphId, MetadataProvider, instance::Size, raw::TableProvider, raw::tables::cmap::MapVariant,
+    instance::Size, raw::tables::cmap::MapVariant, raw::TableProvider, GlyphId, MetadataProvider,
 };
 
 use fontique::{self, Query, QueryFamily, QueryFont};
 
+mod attachment;
 mod cache;
 
+/// One resolved font segment in visual glyph order. Cluster indices count Unicode scalars.
+pub struct AdvanceRequest<'a> {
+    pub font: &'a QueryFont,
+    pub size: f32,
+    pub rtl: bool,
+    pub text: &'a str,
+    pub variations: &'a [FontVariation],
+    pub features: &'a [FontFeature],
+    pub locale: Option<&'a str>,
+    pub infos: &'a [harfrust::GlyphInfo],
+    pub positions: &'a [harfrust::GlyphPosition],
+    pub units_per_em: f32,
+}
+
+/// Horizontal metrics in layout units. Offsets are relative to the glyph's pen.
+pub struct GlyphAdvance {
+    pub advance: f32,
+    pub x_offset: f32,
+}
+
+/// Advances in layout units, before CSS spacing. A tab stop uses a space;
+/// a soft hyphen uses the visible hyphen only when a line ends there.
+pub struct RunAdvances {
+    pub glyphs: Vec<GlyphAdvance>,
+    /// Clusters to check for attachments after adjusting their widths.
+    pub reattach: Vec<core::ops::Range<usize>>,
+    pub space: Option<f32>,
+    pub hyphen: Option<f32>,
+}
+pub type AdvanceMeasure = dyn Fn(&AdvanceRequest<'_>) -> Option<RunAdvances> + Send + Sync;
+
 pub(crate) struct ShapeContext {
+    pub(crate) measure: Option<alloc::sync::Arc<AdvanceMeasure>>,
     shape_data_cache: LruCache<cache::ShapeDataKey, harfrust::ShaperData>,
     shape_instance_cache: LruCache<cache::ShapeInstanceId, harfrust::ShaperInstance>,
     shape_plan_cache: LruCache<cache::ShapePlanId, harfrust::ShapePlan>,
@@ -45,6 +78,7 @@ impl Default for ShapeContext {
     fn default() -> Self {
         const MAX_ENTRIES: usize = 16;
         Self {
+            measure: None,
             shape_data_cache: LruCache::new(MAX_ENTRIES),
             shape_instance_cache: LruCache::new(MAX_ENTRIES),
             shape_plan_cache: LruCache::new(MAX_ENTRIES),
@@ -496,37 +530,28 @@ fn shape_item<'a, B: Brush>(
         );
 
         // Prepare harfrust buffer
-        let mut buffer = mem::take(&mut scx.unicode_buffer).unwrap();
-        buffer.clear();
-
-        // Use the entire segment text including newlines
-        buffer.reserve(segment_text.len());
-        for (i, ch) in segment_text.chars().enumerate() {
-            // Ensure that each cluster's index matches the index into `infos`. This is required
-            // for efficient cluster lookup within `data.rs`.
-            //
-            // In other words, instead of using `buffer.push_str`, which iterates `segment_text`
-            // with `char_indices`, push each char individually via `.chars` with a cluster index
-            // that matches its `infos` counterpart. This allows us to lookup `infos` via cluster
-            // index in `data.rs`.
-            buffer.add(ch, i as u32);
-        }
-
-        buffer.set_direction(direction);
-
-        buffer.set_script(hb_script);
-
-        if let Some(lang) = language {
-            buffer.set_language(lang);
-        }
-
-        let glyph_buffer = harf_shaper.shape(
-            buffer,
+        let prepare = |mut buffer: harfrust::UnicodeBuffer| {
+            buffer.clear();
+            buffer.reserve(segment_text.len());
+            // The cluster ID indexes a scalar's CharInfo, including newlines.
+            for (i, ch) in segment_text.chars().enumerate() {
+                buffer.add(ch, i as u32);
+            }
+            buffer.set_direction(direction);
+            buffer.set_script(hb_script);
+            if let Some(lang) = &language {
+                buffer.set_language(lang.clone());
+            }
+            buffer
+        };
+        let options = || {
             ShapeOptions::new()
-                .plan(Some(shaper_plan))
+                .plan(Some(&*shaper_plan))
                 .features(&scx.features)
-                .point_size(Some(item.size)),
-        );
+                .point_size(Some(item.size))
+        };
+        let buffer = mem::take(&mut scx.unicode_buffer).unwrap();
+        let glyph_buffer = harf_shaper.shape(prepare(buffer), options());
 
         // Extract relevant CharInfo slice for this segment
         let char_start = char_range.start + item_text[..segment_start_offset].chars().count();
@@ -535,6 +560,32 @@ fn shape_item<'a, B: Brush>(
         let segment_infos =
             &item_infos[segment_char_start..(segment_char_start + segment_char_count)];
 
+        let mut advances = scx
+            .measure
+            .as_ref()
+            .and_then(|measure| {
+                measure(&AdvanceRequest {
+                    font: &font.font,
+                    size: item.size,
+                    rtl: item.level & 1 != 0,
+                    text: segment_text,
+                    variations: rcx.variations(item.variations).unwrap_or_default(),
+                    features: rcx.features(item.features).unwrap_or_default(),
+                    locale: item.locale.as_ref().map(|l| l.language()),
+                    infos: glyph_buffer.glyph_infos(),
+                    positions: glyph_buffer.glyph_positions(),
+                    units_per_em: harf_shaper.units_per_em() as f32,
+                })
+            })
+            .filter(|a| a.glyphs.len() == glyph_buffer.len());
+        if let Some(measured) = advances.as_mut().filter(|a| !a.reattach.is_empty()) {
+            let scale = item.size / harf_shaper.units_per_em() as f32;
+            let widened = harf_shaper.shape(
+                prepare(harfrust::UnicodeBuffer::new()),
+                options().font_funcs(Some(&mut attachment::FindBases)),
+            );
+            attachment::place_marks(&glyph_buffer, &widened, measured, scale);
+        }
         // Push harfrust-shaped run for the entire segment
         layout.data.push_run(
             FontData::new(font.font.blob.clone(), font.font.index),
@@ -542,6 +593,7 @@ fn shape_item<'a, B: Brush>(
             font.attrs,
             font.font.synthesis,
             &glyph_buffer,
+            advances.as_ref(),
             item.level,
             item.style_index,
             item.word_spacing,

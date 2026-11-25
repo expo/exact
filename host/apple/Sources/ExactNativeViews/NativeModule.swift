@@ -1123,6 +1123,10 @@ final class NativeViews: NativeModuleHosting {
     /// The node is gone: the nonce dies first, then the instance (D4).
     func destroy(id: UInt32) {
         guard let entry = entries.removeValue(forKey: id) else { return }
+        #if os(iOS) || os(tvOS)
+        // Before a parked instance's reset, which a module may not undo Exact's writes through
+        releaseSafeArea(entry)
+        #endif
         if entry.nonce != 0 {
             NativeProcess.owners.removeValue(forKey: entry.nonce)
             NativeProcess.retired[entry.nonce] = WeakNatives(self)

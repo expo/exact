@@ -16,6 +16,8 @@ pub(crate) struct CatalogSnapshot {
     collection: fontique::Collection,
     files: Arc<HashMap<u64, Arc<std::path::Path>>>,
     locale: String,
+    #[cfg(target_os = "android")]
+    density: f32,
     families: Vec<Vec<FamilyChoice>>,
     declared: HashMap<(u16, u16, bool), catalog::FaceId>,
     sans: String,
@@ -35,6 +37,8 @@ pub(super) struct Recipe {
     collection: fontique::Collection,
     files: Arc<HashMap<u64, Arc<std::path::Path>>>,
     locale: String,
+    #[cfg(target_os = "android")]
+    density: f32,
     families: Vec<Vec<FamilyChoice>>,
     declared: HashMap<(u16, u16, bool), catalog::FaceId>,
     sans: String,
@@ -46,6 +50,8 @@ impl CatalogSnapshot {
             collection: catalog.fonts.collection.clone(),
             files: catalog.files.clone(),
             locale: catalog.locale.clone(),
+            #[cfg(target_os = "android")]
+            density: catalog.density,
             families: catalog.families.clone(),
             declared: catalog.declared_faces.clone(),
             sans: catalog.sans.clone(),
@@ -71,6 +77,8 @@ impl CatalogSnapshot {
             collection: self.collection,
             files: self.files,
             locale: self.locale,
+            #[cfg(target_os = "android")]
+            density: self.density,
             families: self.families,
             declared: self.declared,
             sans: self.sans,
@@ -90,6 +98,8 @@ impl Recipe {
     }
     pub fn attach(&self, fonts: parley::FontContext) -> catalog::Catalog {
         let mut catalog = catalog::Catalog::attach(fonts, self.files.clone(), &self.locale);
+        #[cfg(target_os = "android")]
+        catalog.use_density(self.density);
         catalog.families = self.families.clone();
         catalog.declared_faces = self.declared.clone();
         catalog.sans = self.sans.clone();

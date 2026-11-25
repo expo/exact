@@ -485,6 +485,7 @@ impl<B: Brush> LayoutData<B> {
         font_attrs: fontique::Attributes,
         synthesis: fontique::Synthesis,
         glyph_buffer: &harfrust::GlyphBuffer,
+        advances: Option<&crate::RunAdvances>,
         bidi_level: u8,
         style_index: u16,
         word_spacing: f32,
@@ -592,6 +593,7 @@ impl<B: Brush> LayoutData<B> {
                 scale_factor,
                 glyph_infos,
                 glyph_positions,
+                advances.map(|a| a.glyphs.as_slice()),
                 char_infos,
                 source_text.char_indices(),
             );
@@ -603,6 +605,7 @@ impl<B: Brush> LayoutData<B> {
                 scale_factor,
                 glyph_infos,
                 glyph_positions,
+                advances.map(|a| a.glyphs.as_slice()),
                 char_infos,
                 source_text.char_indices().rev(),
             );
@@ -618,12 +621,13 @@ impl<B: Brush> LayoutData<B> {
             let space = {
                 use skrifa::MetadataProvider;
                 font_ref.charmap().map(' ').map(|glyph| {
-                    let metrics = font_ref
-                        .glyph_metrics(skrifa::prelude::Size::new(font_size), coords);
+                    let metrics =
+                        font_ref.glyph_metrics(skrifa::prelude::Size::new(font_size), coords);
                     (glyph.to_u32(), metrics.advance_width(glyph).unwrap_or(0.0))
                 })
             };
             if let Some((glyph, advance)) = space {
+                let advance = advances.and_then(|a| a.space).unwrap_or(advance);
                 let interval = 8.0 * (advance + letter_spacing + word_spacing);
                 if interval > 0.0 {
                     for index in run.cluster_range.clone() {
@@ -640,12 +644,13 @@ impl<B: Brush> LayoutData<B> {
             let hyphen = {
                 use skrifa::MetadataProvider;
                 font_ref.charmap().map('-').map(|glyph| {
-                    let metrics = font_ref
-                        .glyph_metrics(skrifa::prelude::Size::new(font_size), coords);
+                    let metrics =
+                        font_ref.glyph_metrics(skrifa::prelude::Size::new(font_size), coords);
                     (glyph.to_u32(), metrics.advance_width(glyph).unwrap_or(0.0))
                 })
             };
             if let Some((glyph, advance)) = hyphen {
+                let advance = advances.and_then(|a| a.hyphen).unwrap_or(advance);
                 for index in run.cluster_range.clone() {
                     if self.clusters[index].info.source_char() == '\u{ad}' {
                         self.soft_hyphens.push((index, glyph, advance));
@@ -745,8 +750,8 @@ impl<B: Brush> LayoutData<B> {
                                 .filter(|_| boundary == Boundary::Line)
                                 .and_then(|i| self.soft_hyphen(i))
                                 .map_or(0.0, |h| h.1);
-                            min_width = min_width
-                                .max(running_min_width - trailing_whitespace + hyphen);
+                            min_width =
+                                min_width.max(running_min_width - trailing_whitespace + hyphen);
                             if boundary == Boundary::Mandatory {
                                 max_width = max_width.max(running_max_width - trailing_max);
                                 running_max_width = indent_for(opts.each_line);
@@ -868,7 +873,8 @@ impl<B: Brush> LayoutData<B> {
                             break 'items;
                         }
                         let wrapped = text_wrap_mode == TextWrapMode::Wrap;
-                        text_wrap_mode = self.styles[cluster.info.style_index as usize].text_wrap_mode;
+                        text_wrap_mode =
+                            self.styles[cluster.info.style_index as usize].text_wrap_mode;
                         if cluster.info.boundary() == Boundary::Line
                             && wrapped
                             && !cluster.is_ligature_component()
@@ -975,6 +981,7 @@ fn process_clusters<I: Iterator<Item = (usize, char)>>(
     scale_factor: f32,
     glyph_infos: &[harfrust::GlyphInfo],
     glyph_positions: &[harfrust::GlyphPosition],
+    advances: Option<&[crate::GlyphAdvance]>,
     char_infos: &[(CharInfo, u16)],
     char_indices_iter: I,
 ) -> f32 {
@@ -1027,7 +1034,9 @@ fn process_clusters<I: Iterator<Item = (usize, char)>>(
         Direction::Rtl => char_infos.len() as u32,
     };
 
-    for (glyph_info, glyph_pos) in glyph_infos.iter().zip(glyph_positions.iter()) {
+    for (index, (glyph_info, glyph_pos)) in
+        glyph_infos.iter().zip(glyph_positions.iter()).enumerate()
+    {
         // Flush previous cluster if we've reached a new cluster
         if cluster_id != glyph_info.cluster {
             run_advance += cluster_advance;
@@ -1117,10 +1126,16 @@ fn process_clusters<I: Iterator<Item = (usize, char)>>(
         let glyph = Glyph {
             id: glyph_info.glyph_id,
             style_index: char_info.1,
-            x: (glyph_pos.x_offset as f32) * scale_factor,
+            x: advances.map_or_else(
+                || glyph_pos.x_offset as f32 * scale_factor,
+                |a| a[index].x_offset,
+            ),
             // Convert from font space (Y-up) to layout space (Y-down)
             y: -(glyph_pos.y_offset as f32) * scale_factor,
-            advance: (glyph_pos.x_advance as f32) * scale_factor,
+            advance: advances.map_or_else(
+                || (glyph_pos.x_advance as f32) * scale_factor,
+                |a| a[index].advance,
+            ),
         };
         cluster_advance += glyph.advance;
         // Push any pending glyph. If it was a zero-offset, single glyph cluster, it would

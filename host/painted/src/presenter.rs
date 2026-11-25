@@ -903,6 +903,10 @@ impl<D: DataSource> Presenter<D> {
         if !scale.is_finite() || scale <= 0.0 {
             return Some("display scale must be finite and positive".into());
         }
+        #[cfg(target_os = "android")]
+        if self.text.borrow_mut().set_advance_density(scale) {
+            self.host.runner_mut().kernel_mut().remeasure_text();
+        }
         self.brush.scale = scale;
         self.dirty = true;
         let told = self.host.set_display_scale(f64::from(scale));
