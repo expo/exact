@@ -319,7 +319,10 @@ impl<D: DataSource + Default + 'static> App<D> {
                 flyout.hide();
             }
         }) {
-            Some(true) => events.exit(),
+            Some(true) => {
+                self.end();
+                events.exit();
+            }
             Some(false) => self.bring_forward(),
             None => {}
         }
