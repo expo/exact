@@ -357,3 +357,72 @@ fn a_negative_raw_band_with_no_contribution_is_an_incoming_band_of_0() {
     let slot = slot(&k, 2);
     assert_eq!(k.arena.observations.band(slot), Some([0.0, 0.0, 34.0, 0.0]));
 }
+
+/// A session update with every field: a 47-point top band, a navigation controller (20) holding
+/// the session view, a docked keyboard in the document's space, and `resizes-visual`.
+fn session() -> crate::kernel::SessionUpdate {
+    let mut targets = controller(1, 10.0);
+    targets.chain.push(entry(2, 20.0, Some(Kind::Navigation)));
+    crate::kernel::SessionUpdate {
+        band: [47.0, 0.0, 34.0, 0.0],
+        targets,
+        keyboard: KeyboardReport::Shown(Keyboard {
+            frame: [0.0, 516.0, 390.0, 328.0],
+            docked: true,
+        }),
+        keyboard_policy: Some(crate::kernel::KeyboardPolicy::ResizesVisual),
+    }
+}
+
+#[test]
+fn a_session_update_round_trips_and_a_malformed_one_is_refused() {
+    use crate::kernel::SessionUpdate;
+    let update = session();
+    let bytes = update.encode();
+    assert_eq!(SessionUpdate::decode(&bytes), Ok(update));
+    assert_eq!(
+        SessionUpdate::decode(&SessionUpdate::default().encode()),
+        Ok(SessionUpdate::default())
+    );
+    for n in 0..bytes.len() {
+        assert!(SessionUpdate::decode(&bytes[..n]).is_err(), "{n} bytes");
+    }
+    assert!(SessionUpdate::decode(&[bytes.clone(), vec![0]].concat()).is_err());
+    // The policy, the last byte: 2 is `resizes-visual`, and none past the three
+    assert_eq!(bytes[bytes.len() - 1], 2);
+    let mut bad = bytes.clone();
+    *bad.last_mut().unwrap() = 4;
+    assert!(SessionUpdate::decode(&bad).is_err());
+}
+
+#[test]
+fn a_session_update_reaches_the_boxes_outside_every_owner_whole_or_not_at_all() {
+    // 3, outside the owner 2, reads the navigation controller holding the session view, 7 until
+    // it is reported; an update with one bad field changes nothing
+    let mut ops = create(3..=3);
+    ops.push(reads(3, Target::Kind(Kind::Navigation)));
+    ops.push(children(1, &[2, 3]));
+    let mut k = owner(390.0, 844.0, ops);
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 7.0);
+    let mut bad = session();
+    if let KeyboardReport::Shown(keyboard) = &mut bad.keyboard {
+        keyboard.frame[0] = f32::NAN;
+    }
+    assert!(k.update_session(bad).is_err());
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 7.0);
+    assert_eq!(k.keyboard_facts(3), None);
+    assert!(k.update_session(session()).unwrap());
+    lay_out(&mut k);
+    assert_eq!(top(&k, 3), 20.0);
+    assert_eq!(k.arena.observations.session(), [47.0, 0.0, 34.0, 0.0]);
+    assert!(k.keyboard_facts(3).is_some_and(|f| f.docked));
+    // A later one that says nothing of the keyboard leaves it unreported
+    let quiet = crate::kernel::SessionUpdate {
+        keyboard: KeyboardReport::Unreported,
+        ..session()
+    };
+    k.update_session(quiet).unwrap();
+    assert_eq!(k.keyboard_facts(3), None);
+}

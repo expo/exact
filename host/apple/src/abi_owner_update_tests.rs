@@ -357,3 +357,47 @@ fn a_registration_rides_exact_views_trailer() {
     assert!(batch.contains("\"error\":null"), "{batch}");
     assert_eq!(top_padding(&bridge, reader), 30.0);
 }
+
+/// `update`'s bytes as kind 29 frames the session's update.
+fn session_record(update: &exact_kernel::SessionUpdate) -> Vec<u8> {
+    let bytes = update.encode();
+    let mut framed: Vec<u8> = [0, 29, bytes.len() as u32]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    framed.extend(bytes);
+    framed
+}
+
+#[test]
+fn the_sessions_update_rides_the_covers_door_whole_or_not_at_all() {
+    // With no block the route is no owner, so the keyboard reader is outside every owner and
+    // reads the session's keyboard; a malformed update, or two in one call, refuses the call
+    let (mut bridge, _, [_, reader]) = page();
+    let update = exact_kernel::SessionUpdate {
+        keyboard: KeyboardReport::Shown(Keyboard {
+            frame: [0.0, 516.0, 390.0, 328.0],
+            docked: true,
+        }),
+        ..Default::default()
+    };
+    let framed = session_record(&update);
+    let truncated = covers(&mut bridge, &framed[..framed.len() - 1]);
+    assert!(!truncated.is_empty(), "a truncated record refuses the call");
+    let twice = covers(&mut bridge, &[framed.clone(), framed.clone()].concat());
+    assert!(twice.contains("session update: two"), "{twice}");
+    assert_eq!(facts(&bridge, reader), None);
+    covers(&mut bridge, &framed);
+    let shown = facts(&bridge, reader);
+    assert!(shown.is_some_and(|f| f.docked), "{shown:?}");
+}
+
+fn facts(bridge: &Bridge<StorageModule>, view: u32) -> Option<exact_kernel::KeyboardFacts> {
+    bridge
+        .host
+        .as_ref()
+        .unwrap()
+        .runner()
+        .kernel()
+        .keyboard_facts(view)
+}

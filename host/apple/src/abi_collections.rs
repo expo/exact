@@ -402,8 +402,8 @@ pub(super) fn records(bytes: &[u8]) -> Result<Vec<&[u8]>, &'static str> {
         let size = match u32::from_le_bytes(rest[4..8].try_into().unwrap()) {
             4 => 28,
             6 | 13 => 36,
-            // An owner update's or a registration's length follows its kind
-            21 | 22 => match rest.get(8..12) {
+            // An owner update's, a registration's or the session's update's length follows its kind
+            21 | 22 | 29 => match rest.get(8..12) {
                 Some(len) => 12 + u32::from_le_bytes(len.try_into().unwrap()) as usize,
                 None => return Err("covers: truncated record"),
             },
@@ -480,6 +480,10 @@ impl BlockChanges {
             22 => {
                 let registration = exact_kernel::decode_registration(&r[12..])?;
                 self.reports.registrations.push(registration);
+            }
+            29 => {
+                let update = exact_kernel::SessionUpdate::decode(&r[12..])?;
+                self.reports.sessions.push(update);
             }
             27 => self.reports.bar_items.push((view, edge(8) == 1.0)),
             28 => {

@@ -1069,6 +1069,9 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
  * view's block the kernel refuses is not applied, and one whose view is
  * gone is not applied and is the batch's error. An update for a view with
  * no block holds its keyboard against no bounds, so it occupies nothing.
+ * Kind 29 is the session's update (LLP 1123 D2): the view unused, then as
+ * kind 21 its length and the update as the kernel's `SessionUpdate::encode`
+ * writes it, checked with the call's owner updates; two in one call refuse it.
  * Kind 23 says how a split shows a block's route against its stack's top
  * (LLP 1127 D8): float 1 beside it, live (the split's list column beside
  * its detail), 2 under a pane over it, not live (the detail under the list

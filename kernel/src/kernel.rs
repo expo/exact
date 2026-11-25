@@ -44,6 +44,7 @@ mod provenance;
 pub(crate) mod readers;
 mod replacement;
 mod segments;
+mod session_update;
 pub(crate) mod targets;
 pub(crate) use intrinsic::apply_projection;
 mod row_memo;
@@ -69,6 +70,7 @@ pub use owner_update::{
 };
 pub use provenance::{Contribution, Operation};
 pub use scroll_terms::ScrollTerms;
+pub use session_update::SessionUpdate;
 pub use sticky::StickyConstraint;
 pub use table::TablePlace;
 

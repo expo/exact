@@ -33,9 +33,12 @@ pub struct Keyboard {
 /// Layout takes an unreported keyboard as a dismissed one; D6's facts tell them apart.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum KeyboardReport {
+    /// The host does not know.
     #[default]
     Unreported,
+    /// No keyboard shows.
     Dismissed,
+    /// This keyboard shows.
     Shown(Keyboard),
 }
 
@@ -77,6 +80,15 @@ pub enum KeyboardPolicy {
     ResizesVisual,
     /// Nothing is cleared; a box places itself by its observation.
     OverlaysContent,
+}
+
+impl KeyboardPolicy {
+    /// Every policy, in wire order.
+    pub const ALL: [KeyboardPolicy; 3] = [
+        KeyboardPolicy::ResizesContent,
+        KeyboardPolicy::ResizesVisual,
+        KeyboardPolicy::OverlaysContent,
+    ];
 }
 
 /// The keyboard as the host last reported it.
@@ -430,11 +442,22 @@ impl Kernel {
         &mut self,
         keyboard: Option<Keyboard>,
     ) -> Result<bool, KernelError> {
+        let report = keyboard.map_or(KeyboardReport::Dismissed, KeyboardReport::Shown);
+        self.set_session_keyboard_report(report)
+    }
+
+    /// [`Kernel::set_session_keyboard`], with what the host reports of the keyboard, an
+    /// unreported one laid out as a dismissed one.
+    pub(super) fn set_session_keyboard_report(
+        &mut self,
+        report: KeyboardReport,
+    ) -> Result<bool, KernelError> {
+        let keyboard = report.shown();
         if let Some(k) = &keyboard {
             check(k)?;
         }
         let keyboards = &mut self.arena.observations.keyboards;
-        keyboards.session_reported = true;
+        keyboards.session_reported = report != KeyboardReport::Unreported;
         if keyboards.session == keyboard {
             return Ok(false);
         }

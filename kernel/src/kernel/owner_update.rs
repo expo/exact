@@ -55,7 +55,9 @@ pub struct OwnerChrome {
 pub enum VerticalBarEdge {
     /// No vertical bar is placed here.
     Unspecified,
+    /// The bar is on the leading edge.
     Leading,
+    /// The bar is on the trailing edge.
     Trailing,
 }
 
@@ -78,7 +80,9 @@ impl VerticalBarEdge {
 /// (left and right for the top or bottom, top and bottom for a side), all in points.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct BarRegion {
+    /// How far in from its edge it begins.
     pub distance: f32,
+    /// How far in from the two edges beside it it runs, in their order.
     pub sides: [f32; 2],
 }
 
@@ -206,31 +210,14 @@ impl OwnerUpdate {
             w.u8(c.operation as u8);
             floats(&mut w, &c.effect);
         }
-        w.u32(self.targets.chain.len() as u32);
-        for e in &self.targets.chain {
-            target_out(&mut w, &e.target);
-            w.u8(e.kinds);
-        }
-        w.u32(self.targets.relations.len() as u32);
-        for (relation, target) in &self.targets.relations {
-            w.u8(*relation as u8);
-            target_out(&mut w, target);
-        }
+        targets_out(&mut w, &self.targets);
         optional(&mut w, self.margins.as_ref(), |w, m| {
             floats(w, &m.root);
             floats(w, &m.plain);
             floats(w, &m.minimum);
             w.f32(m.readable_width);
         });
-        match self.keyboard {
-            KeyboardReport::Unreported => w.u8(0),
-            KeyboardReport::Dismissed => w.u8(1),
-            KeyboardReport::Shown(k) => {
-                w.u8(2);
-                floats(&mut w, &k.frame);
-                w.u8(u8::from(k.docked));
-            }
-        }
+        keyboard_out(&mut w, &self.keyboard);
         optional(&mut w, self.segments.as_ref(), |w, g| {
             w.u8(g.cols);
             w.u8(g.rows);
@@ -297,16 +284,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
             effect: four(r)?,
         });
     }
-    let mut targets = NativeTargets::default();
-    for _ in 0..r.u32().ok()? {
-        let target = target_in(r)?;
-        let kinds = r.u8().ok()?;
-        targets.chain.push(ChainEntry { target, kinds });
-    }
-    for _ in 0..r.u32().ok()? {
-        let relation = *Relation::ALL.get(usize::from(r.u8().ok()?))?;
-        targets.relations.push((relation, target_in(r)?));
-    }
+    let targets = targets_in(r)?;
     let margins = match present(r)? {
         true => Some(OwnerMargins {
             root: four(r)?,
@@ -316,15 +294,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         }),
         false => None,
     };
-    let keyboard = match r.u8().ok()? {
-        0 => KeyboardReport::Unreported,
-        1 => KeyboardReport::Dismissed,
-        2 => KeyboardReport::Shown(Keyboard {
-            frame: four(r)?,
-            docked: present(r)?,
-        }),
-        _ => return None,
-    };
+    let keyboard = keyboard_in(r)?;
     let segments = match present(r)? {
         true => {
             let (cols, rows) = (r.u8().ok()?, r.u8().ok()?);
@@ -377,8 +347,63 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
     })
 }
 
+/// An owner's or the session's native targets: the chain after its count, each entry a target
+/// and its kinds, then the relations after theirs, each its index and a target.
+pub(super) fn targets_out(w: &mut Writer, targets: &NativeTargets) {
+    w.u32(targets.chain.len() as u32);
+    for e in &targets.chain {
+        target_out(w, &e.target);
+        w.u8(e.kinds);
+    }
+    w.u32(targets.relations.len() as u32);
+    for (relation, target) in &targets.relations {
+        w.u8(*relation as u8);
+        target_out(w, target);
+    }
+}
+
+pub(super) fn targets_in(r: &mut Reader<'_>) -> Option<NativeTargets> {
+    let mut targets = NativeTargets::default();
+    for _ in 0..r.u32().ok()? {
+        let target = target_in(r)?;
+        let kinds = r.u8().ok()?;
+        targets.chain.push(ChainEntry { target, kinds });
+    }
+    for _ in 0..r.u32().ok()? {
+        let relation = *Relation::ALL.get(usize::from(r.u8().ok()?))?;
+        targets.relations.push((relation, target_in(r)?));
+    }
+    Some(targets)
+}
+
+/// A keyboard report: a byte, 0 unreported, 1 dismissed or 2 shown, a shown keyboard's frame and
+/// docked byte after it.
+pub(super) fn keyboard_out(w: &mut Writer, keyboard: &KeyboardReport) {
+    match keyboard {
+        KeyboardReport::Unreported => w.u8(0),
+        KeyboardReport::Dismissed => w.u8(1),
+        KeyboardReport::Shown(k) => {
+            w.u8(2);
+            floats(w, &k.frame);
+            w.u8(u8::from(k.docked));
+        }
+    }
+}
+
+pub(super) fn keyboard_in(r: &mut Reader<'_>) -> Option<KeyboardReport> {
+    Some(match r.u8().ok()? {
+        0 => KeyboardReport::Unreported,
+        1 => KeyboardReport::Dismissed,
+        2 => KeyboardReport::Shown(Keyboard {
+            frame: four(r)?,
+            docked: present(r)?,
+        }),
+        _ => return None,
+    })
+}
+
 /// A presence byte: 0 or 1, else malformed.
-fn present(r: &mut Reader<'_>) -> Option<bool> {
+pub(super) fn present(r: &mut Reader<'_>) -> Option<bool> {
     match r.u8().ok()? {
         0 => Some(false),
         1 => Some(true),
@@ -386,7 +411,7 @@ fn present(r: &mut Reader<'_>) -> Option<bool> {
     }
 }
 
-fn four(r: &mut Reader<'_>) -> Option<[f32; 4]> {
+pub(super) fn four(r: &mut Reader<'_>) -> Option<[f32; 4]> {
     Some([r.f32().ok()?, r.f32().ok()?, r.f32().ok()?, r.f32().ok()?])
 }
 
@@ -418,7 +443,7 @@ fn optional<T>(w: &mut Writer, value: Option<&T>, each: impl FnOnce(&mut Writer,
     }
 }
 
-fn floats(w: &mut Writer, values: &[f32]) {
+pub(super) fn floats(w: &mut Writer, values: &[f32]) {
     values.iter().for_each(|&v| w.f32(v));
 }
 

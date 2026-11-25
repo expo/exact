@@ -46,6 +46,8 @@ pub struct OwnerReports {
     pub bar_items: Vec<(ViewId, bool)>,
     /// The left and right widths of navigation chrome beside a route (LLP 1123 D9).
     pub side_bars: Vec<(ViewId, [f32; 2])>,
+    /// The session's updates (LLP 1123 D2), of which a call carries at most one.
+    pub sessions: Vec<exact_kernel::SessionUpdate>,
 }
 
 impl<D: DataSource> Host<D> {
@@ -289,6 +291,12 @@ impl<D: DataSource> Host<D> {
                 Err(e) => drop(error.get_or_insert(format!("owner update: {e:?}"))),
             }
         }
+        for update in owners.sessions {
+            match self.runner.kernel_mut().update_session(update) {
+                Ok(o) => owed |= o,
+                Err(e) => drop(error.get_or_insert(format!("session update: {e:?}"))),
+            }
+        }
         if owed {
             self.presence.unauthored = true;
             self.height_targets_dirty = true;
@@ -319,7 +327,14 @@ impl<D: DataSource> Host<D> {
                 )),
             }
         });
+        let session = match owners.sessions.as_slice() {
+            [] => None,
+            [update] => (kernel.check_session_update(update).err())
+                .map(|e| format!("session update: {e:?}; nothing in the call was applied")),
+            _ => Some("session update: two in one call; send one".to_string()),
+        };
         let registered = &owners.registrations;
+        let update = update.or(session);
         update.or_else(|| {
             registered
                 .iter()
