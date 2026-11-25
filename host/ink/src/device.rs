@@ -110,6 +110,37 @@ impl TextureDesc {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Submission(pub u64);
 
+/// The GPU's time for one span of `render` calls, in milliseconds.
+/// @ref LLP 1172.023.006 M2.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpuTime {
+    /// From the GPU starting the span's first pass to its finishing the last, with
+    /// whatever it did or waited for between them.
+    pub span_ms: f64,
+    /// The sum of each pass's own time.
+    pub passes_ms: f64,
+}
+
+impl GpuTime {
+    /// From each pass's start and end on one clock, in milliseconds. `None` without a pass.
+    pub fn of(passes: &[(f64, f64)]) -> Option<Self> {
+        let start = passes.iter().map(|pass| pass.0).reduce(f64::min)?;
+        let end = passes.iter().map(|pass| pass.1).reduce(f64::max)?;
+        Some(Self {
+            span_ms: end - start,
+            passes_ms: passes.iter().map(|pass| pass.1 - pass.0).sum(),
+        })
+    }
+
+    /// From a counter's ticks at each pass's start and end, in the passes' order.
+    pub fn of_ticks(ticks: &[u64], ms_a_tick: f64) -> Option<Self> {
+        let ms = |tick: u64| (i128::from(tick) - i128::from(ticks[0])) as f64 * ms_a_tick;
+        let passes = ticks.as_chunks::<2>().0.iter();
+        let passes: Vec<_> = passes.map(|[start, end]| (ms(*start), ms(*end))).collect();
+        Self::of(&passes)
+    }
+}
+
 /// One tightly packed rectangle; a batch snapshots all rectangles in queue order.
 pub struct TextureUpload {
     pub texture: TextureId,
@@ -182,6 +213,21 @@ pub trait Device {
     fn completed(&mut self) -> Result<Submission>;
     fn retire_texture(&mut self, texture: TextureId) -> Result<()>;
     fn trim(&mut self) -> Result<()>;
+    /// Start a span: the GPU's time for the `render` calls up to `end_gpu_span` is
+    /// wanted. A device creates and issues no timing query before its first span, and
+    /// none outside one.
+    fn begin_gpu_span(&mut self) -> Result<()> {
+        Err(Error::Unsupported("GPU timing"))
+    }
+    /// End the span. Its time arrives later, from [`Device::gpu_times`].
+    fn end_gpu_span(&mut self) -> Result<()> {
+        Err(Error::Unsupported("GPU timing"))
+    }
+    /// The times of ended spans that have arrived, oldest first, without waiting for
+    /// the GPU. `None` is a span with no pass, or one the GPU's counter did not cover.
+    fn gpu_times(&mut self) -> Result<Vec<Option<GpuTime>>> {
+        Ok(Vec::new())
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

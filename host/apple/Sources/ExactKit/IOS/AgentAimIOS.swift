@@ -41,6 +41,14 @@ extension Agent {
             guard let control = bar.drawnBackControl() else { return .failure(BarItemMissing()) }
             return .success((control, control.bounds))
         }
+        #if EXACT_INSPECT
+        // UIKit can draw the toolbar button under the tabs. Its control still
+        // identifies the item when the center hit belongs to a tab.
+        if let (item, nav) = presenter.navigation.bottomItem(node.id) {
+            guard let control = item.projectedControl(in: nav.viewIfLoaded?.window) else { return .failure(BarItemMissing()) }
+            return .success((control, control.bounds))
+        }
+        #endif
         if let (bar, item, owner) = presenter.navigation.barButtonItem(node) {
             guard !item.isHidden else { return .failure(BarItemMissing()) }
             if let more = owner.overflowPresentationSource?.frame(in: bar), !more.isEmpty {
@@ -193,14 +201,16 @@ extension Agent {
     /// Why a finger would not reach the segment or bar item UIKit draws in
     /// `node`'s place (a sheet over it, the keyboard), or nil: the tap that
     /// activates either is refused as a covered node's is.
-    func drawnCovered(_ node: NodeView) -> String? {
+    func drawnCovered(_ node: NodeView, request: [String: Any] = [:]) -> String? {
         guard let place = drawnPlace(node) else { return nil }
         if case .failure(let refusal) = place { return refusal.why }
-        guard case .success(let drawn) = place, let win = drawn.view.window else { return "its middle is off the window" }
-        let p = drawn.view.convert(CGPoint(x: drawn.region.midX, y: drawn.region.midY), to: win)
+        guard case .success(let drawn) = place, let win = drawn.view.window else { return "the tap point is off the window" }
+        let frame = box(drawn.view, region: drawn.region)
+        guard let point = tapPoint(request, node: node, drawn: frame), frame.contains(point) else { return "the point is outside its control" }
+        let p = windowPoint(point)
         awaitAppOverlay(at: p, in: win)
-        guard let hit = win.hitTest(p, with: nil) else { return "its middle is off the window" }
-        return obscured(drawn.view, at: p, hit: hit, barItem: drawn.inBar)
+        guard let hit = win.hitTest(p, with: nil) else { return "the tap point is off the window" }
+        return obscured(drawn.view, at: p, hit: hit, barItem: drawn.inBar, request: request)
     }
 
     /// Whether `view` is in what `session` shows: its viewport, its view, or

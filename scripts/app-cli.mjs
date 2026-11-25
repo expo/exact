@@ -3,7 +3,7 @@
 // a builder reading it learns where the verbs are (`bun exact.mjs --help`), not this code. An
 // exact.mjs written before this file held all of it, and still runs; `bun exact.mjs update` thins it.
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { noteBunLoaded } from '../js/bake/src/__exact_env.mjs';
@@ -798,7 +798,48 @@ export async function lockApp(dir) {
   const { readManifest } = await import('./app.mjs');
   const { lockSwiftPackages } = await import('../host/apple/compose.mjs');
   const swift = lockSwiftPackages({ dir, manifest: readManifest(dir, basename(dir)) });
-  return [await lockRustApp(dir), swift].filter(Boolean).join('\n');
+  return [await lockRustApp(dir), swift, await reportAndroidLock(dir)].filter(Boolean).join('\n');
+}
+/** Resolve the Android classpaths from the current Contract and package declarations without building an APK. */
+export async function reportAndroidLock(dir) {
+  const lock = resolve(dir, 'gradle.lockfile');
+  if (!existsSync(lock)) return null;
+  const { androidJavaEnv, androidJavaFix, androidSdk, androidSdkPackages, androidSdkFix, androidLockCommand,
+    mavenCoordinates, mavenGraph, runGradle } = await import('./agent-android.mjs');
+  const { androidPackageId, resolveApp } = await import('./app.mjs');
+  const { androidImplementations } = await import('../js/bake/src/typescript.mjs');
+  const { androidLibraryArgs } = await import('./android-manifest.mjs');
+  const { contractTool, ROOT } = await import('./tools.mjs');
+  const app = resolveApp(dir, { useOutput: false }), command = androidLockCommand(app);
+  const compiler = contractTool();
+  if (!compiler) return `${lock}: checking the app's Maven dependencies needs the Contract compiler`;
+  const plan = spawnSync(compiler.cmd, [...compiler.pre, 'sources', resolve(dir, 'app.contract'), '--android'], {
+    cwd: ROOT, encoding: 'utf8', env: compiler.env,
+  });
+  compiler.done();
+  if (plan.status !== 0) throw new Error(`${lock}: could not read Android dependencies: ${plan.stderr || plan.error?.message}`);
+  const { uses, extensions } = JSON.parse(plan.stdout);
+  const bound = androidImplementations(dir, extensions), maven = mavenCoordinates(app, bound);
+  if (!maven.length) return `${lock}: the app and its bound packages declare no Maven libraries`;
+  if (!existsSync(resolve(dir, 'gradle-verification.xml'))) return `${lock}: gradle-verification.xml is missing. Run ${command}`;
+  const env = androidJavaEnv(process.env);
+  if (!env) return `${lock}: unchecked. ${androidJavaFix(process.env)}`;
+  const sdk = androidSdk(env), missing = androidSdkPackages().filter(p => !existsSync(resolve(sdk, p.path)));
+  if (missing.length) return `${lock}: unchecked. Install ${missing.map(p => p.id).join(', ')} with ${androidSdkFix(env, missing)}`;
+  const out = mkdtempSync(resolve(tmpdir(), 'exact-android-lock-report-'));
+  try {
+    const manifest = resolve(out, 'app.json');
+    writeFileSync(manifest, JSON.stringify(app.manifest));
+    const graph = mavenGraph(app, false, maven, env);
+    try {
+      const checked = runGradle(['--quiet', '--no-watch-fs', ':app:checkMavenLock', ...graph.args,
+        `-Papp=${app.name}`, `-PappDir=${dir}`, `-PappManifest=${manifest}`, `-PapplicationId=${androidPackageId(app.manifest)}`, `-PappName=${app.displayName}`,
+        `-PappBuildDir=${out}/app`, `-PcanvasBuildDir=${out}/canvas`, `-PvideoBuildDir=${out}/video`, `-PwidgetsBuildDir=${out}/widgets`,
+        '--project-cache-dir', resolve(out, 'cache'), ...androidLibraryArgs(app, bound, uses, env),
+      ], { env: { ...env, ANDROID_HOME: sdk } }, process.platform, { lockAdvice: `For an intended dependency change, run ${command}` });
+      return checked ? `${lock}: current` : `${lock}: Gradle could not confirm the lock. See its diagnostic above.`;
+    } finally { graph.done(); }
+  } finally { rmSync(out, { recursive: true, force: true }); }
 }
 async function lockRustApp(dir) {
   const { cargoEnvironment } = await import('./app.mjs');

@@ -1,6 +1,6 @@
 import { host, loadAfterPaint, localAssetURL, agentMode, now, collections, followOffset, readOut, root, log, pageNative, loadPageNative, pieces, mutate, REPLACE_SETTLE_MS, waiting, encoder, writeIn, loadStage, focus, ask, presence, arrange, motion, views, retiredViews, followedScrolls, followScroll, pendingScrolls, lists, messageFrames, messageViews, controllers, forgettable, inflight, heldAsks, pageFacts, loadGpuIfNeeded, moduleCall, rustImports, dataImports, t0, agentKeepsStore, decoder, assetNamespace, documentsGlue, AGENT_ADMITTED, httpHelpers, track } from "../glue.js";
 import { send, applyBatch } from "./commit.js";
-import { navigation, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, orientationCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
+import { navigation, shortcutKeyboard, launchLocation, launchVisits, reportTime, reportPlace, preferences, updateCode, orientationCode, foldBits, appRootFontSize, releaseAssets, afterPaint, grantOrigins, modalLayers, inertAncestor, editMenu } from "../navigation.js";
 import { setInputReady } from "./input.js";
 import { WINDOW_STATE } from "../navigation/store.js";
 import { startClock } from "./flow.js";
@@ -292,7 +292,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   // The date and place the boot's first settle reads (LLP 1027.000.000).
   if (host.wasm.exact_set_launch) {
     const [epoch, offset] = reportTime(now());
-    host.wasm.exact_set_launch(epoch, offset, writeIn(reportPlace()));
+    host.wasm.exact_set_launch(epoch, offset, writeIn(reportPlace()), shortcutKeyboard());
   }
   const kept = keeps ? focus.keep(ask({ op: "tree" }), Number(document.activeElement?.closest?.("[data-view]")?.dataset.view)) : undefined;
   reportColors();

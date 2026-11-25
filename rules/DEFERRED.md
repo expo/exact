@@ -111,6 +111,10 @@ setting. Take: the discovery of alternates from catalogs, where every extra
 out: Android, until its own RFC (LLP 1163.000 D5); tvOS, until a consumer asks;
 the Mac's Dock tile; switching without the person's tap.
 
+**Android adaptive icon background (Charlie, 2026-11-24, "recs ok").** AA6 (panel 4–0),
+LLP 1163 D6. Fully opaque artwork supplies the bleed from a low-pass copy of its edge colours (#1614).
+Any transparency in the source keeps the light launch colour, or the top-left RGB if none is named.
+
 **Expanded (Charlie, 2026-10-11, events ruling):** `keycapture=` admits DOM
 capture-phase key dispatch for the coding-agent desktop app's early shortcuts;
 `focusin`/`focusout` admit bubbling subtree focus observation for the clipped
@@ -528,6 +532,9 @@ OK for now". The coding-agent desktop app is the consumer (LLP 1021
 §5.3). Take: none named; Charlie's approval admits this bounded extension.
 Built 2026-10-12: placement and root removal of the fixed standard-item ids
 in LLP 1021 §5.3. Develop remains in development builds.
+**Expanded (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0):** `Mod` in `aria-keyshortcuts`
+and the current host’s shortcut display text unblock portable key caps for
+the web app in #1617 (LLP 1021 §5.3, panel 4–0).
 **Expanded (2026-10-21; built 2026-10-22):** the menu bar's own items for the
 T3 Code clone (LLP 1021 §5.3.1): app-menu and Help items enabled outside the
 key window and under a sheet or modal; `-exact-menu="about"` and `"none"`;

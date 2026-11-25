@@ -42,14 +42,14 @@ final class ResetGateTests: XCTestCase {
         XCTAssertTrue(done(), what)
     }
 
-    private func boot(_ fixture: String = "RESET_GATE", postsTimers: Bool = ExactEnv.postsLiveWork) throws -> (ExactSession, Data) {
+    private func boot(_ fixture: String = "RESET_GATE", postsTimers: Bool = ExactEnv.postsLiveWork, editing: Bool = false) throws -> (ExactSession, Data) {
         let plan = try fixturePlan(fixture)
         let session = ExactApp.shared.makeSession(label: "reset-gate")
         self.session = session
         session.postsTimerAdvances = postsTimers
-        let size = CGSize(width: 400, height: 600)
         #if os(iOS)
         let scene = hostedWindowScene()
+        let size = CGSize(width: 400, height: editing ? (scene?.coordinateSpace.bounds.height ?? 600) : 600)
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(origin: .zero, size: size))
         window.frame = CGRect(origin: .zero, size: size)
         let host = UIViewController()
@@ -59,6 +59,7 @@ final class ResetGateTests: XCTestCase {
         view.frame = host.view.bounds
         host.view.addSubview(view)
         #else
+        let size = CGSize(width: 400, height: 600)
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -193,7 +194,7 @@ final class ResetGateTests: XCTestCase {
     /// is replayed once, in order, after the committed batch, reaching the new runtime; the timer due over the reset
     /// fires after it, and the edit the teardown ended never reaches the runtime.
     func testARestartReachesNoRuntimeAndReplaysWhatItHeldOnceInOrder() throws {
-        let (session, plan) = try boot()
+        let (session, plan) = try boot(editing: true)
         try edit(session, try id(session, "field"))
         until("the timer runs: \((try? words(session)) ?? [])") { (try? ticks(session)) ?? 0 > 2 }
         // A native switch, laid out at the size its control measures and reports (not the kernel's fallback).
@@ -213,7 +214,12 @@ final class ResetGateTests: XCTestCase {
         }
         var seen: [ResetGate.Seen] = []
         ResetGate.spy = { seen.append($0) }
+        #if os(macOS)
+        // A compatible live update keeps the Mac editor. Reload the plan to exercise a complete reset.
+        XCTAssertNil(session.boot(plan: plan, size: session.presenter.viewportSize).error)
+        #else
         XCTAssertTrue(session.apply(plan, label: "generation"))
+        #endif
         ResetGate.spy = nil
         guard case let .reset(entered, held)? = seen.first else { return XCTFail("no reset seen: \(seen)") }
         XCTAssertEqual(entered, 0, "a call reached the runtime inside the reset")
@@ -225,7 +231,7 @@ final class ResetGateTests: XCTestCase {
         if case let (r, entered)? = replayed.first {
             XCTAssertEqual(r, replays)
             XCTAssertEqual(r, Array(Set(r)).sorted { $0.rawValue < $1.rawValue }, "each once, in order")
-            XCTAssertGreaterThan(entered, 0, "the replay reached the new runtime")
+            XCTAssertGreaterThan(entered, 0, "the replay reached the new runtime: \(seen)")
         }
         XCTAssertEqual(session.runtime.heldCalls, [], "nothing left held")
         XCTAssertFalse(session.runtime.held)

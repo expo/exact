@@ -275,6 +275,33 @@ impl Device for Selected {
             Self::D3d11(d) => d.trim(),
         }
     }
+    fn begin_gpu_span(&mut self) -> Result<()> {
+        match self {
+            Self::Wgpu(d) => d.begin_gpu_span(),
+            #[cfg(exact_ink_metal)]
+            Self::Metal(d) => d.begin_gpu_span(),
+            #[cfg(windows)]
+            Self::D3d11(d) => d.begin_gpu_span(),
+        }
+    }
+    fn end_gpu_span(&mut self) -> Result<()> {
+        match self {
+            Self::Wgpu(d) => d.end_gpu_span(),
+            #[cfg(exact_ink_metal)]
+            Self::Metal(d) => d.end_gpu_span(),
+            #[cfg(windows)]
+            Self::D3d11(d) => d.end_gpu_span(),
+        }
+    }
+    fn gpu_times(&mut self) -> Result<Vec<Option<GpuTime>>> {
+        match self {
+            Self::Wgpu(d) => d.gpu_times(),
+            #[cfg(exact_ink_metal)]
+            Self::Metal(d) => d.gpu_times(),
+            #[cfg(windows)]
+            Self::D3d11(d) => d.gpu_times(),
+        }
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]

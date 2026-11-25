@@ -36,12 +36,13 @@ Build: `bun host/apple/build.mjs shelf-apple --run`.
    minute while macOS compiles the recognizer for this Mac's Neural Engine;
    later reads take under a second.
 
-## Android (stage 4, device run pending)
+## Android
 
 The implementation bundles ML Kit's Latin recognizer. It does not download a
 model or read non-Latin scripts. The JVM suite stubs the recognizer; it proves
-mapping and lifecycle, not recognition. Run the minified APK on an emulator
-and a photo of a real page on a phone before claiming either works.
+mapping and lifecycle, not recognition; the steps below are what shows it
+reads. They passed on a POCO X6 Pro (Android 14) at `81fe417da`, with two
+camera photos of a page besides the fixture pictures.
 
 For the smallest test app, from the checkout root on a machine with a rootable
 AOSP emulator already running (`ANDROID_SERIAL` names it):
@@ -167,7 +168,17 @@ work after copying the fixtures to
 `files/data/exact/dev.exact.text254/data/` under the app's private directory.
 Repeat offline to check the bundled model. Capture the answers, Android
 version, APK digest and logcat; a registrar-loading exception is a failure.
-This procedure is a handoff, not a recorded device run.
+
+A phone that is not rooted cannot take the `adb push` steps. Give the fixture
+a source that fetches each picture into `app:/data` instead (`net.fetch` with
+`exactBodyTo: "app:/data/<name>"`, the files served from the Mac through
+`adb reverse tcp:8765 tcp:8765`) and a button per picture, and drive it with
+`uiautomator` taps. On HyperOS `adb install` waits for an on-screen "Install
+via USB" prompt that cancels itself after 10 seconds, which fails the
+`--write-locks` build at its install step: accept the prompt, or run the two
+builds separately. In a camera photo, text outside the page comes back too
+and can come first (ML Kit's block order), so compare the page's lines, not
+the whole list.
 
 ## The web
 

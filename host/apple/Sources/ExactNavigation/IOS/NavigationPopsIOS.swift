@@ -180,7 +180,7 @@ extension NavigationHost {
         for op in batch.ops where op.op == .destroy {
             guard let c = controllers[op.id], c.viewIfLoaded?.window != nil else { continue }
             c.freeze()
-            c.retiringRoot = c.node
+            c.retire()
             retiringRoutes.add(c)
         }
     }

@@ -819,14 +819,18 @@ final class IframeAutomationTests: XCTestCase {
     /// An agent-controlled frame's download goes to the folder, with no panel.
     func testDownloadsGoToTheFolder() throws {
         let arm = try arm(), seen = Seen()
-        let (handle, _) = mount(arm, seen)
+        // A cold WebKit threat lookup can hold the download policy past the test. Both pages are served on loopback.
+        let (handle, _) = mount(arm, seen, configuring: { _, config in
+            let configuration = Unmanaged<WKWebViewConfiguration>.fromOpaque(config!).takeUnretainedValue()
+            configuration.preferences.isFraudulentWebsiteWarningEnabled = false
+        })
         defer { arm.destroy(handle) }
         let folder = Self.folder.appendingPathComponent("downloads", isDirectory: true)
         try? FileManager.default.removeItem(at: folder)
         XCTAssertNil(run(arm, "setDownloadBehavior", ["destinationFolder": "app:/tmp/downloads", "destinationFolderFile": folder.path])["error"])
         XCTAssertNil(run(arm, "evaluate", ["expression": "location.href = '/download', 1"])["error"])
         spin { seen.records.contains { $0.event == "download" && $0.record["state"] as? String == "completed" } }
-        let record = try XCTUnwrap(seen.records.last { $0.event == "download" }?.record)
+        let record = try XCTUnwrap(seen.records.last { $0.event == "download" && $0.record["state"] as? String == "completed" }?.record)
         XCTAssertEqual(record["path"] as? String, "app:/tmp/downloads/report.txt", "\(record)")
         XCTAssertEqual(try? String(contentsOf: folder.appendingPathComponent("report.txt"), encoding: .utf8), "a report\n")
     }

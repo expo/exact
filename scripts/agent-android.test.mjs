@@ -1280,6 +1280,7 @@ test('a locked Gradle failure keeps its output and names lock repair only for de
       ['Resolved a module which is not part of the dependency lock state', 1, true],
       ['Did not resolve a module which is part of the dependency lock state', 1, true],
       ['Strict dependency locking is enabled and no lock state exists', 1, true],
+      ['Dependency lock state: Gradle lock lowers shell dependency. Run the named --write-locks command', 1, false],
       ['Compilation failed: unresolved reference', 1, false],
       ['Timeout waiting to lock the build cache', 1, false],
       ['Dependency verification failed in an expected fixture', 0, false],

@@ -62,6 +62,7 @@ pub const HAPTIC_KINDS: [&str; 10] = [
 ];
 
 pub mod shared;
+pub mod shortcut;
 pub mod strings;
 pub mod surface_arguments;
 pub mod value;

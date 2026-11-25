@@ -195,7 +195,8 @@ fn call_value(
             _ => return None,
         },
         // @ref LLP 1054.000.003 D8 — the linked capability, or a trap.
-        Stdlib::FormatDate
+        Stdlib::FormatShortcut
+        | Stdlib::FormatDate
         | Stdlib::FormatNumber
         | Stdlib::ToFixed
         | Stdlib::FormatDecimal

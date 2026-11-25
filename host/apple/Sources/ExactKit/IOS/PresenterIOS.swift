@@ -990,7 +990,7 @@ package final class Presenter {
         }
         var beganGeometry = false, touchedIDs: [UInt32] = [], reshapedIDs: [UInt32] = [], restyledIDs: [UInt32] = []
         // Read once: an animation UIKit has open around the batch is open around each of its ops
-        let animating = UIView.inheritedAnimationDuration > 0
+        let animating = Presenter.animationMayBeOpen
         if outermost { placedAnew.removeAll(keepingCapacity: true) } // a flat leaf promoted between batches
         let anewFrom = placedAnew.count
         if batch.controls { controls.facesChanged() }

@@ -606,7 +606,7 @@ extension Agent {
         }
         if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
            req["wheel"] == nil, req["hover"] == nil, req["contextmenu"] == nil, req["dblclick"] == nil,
-           let why = drawnCovered(node) {
+           let why = drawnCovered(node, request: req) {
             return ["error": "tap #\(id): \(why)"]
         }
         if let id = req["id"] as? Int, let node = presenter.views[UInt32(id)],
@@ -949,31 +949,32 @@ extension Agent {
     /// ancestor taking the touch is how a finger reaches a node that takes
     /// none itself. `v` may be a native view standing for a node (a
     /// grouped list's cell or accessory).
-    func obscured(_ v: UIView, at p: CGPoint, hit: UIView, barItem: Bool = false) -> String? {
+    func obscured(_ v: UIView, at p: CGPoint, hit: UIView, barItem: Bool = false, request: [String: Any] = [:]) -> String? {
+        let location = ["at", "x", "y"].contains { request[$0] != nil } ? "the requested point" : "its middle"
         if let container = presenter.keyboardContainer,
            let top = presenter.keyboardGuideTop(in: container), p.y >= container.convert(CGPoint(x: 0, y: top), to: nil).y {
-            return "its middle is under the software keyboard; dismiss it or scroll the target above it first (state shows keyboard.top)"
+            return "\(location) is under the software keyboard; dismiss it or scroll the target above it first (state shows keyboard.top)"
         }
-        if barItem { return Self.barItemReceives(hit, in: v) ? nil : Agent.covers(hit) }
+        if barItem { return Self.barItemReceives(hit, in: v) ? nil : Agent.covers(hit, at: location) }
         // A child lifted over the tab container is still the target's (LLP 1083.000 D4)
         let inside = sequence(first: hit, next: { self.presenter.layoutParent(of: $0) }).contains { $0 === v }
         if hit === v || inside || (hit is NodeView && v.isDescendant(of: hit)) { return nil }
-        return Agent.covers(hit)
+        return Agent.covers(hit, at: location)
     }
 
     /// What is over a target, named: a node by its id; another view by its
     /// class and the node holding it. The app's own native view (a module's
     /// splash) may be animating away on the wall clock, which the agent's
     /// clock does not move.
-    static func covers(_ hit: UIView) -> String {
-        if let node = hit as? NodeView { return "node #\(node.id) covers its middle" }
+    static func covers(_ hit: UIView, at location: String = "its middle") -> String {
+        if let node = hit as? NodeView { return "node #\(node.id) covers \(location)" }
         var up = hit.superview
         while let u = up, !(u is NodeView) { up = u.superview }
         let cls: AnyClass = Swift.type(of: hit), name = String(describing: cls)
         let held = (up as? NodeView).map { "\(name), in node #\($0.id)," } ?? name
         // build.mjs compiles an app's native modules as one Swift module of this name.
         let own = String(reflecting: cls).hasPrefix("ExactAppModules.") || appOverlay(hit)
-        return "\(held) covers its middle" + (own ? "; it is the app's own view, on the wall's time: a tap waits up to 3 s while one over its point moves, `clock settle` up to 1.5 s for its UIView.animate, `clock +N real` lets a display link's motion run, and one drawn from the module's `frames` or `after` follows `clock +N`" : "")
+        return "\(held) covers \(location)" + (own ? "; it is the app's own view, on the wall's time: a tap waits up to 3 s while one over its point moves, `clock settle` up to 1.5 s for its UIView.animate, `clock +N real` lets a display link's motion run, and one drawn from the module's `frames` or `after` follows `clock +N`" : "")
     }
 
     /// Why the agent's press would not do what a finger on `hit` does, or

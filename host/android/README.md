@@ -827,7 +827,7 @@ An implementation may name Maven coordinates on Google's Maven and Maven Central
 
 Both arrays take `group:artifact:version` with a pinned version: no ranges, dynamic selectors, SNAPSHOTs, classifiers or repository URLs. Neither adds a repository or plugin. A conflict between direct declarations of the same artifact is refused with both coordinates and their declaration files named. They resolve in the app's one Gradle graph, with the reader's own AndroidX (Compose, for an app with a date or time control), so a camera beside a date picker builds; two closures of AndroidX would not. `agent-android.mjs` passes the union of the app's and bound implementations' coordinates (`-Pmaven`), and the graph is held by Gradle's own means:
 
-- **Locked:** `dependencyLocking` in `STRICT` mode, to the app's `gradle.lockfile` beside its other locks (`-PmavenLock`). A module, or a version, the lock does not name is refused by Gradle, naming it.
+- Gradle locks each `:app` configuration to the app's `gradle.lockfile` in `STRICT` mode (`-PmavenLock`). It refuses a module missing from that configuration's lock. The canvas's dependencies reach `:app` transitively, so Gradle can keep an older locked version when the canvas raises its request. Exact resolves a copy of the classpath with locking disabled. If a dependency the shell modules declare directly resolves to a newer version there, the build stops and names the module, both versions and the lock-writing command. A higher lock is allowed. Gradle's usual rules apply to other transitive dependencies.
 - **Verified:** Gradle's dependency verification (SHA-256 of every artifact and its metadata, plugins included), from the app's `gradle-verification.xml`. Gradle reads that file only from the reader's `gradle/`, so the build copies it to `gradle/verification-metadata.xml` for the run and takes it away after (ignored by Git), and passes `--dependency-verification=strict`. `gradle.properties` leaves verification off for every other build.
 - **Written** once, and again when the app's or a module's coordinates or the reader's graph changes
   (adding a date picker brings Compose):
@@ -841,9 +841,9 @@ Both arrays take `group:artifact:version` with a pinned version: no ranges, dyna
   command: `in <app dir>: bun exact.mjs android --write-locks` when the app has its own launcher, otherwise
   the repository directory and command above, with `EXACT_APP_DIR` set to the app's directory unless it is
   `apps/<app>`. A locked build that fails dependency locking or verification names this command;
-  review the dependency change and both regenerated files before committing them.
+  review the dependency change and both regenerated files before committing them. In an app with its own launcher and a `gradle.lockfile`, `bun exact.mjs lock` refreshes Cargo and Swift locks and reports Android drift through Gradle without building the app. The Android `--write-locks` command rewrites the Gradle lock and checksums.
 
-An app with no Maven libraries resolves as before, unlocked and unverified. Two such builds at once on one checkout would share the placed verification file. A library that is not on those repositories stays LLP 1133.001 D9's pinned `artifacts`. `packages/camera/test/android.mjs` checks each step on a fixture app with CameraX and Compose.
+An app with no Maven libraries resolves as before, unlocked and unverified. Maven builds and lock reports on the same checkout take turns using Gradle's verification file. A library that is not on those repositories stays LLP 1133.001 D9's pinned `artifacts`. `packages/camera/test/android.mjs` exercises locking and verification in an app with CameraX and Compose.
 
 ## Text fields (LLP 1115.001 D8)
 

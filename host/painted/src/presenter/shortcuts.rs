@@ -39,6 +39,10 @@ const NAMED: [&str; 14] = [
 /// `Meta++`, `F13`) is the key `name` (`KeyboardEvent.key`) with exactly the
 /// modifiers `held`: the key compared without case, as input-glue does.
 pub(crate) fn chord_matches(chord: &str, name: &str, held: KeyModifiers) -> bool {
+    let Some(chord) = exact_plan::shortcut::resolve(chord, "Control") else {
+        return false;
+    };
+    let chord = chord.as_ref();
     let mut parts: Vec<&str> = chord.split('+').collect();
     let key = if chord == "+" {
         parts.clear();

@@ -105,8 +105,20 @@ extension Presenter {
     /// the view; otherwise with UIKit's animations off, so that it appears
     /// where it is laid out. With no animation open, as it comes.
     package func moveOrPlace(_ view: @autoclosure () -> NodeView?, _ change: () -> Void) {
-        guard UIView.inheritedAnimationDuration > 0, !(view().map(showed) ?? false) else { return change() }
+        guard Presenter.animationMayBeOpen, !(view().map(showed) ?? false) else { return change() }
         UIView.performWithoutAnimation(change)
+    }
+
+    /// Whether UIKit has an animation open, or may (`inPaneLayout`).
+    package static var animationMayBeOpen: Bool { paneLayout || UIView.inheritedAnimationDuration > 0 }
+    nonisolated(unsafe) private static var paneLayout = false
+
+    /// `work` in an arranged pane's layout. The animation that `updateArrangement(_:animated:)` lays the panes out in has no
+    /// `inheritedAnimationDuration`.
+    static func inPaneLayout(_ work: () -> Void) {
+        let outer = paneLayout
+        paneLayout = true; defer { paneLayout = outer }
+        work()
     }
 }
 

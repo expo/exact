@@ -543,7 +543,7 @@ final class PlatformDefaultsIOSTests: XCTestCase {
         let p = presenter([
             ["op": "create", "id": 1, "kind": "view"],
             ["op": "create", "id": 2, "kind": "button", "handlers": ["press"], "props": ["accessibilityKeyShortcuts": "Meta+n", "accessibilityLabel": "New Note"]],
-            ["op": "create", "id": 3, "kind": "button", "handlers": ["press"], "props": ["accessibilityKeyShortcuts": "Meta+Shift+f Escape"]],
+            ["op": "create", "id": 3, "kind": "button", "handlers": ["press"], "props": ["accessibilityKeyShortcuts": "Mod+Shift+O Escape"]],
             ["op": "children", "id": 1, "ids": [2, 3]],
             ["op": "roots", "ids": [1]],
             ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0],
@@ -556,7 +556,7 @@ final class PlatformDefaultsIOSTests: XCTestCase {
         XCTAssertEqual(named.discoverabilityTitle, "New Note", "which is what the ⌘ overlay lists")
         XCTAssertTrue(named.wantsPriorityOverSystemBehavior)
         // A button with no name has nothing to be listed by.
-        let bare = try XCTUnwrap(commands.first { $0.input == "f" })
+        let bare = try XCTUnwrap(commands.first { $0.input == "o" && $0.modifierFlags == [.command, .shift] })
         XCTAssertEqual(bare.title, "")
         XCTAssertEqual(commands.count, 3)
     }

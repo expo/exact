@@ -2037,6 +2037,12 @@
       "params": ["string"],
       "returns": "option<ScrollMetrics>",
       "_comment": "@ref LLP 1051.000: a mounted textarea’s offsets, scrollable size and viewport size in CSS pixels, read from its current layout in an action."
+    },
+    {
+      "name": "formatShortcut",
+      "params": ["string"],
+      "returns": "string",
+      "_comment": "@ref LLP 1021 §5.3: one aria-keyshortcuts chord in the reader's keyboard notation. An invalid chord or a server render gives the empty string."
     }
   ],
   "_sources": "LLP 1027 D2: the data seam's signatures. One row per data-source name the app's `resource` and `send` declarations use, with the parameter types and the result type every use agrees on (the compiler refuses a disagreement by name). An executor that marshals by shape \u2014 the TypeScript module's \u2014 reads this table at bind; a Rust crate ignores it. formatVersion 3.",

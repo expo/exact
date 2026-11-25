@@ -105,6 +105,7 @@ export const classifications = [
     ["runner:runner/src/runner/theme.rs", "Runner::set_token Runner::set_tokens"],
     ["runner:runner/src/runner/time.rs", "Runner::chosen_locale Runner::direction Runner::place Runner::resolved_locale Runner::set_place Runner::set_place_formatted Runner::set_time Runner::wall_time"],
     ["runner:runner/src/runner/viewport.rs", "Runner::refresh_geometry Runner::set_fold Runner::set_keyboard_height Runner::set_preferences Runner::set_view Runner::set_viewport Runner::viewport"],
+    ["runner:runner/src/page.rs", "Keyboard::from_code"],
     ["runner:runner/src/viewport.rs", "ScreenOrientation::from_code ScreenOrientation::rotated"],
     ["web:host/web/src/abi.rs", "exact_motion exact_report_colors exact_resize exact_set_display_scale exact_set_page exact_set_place exact_set_root_font_size exact_set_screen_reader exact_set_time exact_set_update exact_set_orientation exact_set_viewport_geometry"],
     ["web:host/web/src/abi/mode.rs", "exact_set_mode"],

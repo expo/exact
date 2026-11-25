@@ -663,6 +663,13 @@ fn a_shortcut_on_a_key_the_game_binds_warns() {
     );
     assert_eq!(found[1].related.len(), 1, "the use that passed \"1\"");
     assert_eq!(found[1].related[0].span.line, 4);
+    let source = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, source.replace("Shift+J", "Mod+Shift+J")).unwrap();
+    let portable = contract::shortcut_findings(&path).unwrap();
+    assert_eq!(portable.len(), found.len());
+    assert!(portable[0]
+        .message
+        .contains("Meta+Shift on Apple platforms or Control+Shift elsewhere"));
     // Rust newer than the keys: they may predate an `Actions` edit.
     std::fs::create_dir_all(dir.join("logic/src")).unwrap();
     std::fs::write(dir.join("logic/src/lib.rs"), "").unwrap();

@@ -55,14 +55,15 @@ final class ScrollInsetsIOSTests: XCTestCase {
         let sides = ScrollInsetsIOS.insets(terms: .init(), rows: rows, band: [62, 21, 34, 44], platform: never)
         XCTAssertEqual(sides.content, UIEdgeInsets(top: 62, left: 44, bottom: 34, right: 21))
         // A native list's layout clears what it consumes: an 84-point side band it consumes whole is none of the
-        // writer's, 20 reserved past it is, UIKit's adjustment over the consumed depth is cancelled, and the indicator,
-        // which the layout does not move, still takes the whole occupied depth
+        // writer's, 20 reserved past it is, UIKit's adjustment over the consumed depth is cancelled, and the horizontal
+        // indicator, which the layout does not move, still takes the occupied depth; the vertical one takes no side
+        // band, lying at the scroll view's side as UIKit's own does (`SafeIndicatorTerm`)
         let side: [CGFloat] = [0, 84, 0, 0], consumed: [CGFloat] = [0, 84, 0, 0]
         XCTAssertEqual(ScrollInsetsIOS.insets(terms: .init(), rows: rows, band: side, platform: never, consumed: consumed).content.right, 0)
         let reserved = ScrollInsetsIOS.Terms(reserved: [nil, 104, nil, nil])
         XCTAssertEqual(ScrollInsetsIOS.insets(terms: reserved, rows: rows, band: side, platform: never, consumed: consumed).content.right, 20)
         let adjusted = ScrollInsetsIOS.insets(terms: .init(), rows: rows, band: side, platform: side, consumed: consumed)
-        XCTAssertEqual([adjusted.content.right, adjusted.verticalIndicator.right], [-84, 84])
+        XCTAssertEqual([adjusted.content.right, adjusted.verticalIndicator.right, adjusted.horizontalIndicator.right], [-84, 0, 84])
         // On an edge whose region it ignores, the consumed depth is none of the writer's either way
         let ignored = ScrollInsetsIOS.Terms(container: [true, false, true, true])
         XCTAssertEqual(ScrollInsetsIOS.insets(terms: ignored, rows: rows, band: side, platform: never, consumed: consumed).content.right, 0)
@@ -373,29 +374,52 @@ final class ScrollInsetsIOSTests: XCTestCase {
         XCTAssertEqual(reacting.seen, [scroll.adjustedContentInset])
     }
 
-    /// A scroll view's indicators take its own safe area where UIKit's adjustment gives them none: the sides always,
-    /// as UIKit's adjustment never moves an indicator off the scroll view's side, and the top and bottom too while
-    /// that adjustment is off. They follow the safe area, and D14's writer, which writes them whole, takes none of it.
-    func testAScrollViewsIndicatorsTakeTheSafeAreaUIKitsAdjustmentLeavesOut() {
+    /// A scroll view's indicators take its own safe area while UIKit's adjustment, which adds the top and bottom
+    /// itself, is off: the top and bottom, and the horizontal indicator its sides. The vertical one takes no side:
+    /// UIKit's adjustment adds the side safe area again to a side inset written, and with none the vertical indicator
+    /// lies where UIKit's own scroll view's does, the adjustment on or off, outside the layout margins and never over
+    /// content that keeps to them. They follow the safe area, and D14's writer, which writes them whole, takes none.
+    func testAScrollViewsIndicatorsTakeTheSafeAreaUIKitsAdjustmentLeavesOut() throws {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 678)), root = UIViewController()
         window.rootViewController = root
         window.isHidden = false
         defer { window.isHidden = true }
         let strip = UIEdgeInsets(top: 20, left: 0, bottom: 34, right: 84)
         root.additionalSafeAreaInsets = strip
-        let scroll = ScrollView(frame: root.view.bounds)
-        root.view.addSubview(scroll)
+        // As Exact's own scrollers are, UIKit adjusting no content inset (`NodeView`), and beside it UIKit's own
+        let scroll = ScrollView(frame: root.view.bounds), uikit = UIScrollView(frame: root.view.bounds)
+        for s in [scroll, uikit] {
+            s.contentInsetAdjustmentBehavior = .never
+            s.contentSize = CGSize(width: root.view.bounds.width, height: 3000)
+            root.view.addSubview(s)
+        }
         window.layoutIfNeeded()
         let safe = scroll.safeAreaInsets
         XCTAssertGreaterThanOrEqual(safe.right, 84)
-        let sides = UIEdgeInsets(top: 0, left: safe.left, bottom: 0, right: safe.right)
-        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, sides, "UIKit adds the top and bottom itself")
-        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, sides)
-        scroll.automaticallyAdjustsScrollIndicatorInsets = false
-        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, safe, "with UIKit's adjustment off, the whole safe area")
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, .zero, "UIKit adds the top and bottom itself")
+        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, .zero)
+        /// The vertical indicator as UIKit draws it, shown, in the root view.
+        func vertical(_ s: UIScrollView) throws -> CGRect {
+            s.flashScrollIndicators()
+            window.layoutIfNeeded()
+            let bars = s.subviews.filter { String(describing: type(of: $0)) == "_UIScrollViewScrollIndicator" }
+            for bar in bars { bar.layer.removeAllAnimations(); bar.alpha = 1 }
+            return try XCTUnwrap(bars.map { root.view.convert($0.bounds, from: $0) }.first { $0.height > $0.width }, "\(s.subviews)")
+        }
+        let margin = root.view.bounds.width - root.view.layoutMargins.right
+        for adjusted in [true, false] {
+            for s in [scroll, uikit] { s.automaticallyAdjustsScrollIndicatorInsets = adjusted }
+            let exact = try vertical(scroll), own = try vertical(uikit)
+            XCTAssertEqual(exact.minX, own.minX, accuracy: 0.5, "where UIKit's own lies, adjustment \(adjusted): \(exact), \(own)")
+            XCTAssertGreaterThanOrEqual(exact.minX, margin, "outside the layout margins, adjustment \(adjusted): \(exact)")
+        }
+        uikit.removeFromSuperview()
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, UIEdgeInsets(top: safe.top, left: 0, bottom: safe.bottom, right: 0),
+                       "with UIKit's adjustment off, the safe area's top and bottom")
+        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, safe, "and the horizontal track keeps within its sides")
         root.additionalSafeAreaInsets = .zero
         window.layoutIfNeeded()
-        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, scroll.safeAreaInsets, "it follows the safe area")
+        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, scroll.safeAreaInsets, "it follows the safe area")
         root.additionalSafeAreaInsets = strip
         window.layoutIfNeeded()
         scroll.writtenWhole = true

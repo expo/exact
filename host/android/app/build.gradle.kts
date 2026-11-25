@@ -6,8 +6,15 @@
 import com.android.build.api.artifact.ScopedArtifact
 import com.android.build.api.variant.ScopedArtifacts
 import java.net.URLClassLoader
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipFile
 import org.objectweb.asm.ClassReader
+import org.gradle.api.artifacts.component.ModuleComponentSelector
+import org.gradle.api.artifacts.component.ProjectComponentIdentifier
+import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+import org.gradle.api.artifacts.result.ResolvedDependencyResult
+import org.gradle.api.internal.artifacts.ivyservice.ivyresolve.strategy.DefaultVersionComparator
+import org.gradle.api.internal.artifacts.ivyservice.ivyresolve.strategy.VersionParser
 import groovy.json.JsonSlurper
 import com.android.build.api.instrumentation.*
 import org.objectweb.asm.ClassVisitor
@@ -433,6 +440,28 @@ if (maven.isNotEmpty()) {
         lockMode.set(LockMode.STRICT)
         lockFile.set(file(providers.gradleProperty("mavenLock").get()))
     }
+    val incompleteProbes = ConcurrentHashMap<String, Throwable>()
+    tasks.register("checkMavenLock") {
+        doLast {
+            val release = listOf(configurations.getByName("releaseRuntimeClasspath"), configurations.getByName("releaseCompileClasspath"))
+            for (configuration in (release + configurations.filter { it.isCanBeResolved }).distinct()) {
+                configuration.incoming.resolutionResult.allDependencies.filterIsInstance<UnresolvedDependencyResult>()
+                    .firstOrNull()?.let { throw it.failure }
+                incompleteProbes[configuration.name]?.let { throw it }
+            }
+        }
+    }
+    val appMaven = configurations.dependencyScope("appMaven").get()
+    configurations.implementation.get().extendsFrom(appMaven)
+    dependencies {
+        maven.forEach { coordinate ->
+            val library = create(coordinate) as ExternalModuleDependency
+            if (carService != null && coordinate.startsWith("androidx.car.app:app:")) {
+                library.version { strictly(coordinate.substringAfterLast(':')) }
+            }
+            add(appMaven.name, library)
+        }
+    }
     if (gradle.startParameter.isWriteDependencyLocks) {
         // Lock constraints can expose transitive edges absent from an unconstrained graph. Resolve with the
         // selected versions constrained before recording the lock, as the next strict build will resolve it.
@@ -443,14 +472,52 @@ if (maven.isNotEmpty()) {
                 shouldResolveConsistentlyWith(unlocked)
             }
         }
+    } else {
+        val parser = VersionParser()
+        val order = DefaultVersionComparator().asVersionComparator()
+        configurations.configureEach {
+            incoming.afterResolve {
+                // A recursive copy inherits the resolution listeners of its source.
+                if (this !== this@configureEach.incoming) return@afterResolve
+                // Gradle exposes a lock entry as a strict constraint on the root, even when a conflicting
+                // direct dependency cannot resolve. Its selected components would omit that module.
+                val locked = resolutionResult.rootComponent.get().dependencies.filter { it.isConstraint }
+                    .mapNotNull { it.requested as? ModuleComponentSelector }
+                    .filter { it.versionConstraint.strictVersion.isNotEmpty() }
+                    .associate { it.moduleIdentifier to it.versionConstraint.strictVersion }
+                if (locked.isEmpty()) return@afterResolve
+                val unlocked = copyRecursive()
+                unlocked.resolutionStrategy.deactivateDependencyLocking()
+                // Only inspect metadata here. The build verifies every input to its locked classpath.
+                unlocked.resolutionStrategy.disableDependencyVerification()
+                val graph = unlocked.incoming.resolutionResult
+                val root = graph.rootComponent.get()
+                val shell = hierarchy.filter { it != appMaven }.flatMap { it.dependencies.withType<ExternalModuleDependency>() }
+                    .map { it.module }.toSet()
+                val edges = graph.allDependencies
+                edges.filterIsInstance<UnresolvedDependencyResult>().firstOrNull()?.let { incompleteProbes[name] = it.failure }
+                val drift = edges.mapNotNull { edge ->
+                    val request = edge.requested as? ModuleComponentSelector ?: return@mapNotNull null
+                    val fromShell = if (edge.from == root) request.moduleIdentifier in shell else edge.from.id is ProjectComponentIdentifier
+                    if (edge.isConstraint || !fromShell) return@mapNotNull null
+                    val held = locked[request.moduleIdentifier] ?: return@mapNotNull null
+                    val selected = (edge as? ResolvedDependencyResult)?.selected?.moduleVersion?.version ?: return@mapNotNull null
+                    if (order.compare(parser.transform(selected), parser.transform(held)) <= 0) return@mapNotNull null
+                    val declaration = request.version.ifEmpty { "by platform" }
+                    val selection = if (selected != request.version) ", selected $selected" else ""
+                    "${request.moduleIdentifier} (declared $declaration$selection, locked $held)"
+                }.distinct().sorted()
+                if (drift.isNotEmpty()) {
+                    val command = providers.gradleProperty("androidLockCommand").orNull ?: if (appDir.resolve("exact.mjs").isFile)
+                        "in $appDir: bun exact.mjs android --write-locks"
+                    else "in ${rootDir.resolve("../..").canonicalPath}: bun scripts/agent-android.mjs build $app --apk --write-locks with EXACT_APP_DIR set to $appDir"
+                    throw GradleException("Gradle lock lowers shell dependency on $name: ${drift.joinToString()}. Run $command")
+                }
+            }
+        }
     }
 }
 dependencies {
-    maven.forEach { coordinate ->
-        if (carService != null && coordinate.startsWith("androidx.car.app:app:")) {
-            implementation(coordinate) { version { strictly(coordinate.substringAfterLast(':')) } }
-        } else implementation(coordinate)
-    }
     implementation(project(":canvas"))
     if (video) implementation(project(":video"))
     if (backgroundPlayback) {

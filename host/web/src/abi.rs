@@ -1355,9 +1355,10 @@ macro_rules! host {
         /// The date and the place (`locale NUL timeZone NUL seed` in the
         /// input buffer, `place_len` 0 for none) the next boot reads first.
         #[no_mangle]
-        pub extern "C" fn exact_set_launch(epoch_at_zero: f64, utc_offset: f64, place_len: u32) {
+        pub extern "C" fn exact_set_launch(epoch_at_zero: f64, utc_offset: f64, place_len: u32, keyboard: u32) {
             EXACT_BRIDGE.with(|b| {
                 let mut b = b.borrow_mut();
+                b.set_launch_keyboard(keyboard);
                 b.set_launch_time(epoch_at_zero, utc_offset);
                 if place_len > 0 {
                     b.set_launch_place(place_len as usize);

@@ -116,7 +116,7 @@ fn style(k: &mut Kernel, id: ViewId, patch: StyleProps) {
     .unwrap();
 }
 
-fn projected_matches_ordinary(k: &Kernel, ordinary: &Kernel, r: &RegionLayoutReceipt) {
+pub(super) fn projected_matches_ordinary(k: &Kernel, ordinary: &Kernel, r: &RegionLayoutReceipt) {
     let RegionSelection::Accepted(p) = &r.selection else {
         panic!("accepted")
     };
@@ -440,6 +440,18 @@ fn inline_zero_frames_and_rehydrated_complete_geometry_remain_exact() {
     register(&mut rebuilt);
     let again = ready(&mut rebuilt, 400., 1);
     projected_matches_ordinary(&rebuilt, &ordinary, &again);
+
+    let mut hidden = StyleProps::default();
+    hidden.mask.set(StyleId::Display);
+    hidden.display = Display::None;
+    style(&mut k, 4, hidden);
+    let mut ordinary = k.rehydrate(Box::new(MonospaceMeasurer::default()));
+    ordinary
+        .compute_layout(1, Offer::definite(400., 300.))
+        .unwrap();
+    assert!(ordinary.node(8).unwrap().frame.y > 200.);
+    let hidden = ready(&mut k, 400., 2);
+    projected_matches_ordinary(&k, &ordinary, &hidden);
 }
 
 /// A region's nodes publish the padding and border their own layout

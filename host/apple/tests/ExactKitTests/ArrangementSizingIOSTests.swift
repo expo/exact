@@ -2,14 +2,19 @@
 import UIKit
 import XCTest
 @testable import ExactKit
+@testable import ExactNativeViews
 
 final class ArrangementSizingIOSTests: XCTestCase {
     private var session: ExactSession?
     private var window: UIWindow?
+    /// What a hatch does when it hears its words change.
+    nonisolated(unsafe) private static var changed: (() -> Void)?
 
     override func tearDown() {
         session?.destroy(); session = nil
         window?.isHidden = true; window = nil
+        Self.changed = nil
+        NativeViews.uninstallTable()
         super.tearDown()
     }
 
@@ -394,6 +399,59 @@ final class ArrangementSizingIOSTests: XCTestCase {
         XCTAssertEqual(pane.bounds.width, 400, accuracy: 1)
         XCTAssertEqual(primary.bounds.width, pane.bounds.width, accuracy: 1, "laid out with the pane")
         XCTAssertNotNil(primary.layer.animation(forKey: "bounds.size") ?? primary.layer.animation(forKey: "bounds"), "and moved with it")
+    }
+
+    /// UIKit's animated update says no duration (`Presenter.inPaneLayout`): a view no frame has shown takes its place in it
+    /// all the same.
+    func testWhatNoFrameShowedTakesItsPlaceAsAnArrangementMovesItsPanes() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a frame that shows the pane needs a scene") }
+        let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
+        window?.windowScene = scene
+        let primary = try node("primary"), message = try node("message")
+        controller.updateArrangement(across(.absolute(300)))
+        waitFor("a frame shows the pane's content 300 points wide", cap: 5, facts: { "pane \(pane.bounds), content \(primary.frame)" }) {
+            self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded()
+            return abs(primary.bounds.width - 300) < 1 && session.presenter.showed(message)
+        }
+        message.isHidden = true
+        waitFor("a frame hides the text") { message.layer.presentation()?.isHidden == true }
+        message.isHidden = false
+        controller.updateArrangement(across(.absolute(400)), animated: true)
+        XCTAssertEqual(primary.bounds.width, 400, accuracy: 1, "laid out with the pane")
+        waitFor("a frame draws the pane's content on its way") { (primary.layer.presentation()?.bounds.width).map { $0 > 301 && $0 < 399 } ?? false }
+        XCTAssertEqual(message.layer.presentation()?.bounds.width ?? 0, message.bounds.width, accuracy: 1, "the text shown again is where it is laid out")
+    }
+
+    /// A hatch that hears its words change and animates its arrangement: the panes' content has its new box before UIKit's
+    /// animation ends its block.
+    func testAPanesContentMovesInTheAnimationAHatchStarts() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
+        let primary = try node("primary")
+        controller.updateArrangement(across(.absolute(300)))
+        waitFor("the pane's content is 300 points wide", cap: 5, facts: { "pane \(pane.bounds), content \(primary.frame)" }) {
+            self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded(); return abs(primary.bounds.width - 300) < 1
+        }
+        waitForActivation(session)
+        waitFor("the session's own work lands") { !session.ownerInFlight && !session.hasPublished() }
+        let natives = try XCTUnwrap(session.nativeViews)
+        natives.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
+        natives.hatchesConnected = true
+        var widths: [CGFloat] = []
+        let wide = across(.absolute(400))
+        natives.elementCall = { _, event, _, _, _, _ in
+            if event == RouteHatchEvent.changed.rawValue { ArrangementSizingIOSTests.changed?() }
+            return 0
+        }
+        Self.changed = {
+            controller.updateArrangement(wide, animated: true)
+            widths.append(primary.bounds.width)
+        }
+        session.apply(wireBatch([["op": "create", "id": 9_000, "kind": "view", "props": ["hatch": "arranged", "dataset": #"{"layout":"narrow"}"#]]]))
+        session.apply(wireBatch([["op": "props", "id": 9_000, "set": ["dataset": #"{"layout":"wide"}"#]]]))
+        XCTAssertEqual(widths.count, 1, "the hatch hears the change as the batch is applied")
+        XCTAssertEqual(widths.first ?? 0, 400, accuracy: 1, "laid out inside the animation")
     }
 
     func testIntrinsicAllocationFollowsContentAndOtherDimensionsStillWork() throws {

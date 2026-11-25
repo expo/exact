@@ -55,14 +55,14 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     override var bounds: CGRect {
         get { super.bounds }
         set {
-            guard UIView.inheritedAnimationDuration > 0, let node = owner, let presenter = node.presenter else { return super.bounds = newValue }
+            guard Presenter.animationMayBeOpen, let node = owner, let presenter = node.presenter else { return super.bounds = newValue }
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
     }
     /// The list's node, which the collection is the scroll view of.
     private var owner: NodeView? { superview as? NodeView }
-    /// Its indicators take its safe area where UIKit's adjustment gives none, `sideSafeArea` included, as a plain
-    /// scroller's do (`SafeIndicatorTerm`).
+    /// Its indicators take its safe area while UIKit's adjustment is off, and its horizontal indicator `sideSafeArea`
+    /// too, as a plain scroller's do (`SafeIndicatorTerm`).
     private var safeIndicators = SafeIndicatorTerm()
     var writtenWhole = false { didSet { safeIndicators.sync(self) } }
     override var automaticallyAdjustsScrollIndicatorInsets: Bool { didSet { safeIndicators.sync(self) } }

@@ -362,7 +362,7 @@ extension Agent {
                          native: ["kind": "contextMenuDismissal", "label": "Dismiss context menu"])
         }
         #endif
-        if let why = obscured(target, at: p, hit: seen!, barItem: inBar)
+        if let why = obscured(target, at: p, hit: seen!, barItem: inBar, request: at)
             ?? flat.flatMap({ flatObscured($0, at: p, hit: seen!) }) { return ["error": "tap #\(v.id): \(why)"] }
         // Named, it presses what it names, as the activation's tap does.
         var avoided: PressReach?

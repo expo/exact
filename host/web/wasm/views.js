@@ -1,7 +1,7 @@
 import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
 import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from "../drag-input.js";
 import { picker, track, iframeLoading, localAssetURL, host, agentMode, pageFacts, pageNative, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
-import { pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
+import { resolveShortcuts, pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
 import { send } from "./commit.js";
 import { attach } from "./input.js";
 export function appSource(el, name, value, then) {
@@ -573,6 +573,10 @@ export function applyProps(el, set, clear, adopting = false) {
           });
         });
       }
+    } else if (name === "aria-keyshortcuts") {
+      const chord = resolveShortcuts(value);
+      if (chord == null) el.removeAttribute(name);
+      else el.setAttribute(name, chord);
     } else if (name === "data-action") {
       el.setAttribute(name, value);
       el.style.touchAction = "none";

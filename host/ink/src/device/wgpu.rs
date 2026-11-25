@@ -1,7 +1,7 @@
 //! The portable device and S0 control. @ref LLP 1149 D5.1, D6.3, D11.
 
 use super::{check_region, texture_ids};
-use super::{Device, Error, Format, Info, Result, Submission, TextureDesc};
+use super::{Device, Error, Format, GpuTime, Info, Result, Submission, TextureDesc};
 use crate::instance::{flags, Batch, Bindings, Brush, Frame, Instance, Kind, Scissor, TextureId};
 use ::wgpu::util::DeviceExt;
 use std::collections::{BTreeMap, HashMap};
@@ -25,6 +25,7 @@ mod programs;
 pub mod scanout;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
+mod timing;
 
 const SHADER: &str = include_str!("../../shaders/ink.wgsl");
 const ATTRIBUTES: [::wgpu::VertexAttribute; 12] = ::wgpu::vertex_attr_array![
@@ -115,6 +116,8 @@ pub struct Wgpu {
     retired_buffers: Vec<(Submission, ::wgpu::Buffer)>,
     info: Info,
     errors: Arc<Mutex<Option<Error>>>,
+    /// Made by the first `begin_gpu_span`.
+    timing: Option<timing::Timing>,
 }
 
 enum Pending {
@@ -181,7 +184,10 @@ impl Wgpu {
         Ok(::wgpu::DeviceDescriptor {
             label: Some("exact-ink"),
             required_limits: requested_limits(adapter.limits())?,
-            required_features: adapter.features() & ::wgpu::Features::PIPELINE_CACHE,
+            // This allows timestamp queries and makes none: `begin_gpu_span` makes
+            // the first.
+            required_features: adapter.features()
+                & (::wgpu::Features::PIPELINE_CACHE | ::wgpu::Features::TIMESTAMP_QUERY),
             ..Default::default()
         })
     }
@@ -398,6 +404,7 @@ impl Wgpu {
             retired_textures: Vec::new(),
             retired_buffers: Vec::new(),
             errors: failures,
+            timing: None,
             info: Info {
                 adapter: adapter_info.name,
                 api: format!("wgpu {:?}", adapter_info.backend),
@@ -533,6 +540,7 @@ impl Wgpu {
         batches: &[Batch],
         groups: &[::wgpu::BindGroup],
         clear: Option<[f64; 4]>,
+        timed: Option<u32>,
     ) {
         let load = match clear {
             Some([r, g, b, a]) => ::wgpu::LoadOp::Clear(::wgpu::Color { r, g, b, a }),
@@ -550,6 +558,7 @@ impl Wgpu {
         let mut pass = encoder.begin_render_pass(&::wgpu::RenderPassDescriptor {
             label: Some("ink"),
             color_attachments: &attachments,
+            timestamp_writes: (timed.zip(self.timing.as_ref())).map(|(pass, t)| t.writes(pass)),
             ..Default::default()
         });
         pass.set_pipeline(&self.pipeline);
@@ -854,6 +863,7 @@ impl Device for Wgpu {
                 &[batch],
                 &[group],
                 Some([0.; 4]),
+                None,
             );
         }
         let submission = self.submit(encoder.finish())?;
@@ -979,6 +989,7 @@ impl Device for Wgpu {
             .map(|b| self.bindings(b.bindings, &self.buffers[slot].viewport, None))
             .collect::<Result<Vec<_>>>()?;
         let mut encoder = self.device.create_command_encoder(&Default::default());
+        let timed = self.timing.as_mut().and_then(timing::Timing::pass);
         self.encode_pass(
             &mut encoder,
             &self.texture(target)?.view,
@@ -987,6 +998,7 @@ impl Device for Wgpu {
             &frame.batches,
             &groups,
             clear,
+            timed,
         );
         let submission = self.submit(encoder.finish())?;
         self.buffers[slot]
@@ -1090,6 +1102,31 @@ impl Device for Wgpu {
         }
         self.completed()?;
         Ok(())
+    }
+
+    fn begin_gpu_span(&mut self) -> Result<()> {
+        if self.timing.is_none() {
+            self.timing = Some(timing::Timing::new(&self.device, &self.queue)?);
+        }
+        self.timing.as_mut().unwrap().begin()
+    }
+
+    fn end_gpu_span(&mut self) -> Result<()> {
+        let timing = self.timing.as_mut();
+        let timing = timing.ok_or_else(|| Error::Invalid("no GPU span is open".into()))?;
+        timing.end(self.submitted)
+    }
+
+    fn gpu_times(&mut self) -> Result<Vec<Option<GpuTime>>> {
+        let done = self.completed()?;
+        let Some(timing) = &mut self.timing else {
+            return Ok(Vec::new());
+        };
+        let (times, commands) = timing.times(&self.device, done)?;
+        for commands in commands {
+            self.submit(commands)?;
+        }
+        Ok(times)
     }
 }
 

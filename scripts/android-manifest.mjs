@@ -33,6 +33,8 @@
 // and asks nothing for; a runtime permission comes only from a grant line, which derives its prompt (LLP 1133.002 D6).
 // There is no `<provider>` but a library's removed one, and no `android:process`.
 
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { EXACT_PATHS, androidAuthCallbacks } from './links.mjs';
 
 /** The broadcasts a package's receiver may name: the boot, the package replaced, the clock and zone, the exact-alarm
@@ -435,4 +437,29 @@ export function withAuthCallbacks(fragment, callbacks = []) {
   ].join('\n');
   if (app.includes('    </queries>')) return app.replace('    </queries>', `${queries}\n    </queries>`);
   return `${app}\n    <queries>\n${queries}\n    </queries>`;
+}
+
+/** Leave an explicit Gradle property to Gradle. Otherwise select the graph from the sources it compiles. */
+export function composeArgs(uses, appDir, bound, env) {
+  if (uses.includes('dates')) return ['-Pcompose=1'];
+  if (['0', '1'].includes(env.ORG_GRADLE_PROJECT_compose)) return [];
+  const modules = env.ORG_GRADLE_PROJECT_modulesDir ?? resolve(appDir, 'modules/android');
+  const kotlin = new Bun.Glob('**/*.kt');
+  for (const dir of [resolve(import.meta.dir, '../host/android/app', modules), ...bound.flatMap(b => b.dirs)]) {
+    if (!existsSync(dir)) continue;
+    for (const path of kotlin.scanSync({ cwd: dir, absolute: true, dot: true, followSymlinks: true })) {
+      const source = readFileSync(path, 'utf8').replace(/\/\*[\s\S]*?\*\//g, ' ');
+      if (/\bimport\s+androidx\s*\.\s*compose\s*\.|@Composable\b/.test(source)) return ['-Pcompose=1'];
+    }
+  }
+  return [];
+}
+
+export const systemWidgets = manifest => (manifest.widgets ?? []).filter(row => row.families?.some(f => f.startsWith('system')));
+
+/** The modules selected for the APK also select the classpaths its lock report resolves. An unlocked development
+ * APK includes the player so a live edit can add video. A locked app links it only when its plan uses it. */
+export function androidLibraryArgs(app, bound, uses, env, liveVideo = false) {
+  return [...composeArgs(uses, app.dir, bound, env), ...(uses.includes('video') || liveVideo ? ['-Pvideo=1'] : []),
+    ...(systemWidgets(app.manifest).length ? ['-Pwidgets=1'] : []), `-PcarAppService=${carAppService(bound)?.name ?? ''}`];
 }

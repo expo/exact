@@ -364,5 +364,5 @@ export async function glidesSettled(budget) {
     budget.ms = Math.max(0, budget.ms - (performance.now() - started));
   }
 }
-export const agentInput = { backButton, guestOutline, guestTap, guestType, reveal, viewBox, layoutBoxes, scrollRange, selectAll, typeControl, watchGlides, glidesSettled, scrollsSeen };
+export const agentInput = { backButton, guestOutline, guestTap, guestType, reveal, viewBox, textBaseline, layoutBoxes, scrollRange, selectAll, typeControl, watchGlides, glidesSettled, scrollsSeen };
 if (globalThis.exact) Object.assign(globalThis.exact, { agentInput });

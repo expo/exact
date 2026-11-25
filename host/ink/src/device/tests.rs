@@ -403,6 +403,75 @@ fn d3d11_preserves_submitted_frames_during_atlas_and_pool_eviction() {
     in_flight_storage(&mut super::d3d11::D3d11::new().unwrap());
 }
 
+/// @ref LLP 1172.023.006 M2.
+#[test]
+fn a_span_s_gpu_time_is_its_passes_extent_and_their_sum() {
+    assert_eq!(GpuTime::of(&[]), None);
+    let time = GpuTime::of(&[(10., 12.), (15., 16.)]).unwrap();
+    assert_eq!((time.span_ms, time.passes_ms), (6., 3.));
+    // A device that does not time refuses a span and reports none.
+    let mut d = Delayed::default();
+    assert!(matches!(d.begin_gpu_span(), Err(Error::Unsupported(_))));
+    assert_eq!(d.gpu_times().unwrap(), []);
+}
+
+/// A span reports the GPU's time for its passes, and a device reports nothing for
+/// the passes outside one.
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_spans(d: &mut impl Device) {
+    let target = d.create_target(256, 256).unwrap();
+    let mut encoder = Encoder::new(256, 256);
+    let fill = Instance::rounded([0., 0., 256., 256.], [0.; 4], [1., 0., 0., 1.]);
+    encoder.push(fill, Bindings::default()).unwrap();
+    let frame = encoder.finish();
+    let untimed = d.render(&frame, target, Some([0.; 4])).unwrap();
+    d.wait(untimed).unwrap();
+    assert_eq!(d.gpu_times().unwrap(), []);
+
+    d.begin_gpu_span().unwrap();
+    assert!(d.begin_gpu_span().is_err(), "a span inside a span");
+    d.render(&frame, target, None).unwrap();
+    d.render(&frame, target, None).unwrap();
+    d.end_gpu_span().unwrap();
+    assert!(d.end_gpu_span().is_err(), "an end with no span open");
+    // A span with no pass has no time.
+    d.begin_gpu_span().unwrap();
+    d.end_gpu_span().unwrap();
+    // The readback waits for the passes; nothing notifies of their times.
+    d.readback(target).unwrap();
+    let mut times = Vec::new();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while times.len() < 2 {
+        assert!(std::time::Instant::now() < until, "no GPU time arrived");
+        times.extend(d.gpu_times().unwrap());
+        std::thread::yield_now();
+    }
+    let [Some(time), None] = times[..] else {
+        panic!("{times:?}");
+    };
+    for ms in [time.span_ms, time.passes_ms] {
+        assert!(ms > 0. && ms.is_finite(), "{time:?}");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn wgpu_times_gpu_spans() {
+    gpu_spans(&mut super::wgpu::Wgpu::new().unwrap());
+}
+
+#[cfg(exact_ink_metal)]
+#[test]
+fn metal_times_gpu_spans() {
+    gpu_spans(&mut super::metal::Metal::new().unwrap());
+}
+
+#[cfg(windows)]
+#[test]
+fn d3d11_times_gpu_spans() {
+    gpu_spans(&mut super::d3d11::D3d11::new().unwrap());
+}
+
 #[test]
 fn direct_device_selection_is_shared_by_carrier_painter_and_recovery() {
     assert_eq!(super::direct_d3d11(None), Some(false));

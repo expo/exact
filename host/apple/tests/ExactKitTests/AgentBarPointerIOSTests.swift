@@ -215,11 +215,20 @@ final class AgentBarPointerIOSTests: XCTestCase {
         for e in try entries() { try assertPlaced(e) }
     }
 
-    private func assertVisibleSegmentPoint(_ session: ExactSession, _ testId: String) throws {
+    private func assertVisibleSegmentPoint(_ session: ExactSession, _ testId: String, inBar: Bool = true) throws {
         let p = session.presenter, tab = try node(session, testId), agent = Agent(session: session)
-        until { p.navigationHost.barSegment(tab) != nil && !agent.nativeInFlight() }
-        let shown = try XCTUnwrap(p.navigationHost.barSegment(tab))
-        let point = shown.control.convert(CGPoint(x: shown.segment.midX, y: shown.segment.midY), to: nil)
+        func control() -> UISegmentedControl? {
+            let drawn = inBar ? p.navigationHost.barSegment(tab) : p.segments.drawn(tab)
+            return drawn?.control as? UISegmentedControl
+        }
+        until { control()?.window != nil && !agent.nativeInFlight() }
+        XCTAssertEqual(p.navigationHost.barSegment(tab) != nil, inBar)
+        let segments = try XCTUnwrap(control())
+        let index = try XCTUnwrap((0..<segments.numberOfSegments).first { segments.titleForSegment(at: $0) == tab.accessibleName })
+        let views = segments.segmentViews
+        XCTAssertEqual(views.count, segments.numberOfSegments)
+        let view = try XCTUnwrap(views.indices.contains(index) ? views[index] : nil)
+        let point = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
         let expected = p.client(point)
         var samples: [PointerSample] = []
         p.onPointer = { _, _, sample in samples.append(sample) }
@@ -244,9 +253,10 @@ final class AgentBarPointerIOSTests: XCTestCase {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "search and subtitle segments are placed by a scene's bar") }
         let session = try fixture("EXACT_SEARCH_SCOPE_PLAN")
         try node(session, "app").handlers.formUnion(["pointerdown", "pointerup"])
-        try assertVisibleSegmentPoint(session, "filter-mine")
+        let inBar = UIDevice.current.userInterfaceIdiom == .phone
+        try assertVisibleSegmentPoint(session, "filter-mine", inBar: inBar)
         session.presenter.press(try node(session, "pick-plain").id)
-        try assertVisibleSegmentPoint(session, "filter-done")
+        try assertVisibleSegmentPoint(session, "filter-done", inBar: inBar)
     }
 
     /// LLP 1141.004 D3: a hosted item is the element's own view in the bar, so

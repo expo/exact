@@ -1240,8 +1240,8 @@ A root `-exact-menu-keys="close-window=none"` keeps File ▸ Close Window with n
 chord, so ⌘W reaches the page; declare `-exact-menu-remove="close-all"` with it,
 or AppKit's Close All ⌥⌘W shows as a row of its own. `close-window=Meta+Shift+W`
 gives it ⇧⌘W. `close-window` is the one id; the chord is one `aria-keyshortcuts`
-chord with `Meta` that is not the host's or the system's own (⌘Q, ⌘W, ⌘H, ⌘M,
-⌘-comma and the like). Another id, an id named twice, a chord without `Meta`, a
+chord with `Meta` or `Mod` that is not the host's or the system's own (⌘Q, ⌘W, ⌘H, ⌘M,
+⌘-comma and the like). Another id, an id named twice, a chord without `Meta` or `Mod`, a
 standard chord and nested use fail with `lower-menu-keys`. An app command with
 the chord still takes it; without the declaration Close Window has ⌘W (LLP 1021
 §5.3.3).

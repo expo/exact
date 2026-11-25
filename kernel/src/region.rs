@@ -319,31 +319,66 @@ pub struct RegionFrame {
     pub(crate) height_measured: bool,
 }
 
-// A bounded coordinate witness, not retained layout-engine state. Parent is an
-// earlier paint-order ordinal, or OWNER for a direct child of the omitted owner.
-const OWNER: u32 = u32::MAX;
-#[derive(Clone, Copy)]
-pub(crate) struct RegionOffset {
-    parent: u32,
-    x: f32,
-    y: f32,
-    inline: bool,
+const OWNER: u16 = u16::MAX;
+const _: () = assert!(REGION_NODES < OWNER as usize);
+
+type Origin = (f32, f32);
+
+fn shifted((x, y): Origin, shift: Option<Origin>) -> Origin {
+    match shift {
+        Some((dx, dy)) => (x + dx, y + dy),
+        None => (x, y),
+    }
 }
-impl RegionOffset {
-    fn project(self, local: Frame, parent: Frame) -> Result<Frame, LayoutError> {
-        let frame = if self.inline {
-            Frame::default()
-        } else {
-            Frame {
-                x: parent.x + self.x,
-                y: parent.y + self.y,
-                ..local
+
+#[derive(Clone, Copy)]
+enum RegionPosition {
+    Box(Origin),
+    Hidden,
+    Inline,
+}
+
+// The parent's ordinal always names the structural parent, including for cells
+// whose coordinates the table grid supplies.
+#[derive(Clone, Copy)]
+struct RegionOffset {
+    parent: u16,
+    position: RegionPosition,
+    moves: Option<std::num::NonZeroU16>,
+}
+
+#[derive(Clone, Copy, Default, PartialEq)]
+struct RegionMoves {
+    grid: Option<Origin>,
+    safe_area: Option<Origin>,
+    flat: Option<Origin>,
+}
+
+impl RegionPosition {
+    // The published border origin and the origin for children. Ordinary
+    // layout adds the zero fragmentation shift only to the visible border.
+    fn place(self, parent: Origin, moves: &RegionMoves) -> Result<(Origin, Origin), LayoutError> {
+        let from = shifted(parent, moves.grid);
+        let (border, children) = match self {
+            Self::Box(local) => {
+                let at = shifted(from, Some(local));
+                (
+                    shifted((at.0 + 0., at.1 + 0.), moves.safe_area),
+                    shifted(at, moves.safe_area),
+                )
             }
+            Self::Hidden => (from, from),
+            Self::Inline => ((0., 0.), (0., 0.)),
         };
-        if !frame.x.is_finite() || !frame.y.is_finite() {
+        if !border.0.is_finite() || !border.1.is_finite() {
             return Err(LayoutError::ContentRegion("projection overflow"));
         }
-        Ok(frame)
+        // A flat row or group is placed in the grid alongside its children.
+        // Its own frame must still be finite before any child can be read.
+        Ok((
+            border,
+            moves.flat.map_or(children, |d| shifted(from, Some(d))),
+        ))
     }
 }
 
@@ -351,6 +386,7 @@ impl RegionOffset {
 pub(crate) struct RegionGeometry {
     frames: Vec<RegionFrame>,
     offsets: Vec<RegionOffset>,
+    moves: Vec<RegionMoves>,
     facts: BoxFacts,
     provisional_chrome: bool,
 }
@@ -378,51 +414,69 @@ impl RegionGeometry {
         Ok(())
     }
 
+    fn place(&self, index: usize, parent: Origin) -> Result<(Origin, Origin), LayoutError> {
+        let offset = self.offsets[index];
+        let moves = offset.moves.map(|i| &self.moves[usize::from(i.get()) - 1]);
+        offset
+            .position
+            .place(parent, moves.unwrap_or(&RegionMoves::default()))
+    }
+
     fn project(&self, origin: Frame) -> Result<Vec<RegionFrame>, LayoutError> {
         self.validate(origin)?;
-        let mut projected: Vec<RegionFrame> = Vec::with_capacity(self.frames.len());
-        for (local, offset) in self.frames.iter().zip(&self.offsets) {
-            let parent = if offset.parent == OWNER {
-                origin
-            } else {
-                projected
-                    .get(offset.parent as usize)
-                    .ok_or(LayoutError::ContentRegion("invalid projection parent"))?
-                    .frame
-            };
+        let mut projected = Vec::with_capacity(self.frames.len());
+        let mut ancestors = vec![(OWNER, (origin.x, origin.y))];
+        for (index, local) in self.frames.iter().enumerate() {
+            let parent = self.offsets[index].parent;
+            while ancestors.last().is_some_and(|&(i, _)| i != parent) {
+                ancestors.pop();
+            }
+            let (_, from) = ancestors
+                .last()
+                .ok_or(LayoutError::ContentRegion("invalid projection parent"))?;
+            let ((x, y), children) = self.place(index, *from)?;
             projected.push(RegionFrame {
-                node: local.node,
-                frame: offset.project(local.frame, parent)?,
-                content: local.content,
-                height_measured: local.height_measured,
+                frame: Frame {
+                    x,
+                    y,
+                    ..local.frame
+                },
+                ..*local
             });
+            if self
+                .offsets
+                .get(index + 1)
+                .is_some_and(|o| o.parent == index as u16)
+            {
+                ancestors.push((index as u16, children));
+            }
         }
         Ok(projected)
     }
 
     fn frame(&self, node: NodeKey, origin: Frame) -> Option<Frame> {
         self.validate(origin).ok()?;
-        let mut index = self.frames.iter().position(|f| f.node == node)?;
-        let mut chain = Vec::new();
-        loop {
-            chain.push(index);
-            let parent = self.offsets[index].parent;
-            if parent == OWNER {
-                break;
-            }
-            // Strictly decreasing ordinals bound the walk and refuse cycles.
-            if parent as usize >= index {
+        let index = self.frames.iter().position(|f| f.node == node)?;
+        let mut chain = vec![index];
+        let mut at = index;
+        while self.offsets[at].parent != OWNER {
+            let parent = self.offsets[at].parent as usize;
+            if parent >= at {
                 return None;
             }
-            index = parent as usize;
+            chain.push(parent);
+            at = parent;
         }
-        let mut frame = origin;
-        for index in chain.into_iter().rev() {
-            frame = self.offsets[index]
-                .project(self.frames[index].frame, frame)
-                .ok()?;
+        let mut placed = ((origin.x, origin.y), (origin.x, origin.y));
+        for i in chain.into_iter().rev() {
+            placed = self.place(i, placed.1).ok()?;
         }
-        Some(frame)
+        let (x, y) = placed.0;
+        Some(Frame {
+            x,
+            y,
+            ..self.frames[index].frame
+        })
     }
 }
 /// Immutable accepted geometry plus the exact pinned artifacts that produced it.
@@ -501,7 +555,7 @@ impl RegionPublication {
     }
     /// Project all accepted frames in paint order with ordinary layout's exact
     /// parent-first f32 additions. Only origin.x/y are used; old widths/heights
-    /// and content extents remain unchanged. Inline runs remain zero frames.
+    /// and content extents remain unchanged. Visible inline runs remain zero frames.
     ///
     /// One bounded O(W) pass, no arena reads or mutation. All results are checked
     /// before returning; an invalid/nonfinite projection returns an error, not
@@ -583,6 +637,17 @@ pub struct RegionRetention {
 #[cfg(test)]
 mod split_storage_tests {
     use super::*;
+
+    #[test]
+    fn visible_borders_normalize_negative_zero_but_children_keep_the_placement_origin() {
+        let moves = RegionMoves::default();
+        let (border, children) = RegionPosition::Box((-0., -0.))
+            .place((-0., -0.), &moves)
+            .unwrap();
+        assert_eq!(border.1.to_bits(), 0.0_f32.to_bits());
+        let (hidden, _) = RegionPosition::Hidden.place(children, &moves).unwrap();
+        assert_eq!(hidden.1.to_bits(), (-0.0_f32).to_bits());
+    }
 
     #[test]
     fn scalar_allocation_uses_exact_fixed_capacity_without_payload_owners() {

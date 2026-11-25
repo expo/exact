@@ -3199,6 +3199,18 @@ the virtual clock).
   … paste` too and the paste never lands. On iPadOS a hardware keyboard's
   F13–F24 reach `key` handlers but no shortcut (UIKit's key commands name
   F1–F12 only); the driver's reach both, as everywhere.
+  `Mod` is the primary modifier in any modifier position. It means `Meta`
+  on Apple platforms and `Control` elsewhere. In a single chord, combining
+  `Mod` with either spelling is ambiguous. Chords in a list are alternatives for the
+  same action, including when two resolve to the same chord. The web reads
+  `navigator.userAgentData.platform` when present and otherwise
+  `navigator.platform`; an iPad reporting Mac receives Command. A server
+  render omits an attribute containing `Mod` until the browser sets the
+  resolved `aria-keyshortcuts` on the element. The host checks chord spelling
+  in literal attributes, list items, conditional arms, concatenations and state
+  initializers, while the compiler checks the literal `-exact-menu-keys` override.
+  `formatShortcut(chord)` gives one chord's key cap in the reader's notation,
+  or the empty string for an invalid chord or during server rendering.
 - **The Mac's menu bar.** Every button whose chord holds ⌘ is also a menu
   item, titled by its `aria-label` (or its text), placed by its chord as
   Apple's HIG places one: ⌘, is Settings…; ⌘[ ⌘] and a `tablist`'s tabs are
@@ -3258,9 +3270,9 @@ the virtual clock).
   On a top-level root, `-exact-menu-keys="close-window=none"` keeps File ▸
   Close Window (built with ⌘W) in its place with no chord, so ⌘W reaches the
   page, and `close-window=Meta+Shift+W` gives it ⇧⌘W. `close-window` is the
-  one id; the chord is one `aria-keyshortcuts` chord with `Meta` that is not
+  one id; the chord is one `aria-keyshortcuts` chord with `Meta` or `Mod` that is not
   one of the host's or the system's own (⌘Q, ⌘W, ⌘H, ⌘M, ⌘-comma and the like).
-  Another id, an id named twice, a chord without `Meta`, a standard chord,
+  Another id, an id named twice, a chord without `Meta` or `Mod`, a standard chord,
   expressions and non-root use fail with `lower-menu-keys`. With nothing
   holding ⌘W, AppKit's Close All ⌥⌘W shows as a row of its own: an app that
   removes ⌘W declares `-exact-menu-remove="close-all"` too. An app command

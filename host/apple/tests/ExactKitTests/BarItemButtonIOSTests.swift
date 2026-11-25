@@ -49,7 +49,25 @@ extension NavigationBarIOSTests {
         XCTAssertEqual(presses, [node.id])
     }
 
+    func testBacksLayoutFollowsItsControlWhenHiddenOrDetached() throws {
+        _ = try checkBackLayout()
+    }
+
     func testTappingTheCenterOfBacksLayoutPopsItsRoute() throws {
+        guard ProcessInfo.processInfo.environment["EXACT_TOUCH_PORT"] != nil else {
+            throw missing("touch", "Back must receive a touch at its reported center")
+        }
+        let (nav, window, center) = try checkBackLayout()
+        let scene = try XCTUnwrap(window.windowScene)
+        let touch = try TouchRunner(self)
+        defer { touch.connection.cancel() }
+        var request = try TouchRunner.aim(window.convert(center, to: scene.coordinateSpace), in: window)
+        request["op"] = "tap"
+        XCTAssertEqual(try touch.ask(request)["done"] as? Bool, true)
+        until("Back pops the detail route") { nav.viewControllers.count == 1 }
+    }
+
+    private func checkBackLayout() throws -> (UINavigationController, UIWindow, CGPoint) {
         let session = try fixture("back-layout", module: false), agent = Agent(session: session)
         let nav = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation)
         let push = agent.tap(["id": Int(try node(session, "detail").id)])
@@ -99,9 +117,8 @@ extension NavigationBarIOSTests {
         try assertHidden()
         parent.insertSubview(control, at: index)
         try assertBarLayout(agent, back, control)
-        let reached = try XCTUnwrap(window.hitTest(center, with: nil) as? UIControl)
-        reached.sendActions(for: reached.allControlEvents.contains(.primaryActionTriggered) ? .primaryActionTriggered : .touchUpInside)
-        until("Back pops the detail route") { nav.viewControllers.count == 1 }
+        XCTAssertIdentical(window.hitTest(center, with: nil), control)
+        return (nav, window, center)
     }
 
     /// Stand in for the view UIKit vends when the button is hosted outside its bar.

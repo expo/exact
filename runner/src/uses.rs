@@ -829,7 +829,8 @@ fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
             if i.op == Opcode::Call {
                 match Stdlib::from_wire(i.args[0] as u8) {
                     Some(
-                        Stdlib::FormatDate
+                        Stdlib::FormatShortcut
+                        | Stdlib::FormatDate
                         | Stdlib::FormatNumber
                         | Stdlib::ToFixed
                         | Stdlib::FormatDecimal

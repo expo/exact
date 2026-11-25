@@ -104,3 +104,17 @@ test('the SDK side names a byte-order mark the same way', async () => {
   const { parseManifest: sdk } = await import('./app.mjs');
   expect(() => sdk('﻿{}')).toThrow('byte-order mark (U+FEFF)');
 });
+
+test('lock reports a missing Android verification file and leaves the Maven lock for review', () => {
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-lock-report-')));
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Lock', app: { name: 'Lock', id: 'dev.exact.lock' }, host: { android: { maven: ['androidx.window:window-java:1.3.0'] } } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Lock"\n');
+    writeFileSync(resolve(dir, 'gradle.lockfile'), 'committed lock\n');
+    const result = spawnSync(process.execPath, [resolve(import.meta.dir, 'app-cli.mjs'), '--lock', dir], { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain('gradle-verification.xml is missing');
+    expect(result.stdout).toContain('--write-locks');
+    expect(readFileSync(resolve(dir, 'gradle.lockfile'), 'utf8')).toBe('committed lock\n');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

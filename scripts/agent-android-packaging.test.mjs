@@ -262,7 +262,7 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
 }, 600000);
 
 test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
-  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))('one Maven lock write produces a graph the next strict resolution accepts', () => {
+  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))('a written Maven lock accepts the reader it was made for and refuses a newer shell dependency', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-locks-'));
   try {
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({app:{id:'dev.exact.locks', name:'Locks'}}));
@@ -276,9 +276,25 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
           }
         }
       }
+    }
+    gradle.afterProject { p ->
+      if (p.path == ':app' && p.hasProperty('keepBeforeFold')) p.configurations.configureEach {
+        resolutionStrategy.force('androidx.window:window:1.3.0')
+      }
+      if (p.path == ':canvas' && p.hasProperty('unavailableWindow')) {
+        p.configurations.implementation.dependencies.removeIf { it.group == 'androidx.window' && it.name == 'window' }
+        p.dependencies.add('implementation', 'androidx.window:window:999.0.0')
+      }
+      if (p.path == ':canvas' && p.hasProperty('beforeFold')) {
+        p.configurations.implementation.dependencies.removeIf {
+          it.group == 'androidx.window' || it.name == 'kotlinx-coroutines-android'
+        }
+      }
     }`);
     // Push brings older Kotlin transitives into a graph whose reader selects the current stdlib.
     const {maven} = JSON.parse(readFileSync(resolve(import.meta.dir, '../packages/push/android/exact.json'), 'utf8'));
+    // window-java brought Window and coroutines before the reader used either.
+    maven.push('androidx.window:window-java:1.3.0');
     const args = ['--no-watch-fs', '--no-daemon', '--console=plain', '-I', init,
       '-Papp=locks', '-PapplicationId=dev.exact.locks', '-PappName=Locks', `-PappDir=${dir}`,
       `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`,
@@ -287,10 +303,26 @@ test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
       cwd: resolve(import.meta.dir, '../host/android'), encoding:'utf8', timeout:180000, maxBuffer: 1 << 28,
       env:{...releaseJavaEnv, ANDROID_HOME:releaseSdk},
     });
-    const written = run([':app:dependencies', ':app:resolveRuntime', '--write-locks']);
+    const written = run(['-PbeforeFold', ':app:dependencies', ':app:resolveRuntime', '--write-locks']);
     expect(written.status, written.stdout + written.stderr).toBe(0);
-    const strict = run([':app:resolveRuntime']);
+    const strict = run(['-PbeforeFold', ':app:resolveRuntime']);
     expect(strict.status, strict.stdout + strict.stderr).toBe(0);
+    const forced = run(['-PkeepBeforeFold', ':app:resolveRuntime']);
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    const stale = run([':app:resolveRuntime']);
+    expect(stale.status).toBe(1);
+    expect(stale.stderr).toMatch(/androidx.window:window.*1\.5\.0.*locked.*1\.3\.0/);
+    expect(stale.stderr).toContain('--write-locks');
+    const report = run([':app:checkMavenLock']);
+    expect(report.status).toBe(1);
+    expect(report.stderr).toContain('androidx.window:window');
+    const rewrite = run([':app:dependencies', ':app:resolveRuntime', '--write-locks']);
+    expect(rewrite.status, rewrite.stdout + rewrite.stderr).toBe(0);
+    const current = run([':app:checkMavenLock']);
+    expect(current.status, current.stdout + current.stderr).toBe(0);
+    const unchecked = run(['--offline', '-PunavailableWindow', ':app:checkMavenLock']);
+    expect(unchecked.status).toBe(1);
+    expect(unchecked.stderr).toContain('androidx.window:window:999.0.0');
   } finally { rmSync(dir, {recursive:true, force:true}); }
 }, 400000);
 

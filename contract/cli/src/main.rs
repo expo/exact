@@ -76,7 +76,7 @@ fn usage() -> String {
   {build}
   contract migrate <file.contract>
   contract symbols <file.contract> [--stdin] [--editor] [--name <exact-name>]
-  contract sources <file.contract>
+  contract sources <file.contract> [--android]
   contract fmt [--check | --stdout | --stdin] <file.contract>
   contract fmt --uses <file.contract>
   contract types <file.contract> [-o <app.d.ts>] [--check]
@@ -344,8 +344,23 @@ fn symbol_args(args: &[String]) -> Option<SymbolCommand<'_>> {
 /// when loading stops (LLP 1091 D10) — what a capture, a watch and a deploy
 /// take with the app. Exits 1 when the loader refused.
 fn sources(args: &[String]) -> ExitCode {
-    const USAGE: &str = "usage: contract sources <file.contract>";
+    const USAGE: &str = "usage: contract sources <file.contract> [--android]";
     let input = match args {
+        [input, flag] if flag == "--android" && !input.starts_with('-') => {
+            return match contract::compile_path(std::path::Path::new(input)) {
+                Ok(plan) => {
+                    println!(
+                        "{}",
+                        serde_json::json!({"extensions": plan.package_extensions(), "uses": contract::native::android_uses(&plan)})
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         [flag] if matches!(flag.as_str(), "--help" | "-h") => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;

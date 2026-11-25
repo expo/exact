@@ -10,6 +10,7 @@ export const presentRows = (row, ...a) => (Probes ? Probes.rows(row, ...a) : row
 import { resourceInspection, retainedAnswer } from './resource-inspection.js';
 export { canvasColor } from './said.js';
 import { rt as Link } from './rt-link.js';
+export { resolveShortcuts, formatShortcut as x_formatShortcut } from "./navigation.js";
 export { liveTime } from './live-time.js';
 import { liveById, installFits, installSymbolEffects } from './navigation.js';
 // synced animations (LLP 1055.002, emit.rs `clocks`)

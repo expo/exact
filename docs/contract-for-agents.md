@@ -4508,6 +4508,7 @@ Exact supplies their child controllers and manages the arrangement's content
 slots and containment. Supply a detached controller with empty slots; reuse that
 controller for configuration changes. Call UIKit's `updateArrangement(_:animated:)`
 to change axes, split or overlay behavior, dimensions and placement properties.
+An animated change, from a UIKit action or the hatch's `changed`, moves the panes' content with the panes.
 Exact does not translate those settings. Navigation stays in the enclosing controller.
 UIKit may hide a pane when the allowed axes do not suit the current display.
 
@@ -5831,6 +5832,15 @@ the whole menu; write no `press` on the row that opens it (a native menu never
 runs it); and draw the web's `›` as an `aria-hidden` text, since the native
 menus draw their own arrow (LLP 1021 §5.2).
 
+Use `aria-keyshortcuts="Mod+Shift+O"` for the primary shortcut on every
+host. On Apple platforms it takes Command and files in the Mac menu bar
+as a `Meta` chord. Elsewhere it takes Control. The web writes the
+resolved chord to the DOM once the browser supplies its platform.
+Draw the cap with `text formatShortcut("Mod+Shift+O")`. The server leaves it
+empty. The client shows ⇧⌘O on Apple platforms and Ctrl+Shift+O elsewhere.
+See [Apple’s modifier order](https://developer.apple.com/design/human-interface-guidelines/keyboards/)
+and [Microsoft’s key names](https://learn.microsoft.com/en-us/style-guide/a-z-word-list-term-collections/term-collections/keys-keyboard-shortcuts).
+
 For the Mac menu bar, put `-exact-menu="app"` on an ordinary button to add
 an item without a shortcut. Literal destinations are `about` (directly under
 About, where Check for Updates… goes), `app`, `file`, `edit`, `view`, `go`,
@@ -5857,7 +5867,7 @@ Other standard items remain; other hosts ignore removal.
 with no chord, so ⌘W reaches the page; declare `-exact-menu-remove="close-all"`
 with it, or AppKit's Close All ⌥⌘W shows as a row of its own.
 `close-window=Meta+Shift+W` gives it ⇧⌘W instead: one `aria-keyshortcuts`
-chord with `Meta` that is not the host's or the system's own. View has Actual Size
+chord with `Meta` or `Mod` that is not the host's or the system's own. View has Actual Size
 ⌘0, Zoom In ⌘+ and Zoom Out ⌘-, a page zoom as a browser's: the viewport,
 `px` and `rem` all follow it; an app's own zoom commands set it with
 `setPageZoom(factor)`. See the grammar’s “The Mac’s menu bar”.

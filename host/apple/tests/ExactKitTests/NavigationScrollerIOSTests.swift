@@ -156,6 +156,128 @@ final class NavigationScrollerIOSTests: XCTestCase {
         XCTAssertEqual(route.toolbarItems?.last?.isEnabled, false)
     }
 
+    func testThreeTabsPlaceAndCoverTheRouteToolbarAsUIKitDoes() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit places the toolbar and tabs in a window") }
+        let size = scene.coordinateSpace.bounds.size
+        // Portrait, default text size, iOS 26.5 (23F77). Each stock tab holds a navigation
+        // controller. The selected one pushes a route with flexible spaces between the titled items.
+        typealias Button = (name: String, x: CGFloat, width: CGFloat, centerHits: Bool)
+        let cases: [[Button]], y: CGFloat, height: CGFloat
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        let traits = scene.traitCollection
+        let measured = (os.majorVersion, os.minorVersion) == (26, 5) && traits.preferredContentSizeCategory == .large
+            && traits.layoutDirection == .leftToRight && !UIAccessibility.isBoldTextEnabled
+        switch measured ? size : .zero {
+        case CGSize(width: 402, height: 874): // iPhone 17
+            (y, height) = (803, 38)
+            cases = [[("reshape", 33, 89.67, false), ("widget", 290.67, 78.33, false)],
+                     [("reshape", 21.33, 89.67, false), ("animate", 127.33, 147.33, false), ("widget", 302.33, 78.33, true)],
+                     [("widget", 162, 78.33, false)]]
+        case CGSize(width: 440, height: 956): // iPhone 17 Pro Max
+            (y, height) = (885, 38)
+            cases = [[("reshape", 33, 89.67, true), ("widget", 328.67, 78.33, true)],
+                     [("reshape", 33, 89.67, true), ("animate", 146.33, 147.33, false), ("widget", 328.67, 78.33, true)],
+                     [("widget", 181, 78.33, false)]]
+        case CGSize(width: 820, height: 1180): // iPad (A16)
+            (y, height) = (1115, 36)
+            cases = [[("reshape", 14, 92, true), ("widget", 725.5, 80.5, true)],
+                     [("reshape", 14, 92, true), ("animate", 335.5, 149.5, true), ("widget", 725.5, 80.5, true)],
+                     [("widget", 370, 80.5, true)]]
+        default: (cases, y, height) = ([], 0, 0)
+        }
+        let session = try fixture(scene, plan: "BOTTOM_TOOLBAR_TABS")
+        let window = try XCTUnwrap(window), agent = Agent(session: session)
+        let home = try XCTUnwrap(session.presenter.navigationHost.activeRoute)
+        var pressed: [UInt32] = []
+        let send = session.presenter.onPress
+        session.presenter.onPress = { pressed.append($0); send?($0) }
+        let routes = [("open-type", ["reshape", "widget"]), ("open-swift", ["reshape", "animate", "widget"]), ("open-single", ["widget"])]
+        for (index, (link, names)) in routes.enumerated() {
+            let buttons = cases.isEmpty ? [] : cases[index]
+            try press(session, link)
+            let route = try XCTUnwrap(session.presenter.navigationHost.activeRoute)
+            let items = try XCTUnwrap(route.toolbarItems).filter { $0.action != nil }
+            if !buttons.isEmpty {
+                waitFor("UIKit places the measured toolbar items") {
+                    route.transitionCoordinator == nil && !agent.nativeInFlight()
+                        && items.allSatisfy { $0.frame(in: window)?.isEmpty == false && $0.projectedControl(in: window) != nil }
+                }
+            }
+            XCTAssertEqual(items.compactMap(\.accessibilityIdentifier), names)
+            for (i, item) in items.enumerated() {
+                let name = try XCTUnwrap(item.accessibilityIdentifier), node = try node(session, name)
+                guard let control = item.projectedControl(in: window), let frame = item.frame(in: window), !frame.isEmpty else {
+                    XCTAssertTrue(buttons.isEmpty, name)
+                    XCTAssertNotNil(agent.tap(["id": Int(node.id)])["error"], name)
+                    continue
+                }
+                if !buttons.isEmpty, i < buttons.count {
+                    let expected = buttons[i]
+                    XCTAssertEqual(name, expected.name)
+                    XCTAssertEqual(frame.minX, expected.x, accuracy: 1, name)
+                    XCTAssertEqual(frame.minY, y, accuracy: 1, name)
+                    XCTAssertEqual(frame.width, expected.width, accuracy: 1, name)
+                    XCTAssertEqual(frame.height, height, accuracy: 1, name)
+                }
+                let box = try XCTUnwrap(agent.drawnBarBoxes()[node.id], "layout must include an item that the tab bar covers")
+                let measured = box.view.convert(box.region, to: window)
+                XCTAssertEqual(measured.midX, frame.midX, accuracy: 1)
+                XCTAssertEqual(measured.midY, frame.midY, accuracy: 1)
+                node.handlers.formUnion(["pointerdown", "pointerup"])
+                var samples: [PointerSample] = []
+                session.presenter.onPointer = { _, _, sample in samples.append(sample) }
+                func checkTap(at offset: [Double]? = nil, stockHits: Bool? = nil, file: StaticString = #filePath, line: UInt = #line) {
+                    let at = offset ?? [Double(frame.width / 2), Double(frame.height / 2)]
+                    let point = CGPoint(x: frame.minX + at[0], y: frame.minY + at[1])
+                    let hit = window.hitTest(point, with: nil)
+                    let hits = hit === control || hit?.isDescendant(of: control) == true
+                    if let stockHits { XCTAssertEqual(hits, stockHits, name, file: file, line: line) }
+                    pressed.removeAll()
+                    samples.removeAll()
+                    var request: [String: Any] = ["id": Int(node.id)]
+                    request["at"] = offset
+                    let error = agent.tap(request)["error"] as? String
+                    if hits { XCTAssertNil(error, name, file: file, line: line) }
+                    else {
+                        let reason = offset != nil ? "covers the requested point" : "covers its middle"
+                        XCTAssertTrue(error?.contains(reason) == true, "\(name): \(String(describing: error))", file: file, line: line)
+                    }
+                    XCTAssertEqual(pressed, hits ? [node.id] : [], file: file, line: line)
+                    XCTAssertEqual(samples.count, hits ? 2 : 0, file: file, line: line)
+                    let client = session.presenter.client(point)
+                    for sample in samples {
+                        XCTAssertEqual(sample.clientX, client.x, accuracy: 1, file: file, line: line)
+                        XCTAssertEqual(sample.clientY, client.y, accuracy: 1, file: file, line: line)
+                    }
+                }
+                checkTap(stockHits: i < buttons.count ? buttons[i].centerHits : nil)
+                let left = name == "reshape"
+                let width = Double(frame.width), middle = Double(frame.height / 2)
+                let flank = names.count > 1 && name != "animate"
+                checkTap(at: [left ? 8 : width - 8, middle], stockHits: !buttons.isEmpty && flank ? true : nil)
+                checkTap(at: [left ? width - 8 : 8, middle], stockHits: !buttons.isEmpty && flank && size.width == 402 ? false : nil)
+                session.presenter.onPointer = nil
+            }
+            route.navigationController?.popViewController(animated: false)
+            waitFor("back at the tab root") { session.presenter.navigationHost.activeRoute === home && !agent.nativeInFlight() }
+        }
+    }
+
+    func testToolbarPointerDeliveryDoesNotWaitForGlassToFadeIn() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "UIKit draws the toolbar button in its window") }
+        let session = try fixture(scene, plan: "BOTTOM_TOOLBAR"), agent = Agent(session: session)
+        let button = try node(session, "favorite")
+        guard case .success(let place)? = agent.barItem(button) else { return XCTFail("favorite needs a projected button") }
+        let glass = try XCTUnwrap(place.bar.superview)
+        let alpha = glass.alpha
+        glass.alpha = 0
+        defer { glass.alpha = alpha }
+        var nextTurn = false
+        DispatchQueue.main.async { glass.alpha = alpha; nextTurn = true }
+        XCTAssertTrue(agent.nativePointer(button, request: ["id": Int(button.id)]))
+        XCTAssertFalse(nextTurn, "pointer delivery must stay in the turn that checked the target")
+    }
+
     func testACompletedProjectedTransitionDoesNotMakeContentUpdatesOweNavigation() throws {
         guard let scene = hostedWindowScene() else { throw missing("scene", "native navigation completion needs a scene") }
         let session = try fixture(scene), p = session.presenter
@@ -283,9 +405,20 @@ final class NavigationScrollerIOSTests: XCTestCase {
         XCTAssertTrue(field.becomeFirstResponder())
         waitFor("the search keyboard appears") { p.keyboardTop != nil && field.isFirstResponder }
         let column = nav.view.convert(nav.view.bounds, to: window)
-        let bar = search.searchBar.convert(search.searchBar.bounds, to: window)
-        XCTAssertGreaterThanOrEqual(bar.minX, column.minX - 1)
-        XCTAssertLessThanOrEqual(bar.maxX, column.maxX + 1)
+        XCTAssertIdentical(try XCTUnwrap(field.window), window)
+        // On iPad Pro 13-inch (M5), iPadOS 26.5 scales the focused bar to x=22…358 inside a column at x=24…344.
+        var visible = field.convert(field.bounds, to: window)
+        for parent in sequence(first: field as UIView, next: \.superview).dropFirst() where parent.clipsToBounds {
+            visible = visible.intersection(parent.convert(parent.bounds, to: window))
+        }
+        let center = field.convert(CGPoint(x: field.bounds.midX, y: field.bounds.midY), to: window)
+        XCTAssertTrue(visible.contains(center))
+        let layoutCenter = nav.view.convert(center, from: window)
+        XCTAssertGreaterThanOrEqual(layoutCenter.x - field.bounds.width / 2, nav.view.bounds.minX - 1)
+        XCTAssertLessThanOrEqual(layoutCenter.x + field.bounds.width / 2, nav.view.bounds.maxX + 1)
+        XCTAssertLessThanOrEqual(visible.maxY, try XCTUnwrap(p.keyboardTop) + 1)
+        XCTAssertGreaterThanOrEqual(visible.minX, column.minX - 1)
+        XCTAssertLessThanOrEqual(visible.maxX, column.maxX + 1)
         XCTAssertEqual(nav.view.bounds.width, 320, accuracy: 0.5)
         search.isActive = false
         field.resignFirstResponder()

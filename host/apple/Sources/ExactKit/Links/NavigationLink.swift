@@ -445,6 +445,9 @@ package protocol NavigationHosting: AnyObject {
     func backButtonBar(_ node: NodeView) -> UINavigationBar?
     func drawnSearch(_ node: NodeView) -> UITextField?
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)?
+    #if os(iOS)
+    func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)?
+    #endif
     /// The tabs a route's search scope control shows, by segment; nil when
     /// `segments` is no route's scope control.
     func searchScopeTabs(of segments: UISegmentedControl) -> [UInt32]?
@@ -742,6 +745,9 @@ package final class NoNavigation: NavigationHosting {
     package func backButtonBar(_ node: NodeView) -> UINavigationBar? { nil }
     package func drawnSearch(_ node: NodeView) -> UITextField? { nil }
     package func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
+    #if os(iOS)
+    package func bottomItem(_ id: UInt32) -> (UIBarButtonItem, UINavigationController)? { nil }
+    #endif
     package func searchScopeTabs(of segments: UISegmentedControl) -> [UInt32]? { nil }
     #endif
 }

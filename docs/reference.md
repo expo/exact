@@ -1408,10 +1408,12 @@ from `color_scheme_dark.icons`, and its tinted icon is a square `monochrome`
 PNG, whose alpha iOS draws white on black. The web links each scheme's favicons
 (the smallest square raster of at least 32 px, then an SVG when there is one)
 and an Apple touch icon (the smallest opaque square PNG of at least 180 px, else
-the largest). Android takes a square `maskable` of at least 432 px as its
-adaptive icon, a `monochrome` one as its themed layer, a square `any` of 192 px
-when there is no `maskable`, and a 16:9 `any` of at least 640×360 px as the TV
-banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
+the largest). Android centres a square `maskable` PNG of at least 432 px at 82.5 dp on
+a 108 dp layer. For fully opaque artwork, a low-resolution copy extends the local edge
+colours into the margin. If any pixel has transparency, the background uses the light
+launch colour, or the top-left pixel’s RGB when none is named. A square `monochrome` supplies the themed layer,
+a square `any` of at least 192 px the legacy fallback, and a 16:9 `any` of at least
+640×360 px the TV banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
 at least 1280×768 px (an 8:3 and a 29:9 one give the Top Shelf images); the
 watch app a square one of 1024 px, or `host.ios.icon` when its `icon.json` lists
 watchOS; Windows a square `any` of at least 256 px, linked into the executable.
@@ -5876,7 +5878,7 @@ are pixels of the upright image. Lines keep the recognizer's reading order.
 | Host | Answer |
 | --- | --- |
 | iOS, iPadOS, macOS, tvOS | Vision; omitted languages use the request's defaults. Named languages match Vision's supported languages. `apple.confidence` is the top candidate's confidence. |
-| Android | Bundled ML Kit Latin recognizer (`text-recognition:16.0.1`); available without a download. Omitted languages return the Latin list; named languages return the matched, deduplicated tags. Other languages or an explicit non-Latin script answer `unavailable`, `unsupported-options`, and `languages: []`; detection fails `NotSupportedError`. `android.script` is `Latn`; each line's `android.recognizedLanguage` is ML Kit's BCP 47 tag, or `und`. Built and JVM-tested; recognition on a device is not yet verified. |
+| Android | Bundled ML Kit Latin recognizer (`text-recognition:16.0.1`); available without a download. Omitted languages return the Latin list; named languages return the matched, deduplicated tags. Other languages or an explicit non-Latin script answer `unavailable`, `unsupported-options`, and `languages: []`; detection fails `NotSupportedError`. `android.script` is `Latn`; each line's `android.recognizedLanguage` is ML Kit's BCP 47 tag, or `und`. Lines come in ML Kit's block order: in a photo that also holds text outside the page (a window's tab strip above a paragraph), that text can come first. Verified on a phone (Android 14) with the fixture pictures and camera photos. |
 | Web, Windows, Linux, terminal, and targets without an implementation | Declared default: `unavailable`, `reason: "not-supported"`, `languages: []`; `detectText` fails `NotSupportedError`. |
 
 Availability is fixed for an Apple or Android build; neither uses `downloadable`

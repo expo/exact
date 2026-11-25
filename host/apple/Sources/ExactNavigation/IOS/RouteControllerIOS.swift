@@ -385,7 +385,25 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// The route's node, left in place after a batch removed the route while
     /// UIKit still shows it (`NavigationHost.prepare`), until UIKit takes the
     /// route's view out of the window.
-    var retiringRoot: NodeView?
+    private(set) var retiringRoot: NodeView?
+    func retire() {
+        retiringRoot = node
+        // Switching tabs during a pop can detach its view without completing the disappearance.
+        guard let mount = view as? PresentationMount, mount.window != nil else { return finishRetirement() }
+        mount.didLeaveWindow = { [weak self, weak mount] in
+            // UIKit can move a view between parents in one turn. Finish outside its hierarchy callbacks.
+            DispatchQueue.main.async {
+                if mount?.window == nil { self?.finishRetirement() }
+            }
+        }
+    }
+
+    private func finishRetirement() {
+        guard let retiringRoot else { return }
+        self.retiringRoot = nil
+        (viewIfLoaded as? PresentationMount)?.didLeaveWindow = nil
+        retiringRoot.removeFromSuperview()
+    }
     /// The exit it declares, kept while it is its stack's top: it has left
     /// the tree when UIKit asks for its pop's animator (RouteTransitionIOS).
     var exitPart: RoutePart?
@@ -393,8 +411,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.viewDidDisappear(animated)
         // A transition that made it appear was cancelled
         appearing = false
-        retiringRoot?.removeFromSuperview()
-        retiringRoot = nil
+        finishRetirement()
     }
 
     // Follow UIKit moving this route into another controller (`NavigationHost.moved(into:)`)

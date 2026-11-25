@@ -28,7 +28,7 @@ final class ResetHoldTests: XCTestCase {
     }
 
     func testASheetOpenAtARestartTurnsNoRunLoopWhileHeld() throws {
-        let plan = try fixturePlan("RESET_HOLD")
+        let plan = try fixturePlan("RESET_HOLD"), replacement = try fixturePlan("FIELDLESS")
         let session = ExactApp.shared.makeSession(label: "reset-hold")
         defer { session.destroy() }
         let size = CGSize(width: 400, height: 600)
@@ -65,7 +65,7 @@ final class ResetHoldTests: XCTestCase {
         #endif
         let ran = probe { [session.runtime.held] }
         let started = Date()
-        XCTAssertTrue(session.apply(plan, label: "generation"))
+        XCTAssertTrue(session.apply(replacement, label: "generation"))
         let took = Date().timeIntervalSince(started)
         let inside = ran().map(\.0)
         #if os(macOS)
@@ -87,7 +87,7 @@ final class ResetHoldTests: XCTestCase {
     #if os(macOS)
     /// Two windows, each with its sheet open, restarted together: `applyTogether` holds both, then presents each.
     func testTwoWindowsRestartedTogetherTurnNoRunLoopWhileHeld() throws {
-        let plan = try fixturePlan("RESET_HOLD")
+        let plan = try fixturePlan("RESET_HOLD"), replacement = try fixturePlan("FIELDLESS")
         let size = CGSize(width: 400, height: 600)
         var sessions: [ExactSession] = [], windows: [TimedWindow] = []
         defer { sessions.forEach { $0.destroy() }; windows.forEach { $0.close() } }
@@ -106,7 +106,7 @@ final class ResetHoldTests: XCTestCase {
         }
         XCTAssertEqual(windows.map { $0.attachedSheet != nil }, [true, true], "both sheets open at the restart")
         let ran = probe { sessions.map { $0.runtime.held } }
-        XCTAssertEqual(ExactApp.shared.apply(plan, label: "generation"), .applied)
+        XCTAssertEqual(ExactApp.shared.apply(replacement, label: "generation"), .applied)
         let inside = ran().map(\.0)
         XCTAssertEqual(windows.map(\.isVisible), [true, true], "both windows on screen")
         XCTAssertEqual(windows.map { $0.attachedSheet == nil }, [true, true], "the restart ended both sheets")

@@ -1,7 +1,7 @@
 //! Direct Metal over the same instances and shader as wgpu. @ref LLP 1149 D5.2.
 use super::check_region;
 use super::texture_ids;
-use super::{Device, Error, Format, Info, Result, Submission, TextureDesc};
+use super::{Device, Error, Format, GpuTime, Info, Result, Submission, TextureDesc};
 use crate::instance::{flags, Bindings, Frame, Instance, Kind, TextureId};
 use objc2::{
     rc::{autoreleasepool, Retained},
@@ -10,7 +10,7 @@ use objc2::{
 use objc2_metal::*;
 use std::{
     cell::Cell,
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     ptr::NonNull,
     rc::Rc,
     time::Instant,
@@ -39,6 +39,19 @@ struct Pending {
     command: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
     #[cfg(target_os = "macos")]
     receipt: Option<std::sync::mpsc::Receiver<Result<()>>>,
+}
+
+/// The spans whose GPU time is wanted (`Device::begin_gpu_span`). A pass is a
+/// `render` call's command buffer, timed by the start and end Metal reports for it:
+/// <https://developer.apple.com/documentation/metal/mtlcommandbuffer/gpustarttime>.
+#[derive(Default)]
+struct Timing {
+    /// The open span's `render` submissions.
+    open: Option<Vec<u64>>,
+    /// The same of each ended span, oldest first.
+    ended: VecDeque<Vec<u64>>,
+    /// The GPU start and end of each of their completed command buffers, in milliseconds.
+    passes: HashMap<u64, (f64, f64)>,
 }
 
 #[derive(Clone)]
@@ -77,6 +90,7 @@ pub struct Metal {
     owner: Rc<()>,
     error: Option<Error>,
     info: Info,
+    timing: Timing,
     #[cfg(target_os = "macos")]
     thread: Option<Rc<crate::present::Thread>>,
     #[cfg(target_os = "macos")]
@@ -181,6 +195,7 @@ impl Metal {
                 owner,
                 error: None,
                 info,
+                timing: Timing::default(),
                 #[cfg(target_os = "macos")]
                 thread: None,
                 #[cfg(target_os = "macos")]
@@ -672,6 +687,9 @@ impl Device for Metal {
             }
             encoder.endEncoding();
             let s = self.submit(Some(command));
+            if let Some(span) = &mut self.timing.open {
+                span.push(s.0);
+            }
             self.buffers[slot].last.set(s);
             self.textures.get_mut(&target).unwrap().last = s;
             for batch in &frame.batches {
@@ -736,6 +754,11 @@ impl Device for Metal {
                         super::apple::trace_interval(c"gpu command", || {
                             (command.GPUStartTime(), command.GPUEndTime(), id as f64)
                         });
+                        let timing = &mut self.timing;
+                        if (timing.open.iter().chain(&timing.ended)).any(|s| s.contains(&id)) {
+                            let ms = (command.GPUStartTime(), command.GPUEndTime());
+                            timing.passes.insert(id, (ms.0 * 1000., ms.1 * 1000.));
+                        }
                     }
                     MTLCommandBufferStatus::Error => {
                         let message = command
@@ -783,6 +806,32 @@ impl Device for Metal {
         }
         self.completed()?;
         Ok(())
+    }
+    fn begin_gpu_span(&mut self) -> Result<()> {
+        if self.timing.open.is_some() {
+            return Err(Error::Invalid("a GPU span is already open".into()));
+        }
+        self.timing.open = Some(Vec::new());
+        Ok(())
+    }
+    fn end_gpu_span(&mut self) -> Result<()> {
+        let span = self.timing.open.take();
+        let span = span.ok_or_else(|| Error::Invalid("no GPU span is open".into()))?;
+        self.timing.ended.push_back(span);
+        Ok(())
+    }
+    fn gpu_times(&mut self) -> Result<Vec<Option<GpuTime>>> {
+        let done = self.completed()?;
+        let timing = &mut self.timing;
+        let mut times = Vec::new();
+        while (timing.ended.front()).is_some_and(|span| span.iter().all(|id| *id <= done.0)) {
+            let span = timing.ended.pop_front().unwrap();
+            let passes: Vec<_> = (span.iter())
+                .filter_map(|id| timing.passes.remove(id))
+                .collect();
+            times.push(GpuTime::of(&passes));
+        }
+        Ok(times)
     }
 }
 
