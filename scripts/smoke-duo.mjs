@@ -687,6 +687,13 @@ async function suite({ open: openSession, check: record }, reset) {
           await retained(tag);
           const a = box(l, 'panes-workspace-pane'), b = box(l, 'panes-activity-pane');
           check(a?.w > 0 && a?.h > 0, `${tag}: the primary pane has space`);
+          // UIKit's panes lie under the side bar, their scroll indicators at the display's edge, and their content ends at the bar
+          if (mode !== 'css') {
+            const edge = Math.max(...[a, b].filter(pane => pane?.w > 0).map(pane => pane.x + pane.w));
+            check(Math.abs(edge - l.viewport.w) <= 1, `${tag}: the panes end at the display's edge: ${edge} of ${l.viewport.w}`);
+            const row = box(l, b?.w > 0 && b.x + b.w > l.viewport.w - 1 ? 'panes-activity-row-1' : 'panes-workspace-row-1');
+            check(row?.x + row?.w <= l.viewport.w - l.env['safe-area-inset-right'] + 1, `${tag}: the content at that edge ends at the bar: ${JSON.stringify(row)}`);
+          }
           // Detect scroll resets while allowing native bar insets to change with the pose
           for (const [i, pane] of [a, b].entries()) {
             if (pane?.w > 0 && pane?.h > 0) { check(pane.sy > 0, `${tag}: pane ${i + 1} stays scrolled`); }

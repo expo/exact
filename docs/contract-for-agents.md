@@ -4531,6 +4531,13 @@ that space and an automatic height is the content's, so a pane scroller without 
 height or a maximum height does not scroll. Give a pane that should fill its
 allocation a height such as `height="100%"`.
 
+UIKit lays an arrangement out under the iPhone Duo's side bar, its halves meeting at the
+fold, and each pane clears the bar itself. A route pads its content clear of the bar, so
+let the arrangement span the display with `-exact-safe-area="left right"` on the route
+and inset each pane's content by `var(--exact-safe-area-inset-left)` and
+`var(--exact-safe-area-inset-right)`, which in a pane are the pane's own. A pane scroller's
+indicator then lies at the display's edge.
+
 Use a bounded scroller in each child for independent scrolling. The first visible
 vertical scroller is the default title and scroll-to-top target; `navigationScroll`
 can name another. UIKit owns bar minimization, safe-area changes, each pane's
@@ -7754,10 +7761,10 @@ device's under `viewport-fit="cover"` and 0 under `auto`, even on iOS when a roo
 pads with them stays under the status bar
 ([pitfall](agent-pitfalls.md#native-presentation-and-navigation-ios)).
 `var(--exact-safe-area-inset-top|right|bottom|left)` is the safe area where the box
-is, a term in the same places as `env()` (LLP 1123 D9). Inside a route, a tab or a
-sheet it is that container's own, as UIKit's `safeAreaInsets` has it: the status
-bar, the navigation bar and a large title, the tab bar, the home indicator, a
-sheet's edges. Outside every route it is what the page itself reaches under: on
+is, a term in the same places as `env()` (LLP 1123 D9). Inside a route, a tab, a
+sheet or an arranged pane it is that container's own, as UIKit's `safeAreaInsets` has
+it: the status bar, the navigation bar and a large title, the tab bar, the home
+indicator, a sheet's edges. Outside every route it is what the page itself reaches under: on
 iOS the status bar and the home indicator whenever a root stack or `tablist` takes
 the whole screen, even where `env()` is 0. On the web and a host that draws no bars
 it is `env()`'s, and a web sheet's top is 0. It takes no fallback, and it follows
@@ -7790,6 +7797,12 @@ picture under the bar:
   `margin-top="calc(-1 * var(--exact-safe-area-inset-top))"
   padding-top="var(--exact-safe-area-inset-top)"`. Its content starts below the bar
   and the boxes beside it stay where they were.
+- Where a scroller fills the route's width, opt the sides out and inset its content:
+  `-exact-safe-area="left right"` on the route, and
+  `padding-left="var(--exact-safe-area-inset-left)"` and the same on the right on the
+  scroller's content. The scroller's indicator then lies at the display's edge, outside
+  the iPhone Duo's side bar, as UIKit's does; cleared, the scroller ends at the bar and
+  its indicator lies inside it.
 - Where the route's scroller starts at its top (a list under a large title), opt the
   top out and pad the scroller's first box: `-exact-safe-area="top"` on the route,
   `padding-top="var(--exact-safe-area-inset-top)"` on the hero. The scroller then

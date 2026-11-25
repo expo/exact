@@ -51,7 +51,7 @@ component ArrangementView
   action contentScroll(value: string)
     settings = ArrangementSettings(settings, contentScroll=value)
   view
-    column navigationKey=routeKey testId=`${prefix}-screen` data-title-display=settings.titleDisplay data-bar-minimization=settings.barMinimization data-safe-area-adjustment=settings.safeAreaAdjustment data-content-scroll=(settings.contentScroll == "automatic" ? "" : `${key}-${settings.contentScroll}`) position="absolute" inset=0
+    column navigationKey=routeKey -exact-safe-area=(native ? "left right" : none) testId=`${prefix}-screen` data-title-display=settings.titleDisplay data-bar-minimization=settings.barMinimization data-safe-area-adjustment=settings.safeAreaAdjustment data-content-scroll=(settings.contentScroll == "automatic" ? "" : `${key}-${settings.contentScroll}`) position="absolute" inset=0
       header display="flex" align-items="center" gap=8 padding="8px 16px"
         text title role="heading" aria-level=2 flex=1 testId=`${prefix}-title`
         if native
@@ -93,8 +93,8 @@ component ArrangementView
       // of a fold: across it each is as wide as the narrower segment, at either end; down it the container ends with the
       // upper segment, as the box after it takes the rest of the route, and the secondary takes the lower one
       column hatch="arranged-panes" data-pane-layout=(native ? settings.layout : "css") testId=`${prefix}-container` flex=1 min-height=0 flex-direction=paneDirection(viewport) justify-content=(across ? "space-between" : "flex-start")
-        ArrangementPane(id=`${key}-primary`, name=`${prefix}-primary`, label="Primary", ground="pane.primary", stripe="pane.primary.stripe", band="pane.primary.band", grow=(across ? 0 : 1), width=(across ? foldWidth(viewport) : "100%"), lower=false, top="auto", spring=spring)
-        ArrangementPane(id=`${key}-secondary`, name=`${prefix}-secondary`, label="Secondary", ground="pane.secondary", stripe="pane.secondary.stripe", band="pane.secondary.band", grow=(across ? 0 : 1), width=(across ? foldWidth(viewport) : "100%"), lower=down, top=(down ? foldBottom(viewport) : "auto"), spring=spring)
+        ArrangementPane(id=`${key}-primary`, name=`${prefix}-primary`, native=native, label="Primary", ground="pane.primary", stripe="pane.primary.stripe", band="pane.primary.band", grow=(across ? 0 : 1), width=(across ? foldWidth(viewport) : "100%"), lower=false, top="auto", spring=spring)
+        ArrangementPane(id=`${key}-secondary`, name=`${prefix}-secondary`, native=native, label="Secondary", ground="pane.secondary", stripe="pane.secondary.stripe", band="pane.secondary.band", grow=(across ? 0 : 1), width=(across ? foldWidth(viewport) : "100%"), lower=down, top=(down ? foldBottom(viewport) : "auto"), spring=spring)
       if down
         column flex="none" height=`calc(100% - ${foldTop(viewport)})`
 
@@ -126,6 +126,7 @@ component ArrangementPane
   props
     id: string
     name: string
+    native: bool
     label: string
     ground: string
     stripe: string
@@ -138,7 +139,9 @@ component ArrangementPane
   view
     // Fill UIKit's allocation, which is the pane's containing block, or the CSS row, to scroll within it
     scroll id=id hatch="arrangement-pane" testId=name flex-grow=grow flex-shrink=1 flex-basis=(grow == 0 ? "auto" : "0%") width=width height=(lower ? "auto" : "100%") min-width=0 min-height=0 position=(lower ? "absolute" : "relative") top=top bottom=(lower ? "0px" : "auto") left=(lower ? "0px" : "auto") right=(lower ? "0px" : "auto") -exact-layout-transition=spring background-color=ground
-      for i in range(150) key=i
-        column gap=4 padding="16px 20px" background-color=((i + 1) % 2 == 0 ? stripe : band) testId=`${name}-row-${i + 1}`
-          text `${label} ${rowNumber(i + 1)}` font="-exact-body"
-          text "Scroll this pane independently." font="-exact-subheadline" color="-exact-secondary-label"
+      // A native pane lies under the iPhone Duo's side bar, where its scroll indicator is, and its rows end at the bar
+      column margin-left=(native ? "var(--exact-safe-area-inset-left)" : "0px") margin-right=(native ? "var(--exact-safe-area-inset-right)" : "0px")
+        for i in range(150) key=i
+          column gap=4 padding="16px 20px" background-color=((i + 1) % 2 == 0 ? stripe : band) testId=`${name}-row-${i + 1}`
+            text `${label} ${rowNumber(i + 1)}` font="-exact-body"
+            text "Scroll this pane independently." font="-exact-subheadline" color="-exact-secondary-label"

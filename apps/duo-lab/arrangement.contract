@@ -47,22 +47,24 @@ component ArrangementScreen
   derive anchored = folded and nativeArrangement
   derive flowed = folded and not nativeArrangement
   derive spring = nativeArrangement ? "none" : foldSpring(viewport)
-  // Turn the route's side clearance off in Authored mode on a book fold with one row of segments, so on iOS the panes'
-  // container spans the viewport's width as the segments do; its top and bottom stay cleared
-  derive sidesOff = folded and across and viewport.verticalViewportSegments == 1
+  // UIKit's panes lie under the iPhone Duo's side bar and clear it themselves
+  derive native = active != "css"
+  // Turn the route's side clearance off for them, and in Authored mode on a book fold with one row of segments, so on iOS
+  // the panes' container spans the viewport's width as the segments do; its top and bottom stay cleared
+  derive sidesOff = native or (folded and across and viewport.verticalViewportSegments == 1)
   action layout(value: string)
     mode = value
   view
     column navigationKey=routeKey navigationBar=(anchored ? "none" : "auto") -exact-safe-area=(sidesOff ? "left right" : none) testId=`screen-${routeName}` position="absolute" inset=0
       if not anchored
-        ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, inset=flowed, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))
+        ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, inset=flowed, native=native, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))
       // Segment edges are viewport-relative. Keep the chrome inside the first pane whenever the panes anchor, so it adds no
       // offset above them.
       column id=`${prefix}-container` hatch="arranged-panes" data-pane-layout=active testId=`${prefix}-container` flex=1 min-height=0 position=(flowed ? "static" : "relative") display="flex" flex-direction=(anchored ? "column" : direction) justify-content=(flowed and across ? "space-between" : "flex-start") gap=(folded ? 0 : 12)
-        Pane(name="Workspace", prefix=`${prefix}-workspace`, anchored=anchored, flowed=flowed, leading=true, across=across, down=down, sidesOff=sidesOff, segment=foldWidth(viewport), lowerTop=foldBottom(viewport), spring=spring)
+        Pane(name="Workspace", prefix=`${prefix}-workspace`, anchored=anchored, flowed=flowed, leading=true, across=across, down=down, sidesOff=sidesOff, native=native, segment=foldWidth(viewport), lowerTop=foldBottom(viewport), spring=spring)
           if anchored
-            ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, inset=false, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))
-        Pane(name="Activity", prefix=`${prefix}-activity`, anchored=anchored, flowed=flowed, leading=false, across=across, down=down, sidesOff=sidesOff, segment=foldWidth(viewport), lowerTop=foldBottom(viewport), spring=spring)
+            ArrangementChrome(title=title, nextTitle=nextTitle, prefix=prefix, mode=mode, controls=nativeArrangement, inset=false, native=false, openNext=openNext, showSplit=layout("split"), showOverlay=layout("overlay"), showAuthored=layout("css"))
+        Pane(name="Activity", prefix=`${prefix}-activity`, anchored=anchored, flowed=flowed, leading=false, across=across, down=down, sidesOff=sidesOff, native=native, segment=foldWidth(viewport), lowerTop=foldBottom(viewport), spring=spring)
       if flowed and down
         column flex="none" height=`calc(100% - ${foldTop(viewport)})`
 
@@ -74,6 +76,7 @@ component ArrangementChrome
     mode: string
     controls: bool
     inset: bool
+    native: bool
     openNext: action
     showSplit: action
     showOverlay: action
@@ -94,7 +97,7 @@ component ArrangementChrome
           text "Authored"
       button press=openNext testId=`${prefix}-next`
         text nextTitle
-    text (controls ? (mode == "css" ? "Authored responsive layout" : mode == "overlay" ? "UIKit Overlay" : "UIKit Split") : "Responsive layout. Split and Overlay require the native iOS app on iOS 27.1 or later.") padding=12 testId=`${prefix}-policy`
+    text (controls ? (mode == "css" ? "Authored responsive layout" : mode == "overlay" ? "UIKit Overlay" : "UIKit Split") : "Responsive layout. Split and Overlay require the native iOS app on iOS 27.1 or later.") padding=12 padding-left=(native ? "calc(12px + var(--exact-safe-area-inset-left))" : "12px") padding-right=(native ? "calc(12px + var(--exact-safe-area-inset-right))" : "12px") testId=`${prefix}-policy`
 
 component Pane
   props
@@ -106,6 +109,7 @@ component Pane
     across: bool
     down: bool
     sidesOff: bool
+    native: bool
     segment: string
     lowerTop: string
     spring: string
@@ -124,8 +128,8 @@ component Pane
   derive paddingBottom = folded and (across or not leading) ? "calc(16px + max(env(safe-area-inset-bottom), env(-exact-safe-area-corners-inset-bottom)))" : "16px"
   // Pad the sides by the route's insets where the route leaves them uncleared: an agent's explicit size zeros `env()`'s
   // while UIKit still reports the route's
-  derive paddingLeft = folded ? (sidesOff ? "calc(16px + max(var(--exact-safe-area-inset-left), env(-exact-safe-area-corners-inset-left)))" : "calc(16px + max(env(safe-area-inset-left), env(-exact-safe-area-corners-inset-left)))") : "16px"
-  derive paddingRight = folded ? (sidesOff ? "calc(16px + max(var(--exact-safe-area-inset-right), env(-exact-safe-area-corners-inset-right)))" : "calc(16px + max(env(safe-area-inset-right), env(-exact-safe-area-corners-inset-right)))") : "16px"
+  derive paddingLeft = folded ? (sidesOff ? "calc(16px + max(var(--exact-safe-area-inset-left), env(-exact-safe-area-corners-inset-left)))" : "calc(16px + max(env(safe-area-inset-left), env(-exact-safe-area-corners-inset-left)))") : native ? "calc(16px + var(--exact-safe-area-inset-left))" : "16px"
+  derive paddingRight = folded ? (sidesOff ? "calc(16px + max(var(--exact-safe-area-inset-right), env(-exact-safe-area-corners-inset-right)))" : "calc(16px + max(env(safe-area-inset-right), env(-exact-safe-area-corners-inset-right)))") : native ? "calc(16px + var(--exact-safe-area-inset-right))" : "16px"
   state draft = ""
   state count = 0
   derive rows = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
