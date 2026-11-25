@@ -35,6 +35,9 @@ pub(super) struct Input {
     held: Rc<Cell<Option<Press>>>,
     /// Whether the pointer is over the window.
     inside: bool,
+    /// Whether hover and the cursor still owe the seat the window turned to
+    /// a move to its point.
+    rehover: bool,
     previous_click: Option<(f64, (f32, f32), u32)>,
     focused: bool,
     occluded: bool,
@@ -103,11 +106,18 @@ impl Input {
             return Ok(());
         };
         let modifiers = pointer_modifiers(modifiers);
+        // The window turned to this seat: hover and the cursor go to its point
+        // before its next button or wheel, once the presenter can place it
+        self.rehover |= turned;
         let result = presenter.with_pointer_modifiers(modifiers, |presenter| {
-            // The window turned to this seat: hover and the cursor go to its point first
             let pressed = matches!(pointed, Pointed::Button { .. } | Pointed::Wheel { .. });
-            if let Some(point) = self.pointer.filter(|_| turned && pressed) {
-                self.moved(presenter, window, point, now_ms)?;
+            if self.rehover && pressed && pointer_mapped(presenter, window) {
+                self.rehover = false;
+                if let Some(point) = self.pointer {
+                    if let Err(error) = self.moved(presenter, window, point, now_ms) {
+                        eprintln!("exact: {error}");
+                    }
+                }
             }
             self.deliver(presenter, window, pointed, now_ms)
         });
@@ -124,6 +134,7 @@ impl Input {
     ) -> Result<(), String> {
         match pointed {
             Pointed::Entered(point) | Pointed::Moved(point) => {
+                self.rehover &= !pointer_mapped(presenter, window);
                 self.moved(presenter, window, point, now_ms)
             }
             Pointed::Left => self.left(presenter, window, now_ms),
@@ -179,7 +190,10 @@ impl Input {
         }
         match *pointed {
             Pointed::Entered(_) | Pointed::Moved(_) => self.inside = true,
-            Pointed::Left => return followed.then_some(false),
+            Pointed::Left => {
+                self.inside &= !followed;
+                return followed.then_some(false);
+            }
             Pointed::Button {
                 serial,
                 button,
@@ -734,6 +748,19 @@ mod tests {
     }
 
     #[test]
+    fn a_seat_turned_to_brings_its_own_place_from_outside_the_window() {
+        let mut input = Input::default();
+        input.listen(Rc::default());
+        hear(&mut input, 2, Pointed::Entered((50., 60.)));
+        hear(&mut input, 1, Pointed::Entered((10., 10.)));
+        hear(&mut input, 1, Pointed::Left);
+        assert!(!input.inside, "the followed seat left");
+        assert_eq!(input.admit(2, &button(3, LEFT, true)), Some(true));
+        assert_eq!(input.pointer, Some((50., 60.)));
+        assert!(input.inside, "the seat turned to is over the window");
+    }
+
+    #[test]
     fn a_lift_names_the_first_left_press_while_it_is_the_seats_one_button() {
         let held = Rc::new(Cell::new(None));
         let mut input = Input::default();
@@ -796,6 +823,8 @@ mod tests {
             after.ctrl && !after.shift,
             "the keyboard's right Control is back"
         );
+        presenter.hold_modifier("ControlRight", false);
+        assert!(!presenter.modifiers().ctrl, "and its release clears it");
     }
 
     #[test]

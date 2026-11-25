@@ -12,12 +12,17 @@ const APP: &str = r##"component App
   state swipes = 0
   state presses = 0
   state hidden = false
+  state blinked = false
   action moved(dx: number, dy: number)
     pans = pans + 1
   action swiped
     swipes = swipes + 1
   action pressed
     presses = presses + 1
+  action blink
+    blinked = true
+  action unblink
+    blinked = false
   action rename
     label = "Kawaguchi"
   action hide
@@ -39,6 +44,7 @@ const APP: &str = r##"component App
       box testId="hiding" draggable=true dataTransfer=DataTransfer(text="hiding") visibility=(hidden ? "hidden" : "visible") pointerdown=hide width=300 height=40
       box testId="hidden-source" draggable=true dataTransfer=DataTransfer(text="hidden") visibility="hidden" width=300 height=40
         box testId="shown-child" visibility="visible" width=300 height=40
+      box testId="blink" draggable=true dataTransfer=DataTransfer(text="blink") visibility=(blinked ? "hidden" : "visible") pointerdown=blink pointermove=unblink width=300 height=20
       box testId="clear" draggable=true dataTransfer=DataTransfer(text="clear") opacity=0 width=300 height=20
       column overflow="hidden" height=0
         box testId="cut" draggable=true dataTransfer=DataTransfer(text="cut") width=300 height=20
@@ -286,6 +292,30 @@ fn a_source_hidden_at_the_press_or_by_the_lift_lifts_nothing() {
     );
     drag(&mut p, "shown-child", 40., 0.);
     assert!(texts(&lifts).is_empty());
+}
+
+/// Show the frame the presenter paints now, as a window presents it.
+fn show(p: &mut Presenter<()>) {
+    let frame = p.display_frame().unwrap();
+    assert!(p.display_complete(&frame));
+}
+
+#[test]
+fn a_frame_that_hid_the_source_gives_its_lift_no_icon() {
+    let (mut p, lifts) = boot();
+    show(&mut p);
+    let rect = p.box_of(view(&p, "blink")).unwrap().rect;
+    let (x, y, t) = (rect.0 + 10., rect.1 + 5., p.host().now() + 10.);
+    // It arms, then its pointerdown hides it, and that frame shows
+    p.pointer_down(x, y, t).unwrap();
+    show(&mut p);
+    // Its pointermove shows it again before the lift
+    p.pointer_move(x + 1., y, t + 16.).unwrap();
+    p.pointer_move(x + 40., y, t + 32.).unwrap();
+    p.pointer_up(x + 40., y, t + 48.).unwrap();
+    let lift = lifts.borrow_mut().pop().expect("it shows at the lift");
+    assert_eq!(lift.text, "blink");
+    assert!(lift.picture.is_none(), "the frame last shown hid it");
 }
 
 #[test]

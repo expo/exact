@@ -243,15 +243,7 @@ impl<D: exact_runner::DataSource> Presenter<D> {
     /// `id`'s box as it shows, in points: within its clip, so a card a
     /// scroller cuts off is dragged as its shown part.
     fn shown_box(&mut self, id: ViewId) -> Option<(f32, f32, f32, f32)> {
-        let painted = self.box_of(id)?;
-        let rect = painted.rect;
-        let Some(clip) = painted.clip else {
-            return Some(rect);
-        };
-        let (left, top) = (rect.0.max(clip.0), rect.1.max(clip.1));
-        let right = (rect.0 + rect.2).min(clip.0 + clip.2);
-        let bottom = (rect.1 + rect.3).min(clip.1 + clip.3);
-        Some((left, top, (right - left).max(0.), (bottom - top).max(0.)))
+        self.box_of(id).as_ref().map(clipped)
     }
 }
 
@@ -442,8 +434,10 @@ impl<D: exact_runner::DataSource> Presenter<D> {
         id: ViewId,
         origin: (f32, f32),
     ) -> (Option<LiftPicture>, (f32, f32)) {
-        let shown = self.box_of(id).is_some_and(|b| b.visible);
-        let rect = self.shown_box(id).filter(|_| shown);
+        // The box by the node's identity among the frame's own, whatever the
+        // tree has done since
+        let painted = self.boxes.iter().find(|b| b.id == id).filter(|b| b.visible);
+        let rect = painted.map(clipped);
         let cut = rect
             .zip(self.shown.as_ref())
             .and_then(|(rect, (pixels, scale))| crop(pixels, *scale, rect));
@@ -464,6 +458,18 @@ impl<D: exact_runner::DataSource> Presenter<D> {
             .filter(|_| drags)
             .map(|pixels| (pixels.clone(), scale));
     }
+}
+
+/// `painted`'s box within its clip, in points.
+fn clipped(painted: &crate::paint::PaintedBox) -> (f32, f32, f32, f32) {
+    let rect = painted.rect;
+    let Some(clip) = painted.clip else {
+        return rect;
+    };
+    let (left, top) = (rect.0.max(clip.0), rect.1.max(clip.1));
+    let right = (rect.0 + rect.2).min(clip.0 + clip.2);
+    let bottom = (rect.1 + rect.3).min(clip.1 + clip.3);
+    (left, top, (right - left).max(0.), (bottom - top).max(0.))
 }
 
 /// The pixels of `pixmap`, drawn `scale` pixels a point, within `rect` (in

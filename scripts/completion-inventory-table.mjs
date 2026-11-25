@@ -147,9 +147,10 @@ export const classifications = [
     ["painted:host/painted/src/presenter/clipboard.rs", "Presenter::clipboard_action"],
     ["painted:host/painted/src/presenter/collection.rs", "Presenter::collection_scroll_turn Presenter::dispatch_authored_scroll"],
     ["painted:host/painted/src/presenter/contact.rs",
-      "Presenter::contact_live Presenter::contact_position Presenter::pan_candidate Presenter::pointer_cancel Presenter::pointer_down Presenter::pointer_down_counted " +
+      "Presenter::contact_live Presenter::contact_position Presenter::pointer_cancel Presenter::pointer_down Presenter::pointer_down_counted " +
       "Presenter::pointer_abandoned Presenter::pointer_lost Presenter::pointer_move Presenter::pointer_up " +
       "Presenter::pointerdown_prevents_focus Presenter::press_lifted"],
+    ["painted:host/painted/src/presenter/contact/candidate.rs", "Presenter::pan_candidate Presenter::starts_toward"],
     ["painted:host/painted/src/presenter/contact/mouse.rs", "Presenter::pointer_down_with_clicks"],
     ["painted:host/painted/src/presenter/contact/pinch.rs", "Presenter::allows_touch_zoom Presenter::begin_transform_pinch Presenter::drive_transform_pinch Presenter::pinch_binding Presenter::tracking_transform_pinch Presenter::transform_finger"],
     ["painted:host/painted/src/presenter/control.rs", "Presenter::commit_control_value Presenter::key_click Presenter::toggle_control Presenter::toggle_control_with_press"],
@@ -157,7 +158,9 @@ export const classifications = [
       "FieldTextLayout::runs FieldTextLayout::same_shape Presenter::access_focus Presenter::access_focus_node Presenter::access_origin Presenter::access_scroll_text_line Presenter::access_select Presenter::access_selection Presenter::access_editor Presenter::accessible_field_view Presenter::enabled_access_view Presenter::access_text_layout " +
       "Presenter::access_view"],
     ["painted:host/painted/src/text/field.rs", "FieldTextRun::character_metrics FieldTextRun::same_metrics"],
-    ["painted:host/painted/src/presenter/drag_out.rs", "Presenter::ask_drag Presenter::drag_of Presenter::drag_source_at Presenter::inside Presenter::lift_source_at"],
+    ["painted:host/painted/src/presenter/drag_out.rs",
+      "Presenter::ask_drag Presenter::carried_values Presenter::drag_of Presenter::drag_source_at Presenter::inside Presenter::lift_source_at " +
+      "Presenter::mouse_lift Presenter::mouse_lift_of Presenter::mouse_lifts Presenter::set_lifter"],
     ["painted:host/painted/src/presenter/reader_selection.rs",
       "Presenter::reader_select Presenter::report_selection Presenter::selection_policy Presenter::selection_reports"],
     ["painted:host/painted/src/presenter/reader_selection/mouse.rs",
@@ -165,7 +168,8 @@ export const classifications = [
     ["painted:host/painted/src/presenter/edit_menu.rs", "Presenter::edit_menu_action Presenter::edit_menu_at Presenter::edit_menu_key Presenter::edit_menu_valid Presenter::field_menu_default Presenter::open_edit_menu"],
     ["painted:host/painted/src/presenter/events.rs",
       "Presenter::clear_removed_focus Presenter::cursor_at Presenter::focus_place Presenter::follow_pointer Presenter::hold_modifier Presenter::hover " +
-      "Presenter::hover_at Presenter::memory_warning Presenter::modifiers Presenter::move_focus_serviced Presenter::restore_focus Presenter::set_window_active Presenter::submit_event"],
+      "Presenter::hover_at Presenter::memory_warning Presenter::modifiers Presenter::move_focus_serviced Presenter::restore_focus Presenter::set_window_active Presenter::submit_event " +
+      "Presenter::with_pointer_modifiers"],
     ["painted:host/painted/src/presenter/field.rs", "Presenter::apply_field_edit Presenter::before_input Presenter::drain_field_select_tasks Presenter::field_select Presenter::set_range_text"],
     ["painted:host/painted/src/presenter/hatch.rs", "Presenter::hatch_act"],
     ["painted:host/painted/src/presenter/hosted.rs",
@@ -316,6 +320,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/display_frame.rs",
       "Presenter::acknowledge Presenter::display_complete Presenter::display_frame Presenter::display_presented Presenter::panel_complete Presenter::panel_frame Presenter::panel_lost " +
       "Presenter::submitted_picture SubmittedFrame::carried SubmittedFrame::image SubmittedFrame::mirror"],
+    ["painted:host/painted/src/presenter/drag_out.rs", "Presenter::keep_shown"],
   ]),
   group("hatch clocks", ["subscription"], "live hatch attachment and its timer/frame registration", "UI-owned",
     "host/painted/src/presenter/hatch.rs scopes hatches to live nodes, advances registered clocks and retires removed attachments; callbacks can dispatch through the current host.", [
@@ -1231,8 +1236,9 @@ export const classifications = [
     ["painted:host/painted/src/presenter/back.rs", "Presenter::back_key_down"],
     ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_button Presenter::bar_colors Presenter::content_scroller Presenter::read_bars"],
     ["painted:host/painted/src/presenter/contact.rs",
-      "Presenter::canvas_input_live Presenter::contact_down Presenter::depth Presenter::feedback_contains Presenter::focus_on_down Presenter::input_live " +
+      "Presenter::canvas_input_live Presenter::contact_down Presenter::feedback_contains Presenter::focus_on_down Presenter::input_live " +
       "Presenter::pointer_lift Presenter::pointer_moved Presenter::retire_acknowledged_pointer Presenter::retire_pointer"],
+    ["painted:host/painted/src/presenter/contact/candidate.rs", "Presenter::depth"],
     ["painted:host/painted/src/presenter/contact/mouse.rs", "Presenter::mouse_click_target"],
     ["painted:host/painted/src/presenter/control.rs", "Presenter::click_control Presenter::dispatch_control_press Presenter::menu_geometry Presenter::menu_press Presenter::set_control_value Presenter::size_controls"],
     ["painted:host/painted/src/presenter/edit_menu.rs", "Presenter::make_edit_menu Presenter::menu_field"],
