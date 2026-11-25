@@ -5699,24 +5699,30 @@ on the same finger stroke.
 
 #### Swipe to reply
 
-`swiperight` moves its node with the finger: it follows up to 64 points, then a fifth of
-the finger's travel, and the action runs if the node is at or past 64 points when the
-finger lifts. A finger reaches it only with `touch-action="pan-y"`, which leaves vertical
-drags to the list. A `transition` on `translate` springs the node back after the lift;
-without one it jumps back. The node's first child with `swipeIndicator=true` goes from its
-own `opacity` and `scale` to 1 as the swipe reaches 64 points, and back by its own
-`transition` after the lift. Give the node `position="relative"`, so an absolute indicator
+An element takes one `swipe=action` and, beside it, exactly one of `swipe-follow`, a swipe
+the node follows, or `swipe-flick`, the platform's flick (below). `swipe-follow="right"`
+moves its node with the finger: it follows up to 64 points, then a fifth of the finger's
+travel, and the action runs if the node is at or past 64 points when the finger lifts.
+`swipe-follow` is the quoted `"right"` or `"left"` written on the element; for a direction
+that depends on data, write two `if` branches. A finger reaches it only with a
+`touch-action` that leaves it the sideways drag: write `touch-action="pan-y"`, which leaves
+vertical drags to the list (`none` keeps both from the page). A `transition` on
+`translate` springs the node back after the lift; without one it jumps back. The node's
+first child with `swipeIndicator=true` goes from its own `opacity` and `scale` to 1 as the
+swipe reaches 64 points, and back by its own `transition` after the lift (not in a painted
+content region's picture, which follows a row with no indicator); both are optional. Give the node `position="relative"`, so an absolute indicator
 is placed against the node and not against the row around it. `symbol:reply` is a speech
 bubble (SF Symbols' `bubble.left`); Messages' left-turning arrow, `arrowshape.turn.up.left`,
 has no named symbol, so an app declares it as an icon token. The iOS host plays a selection
 haptic as the swipe crosses 64 points, so the action plays none. `apps/messages`' bubble
 is a whole example.
 
-`swipeleft` is the mirror, for Discord's reply or a bubble of your own on the right: the
-node follows a leftward drag and the action runs at or past 64 points to the left. A node
-may have both, each direction running its own action. The directions are the screen's,
-in a right-to-left layout too. Neither reveals buttons: a row's Delete is `delete=`
-(`contract vocab swipe`).
+`swipe-follow="left"` is the mirror, for Discord's reply or a bubble of your own on the
+right: the node follows a leftward drag and the action runs at or past 64 points to the
+left. A node follows one direction. The directions are the screen's, in a right-to-left
+layout too. Neither reveals buttons: a row's Delete is `delete=` (`contract vocab swipe`).
+On a paragraph's run, put it on the paragraph or a box instead: only the web gives a run a
+view of its own. `tree` names the event `swiperight` or `swipeleft`.
 
 ```contract
 component Thread
@@ -5725,7 +5731,7 @@ component Thread
     replyTo = id
   view
     column align-items="flex-start" padding=12 gap=8
-      box position="relative" swiperight=reply("1") touch-action="pan-y"
+      box position="relative" swipe=reply("1") swipe-follow="right" touch-action="pan-y"
         transition="translate -exact-spring(300, 30, 1)" testId="bubble-1"
         image "symbol:reply" swipeIndicator=true position="absolute" left=-32 top=8 opacity=0 scale=0.5
           transition="opacity -exact-spring(300, 30, 1), scale -exact-spring(300, 30, 1)" aria-hidden=true
@@ -5736,17 +5742,20 @@ component Thread
 
 ```contract-test
 test "a swipe right answers the message"
-  tap "bubble-1" drag 100 0 from 10 10
+  tap "bubble-1" drag 100 0 from 40 10
   clock settle
   expect tree has "reply-bar"
 ```
 
 A test's drag is a real touch on an iOS simulator: start it where 100 points stay on the
-screen, and `clock settle` after it, so the spring back has ended when the screen is read.
+screen and at least 20 points from the window's left edge, which iOS keeps for its back
+gesture, and `clock settle` after it, so the spring back has ended when the screen is read.
+Drive a node that follows with `drag`, not `swipe`, whose flick also carries it past 64
+points on iOS.
 
 #### A flick that puts the keys away
 
-`swipe=action` with `swipe-direction="down"` is the platform's discrete swipe: nothing
+`swipe=action` with `swipe-flick="down"` is the platform's discrete swipe: nothing
 follows the finger, and the action runs once when iOS recognizes a quick flick down on the
 node or anything inside it, its field included. UIKit arbitrates it with the other gestures
 under the finger, as it does any swipe: a field whose text overflows scrolls instead. Only
@@ -5763,7 +5772,7 @@ component Composer
   action hideKeys
     blur("composer")
   view
-    column swipe=hideKeys swipe-direction="down" testId="composer-bar"
+    column swipe=hideKeys swipe-flick="down" testId="composer-bar"
       textarea id="composer" testId="composer" value=draft input=edit field-sizing="content" max-height=120
 ```
 

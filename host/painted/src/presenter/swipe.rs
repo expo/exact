@@ -26,7 +26,7 @@ impl Ways {
     }
     /// The indicator's progress at `x`: toward the node's way, and either
     /// way for a node with both.
-    fn progress(self, x: f64) -> f64 {
+    pub(super) fn progress(self, x: f64) -> f64 {
         let toward = match (self.right, self.left) {
             (true, true) => x.abs(),
             (false, true) => -x,

@@ -193,7 +193,7 @@ package typealias TopLayerBackdrop = (UInt32, CGRect, CGRect?)
 package typealias TopLayerGeometry = (frames: [TopLayerFrame], modal: Int?, backdrop: TopLayerBackdrop?)
 
 /// A swipe's host kind, with no payload: `swiperight` (12) and `swipeleft` (61), and `swipe` (66), the platform's
-/// discrete swipe in the node's `swipe-direction` (LLP 1057.001 §8).
+/// discrete swipe in the node's `swipe-flick` direction (LLP 1057.001 §8).
 package enum SwipeKind: UInt32 { case right = 12, left = 61, discrete = 66 }
 
 /// A runtime handle and its calls. `destroy` is idempotent at this layer and

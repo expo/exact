@@ -9,7 +9,7 @@ component SwipeLeft
   view
     column gap=12 padding=12
       text said testId="said"
-      box testId="left-row" swipeleft=say("L") touch-action="pan-y" width=300 height=60 background-color="#dddddd" transition="translate -exact-spring(300, 30, 1)"
+      box testId="left-row" swipe=say("L") swipe-follow="left" touch-action="pan-y" width=300 height=60 background-color="#dddddd" transition="translate -exact-spring(300, 30, 1)"
         text "left only"
-      box testId="both-row" swipeleft=say("l") swiperight=say("r") touch-action="pan-y" width=300 height=60 background-color="#cccccc" transition="translate -exact-spring(300, 30, 1)"
-        text "both ways"
+      box testId="right-row" swipe=say("r") swipe-follow="right" touch-action="pan-y" width=300 height=60 background-color="#cccccc" transition="translate -exact-spring(300, 30, 1)"
+        text "right only"

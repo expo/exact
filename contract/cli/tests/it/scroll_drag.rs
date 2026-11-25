@@ -28,8 +28,10 @@ const APP: &str = r#"component App
         text "a"
       scroll scrolldragend=ended testId="bare" height=100
         text "b"
-      box swipeleft=swiped("left") swiperight=swiped("right") testId="row"
+      box swipe=swiped("left") swipe-follow="left" testId="row"
         text "c"
+      box swipe=swiped("right") swipe-follow="right" testId="right-row"
+        text "d"
       column testId="plain"
 "#;
 
@@ -105,16 +107,14 @@ fn a_release_record_is_typed() {
 }
 
 #[test]
-fn swipeleft_mirrors_swiperight_with_its_arguments() {
+fn a_left_follow_mirrors_a_right_one_with_its_arguments() {
     let mut r = boot();
-    let row = view(&r, "row");
-    assert_eq!(
-        r.handlers_of(row),
-        vec![EventKind::Swipeleft, EventKind::Swiperight]
-    );
+    let (row, right) = (view(&r, "row"), view(&r, "right-row"));
+    assert_eq!(r.handlers_of(row), vec![EventKind::Swipeleft]);
+    assert_eq!(r.handlers_of(right), vec![EventKind::Swiperight]);
     r.dispatch(row, Event::of_host_kind(61, "").unwrap())
         .unwrap();
-    r.dispatch(row, Event::Swiperight).unwrap();
+    r.dispatch(right, Event::Swiperight).unwrap();
     r.dispatch(row, Event::Swipeleft).unwrap();
     assert_eq!(seen(&r), "left;right;left;");
 }

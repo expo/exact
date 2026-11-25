@@ -1079,13 +1079,23 @@ impl Emitter<'_> {
     /// action, curried arguments).
     fn attrs(
         &self,
+        tag: &str,
         attrs: &[contract_syntax::Attr],
     ) -> Result<(Vec<String>, Vec<String>), CompileError> {
         let mut props = Vec::new();
         let mut handlers = Vec::new();
         for a in attrs {
-            match contract_lower::tags::attr_valued(&a.name, &a.value) {
+            // A swipe's selector is its handler's name, and a flick's direction the `swipe-direction` row (LLP 1057.001 §8)
+            let Some(name) = contract_lower::vocab::swipe_row(tag, &a.name) else {
+                continue;
+            };
+            match contract_lower::tags::attr_valued(name, &a.value) {
                 Some(contract_lower::tags::AttrTarget::Handler(event)) => {
+                    let event = if event == "swipe" {
+                        contract_lower::vocab::swipe_event(tag, attrs)
+                    } else {
+                        event
+                    };
                     let (action, args): (&str, &[Expr]) = match &a.value {
                         Expr::Ident(action, _) => (action, &[]),
                         Expr::Call(action, args, _) => (action, args),
@@ -1098,7 +1108,7 @@ impl Emitter<'_> {
                         list(args, |x| self.expr(x))?
                     ));
                 }
-                _ => props.push(format!("({}, {})", string(&a.name), self.expr(&a.value)?)),
+                _ => props.push(format!("({}, {})", string(name), self.expr(&a.value)?)),
             }
         }
         Ok((props, handlers))
@@ -1117,7 +1127,7 @@ impl Emitter<'_> {
                 children,
                 ..
             } => {
-                let (props, handlers) = self.attrs(attrs)?;
+                let (props, handlers) = self.attrs(tag, attrs)?;
                 format!(
                     "(.element {} {} [{}] [{}] {})",
                     string(tag),
