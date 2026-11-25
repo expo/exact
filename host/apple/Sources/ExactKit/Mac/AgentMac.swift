@@ -171,7 +171,7 @@ extension Agent {
             if let range = NavigationRules.stack(routeKeys: keys, selected: key) {
                 navigation["stack"] = Array(keys[range])
                 let selected = routes[range.upperBound - 1]
-                navigation["presentation"] = selected.props["navigationPresentation"] == "modal" ? "modal" : NSNull()
+                navigation["presentation"] = NavigationRules.sheetLike(selected.props["navigationPresentation"]) ? "modal" : NSNull()
                 navigation["closedby"] = selected.props["closedby"] ?? NSNull()
             }
         }

@@ -190,7 +190,7 @@ extension NavigationHost {
     private var sheetRoute: (root: NodeView, route: NodeView)? {
         guard let selection, selection.at > 0, selection.stack.indices.contains(selection.at),
               let root = presenter.views[selection.root], let route = presenter.views[selection.stack[selection.at]],
-              ["modal", "fullscreen"].contains(route.props["navigationPresentation"] ?? "") else { return nil }
+              NavigationRules.presents(route.props["navigationPresentation"]) else { return nil }
         return (root, route)
     }
 

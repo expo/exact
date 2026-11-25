@@ -662,7 +662,7 @@ extension NodeView {
     /// sheet is UIKit's glass (LLP 1141.001 D3).
     package var groundIsSheets: Bool {
         #if os(iOS)
-        guard props["navigationPresentation"] == "modal", !wrote("background_color"),
+        guard NavigationRules.sheetLike(props["navigationPresentation"]), !wrote("background_color"),
               case .object(let o)? = style["background_color"] else { return false }
         return o["sys"]?.string == "systemBackgroundColor"
         #else

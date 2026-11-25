@@ -208,6 +208,7 @@ mod native_buttons;
 mod native_state;
 mod navigation_bar;
 mod navigation_detent;
+mod navigation_popover;
 mod navigation_split;
 mod negative_margin;
 mod notify;

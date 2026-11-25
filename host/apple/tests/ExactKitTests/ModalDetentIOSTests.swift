@@ -427,7 +427,7 @@ final class ModalDetentIOSTests: XCTestCase {
         for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("automatic", .automatic), ("page", .pageSheet), (nil, .pageSheet)] {
             XCTAssertEqual(ModalController.sheetStyle(sizing), style, sizing ?? "unsaid")
             route.props["navigationSizing"] = sizing
-            let made = ModalController(host: session.presenter.modalHost, route: route, fullscreen: false, detent: nil, grabber: nil)
+            let made = ModalController(host: session.presenter.modalHost, route: route, kind: "modal", detent: nil, grabber: nil)
             let plain = UIViewController()
             plain.modalPresentationStyle = style
             XCTAssertEqual(made.modalPresentationStyle, plain.modalPresentationStyle, sizing ?? "unsaid")

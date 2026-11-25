@@ -35,7 +35,7 @@ pub(super) fn unused(em: &Em, roots: bool) -> Vec<&'static str> {
                 plan,
                 n,
                 PropId::NavigationPresentation,
-                &["modal", "fullscreen"],
+                &["modal", "fullscreen", "popover"],
             )
         }),
         bars,

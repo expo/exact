@@ -508,10 +508,16 @@ fn a_pushed_route_has_the_up_arrow_which_goes_back() {
 
 #[test]
 fn a_modal_route_blocks_the_shell_tab_bar_until_dismissed() {
-    for presentation in ["modal", "fullscreen", "push"] {
+    // A popover is a sheet here (LLP 1123 D7)
+    for presentation in ["modal", "fullscreen", "push", "popover"] {
+        let anchor = if presentation == "popover" {
+            " navigationPopoverAnchor=\"open\""
+        } else {
+            ""
+        };
         let source = APP.replace(
             "testId=\"route-detail\"",
-            &format!("testId=\"route-detail\" navigationPresentation=\"{presentation}\""),
+            &format!("testId=\"route-detail\" navigationPresentation=\"{presentation}\"{anchor}"),
         );
         let (mut p, _) = barred(&source);
         tap(&mut p, "open").unwrap();
@@ -519,7 +525,7 @@ fn a_modal_route_blocks_the_shell_tab_bar_until_dismissed() {
         let modal = presentation != "push";
         // Under a sheet the bar is the page's, under its scrim.
         let title = match presentation {
-            "modal" => "Home",
+            "modal" | "popover" => "Home",
             "fullscreen" => "Detail",
             _ => "Other",
         };

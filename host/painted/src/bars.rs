@@ -247,10 +247,7 @@ impl<D: DataSource> Host<D> {
                     // A presented route starts a stack of its own (LLP
                     // 1035.001 D4): it is not pushed, and its Back control
                     // is an item of its bar.
-                    let presented = matches!(
-                        node.props.str(PropId::NavigationPresentation),
-                        Some("modal" | "fullscreen")
-                    );
+                    let presented = node.props.presentation().is_some();
                     let pushed = index > 0 && !presented;
                     let shape = kernel.header_shape(*route, back, pushed, &pressed);
                     let asked_none = node.props.str(PropId::NavigationBar) == Some("none");

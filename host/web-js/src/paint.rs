@@ -318,7 +318,7 @@ pub fn binding(
             PropId::Disabled if kind == NodeType::Control => flag(DISABLED, "v===true"),
             PropId::ImageSource if kind == NodeType::Image => flag(POLICY, "v!=null&&String(v).startsWith(\"symbol:\")"),
             PropId::BackgroundMaterial => flag(POLICY, "v!=null&&v!==\"none\""),
-            PropId::NavigationPresentation => flag(POLICY, "v===\"modal\""),
+            PropId::NavigationPresentation => flag(POLICY, "v===\"modal\"||v===\"popover\""),
             PropId::SemanticTag => flag(OUTSIDE, "v===\"dialog\""),
             PropId::Popover => flag(OUTSIDE, "v!=null"),
             _ => None,

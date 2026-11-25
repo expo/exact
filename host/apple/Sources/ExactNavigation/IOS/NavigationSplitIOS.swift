@@ -258,7 +258,7 @@ extension NavigationHost {
         guard let split else { return ([], []) }
         let columns = split.showing, over = presenter.modalHost.routes
         if over.isEmpty { return columns }
-        return ([], over.allSatisfy { $0.kind == "modal" } ? columns.beside + columns.under : [])
+        return ([], over.allSatisfy { NavigationRules.sheetLike($0.kind) } ? columns.beside + columns.under : [])
     }
 
     /// Each route the split shows beside the stack's top or under a pane

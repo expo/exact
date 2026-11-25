@@ -382,15 +382,19 @@ fn under_a_sheet<'a>(
             let top = rs.iter().position(|r| {
                 node(*r).is_some_and(|(_, p, _)| p.str(PropId::NavigationKey) == Some(key))
             })?;
-            let modal = node(rs[top])
-                .is_some_and(|(_, p, _)| p.str(PropId::NavigationPresentation) == Some("modal"));
+            let modal = node(rs[top]).is_some_and(|(_, p, _)| {
+                p.presentation()
+                    .is_some_and(exact_kernel::props::Presentation::sheet_like)
+            });
             if !modal || top == 0 {
                 return None;
             }
             // The page is the last route beneath the top that is not a sheet.
             let sheet = |r: ViewId| {
-                node(r)
-                    .is_some_and(|(_, p, _)| p.str(PropId::NavigationPresentation) == Some("modal"))
+                node(r).is_some_and(|(_, p, _)| {
+                    p.presentation()
+                        .is_some_and(exact_kernel::props::Presentation::sheet_like)
+                })
             };
             let page = (0..top).rev().find(|i| !sheet(rs[*i])).unwrap_or(0);
             let pane = kernel.host_block(rs[page]).is_some_and(|b| {

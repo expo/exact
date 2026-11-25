@@ -414,10 +414,16 @@ fn another_tabs_stack_is_no_arrival() {
 
 #[test]
 fn a_modal_route_blocks_the_tab_bar_until_dismissed() {
-    for presentation in ["modal", "fullscreen", "push"] {
+    // A popover is a sheet here (LLP 1123 D7)
+    for presentation in ["modal", "fullscreen", "push", "popover"] {
+        let anchor = if presentation == "popover" {
+            " navigationPopoverAnchor=\"open\""
+        } else {
+            ""
+        };
         let source = APP.replace(
             "testId=\"route-detail\"",
-            &format!("testId=\"route-detail\" navigationPresentation=\"{presentation}\""),
+            &format!("testId=\"route-detail\" navigationPresentation=\"{presentation}\"{anchor}"),
         );
         let mut p = boot_source(&source);
         click(&mut p, "open");

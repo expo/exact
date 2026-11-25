@@ -392,7 +392,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             let panel = tabs?.panels[index].id
             var presented = false
             return (index == at ? Array(routes[range]) : routes).map { node -> RouteController in
-                presented = presented || ["modal", "fullscreen"].contains(node.props["navigationPresentation"] ?? "")
+                presented = presented || NavigationRules.presents(node.props["navigationPresentation"])
                 let c = controllers[node.id] ?? RouteController(node)
                 // The projected route keeps the page's scrolling when its root owns overflow.
                 c.pageScrollAxes = root.scroll.map { ($0.scrollsX, $0.scrollsY) }

@@ -4,6 +4,7 @@ use super::*;
 
 pub(crate) mod arrangement;
 pub(crate) mod bottom_toolbar;
+pub(crate) mod popover;
 pub(crate) mod tab_accessory;
 
 impl Lowerer<'_> {
@@ -505,6 +506,7 @@ impl NavPlace {
                 a.span,
             );
         }
+        popover::check(attrs, self.is_route(attrs))?;
         // A sheet opens at, and a route may hold it at, one of its own heights, which its route
         // says; a list the compiler cannot read is given the benefit of the doubt (iOS journals
         // a miss).

@@ -113,6 +113,26 @@ pub struct PropList {
     entries: Vec<(PropId, PropValue)>,
 }
 
+/// @ref LLP 1123 D7 — how a route is presented (`navigationPresentation`). A popover starts a
+/// presentation's stack as a sheet does, and is shown as one where a host has no popovers and where
+/// UIKit adapts it in a compact-width window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Presentation {
+    /// `modal`: a sheet.
+    Sheet,
+    /// `popover`: anchored to the element its `navigationPopoverAnchor` names.
+    Popover,
+    /// `fullscreen`: over the whole screen.
+    FullScreen,
+}
+
+impl Presentation {
+    /// Whether it is a sheet where a host has no popovers: a sheet or a popover.
+    pub fn sheet_like(self) -> bool {
+        matches!(self, Self::Sheet | Self::Popover)
+    }
+}
+
 impl PropList {
     /// An empty list.
     pub const fn new() -> Self {
@@ -138,6 +158,16 @@ impl PropList {
     /// The boolean value for `id`, if set and a boolean.
     pub fn bool(&self, id: PropId) -> Option<bool> {
         self.get(id).and_then(PropValue::as_bool)
+    }
+
+    /// How the route these props are is presented; `None` where it is pushed or not a route.
+    pub fn presentation(&self) -> Option<Presentation> {
+        match self.str(PropId::NavigationPresentation)? {
+            "modal" => Some(Presentation::Sheet),
+            "popover" => Some(Presentation::Popover),
+            "fullscreen" => Some(Presentation::FullScreen),
+            _ => None,
+        }
     }
 
     /// The HTML elements that a semantic tag selects ahead of the node's usual element.

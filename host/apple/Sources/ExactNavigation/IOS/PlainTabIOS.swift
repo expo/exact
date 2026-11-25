@@ -115,7 +115,7 @@ extension NavigationHost {
     func tabWantsSplit(_ route: RouteController?) -> Bool {
         UIDevice.current.userInterfaceIdiom == .pad && !ExactEnv.authoredChrome &&
             route?.node.props["navigationSplit"] == "split" &&
-            !["modal", "fullscreen"].contains(route?.node.props["navigationPresentation"] ?? "")
+            !NavigationRules.presents(route?.node.props["navigationPresentation"])
     }
 
     /// Tab `index`'s controller.

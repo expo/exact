@@ -202,7 +202,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         let view = surface
         // The route's view takes its accent as its tint, which its backdrop in the tint is resolved by
         assign(view, \.tintColor, node.ownAccent)
-        let modal = node.props["navigationPresentation"] == "modal"
+        let modal = NavigationRules.sheetLike(node.props["navigationPresentation"])
         let overPage = node.paintsOverPage
         let key = overPage ? []
             : modal ? [ownBackdrop(dark: false), ownBackdrop(dark: true)]

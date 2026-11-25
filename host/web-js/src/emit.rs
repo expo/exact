@@ -1249,6 +1249,9 @@ impl Em<'_> {
                         format!("()=>{{const v=({f})();return v==null?v:!v}}")
                     } else if prop == PropId::GlassGroup {
                         format!("()=>{{const v=({f})();return v===-1?\"auto\":v}}")
+                    } else if prop == PropId::NavigationPresentation {
+                        // A popover route is this host's sheet (LLP 1123 D7), as `element.rs` writes it
+                        format!("()=>{{const v=({f})();return v===\"popover\"?\"modal\":v}}")
                     } else if let Some(value) =
                         crate::svg_lengths::binding(&mut self.uses, prop, &f, &e)
                     {

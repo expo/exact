@@ -230,7 +230,7 @@ final class SplitHost {
         controller?.split(false, width: nil, empty: false)
     }
 
-    private static func sheet(_ route: NodeView) -> Bool { ["modal", "fullscreen"].contains(route.props["navigationPresentation"] ?? "") }
+    private static func sheet(_ route: NodeView) -> Bool { NavigationRules.presents(route.props["navigationPresentation"]) }
 
     /// Read the runner's rule every batch: layout-only style changes can
     /// leave the wire's frames and paint unchanged. Only the prior list's

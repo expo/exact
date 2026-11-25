@@ -122,10 +122,7 @@ impl<D: DataSource> Runner<D> {
         route.props.str(PropId::NavigationKey)?;
         if route.style.display != Display::Flex
             || route.style.flex_direction != FlexDirection::Row
-            || matches!(
-                route.props.str(PropId::NavigationPresentation),
-                Some("modal" | "fullscreen")
-            )
+            || route.props.presentation().is_some()
         {
             return None;
         }
@@ -206,10 +203,7 @@ impl<D: DataSource> Runner<D> {
     pub fn stack_split(&self, route: ViewId, retained: Option<ViewId>) -> Option<StackSplit> {
         let node = self.kernel.node(route)?;
         node.props.str(PropId::NavigationKey)?;
-        if matches!(
-            node.props.str(PropId::NavigationPresentation),
-            Some("modal" | "fullscreen")
-        ) {
+        if node.props.presentation().is_some() {
             return None;
         }
         let said = node.props.str(PropId::NavigationSplit);

@@ -191,7 +191,10 @@ impl Before {
         else {
             return;
         };
-        let modal = routes[selected].props.str(PropId::NavigationPresentation) == Some("modal");
+        let modal = routes[selected]
+            .props
+            .presentation()
+            .is_some_and(exact_kernel::props::Presentation::sheet_like);
         for (index, route) in routes.iter().enumerate() {
             if let Some(header) = bar_header(src, handlers, route.id) {
                 self.bars.insert(header);

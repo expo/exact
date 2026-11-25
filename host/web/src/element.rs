@@ -834,6 +834,10 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
         }
         let text = match value {
             PropValue::Str(_) if id == PropId::AtomFaces => faces.clone(),
+            // @ref LLP 1123 D7 — a popover route is this host's sheet until its own popovers (stage 4)
+            PropValue::Str(s) if id == PropId::NavigationPresentation && s == "popover" => {
+                "modal".into()
+            }
             PropValue::Str(s) => s.to_string(),
             PropValue::Bool(b) => b.to_string(),
             PropValue::Int(i) => i.to_string(),
