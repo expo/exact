@@ -879,7 +879,13 @@ fn predictive_back_seeks_the_pops_flights_and_springs_on_or_back() {
         assert!(p.back_progress(1, 0.4, 0, now + 50.));
         after(&mut p, 500.0);
         // Compose's NavHost seeks its shared transition by the gesture.
-        assert_eq!(flight(&p), (hero, thumb, 0.4), "held by the gesture");
+        // By play time: the bounds spring's value 40 % into it.
+        let held = 1.0 - 4.6 * (-3.6f32).exp();
+        let (from, to, progress) = flight(&p);
+        assert!(
+            (from, to) == (hero, thumb) && near(progress, held),
+            "{progress}"
+        );
         let now = p.host().now();
         if commit {
             assert!(p.system_back(now));
@@ -890,8 +896,8 @@ fn predictive_back_seeks_the_pops_flights_and_springs_on_or_back() {
         after(&mut p, 50.0);
         let progress = flight(&p).2;
         match commit {
-            true => assert!(progress > 0.4 && progress < 1.0, "{progress}"),
-            false => assert!(progress < 0.4 && progress > 0.0, "{progress}"),
+            true => assert!(progress > held && progress < 1.0, "{progress}"),
+            false => assert!(progress < held && progress > 0.0, "{progress}"),
         }
         after(&mut p, 1000.0);
         assert!(p.host().flight_frames().is_empty());

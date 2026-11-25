@@ -431,13 +431,18 @@ class SharedElementsTest {
         pixels.recycle()
     }
 
+    @Test fun aRouteFlightsFadeLeadsItsBoxAsComposesSprings() {
+        assertEquals(0.849f, SharedElements.fade(0.5f), 0.005f)
+        assertEquals(0f, SharedElements.fade(0f), 0.001f)
+    }
+
     @Test fun aDissolvesBoxEndsWhereItsContentsDo() {
         val t = Fixture()
         t.shared.begin(state(listOf(1))); t.define(definition(1, RectF(0f, 0f, 100f, 96f))); t.shared.finish()
         t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), dissolve = true))
         t.define(definition(2, RectF(0f, 0f, 100f, 24f))); t.shared.finish()
         val pixels = t.pixels()
-        // Halfway the box is 60 high; three quarters dissolved, its contents reach 42.
+        // Halfway the box is 60 high; 85 % dissolved, its contents reach about 35.
         assertNotEquals(Color.WHITE, pixels.getPixel(50, 30))
         assertEquals(Color.WHITE, pixels.getPixel(50, 50))
         pixels.recycle()

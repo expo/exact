@@ -33,6 +33,15 @@ const SLOP: f32 = 8.0;
 const FLING: f32 = 500.0;
 /// How long a cancelled preview takes to come back.
 const RETURN_MS: f64 = 150.0;
+/// About how long Compose's default bounds spring (stiffness 400, critically
+/// damped) takes to land, ms.
+const SEEK_MS: f64 = 450.0;
+
+/// The bounds spring's value `ms` into it.
+fn spring_at(ms: f64) -> f32 {
+    let w = 20.0 * ms / 1000.0;
+    (1.0 - (1.0 + w) * (-w).exp()) as f32
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(in crate::presenter) enum Gesture {
@@ -692,7 +701,7 @@ impl<D: DataSource> Presenter<D> {
                 let pairs = self.stage.pops.2.clone();
                 let progress = match self.stage.preview.and_then(|p| p.container) {
                     Some(_) => zoom::emphasized(progress),
-                    None => progress,
+                    None => spring_at(self.play_ms(progress, 0.0)),
                 };
                 self.host.seek_flights(&pairs, progress);
             }
@@ -715,6 +724,15 @@ impl<D: DataSource> Presenter<D> {
             let curve = p.release_curve();
             self.host.release_flights(Some(&curve), false);
         }
+    }
+
+    /// Where predictive Back's `progress` seeks a pop, ms into it: by play
+    /// time, as Compose seeks a transition (`SeekableTransitionState`), which
+    /// lasts as long as its longest part, an exit `exit_ms` long or the
+    /// bounds spring of the names it flies.
+    pub(super) fn play_ms(&self, progress: f32, exit_ms: f64) -> f64 {
+        let flies = self.host.flights.enabled && !self.stage.pops.2.is_empty();
+        f64::from(progress) * if flies { exit_ms.max(SEEK_MS) } else { exit_ms }
     }
 
     /// What Back would close or pop now, where the stage can preview it:

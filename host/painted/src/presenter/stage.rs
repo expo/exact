@@ -1398,7 +1398,7 @@ impl<D: DataSource> Presenter<D> {
         }
         match &self.stage.preview {
             Some(p) => match self.previewed_exit(p) {
-                Some(exit) => (exit.pose(f64::from(p.shown(now)) * exit.ms()), Pose::REST),
+                Some(exit) => (exit.pose(self.play_ms(p.shown(now), exit.ms())), Pose::REST),
                 None => (p.page_pose(now, width, self.viewport.1), Pose::REST),
             },
             None => (Pose::REST, Pose::REST),

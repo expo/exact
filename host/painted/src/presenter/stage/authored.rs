@@ -134,7 +134,7 @@ impl<D: DataSource> Presenter<D> {
             self.stage.shift = None;
             return;
         }
-        let start = now - f64::from(seek.unwrap_or(0.0)) * ms;
+        let start = now - seek.map_or(0.0, |p| self.play_ms(p, ms).min(ms));
         let bar = (self.stage.bar.as_ref())
             .filter(|(route, ..)| *route == old && sheet.is_none())
             .map(|(_, tape, frame)| (tape.clone(), *frame));

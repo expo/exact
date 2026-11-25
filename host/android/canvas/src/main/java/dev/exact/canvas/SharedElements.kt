@@ -246,7 +246,7 @@ internal class SharedElements(
             // A dissolve's box ends where its contents do, each scaled by width: the source's
             // height at first, the destination's once it has dissolved, as Material's container
             // transform masks its height, so neither shows past the other.
-            val t = ((flight.progress - 0.2f) / 0.4f).coerceIn(0f, 1f)
+            val t = fade(flight.progress)
             val shown = RectF(pose.box)
             if (flight.content != null && element.fit != LABEL) {
                 val w = pose.box.width()
@@ -268,10 +268,9 @@ internal class SharedElements(
                 if (opacity < 1f) canvas.saveLayerAlpha(pose.box, (opacity * 255f + 0.5f).toInt())
                 canvas.translate(pose.box.left, pose.box.top)
                 // A route change's source dissolves into the destination, as Compose's
-                // sharedBounds fades (LLP 1013.004 D3 step 4), so neither end jumps. It
-                // dissolves early in the flight, the two laid out differently overlapping
-                // briefly, and each holds full strength half that time, so content alike
-                // at both ends does not dim.
+                // sharedBounds fades (LLP 1013.004 D3 step 4), so neither end jumps: ahead of
+                // the box ([fade]), each holding full strength half that time, so content
+                // alike at both ends does not dim.
                 // Bounded by the box: a null bound is the view's clip, which would cut off
                 // what reaches into the bars' bands.
                 val bounds = RectF(0f, 0f, pose.box.width(), pose.box.height())
@@ -316,6 +315,16 @@ internal class SharedElements(
     internal fun isFlying(key: Long) = !reduced && key in flights
 
     companion object {
+        /** A route flight's crossfade at its bounds' [progress]: Compose fades a shared bounds' contents
+         * on nonSpatialExpressiveSpring (stiffness 1600) while the bounds move on stiffness 400, both
+         * critically damped, so the fade leads: halfway, it is 85 % done. */
+        internal fun fade(progress: Float): Float {
+            val spring = { x: Double -> 1.0 - (1.0 + x) * Math.exp(-x) }
+            var lo = 0.0; var hi = 20.0
+            repeat(32) { val x = (lo + hi) / 2; if (spring(x) < progress) lo = x else hi = x }
+            return spring(lo + hi).toFloat()
+        }
+
         /** An element's `fit`: a plain image's object-fit, or a label. */
         private val IMAGE = 1..5
         private const val LABEL = 6
