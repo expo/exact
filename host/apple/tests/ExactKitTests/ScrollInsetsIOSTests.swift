@@ -427,6 +427,43 @@ final class ScrollInsetsIOSTests: XCTestCase {
         XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, .zero)
     }
 
+    /// LLP 1123 D15: a lent scroll view's layout is told the container clearance it may take, the
+    /// writer takes what it cleared from the content inset, held to that allowance, the indicators take
+    /// the whole band, and the five borrowed properties come back on release.
+    func testALentScrollViewsLayoutTakesItsAllowanceAndItsPropertiesComeBack() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the band is a scene window's safe area") }
+        let (scroll, owner) = try scrollView(in: scene)
+        window?.rootViewController?.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 84, bottom: 0, right: 0)
+        owner.layoutIfNeeded()
+        // The module's own settings, which the host borrows
+        scroll.contentInset = UIEdgeInsets(top: 0, left: 0, bottom: 7, right: 0)
+        scroll.contentInsetAdjustmentBehavior = .always
+        scroll.automaticallyAdjustsScrollIndicatorInsets = true
+        var allowed: [UIEdgeInsets] = [], clears: CGFloat = 20
+        let lent = LentScrollIOS(view: scroll) { allowance in
+            allowed.append(allowance)
+            return UIEdgeInsets(top: 0, left: clears, bottom: 0, right: 0)
+        }
+        var rows = ScrollInsetsIOS.Rows()
+        rows.adjustment = .never
+        let band = owner.safeAreaInsets.left
+        lent.write(in: owner, terms: .init(), rows: rows)
+        XCTAssertEqual(allowed.last?.left, band, "its allowance is the container term")
+        XCTAssertEqual(scroll.contentInset.left, band - 20, "the band less what its layout cleared")
+        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets.left, band, "its indicators take the whole band")
+        // A layout that says it cleared more than it may is held to its allowance
+        clears = 500
+        lent.write(in: owner, terms: .init(), rows: rows)
+        XCTAssertEqual(scroll.contentInset.left, 0)
+        // An edge it ignores gives its layout none to take
+        lent.write(in: owner, terms: .init(container: [true, true, true, false]), rows: rows)
+        XCTAssertEqual(allowed.last?.left, 0)
+        lent.release()
+        XCTAssertEqual(scroll.contentInset, UIEdgeInsets(top: 0, left: 0, bottom: 7, right: 0))
+        XCTAssertEqual(scroll.contentInsetAdjustmentBehavior, .always)
+        XCTAssertTrue(scroll.automaticallyAdjustsScrollIndicatorInsets)
+    }
+
     func testAWriteOutOfAWindowWritesNothing() {
         let owner = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 600))
         let scroll = UIScrollView(frame: owner.bounds)

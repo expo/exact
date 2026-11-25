@@ -458,6 +458,24 @@ impl<D: DataSource> Host<D> {
         for root in self.runner.roots() {
             let _ = self.runner.kernel_mut().compute_layout(root, offer);
         }
+        // Answer the geometry facts from the layout (LLP 1123 D6), laying out again after each
+        // commit their answers make; the runner ends a chain of them at its bound, so this ends
+        loop {
+            match self.runner.refresh_geometry() {
+                Ok(Some(_)) => {
+                    for root in self.runner.roots() {
+                        let _ = self.runner.kernel_mut().compute_layout(root, offer);
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    crate::term::diagnostic(format_args!(
+                        "terminal geometry: the commit that answered the geometry facts again failed, so they keep their last answers: {error:?}"
+                    ));
+                    break;
+                }
+            }
+        }
         let t_layout = t0.elapsed();
         let mut layer_ops = Vec::new();
         for command in self.runner.take_commands() {

@@ -3,6 +3,7 @@
 mod cli;
 mod collections;
 mod command_line;
+mod geometry;
 mod input;
 mod reading;
 mod screen;

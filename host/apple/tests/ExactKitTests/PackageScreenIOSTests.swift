@@ -108,6 +108,16 @@ final class PackageScreenIOSTests: XCTestCase {
         XCTAssertEqual(declared.safeAreaRegions, 1)
         declared.release()
         XCTAssertEqual(lent.view.accessibilityHint, "released", "the package's release ran")
+        // The host holds the lent scroll view, and gives back what it borrowed when the view goes
+        let held = try XCTUnwrap(natives.lent(of: plain.id).first)
+        XCTAssertTrue(held.view === lent.view)
+        lent.view.contentInsetAdjustmentBehavior = .always
+        var never = ScrollInsetsIOS.Rows()
+        never.adjustment = .never
+        held.write(in: home.view, terms: .init(), rows: never)
+        XCTAssertEqual(lent.view.contentInsetAdjustmentBehavior, .never)
+        natives.destroy(id: plain.id)
+        XCTAssertEqual(lent.view.contentInsetAdjustmentBehavior, .always, "given back as the view goes")
         XCTAssertEqual(natives.safeArea(of: clearing.id)?.adjustsAdditionalSafeAreaInsets, true, "the app's declaration")
         XCTAssertNil(natives.safeArea(of: table.id), "a view that declares nothing")
     }
