@@ -19,6 +19,9 @@ pub(super) enum Event {
     Focus,
     /// The app's `hideWindow()`.
     Hide,
+    /// The session's end (`window::session_end`): the loop ends, whether or
+    /// not it ended the App, which a nested loop may hold.
+    Exit,
     ModalWake,
     Timer(std::sync::Arc<crate::timers::Fired>),
     Access(accesskit_winit::Event),

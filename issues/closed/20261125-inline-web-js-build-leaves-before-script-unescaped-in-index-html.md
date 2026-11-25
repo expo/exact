@@ -1,6 +1,7 @@
 # --inline web JS build leaves '<!--' before '<script' unescaped in index.html, breaking inline module parsing (and coupling CSP hash to on-disk app.js)
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Escape HTML script-data tags in --inline entry chunks after minification so disk and inline bytes match, and hash the shell's inline entry script in exact-render CSP headers.
 **Systems:** host/web-js bundler (--inline) and host/render CSP hashing
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

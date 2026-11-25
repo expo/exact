@@ -195,6 +195,13 @@ final class TabsIOSTests: XCTestCase {
         let session = try fixture("EXACT_SEARCH_TABS_PLAN")
         let tabs = try XCTUnwrap(session.presenter.navigationHost.tabController)
         XCTAssertEqual(tabs.mode, .tabSidebar)
+        let search = try node(session, "tab-find")
+        let agent = Agent(session: session)
+        waitFor("UIKit presents the pinned search tab") {
+            guard case .success(let view)? = agent.tabItem(search), let model = tabs.tabs.first(where: { $0 is UISearchTab }),
+                  let frame = model.frame(in: tabs.view), !frame.isEmpty else { return false }
+            return view.convert(view.bounds, to: tabs.view) == frame
+        }
         tabs.sidebar.isHidden = false
         let route = try XCTUnwrap(tabs.selectedViewController?.stackRoutes.first as? RouteController)
         until("the route clears the sidebar") { route.view.safeAreaInsets.left > 100 }
@@ -612,6 +619,94 @@ private final class RecordingTabDelegate: NSObject, UITabBarControllerDelegate {
     func tabBarController(_ tabs: UITabBarController, shouldSelect controller: UIViewController) -> Bool {
         calls.append("shouldSelect controller")
         return true
+    }
+}
+
+final class FloatingTabIOSTests: XCTestCase {
+    func testFloatingTabsWithTheSameTitleHaveTheirOwnCells() throws {
+        guard #available(iOS 18.0, *), UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad tab list") }
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "UIKit lays out its tab cells in a regular-width window")
+        }
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let session = ExactApp.shared.makeSession(label: "tab cells")
+        defer { session.destroy() }
+        let agent = Agent(session: session)
+        let animations = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(false)
+        defer { UIView.setAnimationsEnabled(animations) }
+        for count in [3, 6] {
+            let controller = UITabBarController()
+            let pages = (0..<count).map { _ -> UIViewController in
+                let page = UIViewController()
+                page.tabBarItem = UITabBarItem(title: "Shared", image: nil, tag: 0)
+                return page
+            }
+            if count == 3 {
+                controller.mode = .tabSidebar
+                controller.tabs = pages.enumerated().map { index, page in
+                    UITab(title: "Shared", image: nil, identifier: "panel-\(index)") { _ in page }
+                }
+            } else {
+                controller.viewControllers = pages
+                XCTAssertTrue(controller.tabs.isEmpty)
+            }
+            window.rootViewController = controller
+            window.makeKeyAndVisible()
+            for sidebar in count == 3 ? [false, true] : [false] {
+                controller.sidebar.isHidden = !sidebar
+                window.layoutIfNeeded()
+                waitFor("UIKit presents all \(count) tabs in the requested bar") {
+                    guard let list = controller.shownTabBar as? UICollectionView else { return false }
+                    return list.visibleCells.count == count && (list.bounds.height > list.bounds.width) == sidebar
+                }
+                let list = try XCTUnwrap(controller.shownTabBar as? UICollectionView)
+                let sample = try XCTUnwrap(list.visibleCells.first)
+                let frame = sample.convert(sample.bounds, to: controller.view)
+                let layout = UICollectionViewFlowLayout()
+                layout.itemSize = frame.size
+                let other = UICollectionView(frame: frame, collectionViewLayout: layout)
+                other.isUserInteractionEnabled = false
+                other.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "unrelated")
+                let data = UICollectionViewDiffableDataSource<Int, Int>(collectionView: other) { list, path, _ in
+                    list.dequeueReusableCell(withReuseIdentifier: "unrelated", for: path)
+                }
+                var snapshot = NSDiffableDataSourceSnapshot<Int, Int>()
+                snapshot.appendSections([0])
+                snapshot.appendItems([0])
+                data.apply(snapshot, animatingDifferences: false)
+                controller.view.addSubview(other)
+                other.layoutIfNeeded()
+                XCTAssertEqual(other.visibleCells.first.map { $0.convert($0.bounds, to: controller.view) }, frame)
+                defer { other.removeFromSuperview(); withExtendedLifetime(data) {} }
+                var visited = Set<ObjectIdentifier>()
+                for (index, page) in pages.enumerated() {
+                    // Hosted XCTest loads accessibility. Make these cells as unidentifiable by
+                    // accessibility as the cold simulator's, even with the client attached.
+                    var pending: [UIView] = list.visibleCells
+                    while let view = pending.popLast() {
+                        view.isAccessibilityElement = false
+                        view.accessibilityIdentifier = nil
+                        view.accessibilityLabel = ""
+                        pending += view.subviews
+                    }
+                    let shown = try XCTUnwrap(controller.shownTabBar)
+                    XCTAssertTrue(shown === list)
+                    guard case .success(let view) = agent.presentedTabItem(page.tabBarItem, in: shown, controller: controller) else {
+                        return XCTFail("no cell for tab \(index)")
+                    }
+                    XCTAssertTrue(list.visibleCells.contains { $0 === view })
+                    if count == 6 {
+                        controller.selectedIndex = index
+                        window.layoutIfNeeded()
+                    }
+                    let model = count == 3 ? controller.tabs[index] : controller.selectedTab
+                    XCTAssertEqual(view.convert(view.bounds, to: list), model?.frame(in: list))
+                    XCTAssertTrue(visited.insert(ObjectIdentifier(view)).inserted)
+                }
+            }
+        }
     }
 }
 #endif

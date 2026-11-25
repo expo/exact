@@ -875,10 +875,10 @@ fn the_session_end_asks_beforeunload_then_ends_in_order(
         "component App
   resource item = save() as shape number else save()
   state asked = false
-  action guard(e: Event)
+  action guard
     if !asked
       asked = true
-      e.preventDefault()
+      preventDefault()
   view
     column beforeunload=guard
       text item.toString() height=20
@@ -922,8 +922,9 @@ fn the_session_end_asks_beforeunload_then_ends_in_order(
     app.window = Some(window);
     let app = Rc::new(RefCell::new(app));
     // Re-installing on the same HWND must be a safe no-op.
-    session_end::install(hwnd, Rc::downgrade(&app));
-    session_end::install(hwnd, Rc::downgrade(&app));
+    let proxy = app.borrow().proxy.clone();
+    session_end::install(hwnd, Rc::downgrade(&app), proxy.clone());
+    session_end::install(hwnd, Rc::downgrade(&app), proxy);
     assert_eq!(
         unsafe { SendMessageW(hwnd, WM_QUERYENDSESSION, 0, 0) },
         0,

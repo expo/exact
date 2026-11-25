@@ -74,11 +74,14 @@ final class SplitHost {
         let root: NodeView
         /// The stack's root route: the list's column.
         let list: NodeView
-        /// The list whose row pushes, by the rule; nil where only
-        /// `navigationSplit` asked for the split.
+        /// The list whose row pushes, by the rule; nil where only the root
+        /// route's ask (its `navigationSplit` or its placeholder box) splits.
         let table: UInt32?
         /// The list column's width as `navigationSplit` names it.
         let width: CGFloat?
+        /// The root route's own placeholder box, the runner's choice, which
+        /// the pane shows while nothing is selected (LLP 1127 D1).
+        let placeholder: UInt32?
         /// The pane's routes: the stack's above the list, up to its first sheet.
         let routes: [NodeView]
         /// The one the pane shows; nil with none.
@@ -273,7 +276,7 @@ final class SplitHost {
         let base = top >= 1 ? stride(from: top, through: 1, by: -1).first { rowOf[routes[$0].id] != nil } ?? 1 : 1
         let owner = top >= 1 ? rowOf[routes[base].id] : nil
         let current = detail != nil && owner?.row == nil ? rule.current : nil
-        shown = Shown(root: root, list: list, table: rule.list, width: rule.width.map { CGFloat($0) }, routes: pane, detail: detail,
+        shown = Shown(root: root, list: list, table: rule.list, width: rule.width.map { CGFloat($0) }, placeholder: rule.placeholder, routes: pane, detail: detail,
                       base: base, row: owner?.row ?? current)
         wantController()
     }
@@ -336,7 +339,7 @@ final class SplitHost {
             lastDetail = nil
             return
         }
-        let own = shown.detail == nil ? ownPlaceholder(in: shown.list) : nil
+        let own = shown.detail == nil ? shown.placeholder.flatMap { presenter.views[$0] } : nil
         controller.split(true, width: shown.width, empty: shown.detail == nil && own == nil)
         if groundList !== shown.list {
             groundList = shown.list
@@ -364,15 +367,6 @@ final class SplitHost {
         veil(shown.table.flatMap { presenter.tables.feeds[$0] == nil ? presenter.views[$0] : nil })
         mark(shown.detail == nil ? nil : veiled.flatMap { Self.marksRows($0) ? $0 : nil }.flatMap { list in shown.row.flatMap { presenter.views[$0] }.flatMap { row(of: $0, in: list) } })
         lastDetail = shown.detail?.id
-    }
-
-    /// The box `list`, the stack's root route, marks as the split's own
-    /// placeholder: the first so marked whose route, by authored parents
-    /// (the pane holds it apart), is `list`.
-    private func ownPlaceholder(in list: NodeView) -> NodeView? {
-        presenter.carrying("split:placeholder").first { node in
-            presenter.logicalAncestry(of: node).dropFirst().first { ($0 as? NodeView)?.props["navigationKey"] != nil } === list
-        }
     }
 
     /// Show `own` in the pane, laid out at its size, or with nil give the

@@ -1,6 +1,7 @@
 # Virtualized list reading a component-owned resource crashes unconditionally at mount on the web JS target
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Read component-owned resources and mutations from the enclosing instance in Em::row_inputs instead of root stubs.
 **Systems:** host/web-js compiler (list_options.rs) and JS runtime (list.js, each.js)
 **Author:** Gemini 4 Neon
 **Date:** 2026-11-25

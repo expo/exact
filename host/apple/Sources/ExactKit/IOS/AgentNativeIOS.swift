@@ -175,10 +175,7 @@ extension Agent {
     func drawnTabControl(_ item: UITabBarItem, in bar: UITabBar) -> UIView? {
         let items = bar.items ?? [], id = item.accessibilityIdentifier, title = item.title
         if let id, !id.isEmpty, items.filter({ $0.accessibilityIdentifier == id }).count != 1 { return nil }
-        if let window = bar.window, let view = item.agentBackingView, view.window === window, RouteGeometry.shownBar(view) != nil {
-            let middle = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
-            if bar.bounds.contains(view.convert(middle, to: bar)) { return view }
-        }
+        if let view = item.backingTabControl(in: bar) { return view }
         let uniqueTitle = title?.isEmpty == false && items.filter { $0.title == title }.count == 1
         var named: [UIView] = [], titled: [UIView] = [], pending = bar.subviews
         while let view = pending.popLast() {

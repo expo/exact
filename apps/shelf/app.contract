@@ -417,6 +417,7 @@ component Shelf
             for e in t.stack key = e.id
               if e.name == "library"
                 column navigationKey=`${e.id}`
+                  navigationSplit="split"
                   navigationScroll="library-list"
                   testId="route-library"
                   position="absolute"

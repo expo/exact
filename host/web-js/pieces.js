@@ -9,7 +9,7 @@ import { Owner, onEnd, effect, say, inflight, data, journal, After, Before, Fini
 import { clock, advance } from './clock.js';
 import { Views, Ids, viewId, Hooks } from './tree.js';
 import { OnHooks } from './events.js';
-import { start } from './mount.js';
+import { start, replaceRowNode } from './mount.js';
 import { replaced } from './focus.js';
 /** A canvas's surface (LLP 1009 D2): its inputs, evaluated as the runner
  * evaluates them (records as arrays), to the app's GPU module — the web
@@ -426,18 +426,28 @@ export const x_elementsFromPoint = (x, y) => Geo?.namedPoints(x, y) ?? [];
 let Editor = null;
 export function mde(e) {
   if (typeof requestAnimationFrame !== 'function' || globalThis.__exactRender) return;
+  const own = Owner;
+  let cur = e, obs = null, dead = false;
+  onEnd(() => {
+    dead = true;
+    obs?.disconnect();
+    obs = null;
+    cur?.exactMarkup?.destroy();
+  });
   inflight.n++;
   if (!Editor) {
     Editor = import('./markup-editor.js').then(() => globalThis.exact.installMarkupEditor);
     Hosts.format = (id, name, arg) => Editor.then(() => liveById(id)?.exactMarkup?.format(name, arg ?? ''));
   }
   Editor.then(install => {
-    if (!e.isConnected) return;
+    if (dead || own?.gone || !e.isConnected) return;
     const id = viewId(e);
     install(e, {
-      live: n => n.isConnected,
+      live: n => !dead && n.isConnected,
       replace(n) {
-        replaced(e, n);
+        replaceRowNode(cur, n);
+        replaced(cur, n);
+        cur = n;
         Ids.set(n, id);
         Views.set(id, n);
         Object.defineProperties(e, {
@@ -480,13 +490,15 @@ export function mde(e) {
             // before the editor applies its own key default
             t === 'keydown',
           );
-        new MutationObserver(ms => {
+        obs?.disconnect();
+        obs = new MutationObserver(ms => {
           for (const m of ms) {
             const v = e.getAttribute(m.attributeName);
             v == null ? n.removeAttribute(m.attributeName) : n.setAttribute(m.attributeName, v);
           }
           n.exactMarkup?.sync();
-        }).observe(e, { attributes: true });
+        });
+        obs.observe(e, { attributes: true });
       },
       select: (n, p) => {
         const [formats, mixed, unavailable, atom, ...link] = p.split('\n');

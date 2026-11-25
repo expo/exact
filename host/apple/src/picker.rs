@@ -209,9 +209,13 @@ pub fn know_roots(app_id: &str) {
 
 /// Record the app's directories, as storage is configured, and empty
 /// `app:/tmp/picked/` and `app:/tmp/shared/` ([`empty_landings`]). Their
-/// handles are pinned here for a share's reads ([`pin`]).
+/// handles are pinned here for a share's reads ([`pin`]). Each root that
+/// exists gets this launch's staging directory, and loses those of launches
+/// that ended with a download or an atomic write unfinished (ibex2's
+/// `claim_staging`).
 pub fn set_roots(data: PathBuf, cache: PathBuf, temporary: PathBuf) {
     empty_landings(&temporary);
+    ibex2::stdlib::app_fs::claim_staging(&[&data, &cache, &temporary]);
     let roots = [data, cache, temporary];
     pin(&roots);
     *ROOTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(roots);

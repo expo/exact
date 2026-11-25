@@ -549,3 +549,28 @@ test("a child's task key reads its synchronous resource before mounting", () => 
   await browser.clock('+10');
   expect(await text('clock')).toBe('1');
 }), 180_000);
+
+test('a virtualized list inside a child component mounts and updates when its owned resource settles', () => fixture(`shape Subject
+  ok: bool
+  works: string[]
+
+component App
+  state show = true
+  view
+    column
+      if show
+        Screen()
+
+component Screen
+  resource feed = subjectWorks("sf") as shape Subject else empty(ok=true)
+  state ids = [1, 2]
+  view
+    list virtualized=true height=200
+      for x in ids key=x
+        text \`\${feed.works.join(",") }:\${pending(feed)}:\${failed(feed)}:\${x}\` testId=\`row-\${x}\`
+`, async ({ text, asks, land }) => {
+  expect(await asks()).toEqual(['subjectWorks(sf)']);
+  expect([await text('row-1'), await text('row-2')]).toEqual([':true:false:1', ':true:false:2']);
+  expect(await land()).toBe(1);
+  expect([await text('row-1'), await text('row-2')]).toEqual(['sf:false:false:1', 'sf:false:false:2']);
+}), 180_000);

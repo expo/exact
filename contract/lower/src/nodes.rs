@@ -427,9 +427,14 @@ impl Lowerer<'_> {
             routes::bottom_toolbar::check_row(&self.nav_place, tag, expanded, *span)?;
         }
         self.check_route_parts(&self.nav_place, tag, expanded)?;
-        let nav_place = self
-            .nav_place
-            .enter(first, tag, expanded, children, *span)?;
+        let nav_place = self.nav_place.enter(
+            first,
+            tag,
+            expanded,
+            children,
+            *span,
+            t.node_type == NodeType::View,
+        )?;
         // @ref LLP 1038 D8 — only the first root selects navigation; an
         // iframe's `navigate` is its guest's (LLP 1020.002 D2). The history
         // swipe and the ways through history offered are the root's too
@@ -1057,6 +1062,8 @@ impl Lowerer<'_> {
             let mut style = warnings::TextStyle {
                 native: native_font,
                 parent_horizontal_flex: self.parent_horizontal_flex,
+                split: (expanded.iter().rev().find(|a| a.name == "navigationSplit"))
+                    .and_then(|a| crate::routes::split_text(&a.value)),
                 font: expanded
                     .iter()
                     .rev()

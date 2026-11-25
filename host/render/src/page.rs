@@ -296,6 +296,16 @@ pub(crate) fn is_js(shell: &str) -> bool {
     js_entry(shell).is_some()
 }
 
+/// The body of an `--inline` shell's `<script type="module" data-entry="…">`,
+/// or `None` when the shell loads an external entry or holds none.
+pub(crate) fn inline_js_entry(shell: &str) -> Option<&str> {
+    let (entry, url) = js_entry(shell)?;
+    shell[entry.start..].strip_prefix("<script type=\"module\" data-entry=\"")?;
+    let body_start = url.end + "\">".len();
+    let body_end = entry.end - "</script>".len();
+    Some(&shell[body_start..body_end])
+}
+
 /// The JavaScript runtime's entry after the shell's root, outside script
 /// text ([`blanked`]), as the build marks it: `<script type="module"
 /// data-entry src="…"></script>`, or `<script type="module" data-entry="…">`

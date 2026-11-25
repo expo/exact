@@ -818,6 +818,18 @@ impl Lowerer<'_> {
         lowered
     }
 
+    /// `under_bindings` for a `for`'s body, where a route's own child is a row (`NavPlace::repeat`).
+    pub(crate) fn under_repeat<T>(
+        &mut self,
+        bindings: Binds<'_>,
+        lower: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let place = self.nav_place.repeat();
+        let lowered = self.under_bindings(bindings, lower);
+        self.nav_place = place;
+        lowered
+    }
+
     /// A native button's attributes, face and place (LLP 1069.011 D2, D5,
     /// D6, D11), after class merging.
     pub(crate) fn check_native_button(

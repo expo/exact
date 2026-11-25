@@ -70,7 +70,7 @@ impl Target {
         }
     }
 }
-fn remove(parent: &Directory, leaf: &str) -> io::Result<()> {
+pub(super) fn remove(parent: &Directory, leaf: &str) -> io::Result<()> {
     let mut waits = [2, 4, 8, 16, 32].into_iter();
     loop {
         match remove_pass(parent, leaf) {
