@@ -404,6 +404,9 @@ module artifact — with a photo-editor example as the consumer. Unblocks a
 platform widget without a host change or a new node type. Take: LLP 1024 §7's
 (§Components loses no line; `terminal` and friends stay out as built-in tags).
 
+**Expanded (Charlie, 2026-11-25, "ask panel about questions then follow recs of panel"; panel 4–0).**
+Pocket Lab can name the hosts serving each native-module tag. Every build checks its platform guards, and each artifact supplies its host's factories (LLP 1024 D1).
+
 **Expanded (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).**
 Pocket Lab can answer calls and announce watched topics from its own Kotlin in an Android
 app or game. The Canvas session owns its `ExactModule` across Activity recreation (LLP 1067.000).

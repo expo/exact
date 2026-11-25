@@ -758,7 +758,32 @@ abstract class ManifestPermissions : DefaultTask() {
     }
 }
 
+// The release variant supplies the factory classes. The unit-test runtime supplies Android APIs.
+abstract class CheckModuleRoster : Test() {
+    @get:Classpath abstract val jars: ListProperty<RegularFile>
+    @get:Classpath abstract val classes: ListProperty<Directory>
+}
+
 androidComponents.onVariants(androidComponents.selector().withBuildType("release")) { variant ->
+    val receipt = out.resolve("rust/bake/compat.json")
+    val inputs = if (receipt.isFile) (JsonSlurper().parse(receipt) as Map<*, *>)["inputs"] as? Map<*, *> else null
+    val tags = (inputs?.get("nativeModules") as? Map<*, *>)?.get("tags") as? List<*>
+    if (!tags.isNullOrEmpty()) {
+        val checkRoster = tasks.register<CheckModuleRoster>("checkReleaseModuleRoster") {
+            val unit = tasks.named<Test>("testDebugUnitTest").get()
+            testClassesDirs = unit.testClassesDirs
+            val testRuntime = unit.classpath - files(tasks.named("bundleDebugClassesToRuntimeJar"))
+            classpath = files(classes, jars, testRuntime)
+            filter.includeTestsMatching("dev.exact.app.ModuleRosterTest")
+            systemProperty("exact.module.tags", tags.joinToString(","))
+            systemProperty("exact.module.development", developmentApk.toString())
+            // API 36's shared memory uses the JDK file descriptor.
+            jvmArgs(unit.jvmArgs.orEmpty() + "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
+            testLogging { showStandardStreams = true; exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
+        }
+        variant.artifacts.forScope(ScopedArtifacts.Scope.ALL).use(checkRoster).toGet(ScopedArtifact.CLASSES, CheckModuleRoster::jars, CheckModuleRoster::classes)
+        tasks.matching { it.name in setOf("packageRelease", "packageReleaseBundle") }.configureEach { dependsOn(checkRoster) }
+    }
     tasks.register<ManifestPermissions>(variant.computeTaskName("write", "ManifestPermissions")) {
         merged.set(variant.artifacts.get(com.android.build.api.artifact.SingleArtifact.MERGED_MANIFEST))
         inventory.set(layout.buildDirectory.file("manifest-permissions.json"))

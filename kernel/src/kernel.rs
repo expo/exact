@@ -43,6 +43,7 @@ pub(crate) mod owner;
 mod owner_update;
 mod provenance;
 pub(crate) mod readers;
+mod regions;
 mod replacement;
 mod segments;
 mod session_update;
@@ -71,6 +72,7 @@ pub use owner_update::{
     decode_registration, encode_registration, BarRegion, OwnerChrome, OwnerUpdate, VerticalBarEdge,
 };
 pub use provenance::{Contribution, Operation};
+pub use regions::{RegionKind, ReservedRegion};
 pub use scroll_terms::ScrollTerms;
 pub use session_update::SessionUpdate;
 pub use sticky::StickyConstraint;

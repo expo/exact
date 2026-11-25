@@ -936,7 +936,7 @@ fn compile_loaded(
     warned: Option<(usize, &mut Vec<CompileError>)>,
 ) -> Result<(Plan, Option<SourceMap>), Vec<CompileError>> {
     let app_root = app_root.to_path_buf();
-    let views = native::check(&file, &app_root).map_err(|all| {
+    let views = native::check(&file, &app_root, profile).map_err(|all| {
         all.into_iter()
             .map(|e| sources.resolve(e))
             .collect::<Vec<_>>()

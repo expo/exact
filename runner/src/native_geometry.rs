@@ -11,11 +11,11 @@ use crate::geometry::view_of;
 use crate::DataError;
 use exact_kernel::style::calc::Family;
 use exact_kernel::style::targets::{Kind, NativeTarget};
-use exact_kernel::{Kernel, OwnerChrome, ViewId};
+use exact_kernel::{Kernel, OwnerChrome, RegionKind, ReservedRegion, ViewId};
 use exact_plan::{Plan, TypeKind, TypesId, Value};
 
 /// `exactGeometry(id[, space[, node[, regions]]])`, whose `regions` names the query options of
-/// the `regions` field, which no host reports yet.
+/// the `regions` field: `"inactive"` includes the inactive ones, as UIKit's `includeInactive`.
 pub const GEOMETRY: &str = "exactGeometry";
 /// `exactNativeChain(id)`.
 pub const CHAIN: &str = "exactNativeChain";
@@ -172,6 +172,8 @@ pub enum Query {
         id: String,
         /// The space its frames are in.
         space: Space,
+        /// Whether its `regions` include the inactive ones.
+        inactive: bool,
     },
     /// `exactNativeChain`: the targets of the owner of the node `id` names.
     Chain {
@@ -243,15 +245,17 @@ pub fn query(source: &str, args: &[Value]) -> Result<Query, DataError> {
                 }
             };
             let regions = text(3, "regions")?.unwrap_or("");
-            if let Some(bad) = regions
-                .split_whitespace()
-                .find(|o| !["inactive", "mirrored"].contains(o))
-            {
+            if let Some(bad) = regions.split_whitespace().find(|o| *o != "inactive") {
                 return Err(DataError::BadArguments(format!(
-                    "{GEOMETRY}'s regions are \"inactive\", \"mirrored\" or both, space-separated, not \"{bad}\""
+                    "{GEOMETRY}'s regions option is \"inactive\" or none, not \"{bad}\": UIKit's reserved regions take only `includeInactive`, and each frame is physical"
                 )));
             }
-            Ok(Query::Geometry { id, space })
+            let inactive = regions.split_whitespace().next().is_some();
+            Ok(Query::Geometry {
+                id,
+                space,
+                inactive,
+            })
         }
         CHAIN => id("the node whose owner's chain it reads").map(|id| Query::Chain { id }),
         _ => Ok(Query::Unsettled),
@@ -261,7 +265,7 @@ pub fn query(source: &str, args: &[Value]) -> Result<Query, DataError> {
 /// What `exactGeometry` reads of the node `id` names, `generation` the number of the layout it
 /// reads. A node that is gone or was not laid out is unavailable, with nothing else; a frame
 /// the kernel cannot place in `space` is `none`, as are the rectangles in it.
-pub fn geometry(kernel: &Kernel, id: &str, space: &Space, generation: u64) -> Fact {
+pub fn geometry(kernel: &Kernel, id: &str, space: &Space, inactive: bool, generation: u64) -> Fact {
     let Some(laid) = view_of(kernel, id).and_then(|view| laid_out(kernel, view)) else {
         return unavailable(generation);
     };
@@ -275,9 +279,19 @@ pub fn geometry(kernel: &Kernel, id: &str, space: &Space, generation: u64) -> Fa
         laid.size,
         frame_in(kernel, &laid, space),
         reading,
-        keyboard_fact(kernel, &laid, space),
-        chrome_fact(kernel.owner_chrome(laid.view)),
+        Hosted {
+            regions: regions_fact(kernel, &laid, space, inactive),
+            keyboard: keyboard_fact(kernel, &laid, space),
+            chrome: chrome_fact(kernel.owner_chrome(laid.view)),
+        },
     )
+}
+
+/// The quantities of an `exactGeometry` answer that only a host reports.
+struct Hosted {
+    regions: Fact,
+    keyboard: Fact,
+    chrome: Fact,
 }
 
 /// What `exactSafeAreaUnsettled` reads: how many boxes the last layout left unsettled, readers,
@@ -353,44 +367,60 @@ fn target_fact(number: Option<u32>, relation: Option<&str>, kinds: u8, t: &Nativ
 /// their fields must be `option`s, and what is inside one is checked once a host reports it.
 pub fn templates(source: &str) -> Vec<Fact> {
     match source {
-        GEOMETRY => vec![
-            answer(
-                0,
-                (1.0, 1.0),
-                Some([0.0, 0.0, 1.0, 1.0]),
-                |_| Some([0.0; 4]),
-                Fact::Record(vec![
+        GEOMETRY => {
+            let region = ReservedRegion {
+                id: 1,
+                kind: RegionKind::Division,
+                frame: [0.0; 4],
+                margins: [0.0; 4],
+                active: true,
+            };
+            let present = Hosted {
+                regions: Fact::List(vec![region_fact(&region, Fact::rect(0.0, 0.0, 0.0, 0.0))]),
+                keyboard: Fact::Record(vec![
                     ("guide", Fact::rect(0.0, 0.0, 0.0, 0.0)),
                     ("occupancy", Fact::rect(0.0, 0.0, 0.0, 0.0)),
                     ("docked", Fact::Bool(false)),
                     ("near", Fact::edges([false; 4])),
                     ("away", Fact::edges([false; 4])),
                 ]),
-                Fact::Record(vec![
+                chrome: Fact::Record(vec![
                     ("verticalBarEdge", Fact::Str(String::new())),
                     ("sidebarAvailable", Fact::Bool(false)),
                     ("overscan", Fact::Str(String::new())),
                     ("auxiliaryTopLeftArea", Fact::rect(0.0, 0.0, 0.0, 0.0)),
                     ("auxiliaryTopRightArea", Fact::rect(0.0, 0.0, 0.0, 0.0)),
                 ]),
-            ),
-            answer(
-                0,
-                (1.0, 1.0),
-                None,
-                |_| None,
-                Fact::Record(vec![
+            };
+            let inner_absent = Hosted {
+                regions: Fact::List(vec![region_fact(&region, Fact::Absent)]),
+                keyboard: Fact::Record(vec![
                     ("guide", Fact::Absent),
                     ("occupancy", Fact::Absent),
                     ("docked", Fact::Absent),
                     ("near", Fact::Absent),
                     ("away", Fact::Absent),
                 ]),
-                chrome_fact(Some(Default::default())),
-            ),
-            answer(0, (1.0, 1.0), None, |_| None, Fact::Absent, Fact::Absent),
-            unavailable(0),
-        ],
+                chrome: chrome_fact(Some(Default::default())),
+            };
+            let absent = Hosted {
+                regions: Fact::Absent,
+                keyboard: Fact::Absent,
+                chrome: Fact::Absent,
+            };
+            vec![
+                answer(
+                    0,
+                    (1.0, 1.0),
+                    Some([0.0, 0.0, 1.0, 1.0]),
+                    |_| Some([0.0; 4]),
+                    present,
+                ),
+                answer(0, (1.0, 1.0), None, |_| None, inner_absent),
+                answer(0, (1.0, 1.0), None, |_| None, absent),
+                unavailable(0),
+            ]
+        }
         CHAIN => {
             let target = NativeTarget {
                 id: 1,
@@ -427,14 +457,13 @@ pub fn templates(source: &str) -> Vec<Fact> {
 }
 
 /// An `exactGeometry` answer for a laid-out box of `size`, `frame` in the space read, what it
-/// observes of each family, its `keyboard` and its owner's `chrome`.
+/// observes of each family, and what its host reports of it.
 fn answer(
     generation: u64,
     (width, height): (f64, f64),
     frame: Option<[f64; 4]>,
     reading: impl Fn(Family) -> Option<[f64; 4]>,
-    keyboard: Fact,
-    chrome: Fact,
+    hosted: Hosted,
 ) -> Fact {
     let observations = Family::ALL
         .iter()
@@ -476,10 +505,10 @@ fn answer(
         // What only the host has, until it reports it (LLP 1123 stage 3)
         ("cornerInsets", Fact::Absent),
         ("cornerRadii", Fact::Absent),
-        ("regions", Fact::Absent),
+        ("regions", hosted.regions),
         ("scroll", Fact::Absent),
-        ("keyboard", keyboard),
-        ("chrome", chrome),
+        ("keyboard", hosted.keyboard),
+        ("chrome", hosted.chrome),
     ])
 }
 
@@ -501,6 +530,32 @@ fn keyboard_fact(kernel: &Kernel, laid: &Laid, space: &Space) -> Fact {
         ("docked", Fact::Bool(k.docked)),
         ("near", Fact::Absent),
         ("away", Fact::Absent),
+    ])
+}
+
+/// D16's reserved regions of `laid`'s owner, or the document's, in `space`: the active ones, and
+/// the inactive ones too where the query asks for them; `none` where the host reported none, and
+/// a region's frame `none` where it cannot be placed in `space`.
+fn regions_fact(kernel: &Kernel, laid: &Laid, space: &Space, inactive: bool) -> Fact {
+    let Some(regions) = kernel.reserved_regions(laid.view) else {
+        return Fact::Absent;
+    };
+    let shown = regions.iter().filter(|r| r.active || inactive);
+    let placed = |r: &ReservedRegion| match rect_in(kernel, laid, space, r.frame.map(f64::from)) {
+        Some([x, y, w, h]) => Fact::rect(x, y, w, h),
+        None => Fact::Absent,
+    };
+    Fact::List(shown.map(|r| region_fact(r, placed(r))).collect())
+}
+
+/// One reserved region of a geometry answer, its frame already placed.
+fn region_fact(r: &ReservedRegion, frame: Fact) -> Fact {
+    Fact::Record(vec![
+        ("id", Fact::Number(r.id as f64)),
+        ("kind", Fact::Str(r.kind.name().to_string())),
+        ("frame", frame),
+        ("margins", Fact::insets(r.margins.map(f64::from))),
+        ("active", Fact::Bool(r.active)),
     ])
 }
 

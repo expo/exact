@@ -4,10 +4,10 @@
 //! the hosts' shared wire form, its fields encoded as an owner update's are.
 
 use super::owner_update::{
-    configuration_in, floats, four, keyboard_in, keyboard_out, optional, targets_in, targets_out,
-    window_map_in, window_map_out,
+    configuration_in, floats, four, keyboard_in, keyboard_out, optional, regions_in, regions_out,
+    targets_in, targets_out, window_map_in, window_map_out,
 };
-use super::{Kernel, KeyboardPolicy, KeyboardReport, WindowMap};
+use super::{Kernel, KeyboardPolicy, KeyboardReport, ReservedRegion, WindowMap};
 use crate::error::{KernelError, LayoutError};
 use crate::style::targets::NativeTargets;
 use crate::wire::codec::{Reader, Writer};
@@ -32,6 +32,8 @@ pub struct SessionUpdate {
     /// The session view's configuration's identity, as an owner update's (D9), `None` where the
     /// host reports none.
     pub configuration: Option<u64>,
+    /// The session view's reserved regions (D16), in the document's space, as an owner update's.
+    pub regions: Option<Vec<ReservedRegion>>,
 }
 
 impl Kernel {
@@ -45,6 +47,7 @@ impl Kernel {
         owed |= self.set_keyboard_policy(update.keyboard_policy);
         self.set_window_map(None, update.window_map);
         owed |= self.track_band(None, update.configuration);
+        self.set_regions(None, update.regions);
         Ok(owed)
     }
 
@@ -62,6 +65,9 @@ impl Kernel {
             super::keyboard::check(k)?;
         }
         if let Some(why) = WindowMap::refusal(update.window_map.as_ref()) {
+            return Err(LayoutError::NativeTarget(why).into());
+        }
+        if let Some(why) = super::regions::refusal(update.regions.as_deref()) {
             return Err(LayoutError::NativeTarget(why).into());
         }
         Ok(())
@@ -84,6 +90,7 @@ impl SessionUpdate {
                 },
                 window_map: window_map_in(r)?,
                 configuration: configuration_in(r)?,
+                regions: regions_in(r)?,
             })
         };
         match (read(&mut r), r.is_empty()) {
@@ -94,8 +101,8 @@ impl SessionUpdate {
 
     /// The update as the hosts' wire form: the band (four `f32`s, top, right, bottom, left), the
     /// targets and the keyboard as an owner update encodes them, then the policy, a byte, 0 for
-    /// none and else 1 more than its index in [`KeyboardPolicy::ALL`], and the window map and the
-    /// configuration as an owner update encodes them.
+    /// none and else 1 more than its index in [`KeyboardPolicy::ALL`], and the window map, the
+    /// configuration and the reserved regions as an owner update encodes them.
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         floats(&mut w, &self.band);
@@ -107,6 +114,7 @@ impl SessionUpdate {
         w.u8(policy.map_or(0, |i| i as u8 + 1));
         window_map_out(&mut w, self.window_map.as_ref());
         optional(&mut w, self.configuration.as_ref(), |w, c| w.u64(*c));
+        regions_out(&mut w, self.regions.as_deref());
         w.into_vec()
     }
 }

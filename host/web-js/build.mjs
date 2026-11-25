@@ -2,7 +2,8 @@ import { bundledAsset, grantWords, trimGrant, knownFolderPath } from '../web/gra
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, webImplementations } from '../../js/bake/src/typescript.mjs';
 import { webPackageEntries } from '../../js/bake/src/package-config.mjs';
 import { buildPageFiles, renderEntryPages, writeCrawlerFiles } from '../web/crawl.mjs';
-import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, readManifest, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
+import { moduleRoster } from '../../scripts/launch-modules.mjs';
+import { bakeWatchEnv, checkModuleRoster, hatchWords, injectedProfiles, moduleDirectory, readManifest, resolveApp, webAppManifest, webToolchainEnv } from '../../scripts/app.mjs';
 import { authoredWebBake, webRendererHost, rustDataOf } from '../../scripts/app-shells.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { webAudioSession, webCspFile, webHead } from '../../scripts/web-head.mjs';
@@ -191,12 +192,12 @@ function mounted(spec, importer) {
 const devLogic = [];
 // Native modules (LLP 1024): the app's module artifact, `modules/web/` beside
 // the page as `modules/`, with the web host's adapter (native.js).
-const pageModules = existsSync(resolve(moduleDirectory(appDir, 'web'), 'index.js'));
+const pageModuleEntry = resolve(moduleDirectory(appDir, 'web'), 'index.js');
+const pageModules = existsSync(pageModuleEntry);
 // The page module's container, app and window hatches (LLP 1075.003.000 §3.7, 1075.003.000.001 §2.1): their glue loads
-// only for a page module that exports one. Its exports are read by Bun's
-// parser, never run: a browser module may touch the DOM as it loads. An
-// `export *` may export one.
-const pageSource = pageModules ? readFileSync(resolve(moduleDirectory(appDir, 'web'), 'index.js'), 'utf8') : '';
+// only for a page module that exports one. Bun’s parser finds the hatch names;
+// an `export *` may export one.
+const pageSource = pageModules ? readFileSync(pageModuleEntry, 'utf8') : '';
 const pageExports = pageModules ? new Bun.Transpiler({ loader: 'js' }).scan(pageSource) : { exports: [], imports: [] };
 const containerHatches = pageExports.exports.some(n => ['navigation', 'route', 'routeEnded', 'tabs', 'app', 'appEnded', 'window', 'windowEnded'].includes(n))
   || /\bexport\s*\*\s*from\b/.test(pageSource);
@@ -1436,6 +1437,12 @@ cpSync(resolve(out, 'index.html'), resolve(out, 'shell.html'));
 const routes = planRoutes.map(({ name, pattern, render, notfound }) => ({ name, pattern, render, notfound }));
 // And the files named by their content, which a host may keep for good (LLP 1153.004 D4, D6).
 writeFileSync(resolve(out, 'routes.json'), JSON.stringify({ ...(siteBase === '/' ? {} : { base: siteBase }), origin: renderOrigin, routes, files: contentFiles }, null, 2) + '\n');
+const webTags = moduleRoster(manifest.modules).tagsFor('web');
+if (webTags.length) {
+  const { webModuleTags } = await import('./module.mjs');
+  const tags = await webModuleTags(out, siteBase, webTags, production);
+  if (tags) checkModuleRoster(webTags, tags, 'web', production);
+}
 // Compile known reader text even when the development build emits only a shell.
 if (markdownReaders) {
   const { markdownAt, renderer } = await import('./render.mjs');

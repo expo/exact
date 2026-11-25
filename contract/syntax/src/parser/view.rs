@@ -88,6 +88,14 @@ impl Parser {
         self.next();
         let subject = self.expr()?;
         self.newline()?;
+        let platform = match &subject {
+            Expr::Member(base, field, _) if field == "platform" => match &**base {
+                Expr::Ident(name, _) => Some(name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut cases = Vec::new();
         let mut some = None;
         let mut none = None;
         if matches!(self.peek_kind(), TokenKind::Indent) {
@@ -101,6 +109,33 @@ impl Parser {
                     TokenKind::Eof => break,
                     TokenKind::Newline => {
                         self.next();
+                    }
+                    _ if platform.is_some()
+                        && self.at_ident("case")
+                        && matches!(self.peek2(), TokenKind::Str(_)) =>
+                    {
+                        let case = self.next().span;
+                        let TokenKind::Str(host) = self.next().kind else {
+                            unreachable!()
+                        };
+                        if !crate::MODULE_PLATFORMS.contains(&host.as_str()) {
+                            return Err(SyntaxError {
+                                id: "contract-match-platform",
+                                message: format!("unknown platform {host:?}"),
+                                span: case,
+                            });
+                        }
+                        if let Some((_, first, _)) = cases.iter().find(|(name, _, _)| *name == host)
+                        {
+                            return duplicate("platform case", &host, case, *first);
+                        }
+                        self.view_range(case, case);
+                        self.newline()?;
+                        // Later cases lower to nested else-if nodes.
+                        self.view_depth += cases.len();
+                        let body = self.required_block(case, "case", |p| p.node());
+                        self.view_depth -= cases.len();
+                        cases.push((host, case, body?));
                     }
                     _ => {
                         let (var, case_span) = self.match_case_header(span)?;
@@ -118,6 +153,33 @@ impl Parser {
                     }
                 }
             }
+        }
+        if !cases.is_empty() {
+            self.platform_matches
+                .push((platform.unwrap().to_owned(), span));
+            if some.is_some() || none.is_some() {
+                return Err(SyntaxError {
+                    id: "contract-match-platform",
+                    message: "a platform match takes only quoted platform cases".into(),
+                    span,
+                });
+            }
+            let mut otherwise = Vec::new();
+            for (host, case, then) in cases.into_iter().rev() {
+                otherwise = vec![Node::When {
+                    tag: 0,
+                    cond: Expr::Binary(
+                        BinOp::Eq,
+                        Box::new(subject.clone()),
+                        Box::new(Expr::Str(host, case)),
+                        case,
+                    ),
+                    then,
+                    otherwise,
+                    span: case,
+                }];
+            }
+            return Ok(otherwise.pop().unwrap());
         }
         let some = some.ok_or(SyntaxError {
             id: "contract-match-arms",

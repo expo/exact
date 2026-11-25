@@ -47,11 +47,15 @@
       "description": "Per-module settings a launch part reads at launch (the Info.plist key ExactModuleConfig): module name to its settings.",
       "additionalProperties": {"type": "object"}
     },
-    "modules": {
-      "type": "array",
-      "description": "The native-module roster (LLP 1024 D1): the custom-element tags the app's module artifact serves (modules/apple/*.swift beside libexact_modules.dylib on Apple, exact.app.Modules in modules/android on Android, modules/web/index.js on the web). A hyphenated tag in the Contract that this list lacks is bake-unknown-module.",
-      "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]*(-[a-z][a-z0-9_]*)+$"}
-    },
+    "modules": {"type": "array",
+      "description": "Each native view tag appears once. A string or an object without hosts declares every host. Guard a host-limited view with its exactPage().platform test (LLP 1024 D1).",
+      "uniqueItems": true, "x-uniqueModuleTag": true,
+      "items": {"oneOf": [
+        {"$ref": "#/$defs/moduleTag"},
+        {"type": "object", "required": ["tag"], "additionalProperties": false, "properties": {
+          "tag": {"$ref": "#/$defs/moduleTag"},
+          "hosts": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/hatchPlatform"}}
+        }} ]} },
     "data": {
       "type": "array",
       "description": "The app's data-* words (LLP 1075.003 Q2), without the `data-`: real attributes on the web, read by the app module's hatches on Apple through typed keys the build writes from this list (ExactDataKey). A data-* attribute in the Contract that this list lacks is bake-undeclared-data.",
@@ -60,17 +64,10 @@
     "hatches": {
       "description": "The app's hatch words (LLP 1075.003.000 Q1): a node marked hatch=\"word\" hands its platform object (a UIView or NSView and its kind's UIKit or AppKit object, or a DOM element) to the app module's element hatch, which compares it with typed keys the build writes from this list (ExactHatchKey). A hatched node leaves the host's fast path. A hatch word in the Contract that this list lacks is bake-undeclared-hatch. Either a list of words, each handled on every platform the app builds, or an object giving each word the platforms whose module handles it, as {\"avatar\": [\"ios\", \"macos\", \"web\"]} (LLP 1075.003.000.001 §5): a platform the word does not name shows the node and never calls a hatch for it, and its typed keys leave the word out.",
       "oneOf": [
-        {
-          "type": "array",
-          "items": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$"}
-        },
-        {
-          "type": "object",
-          "propertyNames": { "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$" },
-          "additionalProperties": {"type": "array", "items": {"enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"]}}
-        }
-      ]
-    },
+        {"type": "array", "items": {"$ref": "#/$defs/hatchWord"}},
+        {"type": "object", "propertyNames": {"$ref": "#/$defs/hatchWord"},
+          "additionalProperties": {"type": "array", "items": {"$ref": "#/$defs/hatchPlatform"}}}
+      ] },
     "implementations": {
       "description": "The implementation each module interface binds on a target (LLP 1133.001 D4), where the build cannot choose alone: {\"@exact/geolocation\": {\"web\": \"@fast/geolocation-web\"}}. Unnamed, a target binds the app's one direct dependency that implements the interface there, else the one the interface carries; two such dependencies are bake-implementation-ambiguous.",
       "type": "object",
@@ -1368,6 +1365,9 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "moduleTag": {"type": "string", "pattern": "^(?!(?:annotation-xml|color-profile|font-face(?:-src|-uri|-format|-name)?|missing-glyph)$)[a-z][a-z0-9_]*(-[a-z][a-z0-9_]*)+$"},
+    "hatchWord": {"type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z][a-z0-9]*)*$"},
+    "hatchPlatform": {"enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"]},
     "plistValue": {"description": "A property-list value: a string, number, boolean, array or dictionary.", "type": ["string", "number", "boolean", "array", "object"], "items": {"$ref": "#/$defs/plistValue"}, "additionalProperties": {"$ref": "#/$defs/plistValue"}},
     "darkLaunchImage": {"type": "object", "required": ["src"], "additionalProperties": false, "properties": {"src": {"type": "string", "description": "The dark PNG, relative to the app directory.", "pattern": "\\.png$"}}},
     "launchColour": {
