@@ -632,6 +632,7 @@ pub(crate) fn css_text_in(
                 | StyleId::ScrollInsetAdjustment
                 | StyleId::ScrollIndicatorAdjustment
                 | StyleId::SafeAreaTrack
+                | StyleId::SafeAreaAspectFit
                 | StyleId::ScrollEdgeEffectSoft
                 | StyleId::ScrollEdgeEffectHard
                 | StyleId::ScrollEdgeEffectHidden
@@ -1090,6 +1091,7 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
         RowValue::ClipPath(p) => out.push_str(&p.css()),
         RowValue::ShapeOutside(p) => out.push_str(&p.css()),
         RowValue::AspectRatio(r) => out.push_str(&r.css()),
+        RowValue::AspectFit(r) => out.push_str(&r.css()),
         RowValue::PositionTryFallbacks(r) => out.push_str(&r.css()),
         RowValue::DragTimeline(d) => out.push_str(&d.css()),
         RowValue::AnimationTimeline(t) => out.push_str(&t.css()),

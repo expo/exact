@@ -47,6 +47,7 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         | ScrollInsetAdjustment
         | ScrollIndicatorAdjustment
         | SafeAreaTrack
+        | SafeAreaAspectFit
         | ScrollEdgeEffectSoft
         | ScrollEdgeEffectHard
         | ScrollEdgeEffectHidden

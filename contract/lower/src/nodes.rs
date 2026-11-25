@@ -453,6 +453,7 @@ impl Lowerer<'_> {
                 );
             }
         }
+        crate::aspect_fit::check(first, expanded, *span)?;
         // @ref LLP 1121 D8 — the state parts, folded or recorded.
         let target = if native_button {
             Some(crate::states::StateTarget::NativeButton)

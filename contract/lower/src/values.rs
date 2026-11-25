@@ -165,6 +165,7 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::BadShapeOutside { .. } => "expected none, circle(), ellipse(), inset() with one round radius, or polygon() with at most 64 vertices; lengths are points/px or percentages".into(),
         StyleValueError::BadClipPath { .. } => "expected none, polygon(), inset() with optional round radii, circle(), ellipse() (px or %), path() with valid SVG path data in CSS pixels, or url(#id) on an SVG element".into(),
         StyleValueError::BadAspectRatio { .. } => "expected auto, a ratio (`16 / 9`, or a number), or both (`auto 4 / 3`); numbers are nonnegative".into(),
+        StyleValueError::BadAspectFit { .. } => "expected none or a positive ratio, width over height (`16 / 9`, or a number); both numbers and their quotient finite and above zero".into(),
         StyleValueError::BadBackgroundImage { .. } => "expected none, or up to four of linear-gradient(…), radial-gradient(…) and conic-gradient(…)".into(),
         StyleValueError::BadMaskImage { .. } => "expected none, or one linear-gradient(…), radial-gradient(…) or conic-gradient(…)".into(),
         StyleValueError::BadTextShadow { .. } => "expected none, or one shadow: <offset-x> <offset-y> [<blur>] and an optional colour".into(),

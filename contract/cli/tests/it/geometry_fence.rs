@@ -205,3 +205,17 @@ fn an_iframes_capture_runs_without_the_person() {
         "`focus(…)` is under a branch on `wide`",
     );
 }
+
+#[test]
+fn a_fact_that_shapes_a_popover_or_fits_the_window_is_refused() {
+    // A popover's arrows move the popover, and aspect fit the window's fitting (LLP 1123 D7, D16)
+    let popover = route("", "").replace(
+        "inset=0\n",
+        "inset=0 navigationPresentation=\"popover\" navigationPopoverAnchor=\"hero\" navigationPopoverArrows=(wide ? \"up\" : \"down\")\n",
+    );
+    refused(&popover, "`navigationPopoverArrows` follows `wide`");
+    let fit = format!(
+        "{SHAPES}component App\n  resource g = exactGeometry(\"hero\") as shape G\n  derive wide = match g.frame {{ case some(f) => f.width > 400, case none => false }}\n  view\n    column viewport-fit=\"cover\" -exact-safe-area-aspect-fit=(wide ? \"16 / 9\" : \"none\") width=\"100%\" height=\"100%\"\n      column id=\"hero\"\n"
+    );
+    refused(&fit, "`-exact-safe-area-aspect-fit` follows `wide`");
+}

@@ -97,8 +97,7 @@ pub enum Dimension {
     /// Percent of the containing block (0–100) plus points: `calc(50% - 89px)`
     /// is `Calc(50.0, -89.0)`.
     Calc(f32, f32),
-    /// The viewport's safe-area inset at an edge, plus points (zero for a
-    /// bare `env()`).
+    /// The viewport's safe-area inset at an edge, plus points (zero for a bare `env()`).
     Env(Edge, f32),
     /// A layout region's inset at an edge plus points (LLP 1123 D10; [`env`]).
     Region(Region, Edge, f32),
@@ -113,8 +112,7 @@ pub enum Dimension {
     /// handle; resolved as `env()` is, or at layout against its basis when
     /// it holds a percentage ([`calc`]).
     Compare(Comparison),
-    /// A size keyword, on the rows that take it
-    /// (`StyleId::admits_size_keyword`).
+    /// A size keyword, on the rows that take it (`StyleId::admits_size_keyword`).
     Keyword(SizeKeyword),
 }
 
@@ -905,6 +903,8 @@ pub enum RowValue<'a> {
     ShapeOutside(&'a exact_textflow::ShapeOutside),
     /// CSS `aspect-ratio` as authored (LLP 1053 G1).
     AspectRatio(&'a crate::ratio::AspectRatio),
+    /// `-exact-safe-area-aspect-fit` (LLP 1123 D16).
+    AspectFit(&'a crate::ratio::AspectFit),
     /// Ordered invoker-popover flip attempts (LLP 1021 D2).
     PositionTryFallbacks(&'a crate::position_try::PositionTryFallbacks),
     /// `-exact-drag-timeline` (LLP 1057.003).

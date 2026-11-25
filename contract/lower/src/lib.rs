@@ -19,6 +19,7 @@
 #![deny(missing_docs)]
 mod alert_parts;
 pub mod anatomy;
+mod aspect_fit;
 mod atoms;
 mod box_transform;
 mod bundled;

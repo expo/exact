@@ -166,6 +166,11 @@ pub(crate) fn style_json_rows(
             RowValue::SafeAreaProperties(_) => false,
             // Layout only (LLP 1053 G1): the kernel sizes the box.
             RowValue::AspectRatio(_) => false,
+            // The host claims the window's guide at it (LLP 1123 D16)
+            RowValue::AspectFit(v) => {
+                let _ = write!(out, "\"{}\"", v.css());
+                true
+            }
             RowValue::PositionTryFallbacks(v) => {
                 let _ = write!(out, "\"{}\"", v.css());
                 true

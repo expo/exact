@@ -307,6 +307,7 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-list-cell-margins-follow-readable-width", "exact LLP 1123 D15", AttrTarget::Styles(&[StyleId::ListCellMarginsFollowReadableWidth])),
     ("-exact-keyboard-dismiss-padding", "exact LLP 1123 D7", AttrTarget::Styles(&[StyleId::KeyboardDismissPadding])),
     ("-exact-safe-area-track", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::SafeAreaTrack])),
+    ("-exact-safe-area-aspect-fit", "exact LLP 1123 D16", AttrTarget::Styles(&[StyleId::SafeAreaAspectFit])),
     ("-exact-scroll-vertical-indicator-insets", "exact LLP 1123 D14", AttrTarget::Styles(&[ StyleId::ScrollVerticalIndicatorInsetsTop, StyleId::ScrollVerticalIndicatorInsetsRight, StyleId::ScrollVerticalIndicatorInsetsBottom, StyleId::ScrollVerticalIndicatorInsetsLeft, ])),
     ("-exact-scroll-horizontal-indicator-insets", "exact LLP 1123 D14", AttrTarget::Styles(&[ StyleId::ScrollHorizontalIndicatorInsetsTop, StyleId::ScrollHorizontalIndicatorInsetsRight, StyleId::ScrollHorizontalIndicatorInsetsBottom, StyleId::ScrollHorizontalIndicatorInsetsLeft, ])),
     ("-exact-scroll-indicator-adjustment", "exact LLP 1123 D14", AttrTarget::Styles(&[StyleId::ScrollIndicatorAdjustment])),

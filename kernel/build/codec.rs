@@ -202,6 +202,12 @@ fn parse_codec(s: &str) -> Codec {
             variant: "AspectRatio",
             error: "BadAspectRatio",
         },
+        // @ref LLP 1123 D16
+        "aspect-fit" => Codec::CssValue {
+            path: "crate::ratio::AspectFit",
+            variant: "AspectFit",
+            error: "BadAspectFit",
+        },
         "shape-outside" => Codec::CssValue {
             path: "exact_textflow::ShapeOutside",
             variant: "ShapeOutside",

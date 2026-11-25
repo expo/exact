@@ -764,6 +764,7 @@ fn a_local_inset_is_the_browsers_custom_property() {
         (StyleId::ScrollInsetAdjustment, "never"),
         (StyleId::ScrollIndicatorAdjustment, "none"),
         (StyleId::SafeAreaTrack, "observed-max"),
+        (StyleId::SafeAreaAspectFit, "16 / 9"),
         (StyleId::ScrollEdgeEffectSoft, "top"),
         (StyleId::ScrollEdgeEffectHard, "bottom"),
         (StyleId::ScrollEdgeEffectHidden, "left"),

@@ -28,6 +28,7 @@ impl RowValue<'_> {
             | RowValue::ClipPath(_)
             | RowValue::ShapeOutside(_)
             | RowValue::AspectRatio(_)
+            | RowValue::AspectFit(_)
             | RowValue::PositionTryFallbacks(_)
             | RowValue::DragTimeline(_)
             | RowValue::AnimationTimeline(_)
