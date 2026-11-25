@@ -239,8 +239,8 @@ class DragInTest {
         assertTrue(resolver.getType(Uri.parse("content://typed/photo.png")) == "image/png")
     }
 
-    /** An item's bytes that the test hands out: the read waits, once it has begun, until [release], and fails at
-     * once on the thread that made it, which a copy on the main thread would block. */
+    /** An item's bytes that the test hands out: the read waits, once it has begun, until [release] or for at most
+     * 10 seconds, and fails at once on the thread that made it, which a copy on the main thread would block. */
     private class Held : java.io.InputStream() {
         private val maker = Thread.currentThread()
         val reading = java.util.concurrent.CountDownLatch(1)
@@ -255,7 +255,7 @@ class DragInTest {
             if (thread === maker) throw AssertionError("the copy read on the main thread")
             reader = thread
             reading.countDown()
-            released.await()
+            if (!released.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw AssertionError("the drop waited for its copy")
             return read()
         }
     }
@@ -278,10 +278,9 @@ class DragInTest {
             assertEquals("the drag ended, and its copy is still reading", emptyList<String>(), landed())
         } finally {
             held.release()
+            held.reader?.join(5000)
         }
-        val copier = held.reader!!
-        copier.join(5000)
-        assertFalse("the copy ended", copier.isAlive)
+        assertFalse("the copy ended", held.reader!!.isAlive)
         idle()
         assertEquals("one landing, once the copy ended", 1, landed().size)
         val items = JSONObject(landed().single().removePrefix("landed 7 "))

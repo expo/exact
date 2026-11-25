@@ -254,8 +254,8 @@ impl<D: DataSource> Presenter<D> {
         self.drag_flush();
         if self.drag_in.over {
             self.drag_at(self.drag_in.point, self.drag_in.held);
+            self.drag_flush();
         }
-        self.drag_flush();
         delivered
     }
 
@@ -384,9 +384,9 @@ impl<D: DataSource> Presenter<D> {
             .filter(|id| !self.brush.region_blocks_action(*id))
     }
 
-    /// The nodes under `point` that hear `dragenter` or `dragleave`,
-    /// innermost first.
-    fn drag_chain(&mut self, hit: Option<ViewId>) -> Vec<NodeKey> {
+    /// `hit` and its listener ancestors that hear `dragenter` or
+    /// `dragleave`, innermost first.
+    fn drag_chain(&self, hit: Option<ViewId>) -> Vec<NodeKey> {
         let mut chain = Vec::new();
         let mut at = hit;
         while let Some(node) =
