@@ -3177,7 +3177,11 @@ does. A mutation fails on its first overrun. `failure(x).code` is `error`
 and `failure(x).reason` is `overrun` for either failure. The app can show a
 retry button for a failed mutation. A development build also reports the
 overrun in the host console (the app’s logcat tag on Android). The Apple
-development window shows it until the next input or plan replacement.
+development window shows it until the next input or plan replacement. A launch
+with `EXACT_DEV_PILL=0` draws no such pill, nor the dev loop's status pill: for a
+screenshot of a development build (a simulator screenshot service such as Exact Build's,
+whose emulated clock can overrun budgets a device keeps). The budgets, the refusal and the
+console line are unchanged.
 The runner never retries a stream message
 that overruns.
 The host asks a yielded answer again at once, in its place among the source's
