@@ -137,14 +137,20 @@ extension Presenter {
     /// reaches the route's edge, the covers included, when either edge has
     /// bars or the open top is under the bar (`controlBands`); an edge the
     /// bar's collapse or the bottom edge already took is there already, so
-    /// the collapse scroller is judged as its title's riders are. None under
-    /// a large title unless the eligible top bars ride its safe area.
+    /// the collapse scroller is judged as its title's riders are. Under a
+    /// large title whose eligible top bars do not ride its safe area, the top
+    /// keeps its place, as a hand-built table's under a fixed header does, and
+    /// an open foot is still reached (`openFoot`), as it takes no part in the
+    /// title. None is reached while riders leave the route a top cover.
     private func routeBands(of v: NodeView, _ sv: UIScrollView, in c: any RouteSurface, _ judge: ControlBars) -> Bands {
+        let apart = c.collapseScroll !== v
         #if os(iOS)
-        if let nav = c.navigationController, navigation.routeShowsBar(c, in: nav), c.navigationItem.largeTitleDisplayMode == .always, c.ridingBars.isEmpty { return Bands() }
+        if let nav = c.navigationController, navigation.routeShowsBar(c, in: nav), c.navigationItem.largeTitleDisplayMode == .always, c.ridingBars.isEmpty {
+            return openFoot(of: v, sv, in: c.node, judge, apart: apart) ?? Bands()
+        }
         #endif
         if !c.ridingBars.isEmpty, case .edges(let edges)? = navigation.covers[c.node.id], edges.top > 0.5 { return Bands() }
-        return controlBands(of: v, in: c.node, judge, apart: c.collapseScroll !== v)
+        return controlBands(of: v, in: c.node, judge, apart: apart)
     }
 
     /// Collapse adoption and banding must agree about both edges and paint
@@ -163,15 +169,8 @@ extension Presenter {
         guard let sv = v.scrollView else { return Bands() }
         let r = v.convert(v.bounds, to: route)
         let top = judge.lifts(of: v, in: route, top: true), bottom = judge.lifts(of: v, in: route, top: false)
-        // More than bars over the scroller keeps its top where it is; an open
-        // foot over the route's bottom cover (a tab bar), apart from a title's
-        // collapse, still reaches it, as a hand-built table under a fixed
-        // header runs under its tab bar. Bars under it keep both edges.
-        if top == nil, apart, bottom?.isEmpty == true, case .edges(let e)? = navigation.covers[route.id],
-           e.bottom > 0.5, route.bounds.height - r.maxY > 0.5 {
-            let band = UIEdgeInsets(top: 0, left: 0, bottom: route.bounds.height - r.maxY, right: 0)
-            return Self.drawn(band, v, sv) ? Bands(band: band) : Bands()
-        }
+        // More than bars over the scroller keeps its top where it is; an open foot still reaches the route's bottom
+        if top == nil, let foot = openFoot(of: v, sv, in: route, judge, apart: apart) { return foot }
         guard let top, apart || bottom != nil else { return Bands() }
         let underBar = apart && top.isEmpty && r.minY > 0.5
         var overCover = false
@@ -180,6 +179,18 @@ extension Presenter {
               Self.over(top), Self.over(bottom ?? []) else { return Bands() }
         let band = UIEdgeInsets(top: max(0, r.minY), left: 0, bottom: bottom == nil ? 0 : max(0, route.bounds.height - r.maxY), right: 0)
         return Self.drawn(band, v, sv) ? Bands(band: band, top: top, bottom: bottom ?? []) : Bands()
+    }
+
+    /// The band of a scroller's open foot over its route's bottom cover (a tab bar or the home indicator, kept
+    /// under `viewport-fit=cover`, where `reachBottom` gives UIKit no scroller), apart from a title's collapse
+    /// (`apart`), as a hand-built table under a fixed header runs under its tab bar (#223); `nil` where bars
+    /// lie under the scroller or something else does, or the route has no bottom cover.
+    private func openFoot(of v: NodeView, _ sv: UIScrollView, in route: NodeView, _ judge: ControlBars, apart: Bool) -> Bands? {
+        let r = v.convert(v.bounds, to: route)
+        guard apart, judge.lifts(of: v, in: route, top: false)?.isEmpty == true, case .edges(let e)? = navigation.covers[route.id],
+              e.bottom > 0.5, route.bounds.height - r.maxY > 0.5 else { return nil }
+        let band = UIEdgeInsets(top: 0, left: 0, bottom: route.bounds.height - r.maxY, right: 0)
+        return Self.drawn(band, v, sv) ? Bands(band: band) : Bands()
     }
 
     /// A bar ranked under the sibling it is lifted over by a nonzero `z-index`

@@ -956,5 +956,38 @@ final class PageEdgesIOSTests: XCTestCase {
             return abs(l.pageBand.bottom - cover.bottom) < 0.5
         }
     }
+
+    /// Under a large title too, a route's scroller below a line is drawn on under the tab bar by its open foot and
+    /// inset by the gap, while its top and the title keep their places, as a hand-built table pinned from a fixed
+    /// header to its view's bottom runs under its tab bar under a still title (#223, LLP 1131 D2).
+    func testUnderACoverRootAScrollerBelowALargeTitleRunsUnderTheTabBar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        let (session, _) = try fixture("COVER_TABS")
+        let p = session.presenter, routeNode = try node(session, "route-home")
+        let route = try XCTUnwrap(p.navigationHost.controllers[routeNode.id])
+        let shown = { (id: String) in p.views.values.first { $0.props["testId"] == id && $0.window != nil } }
+        p.press(try node(session, "use-titled").id)
+        until("the route shows its large title over the lead") {
+            route.navigationItem.largeTitleDisplayMode == .always && route.navigationController?.isNavigationBarHidden == false
+                && route.ridingBars.isEmpty && shown("lead") != nil
+        }
+        until("the scroller's foot runs under the tab bar") { (shown("list")?.pageBand.bottom ?? 0) > 0.5 }
+        guard case .edges(let cover)? = p.navigationHost.covers[routeNode.id] else { return XCTFail("the route keeps the tab bar's cover") }
+        let v = try XCTUnwrap(shown("list")), sv = try XCTUnwrap(v.scrollView), lead = try XCTUnwrap(shown("lead"))
+        let bar = try XCTUnwrap(route.navigationController?.navigationBar), foot = routeNode.convert(routeNode.bounds, to: nil).maxY
+        XCTAssertFalse(route.collapseScroll === v, "the scroller is not the title's")
+        XCTAssertEqual(v.convert(v.bounds, to: nil).maxY, foot - cover.bottom, accuracy: 0.5, "laid out above the cover")
+        XCTAssertEqual(v.pageBand.bottom, cover.bottom, accuracy: 0.5, "its foot is banded")
+        XCTAssertEqual(v.pageBand.top, 0, accuracy: 0.5, "its top keeps its place")
+        XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, foot, accuracy: 0.5, "its scroll view reaches the route's foot, under the bar")
+        XCTAssertEqual(sv.adjustedContentInset.bottom, cover.bottom, accuracy: 0.5, "inset by the band alone")
+        XCTAssertEqual(sv.verticalScrollIndicatorInsets.bottom, cover.bottom, accuracy: 0.5, "its indicator ends at the bar")
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === sv, "the tab bar's edge effect follows it")
+        let barHeight = bar.bounds.height, leadFrame = lead.convert(lead.bounds, to: nil)
+        sv.setContentOffset(CGPoint(x: 0, y: sv.contentOffset.y + 300), animated: false)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertEqual(bar.bounds.height, barHeight, accuracy: 0.5, "the title stays large, as it does over a hand-built table below a header")
+        XCTAssertEqual(lead.convert(lead.bounds, to: nil), leadFrame, "the line over the scroller stays")
+    }
 }
 #endif
