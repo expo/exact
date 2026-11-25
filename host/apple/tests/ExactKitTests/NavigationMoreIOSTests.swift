@@ -1465,7 +1465,7 @@ final class NavigationMoreIOSTests: XCTestCase {
     }
 
     /// How many times the session's journal holds `line`.
-    private func journal(_ session: ExactSession, _ line: String) -> Int {
+    func journal(_ session: ExactSession, _ line: String) -> Int {
         session.agent(#"{"op":"logs","since":0}"#).components(separatedBy: line).count - 1
     }
 }

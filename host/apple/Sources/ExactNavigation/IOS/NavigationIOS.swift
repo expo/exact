@@ -162,7 +162,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var besideIdentity: ContributionsIOS.Identity?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
-    /// whether its press navigated.
+    /// whether its press navigated. A route UIKit dropped as it moved its tab
+    /// comes back without it too (`whileTabsChange`).
     var unanimated = false
     var crossFading = false
     func retires(_ controller: UIViewController) -> Bool { presenter.modalHost.retires(controller) }

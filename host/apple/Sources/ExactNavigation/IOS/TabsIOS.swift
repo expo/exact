@@ -32,6 +32,9 @@ final class TabController: UITabBarController {
     /// How many of UIKit's changes of these tabs are under way, one within another, how many of their ends are doing what
     /// they left, and how many of those the layout, and what is left (`NavigationHost.whileTabsChange`).
     var changes = 0, ends = 0, layingOut = 0, left = LeftToTabsChange()
+    /// The tabs' roots with routes pushed over them, and those routes, as UIKit held them when the innermost change began, with
+    /// those it has between stacks from a change around it; and the routes that count as dropped (`moved(root:)`).
+    var moving: [(root: RouteController, pushed: [RouteController])] = [], dropped: [RouteController] = []
     private weak var barGroup: UIView?
     private var hidGroup = false
 

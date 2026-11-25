@@ -421,6 +421,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         held = true
         if let nav = parent as? UINavigationController { lastStack = nav }
         host?.moved(into: parent)
+        host?.moved(root: self)
     }
 
     private(set) var nativeContentScrollEdges: NSDirectionalRectEdge = []
