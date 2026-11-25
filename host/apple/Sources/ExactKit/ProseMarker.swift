@@ -30,7 +30,7 @@ extension NodeView {
         let measured = words.size()
         let width = ceil(measured.width), gap = size / 4
         let x = style["direction"]?.string == "rtl" ? bounds.maxX + gap : bounds.minX - width - gap
-        let first = structuralChildren.first { !$0.isHidden && $0.style["position_type"]?.string != "absolute" }
+        let first = structuralChildren.first { !$0.isHidden && !["absolute", "fixed"].contains($0.layoutPosition) }
         let top = first.map { $0.convert($0.bounds, to: self).minY } ?? bounds.minY
         CATransaction.begin()
         CATransaction.setDisableActions(true)

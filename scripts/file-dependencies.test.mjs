@@ -1,15 +1,19 @@
-// A `file:` package's sources reach the next build without a `bun install` by hand (#115), in both of Bun's layouts.
+// A `file:` package's sources reach the next build without a `bun install` by hand (#115), in each of Bun's layouts.
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { fileDependencies, installDifference, installedFileDependencies } from './file-dependencies.mjs';
 import { installLock, withInstallLock } from './filesystem.mjs';
 
-/** An app at `<dir>/app` with `@x/p` from `file:<spec>` (relative to the app), installed by the pinned Bun. */
-function installed(spec) {
+// Makes a package inside the app a copy: Bun's own choice is a clone on macOS, which keeps the source's time, and hard
+// links elsewhere.
+const COPY = process.platform === 'darwin' ? [] : ['--backend=copyfile'];
+
+/** An app at `<dir>/app` with `@x/p` from `file:<spec>` (relative to the app), installed by the pinned Bun with `flags`. */
+function installed(spec, flags = COPY) {
   const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-file-dep-')));
   const app = resolve(dir, 'app'), source = resolve(app, spec);
   mkdirSync(resolve(source, 'apple'), { recursive: true });
@@ -18,7 +22,7 @@ function installed(spec) {
   writeFileSync(resolve(source, 'apple/P.swift'), 'let a = 1\n');
   writeFileSync(resolve(source, 'README.md'), 'p\n');
   writeFileSync(resolve(app, 'package.json'), JSON.stringify({ name: 'app', private: true, dependencies: { '@x/p': `file:${spec}` } }));
-  const bun = spawnSync(process.execPath, ['install'], { cwd: app, encoding: 'utf8' });
+  const bun = spawnSync(process.execPath, ['install', ...flags], { cwd: app, encoding: 'utf8' });
   assert.equal(bun.status, 0, bun.stderr);
   return { dir, app, source, copy: resolve(app, 'node_modules/@x/p') };
 }
@@ -31,9 +35,9 @@ function removeFixture(dir) {
 }
 
 /** The real install, counted. */
-const counted = () => {
+const counted = (flags = COPY) => {
   const calls = [];
-  return { calls, install: (root) => { calls.push(root); return spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: root, stdio: 'ignore' }).status === 0; } };
+  return { calls, install: (root) => { calls.push(root); return spawnSync(process.execPath, ['install', '--frozen-lockfile', ...flags], { cwd: root, stdio: 'ignore' }).status === 0; } };
 };
 
 for (const [layout, spec] of [['a copy (inside the app)', './packages/p'], ['links (outside the app)', '../lib/p']]) {
@@ -74,13 +78,34 @@ for (const [layout, spec] of [['a copy (inside the app)', './packages/p'], ['lin
   }, 30_000);
 }
 
+// Where Bun hard-links by default.
+test.skipIf(process.platform !== 'linux')('a file: package installed as hard links has an edit made in place, and is installed again when a file is replaced', () => {
+  const { dir, app, source, copy } = installed('./packages/p', []);
+  try {
+    const from = resolve(source, 'apple/P.swift'), to = resolve(copy, 'apple/P.swift');
+    assert.equal(statSync(to).ino, statSync(from).ino);
+    const run = counted([]);
+    appendFileSync(from, 'let b = 2\n');
+    installedFileDependencies(app, run);
+    assert.equal(run.calls.length, 0, 'the edit is already in the install');
+    // As an editor saves: a new file, renamed over the old one.
+    writeFileSync(`${from}~`, 'let z = 1\n');
+    renameSync(`${from}~`, from);
+    assert.equal(installDifference(fileDependencies(app)[0]), 'apple/P.swift differs');
+    installedFileDependencies(app, run);
+    assert.deepEqual(run.calls, [app]);
+    assert.equal(readFileSync(to, 'utf8'), 'let z = 1\n');
+    assert.equal(statSync(to).ino, statSync(from).ino);
+  } finally { removeFixture(dir); }
+}, 30_000);
+
 test('a copy differing only in its time is the same; one of the same size and time is taken as the same', () => {
   const { dir, app, source, copy } = installed('./packages/p');
   try {
     const later = new Date(Date.now() + 60_000);
     utimesSync(resolve(source, 'apple/P.swift'), later, later);
     assert.equal(installDifference(fileDependencies(app)[0]), null, 'the bytes are compared when the times differ');
-    // An edit of the same length is caught by its time, as Bun's copy keeps the source's.
+    // An edit of the same length is caught: the times differ, so the bytes are compared.
     writeFileSync(resolve(source, 'apple/P.swift'), 'let z = 1\n');
     assert.equal(installDifference(fileDependencies(app)[0]), 'apple/P.swift differs');
     // The package's own installs and repository are not its sources.
