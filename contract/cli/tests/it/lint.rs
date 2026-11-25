@@ -439,6 +439,24 @@ fn bake_refuses_a_pressable_with_zero_area() {
     }
 }
 
+/// A closed dialog has no layout box, as on the web, so its buttons have no
+/// area until it opens: they are not zero-size pressables, whether the dialog
+/// is an alert or a sheet, nor a level down.
+#[test]
+fn a_closed_dialogs_buttons_are_not_zero_size() {
+    let direct = "component A\n  state n = 0\n  action go\n    n = 1\n  view\n    column\n      text \"Shelf\"\n      dialog id=\"remove\" role=\"alertdialog\" aria-label=\"Remove?\"\n        button press=go commandfor=\"remove\" command=\"close\" testId=\"confirm\"\n          text \"Remove\"\n";
+    // A sheet whose button is a level down.
+    let nested = direct.replace(" role=\"alertdialog\"", "").replace(
+        "        button press=go commandfor=\"remove\" command=\"close\" testId=\"confirm\"\n          text \"Remove\"\n",
+        "        column\n          button press=go commandfor=\"remove\" command=\"close\" testId=\"confirm\"\n            text \"Remove\"\n",
+    );
+    for src in [direct, nested.as_str()] {
+        let plan = contract::compile(src).unwrap_or_else(|e| panic!("{src}\n{e}"));
+        contract::check(&plan).unwrap_or_else(|e| panic!("{src}\n{e:?}"));
+        contract::bake(plan, boxed(NoData)).unwrap_or_else(|e| panic!("{src}\n{e:?}"));
+    }
+}
+
 fn empty_controls_sized_by_flex(attrs: &str, width: f32) {
     for control in ["button press=go", "link href=\"/close\""] {
         for applied in [attrs, "class=Size"] {

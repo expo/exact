@@ -493,7 +493,7 @@ fn hidden_by(arena: &NodeArena, slot: u32, itself: bool, authored: bool) -> bool
     false
 }
 
-fn closed_dialog(arena: &NodeArena, slot: u32) -> bool {
+pub(crate) fn closed_dialog(arena: &NodeArena, slot: u32) -> bool {
     !arena.is_root(slot)
         && !arena.blocks.holds(slot)
         && arena.props(slot).str(crate::PropId::SemanticTag) == Some("dialog")

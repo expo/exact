@@ -18,6 +18,15 @@ impl crate::NodeRef<'_> {
 }
 
 impl Kernel {
+    /// Whether `view` is a closed `dialog`: one no host presents or measures,
+    /// which has no layout box, as the web's closed `dialog` is `display:
+    /// none`. Nothing inside it is laid out until it opens.
+    pub fn is_closed_dialog(&self, view: ViewId) -> bool {
+        self.arena
+            .slot_of(view)
+            .is_some_and(|slot| super::block::closed_dialog(&self.arena, slot))
+    }
+
     /// Request the viewport as a dialog's containing block. A sheet's own
     /// block takes precedence. With neither block a dialog has no layout box.
     pub fn measure_dialog(&mut self, view: ViewId, measure: bool) -> bool {

@@ -1354,7 +1354,7 @@ fn first_frame<D: DataSource>(
 /// nothing bounding it (it grows, and never scrolls — 0102, 0103), and a
 /// pressable with zero area (nothing can press it — valet 0003). A pressable
 /// holding an image or a canvas is exempt: their size is the host's.
-/// A pressable hidden by `display: none` on itself or an ancestor is skipped.
+/// A pressable under `display: none` or in a closed `dialog` has no box and is skipped.
 ///
 /// Unanswered (`answered` false, [`check`]), a verdict that could rest on a
 /// placeholder is not given: an empty list's `scroll`, or a button whose
@@ -1491,7 +1491,7 @@ fn has_zero_dimension(node: exact_kernel::NodeRef<'_>) -> bool {
 fn hidden(kernel: &Kernel, node: exact_kernel::NodeRef<'_>) -> bool {
     let mut at = Some(node);
     while let Some(n) = at {
-        if matches!(n.style.display, exact_kernel::Display::None) {
+        if matches!(n.style.display, exact_kernel::Display::None) || kernel.is_closed_dialog(n.id) {
             return true;
         }
         at = n.parent.and_then(|p| kernel.node(p));
