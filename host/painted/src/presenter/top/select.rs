@@ -42,6 +42,8 @@ impl<D: DataSource> Presenter<D> {
             Entry::Item(Row {
                 node: choice.view,
                 title: choice.label,
+                menu_label: None,
+                subtitle: None,
                 direction: self.host.kernel().node(choice.view).map_or_else(
                     || shape::direction(&node),
                     |option| shape::direction(&option),

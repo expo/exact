@@ -64,9 +64,13 @@ impl Default for CollectionOptions {
 /// Collection of fonts.
 #[derive(Clone)]
 pub struct Collection {
+    symbol_fallback: Option<Arc<SymbolFallback>>,
     inner: Inner,
     query_state: query::QueryState,
 }
+
+type SymbolFallback =
+    dyn Fn(char, super::Attributes, GenericFamily) -> Option<(FamilyId, usize)> + Send + Sync;
 
 impl Collection {
     /// Creates a new collection with the given options.
@@ -80,9 +84,22 @@ impl Collection {
     /// and providing it with the data for those fonts.
     pub fn new(options: CollectionOptions) -> Self {
         Self {
+            symbol_fallback: None,
             inner: Inner::new(options),
             query_state: query::QueryState::default(),
         }
+    }
+
+    /// Supplies the platform's face for an unqualified symbol after the
+    /// requested font stack misses. Explicit variation selectors use normal matching.
+    pub fn set_symbol_fallback(
+        &mut self,
+        select: impl Fn(char, super::Attributes, GenericFamily) -> Option<(FamilyId, usize)>
+        + Send
+        + Sync
+        + 'static,
+    ) {
+        self.symbol_fallback = Some(Arc::new(select));
     }
 
     /// Converts an unshared collection into a shared collection

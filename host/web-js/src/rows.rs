@@ -965,6 +965,7 @@ pub(super) fn attributes(
     let mut css = String::new();
     for (name, value) in props {
         match name.as_str() {
+            "aria-keyshortcuts" if exact_plan::shortcut::portable(value) => {}
             "scrollFollowEnd" | "scrollTop" | "scrollLeft" => {}
             // An authored `autofocus=false` is kept for the agent's tree
             // (the runner reports it); the attribute would mean true.

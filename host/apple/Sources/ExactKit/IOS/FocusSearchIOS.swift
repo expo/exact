@@ -114,6 +114,11 @@ extension NodeView {
 /// Bound focus search to a native route or modal presentation, as the
 /// document viewport does (LLP 1123 D2).
 package final class PresentationMount: UIView {
+    package var didLeaveWindow: (() -> Void)?
+    package override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { didLeaveWindow?() }
+    }
     #if os(iOS)
     /// Relay a modal presentation's events to its logical ancestors (`MountRelay`).
     package var relay: MountRelay?

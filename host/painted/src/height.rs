@@ -137,17 +137,27 @@ impl<D: DataSource> Host<D> {
     // Mandatory layout entries always reconcile eligibility and use fresh epochs.
     // Failed layout invalidates this cache; unchanged samples must retry recovery.
     pub(crate) fn layout(&mut self) -> Result<bool, String> {
-        let result = self.layout_anchored();
-        if result.is_ok() {
-            self.scroll_anchors
-                .laid_out(self.runner.kernel(), &self.runner.roots());
-            // @ref LLP 1057.003 D5 — scroll and view timelines, placed from
-            // the layout; the presenter gives their scrollers' offsets.
-            for (node, binding) in self.runner.kernel_mut().place_timelines() {
-                self.engine.set_animation_timeline(node, binding);
+        let changed = self.layout_anchored()?;
+        let env = self.runner.kernel().arena().env();
+        // The route's new frame determines how much of a side band reaches it.
+        if changed && (env.left > 0.0 || env.right > 0.0) && !self.navigation.bars.stacks.is_empty()
+        {
+            // Clearance can change an intrinsically sized route's width and move
+            // its edge again. Use the same bound as the UIKit cover delivery.
+            for _ in 0..8 {
+                if !self.project_bars() || !self.layout_anchored()? {
+                    break;
+                }
             }
         }
-        result
+        self.scroll_anchors
+            .laid_out(self.runner.kernel(), &self.runner.roots());
+        // @ref LLP 1057.003 D5 — scroll and view timelines, placed from
+        // the layout; the presenter gives their scrollers' offsets.
+        for (node, binding) in self.runner.kernel_mut().place_timelines() {
+            self.engine.set_animation_timeline(node, binding);
+        }
+        Ok(changed)
     }
 
     fn layout_anchored(&mut self) -> Result<bool, String> {

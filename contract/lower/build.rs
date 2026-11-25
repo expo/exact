@@ -227,6 +227,19 @@ fn main() {
 
     let schema: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&schema_path).unwrap()).unwrap();
+    let placement = schema["props"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "toolbarPlacement")
+        .unwrap();
+    let words: Vec<_> = placement["_literalWords"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    writeln!(out, "/// The authored words of the string prop `toolbarPlacement`.\npub const TOOLBAR_PLACEMENTS: &[&str] = &{words:?};").unwrap();
     let enums = &schema["enums"];
     let mut defaults = Vec::new();
     for row in schema["styles"].as_array().expect("schema.json: `styles`") {

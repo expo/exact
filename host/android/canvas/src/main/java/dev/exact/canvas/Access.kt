@@ -63,8 +63,14 @@ internal class Access(private val host: View) {
          * [columns]. 0: none. */
         val row: Int, val rows: Int, val column: Int, val columns: Int,
         val name: String, val value: String, val hint: String,
+        val targets: List<Pair<Int, String>>,
     ) {
         val children = ArrayList<Int>(0)
+        var actions = emptyList<AccessibilityAction>()
+        fun performCustom(action: Int): Boolean {
+            val index = actions.indexOfFirst { it.id == action }
+            return index >= 0 && Exact.accessAct(id, 0, 0f, targets[index].first)
+        }
         fun has(flag: Int) = flags and flag != 0
     }
 
@@ -101,6 +107,7 @@ internal class Access(private val host: View) {
                     w[i], w[i + 1], w[i + 2], w[i + 3], w[i + 4], w[i + 5], w[i + 6], w[i + 7], w[i + 8],
                     float(i + 9), float(i + 10), float(i + 11), w[i + 12], w[i + 13],
                     w[i + 14], w[i + 15], w[i + 16], w[i + 17], string(), string(), string(),
+                    List(w[at++]) { w[at++] to string() },
                 ))
             }
         }
@@ -110,19 +117,21 @@ internal class Access(private val host: View) {
     }
 
     /** Where a hosted field stands in the tree: under node [parent] of [host]'s (0: the view itself), named [name]. */
-    class Stand(val host: View, val parent: Int, val name: String) {
+    class Stand(val host: View, val node: Node) {
         /** The field's own node, made to say so: its parent is the node it stands under, and its accessible name is
          * its hint, which TalkBack reads as an edit box's label. */
         fun place(info: AccessibilityNodeInfo) {
-            if (parent == 0) info.setParent(host) else info.setParent(host, parent)
-            if (name.isNotEmpty()) info.hintText = name
+            if (node.parent == 0) info.setParent(host) else info.setParent(host, node.parent)
+            node.actions.forEach(info::addAction)
+            if (node.name.isNotEmpty()) info.hintText = node.name
         }
 
         /** A media controller's own node: its parent is the node it stands under, and the author's label, where
          * there is one, is its description, over Media3's "Show player controls" (LLP 1115: the author's word wins). */
         fun media(info: AccessibilityNodeInfo) {
-            if (parent == 0) info.setParent(host) else info.setParent(host, parent)
-            if (name.isNotEmpty()) info.contentDescription = name
+            if (node.parent == 0) info.setParent(host) else info.setParent(host, node.parent)
+            node.actions.forEach(info::addAction)
+            if (node.name.isNotEmpty()) info.contentDescription = node.name
         }
     }
 
@@ -172,12 +181,30 @@ internal class Access(private val host: View) {
             (if (n.value.isEmpty()) "" else " value \"${n.value}\"") + (if (state.isEmpty()) "" else " [${state.joinToString(", ")}]")
     }
 
+    // Android reserves action ids for its own commands. Keep a separate negative id for each
+    // live target and carry its full 32-bit view id back to the presenter.
+    private var lastAction = 0
+
     /** exact2's statement of this view's tree. */
     fun told(t: Told) {
         val before = nodes
         val now = HashMap<Int, Node>(t.nodes.size * 2)
         val roots = ArrayList<Int>()
-        for (n in t.nodes) now[n.id] = n
+        for (n in t.nodes) {
+            if (n.targets.isNotEmpty()) {
+                val old = before[n.id]?.takeIf { it.view == n.view }
+                val assigned = old?.targets?.mapIndexed { i, (target, _) -> target to old.actions[i].id }?.toMap().orEmpty()
+                val used = assigned.values.toMutableSet()
+                n.actions = n.targets.map { (target, name) ->
+                    val action = assigned[target] ?: run {
+                        do { lastAction = if (lastAction == Int.MIN_VALUE) -1 else lastAction - 1 } while (!used.add(lastAction))
+                        lastAction
+                    }
+                    AccessibilityAction(action, name)
+                }
+            }
+            now[n.id] = n
+        }
         for (n in t.nodes) (if (n.parent == 0) null else now[n.parent])?.children?.add(n.id) ?: roots.add(n.id)
         nodes = now; top = roots
         stand()
@@ -229,7 +256,7 @@ internal class Access(private val host: View) {
     /** Each hosted field the tree has is told where it stands; one it no longer has reports itself as it did. */
     private fun stand() {
         val now = ArrayList<FieldText>()
-        for (n in nodes.values) if (n.role == FIELD) fields?.text(n.view)?.let { it.stand = Stand(host, n.parent, n.name); now.add(it) }
+        for (n in nodes.values) if (n.role == FIELD) fields?.text(n.view)?.let { it.stand = Stand(host, n); now.add(it) }
         for (f in placed) if (f !in now) f.stand = null
         placed = now
         val held = HashSet<View>()
@@ -242,15 +269,17 @@ internal class Access(private val host: View) {
     private fun real(n: Node): View? = when (n.role) {
         FIELD -> fields?.text(n.view)
         MEDIA -> controller(n.view)?.also { view ->
-            val stand = Stand(host, n.parent, n.name)
+            val stand = Stand(host, n)
             val was = standing[view]
-            if (was == null || was.parent != stand.parent || was.name != stand.name) {
-                standing[view] = stand
+            standing[view] = stand
+            if (was == null) {
                 view.accessibilityDelegate = object : View.AccessibilityDelegate() {
                     override fun onInitializeAccessibilityNodeInfo(v: View, info: AccessibilityNodeInfo) {
                         super.onInitializeAccessibilityNodeInfo(v, info)
                         standing[v]?.media(info)
                     }
+                    override fun performAccessibilityAction(v: View, action: Int, args: Bundle?): Boolean =
+                        standing[v]?.node?.performCustom(action) == true || super.performAccessibilityAction(v, action, args)
                 }
             }
         }
@@ -288,7 +317,7 @@ internal class Access(private val host: View) {
                     val to = args?.takeIf { it.containsKey(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE) } ?: return false
                     n.has(SETTABLE) && Exact.accessAct(id, SET, to.getFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE))
                 }
-                else -> false
+                else -> n.performCustom(action)
             }
         }
 
@@ -396,6 +425,7 @@ internal class Access(private val host: View) {
         if (n.has(POLITE)) info.liveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         if (n.has(ASSERTIVE)) info.liveRegion = View.ACCESSIBILITY_LIVE_REGION_ASSERTIVE
         // What a double tap does. A tab that is selected takes none, as Material's does not.
+        n.actions.forEach(info::addAction)
         if (n.has(CLICK) && !(n.role == TAB && n.has(SELECTED))) { info.isClickable = true; info.addAction(AccessibilityAction.ACTION_CLICK) }
         if (n.has(LONG_CLICK)) { info.isLongClickable = true; info.addAction(AccessibilityAction.ACTION_LONG_CLICK) }
         // Start stays: Android refuses a second drag while one is under way, and a Cancel that no longer reaches a drag
@@ -587,7 +617,7 @@ internal class Access(private val host: View) {
         // window's last touch.
         if (!manager.isEnabled) return false
         val n = nodes.values.firstOrNull { it.view == view && drags(it) && real(it) == null } ?: return false
-        if (!host.startDragAndDrop(clip, DragOut.blank, null, flags)) return false
+        if (!host.startDragAndDrop(clip, DragOut.blank, DragOut.OWN, flags)) return false
         dragging = n.id
         cancellable = true
         changed(n.id, AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED)
@@ -801,23 +831,17 @@ internal class Root(context: Context) : FrameLayout(context) {
         if (!access.heard(event)) super.sendAccessibilityEventUnchecked(event)
     }
 
-    /**
-     * Whether the window has heard a drag start and not yet its end. Android tells a view of a drag's end only where
-     * the view took its start, which this does with `onDragEvent`, so it is offered to services as no drop target
-     * (`View.canAcceptAccessibilityDrop` asks for a listener), and it takes no drop. Exact begins no drag while this
-     * holds ([DragOut.start], [Requests]): the window keeps one drag's hold, and an earlier drag's end handled after a
-     * later drag began would take the later one's (`ViewRootImpl.handleDragEvent`).
-     */
-    var dragging = false
-        private set
+    /** Drags into the window ([DragIn], LLP 1094.001 D5). */
+    val drags = DragIn(this)
 
-    override fun onDragEvent(event: android.view.DragEvent): Boolean {
-        when (event.action) {
-            android.view.DragEvent.ACTION_DRAG_STARTED -> { dragging = true; return true }
-            android.view.DragEvent.ACTION_DRAG_ENDED -> dragging = false
-        }
-        return false
-    }
+    /**
+     * Whether the window has heard a drag start and not yet its end. Exact begins no drag while this holds
+     * ([DragOut.start], [Requests]): the window keeps one drag's hold, and an earlier drag's end handled after a later
+     * drag began would take the later one's (`ViewRootImpl.handleDragEvent`).
+     */
+    val dragging: Boolean get() = drags.dragging
+
+    override fun onDragEvent(event: android.view.DragEvent): Boolean = drags.heard(event)
 
     override fun dispatchHoverEvent(event: MotionEvent): Boolean = (accessible && access.hover(event)) || super.dispatchHoverEvent(event)
 }

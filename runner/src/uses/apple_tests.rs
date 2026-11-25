@@ -117,6 +117,54 @@ fn a_document_picker_links_the_pickers_family() {
     }
 }
 
+#[test]
+fn command_capabilities_use_the_opcode_and_resolved_name() {
+    use Capability::*;
+
+    for (name, common, apple) in [
+        ("share", &[Share][..], &[Share][..]),
+        ("saveFile", &[Documents], &[Documents, Picker]),
+        ("requestPermission", &[Documents], &[Documents]),
+        ("showPicker", &[Picker], &[Picker]),
+        ("startTrace_EXPERIMENTAL", &[], &[Traces]),
+        ("requestPictureInPicture", &[], &[Video]),
+        ("playSounds", &[], &[Sound]),
+        ("sendMIDI", &[], &[Midi]),
+        ("Share", &[], &[]),
+    ] {
+        let plan = built(|b| {
+            let mut literal = Asm::new();
+            literal.str(b.str("showPicker"));
+            let literal = b.code(literal);
+            b.action("literal", &[], &[], literal);
+            let mut command = Asm::new();
+            command.command(b.str(name), 0);
+            let command = b.code(command);
+            b.action("command", &[], &[], command);
+        });
+        let common_uses = uses(&plan);
+        let apple_uses = apple_uses(&plan);
+        for capability in [Share, Documents, Picker, Traces, Video, Sound, Midi] {
+            assert_eq!(
+                common_uses.has(capability),
+                common.contains(&capability),
+                "{name}"
+            );
+            assert_eq!(
+                apple_uses.has(capability),
+                apple.contains(&capability),
+                "{name}"
+            );
+        }
+        assert_eq!(uses::runs_sounds(&plan), name == "playSounds");
+        assert_eq!(uses::uses_midi(&plan), name == "sendMIDI");
+        assert_eq!(
+            uses::uses_picture_in_picture(&plan),
+            name == "requestPictureInPicture"
+        );
+    }
+}
+
 /// D10: the wake lock's family is a `wakelock` that can be `screen`.
 #[test]
 fn a_wake_lock_is_a_wakelock_that_can_be_screen() {

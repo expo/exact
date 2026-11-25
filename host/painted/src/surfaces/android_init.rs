@@ -60,7 +60,7 @@ pub(super) fn run(abi: &Abi, path: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "android")]
-pub(crate) use jvm::bind;
+pub(crate) use jvm::{attach, bind};
 
 mod jvm {
     use jni_sys::{jobject, JNIEnv, JavaVM, JNI_OK, JNI_VERSION_1_6};
@@ -110,14 +110,14 @@ mod jvm {
 
     /// The calling thread in the VM for one call of an entry, detached again
     /// when the host attached it.
-    pub(super) struct Attached {
+    pub(crate) struct Attached {
         pub vm: *mut c_void,
         pub env: *mut c_void,
         pub context: *mut c_void,
         detach: bool,
     }
 
-    pub(super) fn attach() -> Result<Attached, String> {
+    pub(crate) fn attach() -> Result<Attached, String> {
         let application = APPLICATION.get().ok_or(super::UNBOUND)?;
         let vm = application.vm;
         let mut env: *mut JNIEnv = std::ptr::null_mut();
@@ -144,7 +144,7 @@ mod jvm {
     impl Attached {
         /// Whether a Java exception is pending: logged and cleared, so that it
         /// neither surfaces in the reader's Kotlin nor aborts the detach.
-        pub(super) fn threw(&self) -> bool {
+        pub(crate) fn threw(&self) -> bool {
             let env = self.env.cast::<JNIEnv>();
             // SAFETY: this thread's environment, attached until `self` drops.
             unsafe {

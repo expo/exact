@@ -1,7 +1,8 @@
 // @fixture/swatch on Apple: a box filled with its `tint`, which sends
 // `message` "tap" when clicked or tapped, made by the session's one instance,
 // which keeps what it was told of its views and answers it, with what it
-// reads of its configuration, as `swatchReports`.
+// reads of its configuration, as `swatchReports`. On iOS the box is a view
+// controller's view, which the host contains.
 import ExactPackage
 import Foundation
 #if os(macOS)
@@ -30,12 +31,12 @@ public final class SwatchModule: ExactPackage {
     /// length and last four characters only.
     private var config: String {
         let key = context.config["apiKey"] as? String ?? ""
-        return "label=\(context.config["label"] as? String ?? "none") apiKey=\(key.isEmpty ? "none" : "\(key.count) chars ending \(key.suffix(4))")"
+        return "label=\(context.config["label"] as? String ?? "none") apiKey=\(key.isEmpty ? "none" : "\(key.count) chars ending \(key.suffix(4))") development=\(context.development)"
     }
 
     public func view(_ tag: String, id: String, props: [String: String], events: ExactPackageEvents) throws -> ExactPackageView {
         guard tag == "swatch-box" else { throw ExactPackageRefusal("no view \(tag)") }
-        let box = SwatchBox(events: events)
+        let box = SwatchBox(events: events) { [weak self] held in self?.say("held \(id) \(held)") }
         try box.setProps(props)
         say("made \(id)")
         return box
@@ -54,13 +55,26 @@ private final class Fill: NSView {
 }
 #else
 private final class Fill: UIView {}
+
+/// The box's controller. Each `didMove(toParent:)` reports whether the
+/// parent's view holds the box, as UIKit requires.
+private final class Holder: UIViewController {
+    var moved: (Bool) -> Void = { _ in }
+    override func didMove(toParent parent: UIViewController?) {
+        super.didMove(toParent: parent)
+        if let parent { moved(view.isDescendant(of: parent.view)) }
+    }
+}
 #endif
 
 private final class SwatchBox: NSObject, ExactPackageView {
     private let fill = Fill()
     private let events: ExactPackageEvents
+    #if !os(macOS)
+    private let holder = Holder()
+    #endif
 
-    init(events: ExactPackageEvents) {
+    init(events: ExactPackageEvents, held: @escaping (Bool) -> Void) {
         self.events = events
         super.init()
         #if os(macOS)
@@ -68,6 +82,8 @@ private final class SwatchBox: NSObject, ExactPackageView {
         fill.layer?.cornerRadius = 8
         fill.tapped = { [weak self] in self?.events.message("tap") }
         #else
+        holder.view = fill
+        holder.moved = held
         fill.layer.cornerRadius = 8
         fill.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tap)))
         #endif
@@ -78,6 +94,9 @@ private final class SwatchBox: NSObject, ExactPackageView {
     #endif
 
     var view: ExactPackagePlatformView { fill }
+    #if !os(macOS)
+    var controller: UIViewController? { holder }
+    #endif
 
     func setProps(_ props: [String: String]) throws {
         let color = Self.color(props["tint"] ?? "")

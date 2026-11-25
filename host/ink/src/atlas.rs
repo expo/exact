@@ -204,19 +204,25 @@ impl Atlas {
         }
         let completed = device.completed()?;
         let mut busy = std::collections::HashSet::new();
+        // The pages an unfinished draw samples that the device can still append to:
+        // the draw reads none of the space an append fills.
+        let mut ordered = std::collections::HashSet::new();
         for p in &self.pages {
             let last = device.last_use(p.id)?;
             // The device orders consecutive uploads; only an unfinished draw
             // prevents appending to the page. @ref LLP 1149 D11, S2.5.
             if last > completed && last != p.upload {
                 busy.insert(p.id);
+                if device.orders_upload(p.id)? {
+                    ordered.insert(p.id);
+                }
             }
         }
         let padded = size.map(|s| s + 2 * self.padding);
         let mut slot = None;
         if padded[0] <= self.size[0] && padded[1] <= self.size[1] {
             for page in &mut self.pages {
-                if busy.contains(&page.id) {
+                if busy.contains(&page.id) && !ordered.contains(&page.id) {
                     continue;
                 }
                 if let Some(origin) = place(page, self.size, padded) {

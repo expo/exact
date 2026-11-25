@@ -383,6 +383,113 @@ final class ModalDetentIOSTests: XCTestCase {
         XCTAssertTrue(session.agent(#"{"op":"logs","since":0}"#).contains(#"navigationInitialDetent \"medum\""#), "journaled when the sheet is made")
     }
 
+    /// LLP 1123 D7: the detent a route holds its sheet at moves the sheet as it changes and again over new
+    /// detents, while an unrelated update leaves the height the person dragged it to; let go, the sheet returns to
+    /// the one it opens at. Its edge attachment and scroll expansion are UIKit's properties while it says them, and
+    /// UIKit's defaults once it stops; its sizing is the presentation style it is made with.
+    func testASheetRouteHoldsItsSelectedDetentAndSaysItsSheetsChoices() throws {
+        let session = try fixture("detent-selected")
+        try tap(session, "menu")
+        until("the menu is presented as a sheet") { sheet()?.sheetPresentationController != nil }
+        let presented = try XCTUnwrap(sheet())
+        let controller = try XCTUnwrap(presented.sheetPresentationController)
+        XCTAssertEqual(presented.modalPresentationStyle, .pageSheet, "unsaid, a page sheet")
+        let route = try node(session, "route-menu")
+        func update(_ props: [String: String?]) {
+            for (name, value) in props { route.props[name] = value }
+            session.presenter.modalHost.updatePermissions()
+        }
+        update(["navigationDetent": "medium large", "navigationSelectedDetent": "large"])
+        XCTAssertEqual(controller.selectedDetentIdentifier, .large)
+        controller.selectedDetentIdentifier = .medium
+        update(["navigationGrabber": "visible"])
+        XCTAssertEqual(controller.selectedDetentIdentifier, .medium, "an unrelated update leaves the height the person dragged it to")
+        update(["navigationSelectedDetent": "medium"])
+        update(["navigationSelectedDetent": "large"])
+        XCTAssertEqual(controller.selectedDetentIdentifier, .large, "a new value moves it")
+        update(["navigationDetent": "300 large"])
+        XCTAssertEqual(controller.selectedDetentIdentifier, .large, "held over new detents")
+        update(["navigationSelectedDetent": "45%"])
+        XCTAssertEqual(controller.selectedDetentIdentifier, .large, "a word that names none of its detents leaves it")
+        XCTAssertTrue(session.agent(#"{"op":"logs","since":0}"#).contains(#"navigationSelectedDetent \"45%\" on route"#))
+        update(["navigationSelectedDetent": nil])
+        XCTAssertEqual(controller.selectedDetentIdentifier, .init("authored-0"), "let go: where it opens, its first")
+        XCTAssertFalse(controller.prefersEdgeAttachedInCompactHeight)
+        XCTAssertTrue(controller.prefersScrollingExpandsWhenScrolledToEdge, "unsaid over two detents: the platform's")
+        update(["navigationEdgeAttachedInCompactHeight": "true", "navigationScrollExpands": "false"])
+        XCTAssertTrue(controller.prefersEdgeAttachedInCompactHeight)
+        XCTAssertFalse(controller.prefersScrollingExpandsWhenScrolledToEdge)
+        update(["navigationEdgeAttachedInCompactHeight": nil, "navigationScrollExpands": nil])
+        XCTAssertFalse(controller.prefersEdgeAttachedInCompactHeight, "UIKit's default once it stops")
+        XCTAssertTrue(controller.prefersScrollingExpandsWhenScrolledToEdge)
+        // UIKit reads a style back as it resolves it for the device (on an iPhone a form sheet reads as a page
+        // sheet), so the sheet is made as a controller given the same style is
+        for (sizing, style) in [("form", UIModalPresentationStyle.formSheet), ("automatic", .automatic), ("page", .pageSheet), (nil, .pageSheet)] {
+            XCTAssertEqual(ModalController.sheetStyle(sizing), style, sizing ?? "unsaid")
+            route.props["navigationSizing"] = sizing
+            let made = ModalController(host: session.presenter.modalHost, route: route, fullscreen: false, detent: nil, grabber: nil)
+            let plain = UIViewController()
+            plain.modalPresentationStyle = style
+            XCTAssertEqual(made.modalPresentationStyle, plain.modalPresentationStyle, sizing ?? "unsaid")
+            XCTAssertNotNil(made.sheetPresentationController, "\(sizing ?? "unsaid"): a sheet to configure")
+        }
+    }
+
+    /// LLP 1123 D7: a sheet resting at or below its undimmed detent dims nothing and is no modal dialog: the screen
+    /// under it takes a person's touch, its views are live to reads, and the sheet begins no modal boundary. Above
+    /// it, or with no undimmed detent, the sheet is modal again.
+    func testASheetAtOrBelowItsUndimmedDetentLeavesTheScreenUnderItLive() throws {
+        guard ProcessInfo.processInfo.environment["EXACT_TOUCH_PORT"] != nil else {
+            throw missing("touch", "a person's touch reaches the screen under an undimmed sheet")
+        }
+        let touch = try TouchRunner(self)
+        defer { touch.connection.cancel() }
+        let session = try fixture("detent-undimmed")
+        let window = try XCTUnwrap(self.window), modals = session.presenter.modalHost
+        try tap(session, "menu")
+        until("the menu is presented as a sheet") { self.sheet()?.sheetPresentationController != nil && self.sheet()?.view.window != nil }
+        let presented = try XCTUnwrap(sheet()), controller = try XCTUnwrap(presented.sheetPresentationController)
+        let route = try node(session, "route-menu"), bump = try node(session, "bump")
+        func update(_ props: [String: String?]) {
+            for (name, value) in props { route.props[name] = value }
+            modals.updatePermissions()
+        }
+        func count() -> Double? {
+            let reply = try? JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8)) as? [String: Any]
+            return (reply?["slots"] as? [String: Any])?["count"] as? Double
+        }
+        // A short detent, so the sheet leaves Bump uncovered
+        let short = UISheetPresentationController.Detent.Identifier("authored-0")
+        update(["navigationDetent": "200 large", "navigationSelectedDetent": "200", "navigationUndimmedDetent": "200"])
+        XCTAssertEqual(controller.largestUndimmedDetentIdentifier, short)
+        until("the sheet rests at its short detent") { controller.selectedDetentIdentifier == short && presented.transitionCoordinator == nil }
+        XCTAssertFalse(modals.inertBehind(bump), "the screen under it is live")
+        XCTAssertNil(session.presenter.openTopLayer.1, "the sheet begins no modal boundary")
+        XCTAssertNil(modals.topNavigation)
+        // Bump takes touches where every view from it to the window does
+        let takesTouches = { sequence(first: bump as UIView, next: \.superview).allSatisfy(\.isUserInteractionEnabled) }
+        XCTAssertTrue(takesTouches())
+        let center = bump.convert(CGPoint(x: bump.bounds.midX, y: bump.bounds.midY), to: window)
+        XCTAssertLessThan(center.y, presented.view.convert(presented.view.bounds, to: window).minY, "Bump lies above the sheet")
+        let before = try XCTUnwrap(count())
+        waitFor("the window receives touches") { Agent.frontRefusal(window) == nil }
+        XCTAssertEqual(try touch.ask(TouchRunner.aim(center, in: window).merging(["op": "tap"]) { _, new in new })["done"] as? Bool, true)
+        until("a person's tap presses Bump under the sheet") { count() == before + 1 }
+        // A person's drag takes it above its undimmed detent, and it is modal again
+        let top = presented.view.convert(presented.view.bounds, to: window).minY
+        var drag = try TouchRunner.aim(CGPoint(x: window.bounds.midX, y: top + 10), in: window)
+        let end = try TouchRunner.aim(CGPoint(x: window.bounds.midX, y: 120), in: window)
+        drag.merge(["op": "drag", "to": end["point"]!, "screenTo": end["screen"]!, "velocity": 900, "press": 0.05, "hold": 0.1]) { _, new in new }
+        XCTAssertEqual(try touch.ask(drag)["done"] as? Bool, true)
+        until("the person's drag takes the sheet to large") { controller.selectedDetentIdentifier == .large && presented.transitionCoordinator == nil }
+        XCTAssertTrue(modals.inertBehind(bump), "above its undimmed detent the sheet is modal")
+        XCTAssertFalse(takesTouches(), "the screen under it takes no touch")
+        XCTAssertNotNil(session.presenter.openTopLayer.1)
+        update(["navigationSelectedDetent": "large", "navigationUndimmedDetent": nil])
+        XCTAssertNil(controller.largestUndimmedDetentIdentifier)
+        XCTAssertTrue(modals.inertBehind(bump), "with no undimmed detent every height is modal")
+    }
+
     func testADialogUsesItsAuthoredDetentsAndKeepsTheSelectionWhenItsGrabberChanges() throws {
         guard hostedWindowScene() != nil else {
             throw missing("scene", "UIKit presents and dismisses the dialog in its window")

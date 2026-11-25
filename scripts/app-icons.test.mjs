@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 import { alternateIcons, appIconProblems, iconDigests, iconFile, opaque, pickIcon, placeRgba, pngAlpha, readPng, resize, webIconLinks, webThemeColors, WINDOWS_ICON_SIZES, windowsIconRes, writeTinted } from './app-icons.mjs';
-import { encodePng } from './png.mjs';
+import { decodePng, encodePng } from './png.mjs';
 import { validate } from './app.mjs';
 
 // An async body's directory goes when its promise settles, not when it returns one.
@@ -119,6 +119,11 @@ test('PNG decodes every form to RGBA, opacity and the tinted icon read its alpha
   // A palette with transparency, 16-bit grey with alpha, 1-bit grey, and an interlaced 2×2 RGB image.
   assert.deepEqual(at(raw(2, 1, 8, 3, [[0, 1]], { chunks: [['PLTE', [255, 0, 0, 0, 0, 255]], ['tRNS', [128]]] })), [255, 0, 0, 128, 0, 0, 255, 255]);
   assert.deepEqual(at(raw(1, 1, 16, 4, [[0x80, 0, 0xff, 0xff]])), [128, 128, 128, 255]);
+  for (const [low, opaque] of [[0xff, true], [0xfe, false]]) {
+    const image = decodePng(raw(1, 1, 16, 4, [[0x80, 0, 0xff, low]]), { checkOpacity: true });
+    assert.equal(image.opaque, opaque);
+    assert.equal(image.data[3], 255, '16-bit source alpha can differ even when the RGBA bytes match');
+  }
   assert.deepEqual(at(raw(2, 1, 1, 0, [[0b10000000]])), [255, 255, 255, 255, 0, 0, 0, 255]);
   // Adam7 on 2×2: pass 1 is (0,0), pass 6 is (1,0), pass 7 is the second row.
   assert.deepEqual(at(raw(2, 2, 8, 2, [[1, 1, 1], [2, 2, 2], [3, 3, 3, 4, 4, 4]], { interlace: 1 })),

@@ -134,7 +134,7 @@ impl<D: DataSource> Host<D> {
         let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
                                                // @ref LLP 1039 D2 — merge re-answer and relayout, once.
         let size = Some((f64::from(width), f64::from(height)));
-        let receipt = match self.runner.set_view(size, keyboard) {
+        let receipt = match self.runner.set_view(size, keyboard, None) {
             Ok(receipt) => receipt,
             Err(e) => {
                 return self.geometry_refused(
@@ -304,7 +304,7 @@ impl<D: DataSource> Host<D> {
                 self.resize_inner(width, height, keyboard, batch, error, Some(previous))
             }
             None => {
-                match self.runner.set_view(None, keyboard) {
+                match self.runner.set_view(None, keyboard, None) {
                     Ok(Some(receipt)) => {
                         return self.commit_into(
                             &[Timed {

@@ -72,7 +72,19 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let now = self.now();
         let at = self.input_clock.android(action == 0, at_ns, now);
         let (x, y) = (x / self.scale, y / self.scale);
-        let r = self.p.reader_touch(action, x, y, now, at);
+        let r = if matches!(action, 1 | 2) {
+            self.p
+                .transform_finger((u64::MAX, (x, y)), None, action, now, at)
+        } else {
+            Ok(false)
+        }
+        .and_then(|took| {
+            if took {
+                Ok(())
+            } else {
+                self.p.reader_touch(action, x, y, now, at)
+            }
+        });
         self.touched(action, x, y, now, r);
     }
 
@@ -85,16 +97,48 @@ impl<D: DataSource + Default> CanvasHost<D> {
 
     /// A finger past the touch's first (0 down, 1 up, 2 move, 3 cancel) at
     /// pixels, by Android's pointer `id`: the canvas holding the touch takes
-    /// it ([`crate::presenter::Presenter::canvas_finger`]); where none holds
-    /// it, a second finger cancels the touch.
-    pub fn finger(&mut self, action: i32, id: i32, x: f32, y: f32) {
+    /// it first. A second finger can join a photo hold. Other recognizers
+    /// keep their first contact, and an ordinary pending press is cancelled.
+    pub fn finger(
+        &mut self,
+        action: i32,
+        id: i32,
+        x: f32,
+        y: f32,
+        tool: i32,
+        at_ns: i64,
+        primary: (f32, f32),
+    ) {
         let _s = Section::begin(c"exact finger");
         let now = self.now();
         let taken = self
             .p
             .canvas_finger(id, action, x / self.scale, y / self.scale, now);
-        if !taken && action == 0 {
-            self.touch(3, x, y, 0, -1);
+        if taken {
+            return;
+        }
+        let pos = (x / self.scale, y / self.scale);
+        let event = self.input_clock.android(false, at_ns, now);
+        let id = id as u64;
+        let first = (u64::MAX, (primary.0 / self.scale, primary.1 / self.scale));
+        let peer = primary.0.is_finite().then_some(first);
+        let result = if action == 0 && tool != 1 {
+            Ok(self.p.tracking_transform_pinch())
+        } else {
+            self.p
+                .transform_finger((id, pos), peer, action, now, event)
+                .and_then(|took| {
+                    if !took && action == 0 && peer.is_some() {
+                        self.p.begin_transform_pinch(first, id, pos, event)
+                    } else {
+                        Ok(took)
+                    }
+                })
+        };
+        match result {
+            Ok(false) if action == 0 => self.touch(3, x, y, 0, -1),
+            Err(e) => self.p.host_mut().log(e),
+            _ => {}
         }
     }
 }

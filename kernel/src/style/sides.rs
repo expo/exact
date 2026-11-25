@@ -17,7 +17,7 @@ use crate::generated::StyleId;
 /// The shorthands' rows, in top, right, bottom, left order, and
 /// `border-radius`'s corners in top-left, top-right, bottom-right,
 /// bottom-left order, which CSS fills from fewer values the same way.
-pub const FAMILIES: [[StyleId; 4]; 18] = [
+pub const FAMILIES: [[StyleId; 4]; 20] = [
     [
         StyleId::PaddingTop,
         StyleId::PaddingRight,
@@ -120,6 +120,18 @@ pub const FAMILIES: [[StyleId; 4]; 18] = [
         StyleId::SafeAreaExtendBoundsRight,
         StyleId::SafeAreaExtendBoundsBottom,
         StyleId::SafeAreaExtendBoundsLeft,
+    ],
+    [
+        StyleId::ListCellMarginsTop,
+        StyleId::ListCellMarginsRight,
+        StyleId::ListCellMarginsBottom,
+        StyleId::ListCellMarginsLeft,
+    ],
+    [
+        StyleId::ListBackgroundInsetsTop,
+        StyleId::ListBackgroundInsetsRight,
+        StyleId::ListBackgroundInsetsBottom,
+        StyleId::ListBackgroundInsetsLeft,
     ],
 ];
 

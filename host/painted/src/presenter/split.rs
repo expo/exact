@@ -77,7 +77,7 @@ pub(crate) struct State {
     logged: BTreeSet<NodeKey>,
     actions: BTreeMap<ViewId, Association>,
     blocks: BTreeMap<NodeKey, ViewId>,
-    covers: BTreeMap<NodeKey, (ViewId, HostCover)>,
+    pub(crate) covers: BTreeMap<NodeKey, (ViewId, HostCover)>,
     /// The row a press is being dispatched from, and whether its commits
     /// recycled it before the press's route could be associated with it.
     pressing: Option<(NodeKey, bool)>,
@@ -546,8 +546,8 @@ impl<D: DataSource> Presenter<D> {
         }
         let previous_blocks =
             std::mem::replace(&mut self.host.navigation.split.blocks, blocks.clone());
-        let previous_covers =
-            std::mem::replace(&mut self.host.navigation.split.covers, covers.clone());
+        let covers_changed = self.host.navigation.split.covers != covers;
+        self.host.navigation.split.covers = covers;
         for (key, id) in previous_blocks {
             if !blocks.contains_key(&key) {
                 if self.host.kernel().node_by_key(key).is_some() {
@@ -559,38 +559,6 @@ impl<D: DataSource> Presenter<D> {
                 }
                 self.host.runner_mut().place_blocks(&[(id, None)]);
                 changed = true;
-            }
-        }
-        for (key, (id, cover)) in previous_covers {
-            if cover == HostCover::Whole
-                && self.host.navigation.bars.covers.get(&id) != Some(&HostCover::Whole)
-            {
-                self.host.navigation.lifted.remove(&id);
-            }
-            if !covers.contains_key(&key)
-                && self.host.kernel().node_by_key(key).is_some()
-                && !self.host.navigation.bars.covers.contains_key(&id)
-            {
-                self.host
-                    .runner_mut()
-                    .kernel_mut()
-                    .set_host_cover(id, None)
-                    .map_err(|e| format!("split cover: {e:?}"))?;
-                changed = true;
-            }
-        }
-        for (id, cover) in covers.values() {
-            let k = self.host.kernel();
-            if k.arena().slot_of(*id).and_then(|s| k.arena().cover(s)) != Some(*cover) {
-                self.host
-                    .runner_mut()
-                    .kernel_mut()
-                    .set_host_cover(*id, Some(*cover))
-                    .map_err(|e| format!("split cover: {e:?}"))?;
-                changed = true;
-            }
-            if *cover == HostCover::Whole {
-                self.host.navigation.lifted.insert(*id);
             }
         }
         if let Some(s) = &next {
@@ -613,16 +581,14 @@ impl<D: DataSource> Presenter<D> {
         }
         self.host.navigation.split.active = next.clone();
         self.brush.split_changed(next.clone());
+        if changed || covers_changed {
+            changed |= self.host.project_bars();
+        }
         if !receipts.is_empty() {
             self.dirty = true;
             if let Some(error) = self.host.commit(&receipts, None) {
                 return Err(error);
             }
-            self.host.navigation.lifted.extend(
-                covers
-                    .values()
-                    .filter_map(|(id, cover)| (*cover == HostCover::Whole).then_some(*id)),
-            );
         } else if changed {
             self.dirty = true;
             self.host.layout()?;
@@ -630,9 +596,9 @@ impl<D: DataSource> Presenter<D> {
         if let Some(s) = next {
             let kernel = self.host.kernel();
             let root = kernel.node(s.root).ok_or("split list removed")?;
-            let arena = kernel.arena();
-            let cover = match arena.slot_of(s.root).and_then(|t| arena.cover(t)) {
-                Some(HostCover::Edges([_, right, _, _])) => right,
+            // Validate the column boundary even when a wider cutout also covers its end.
+            let cover = match self.host.navigation.split.covers.get(&root.key) {
+                Some((_, HostCover::Edges([_, right, _, _]))) => *right,
                 _ => 0.,
             };
             let content = root.frame.x + root.frame.width - cover - s.rect.0;

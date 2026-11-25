@@ -16,7 +16,7 @@
 
 const STATES = { default: 'prompt', granted: 'granted', denied: 'denied' };
 
-export function implementation({ changed, activation, log = () => {} }) {
+export function implementation({ changed, activation, emit, foreground, log = () => {} }) {
   const shown = new Map(), waiting = new Map();
   const has = typeof Notification === 'function';
   const status = () => ({
@@ -37,7 +37,9 @@ export function implementation({ changed, activation, log = () => {} }) {
     let n;
     try { n = new Notification(title, { ...(body != null && { body }), ...(tag != null && { tag }), ...(silent != null && { silent }), ...(data != null && { data }) }); }
     catch (e) { return { error: e?.name ?? 'NotSupportedError', message: String(e?.message ?? e) }; }
-    activation(n, 'click', 'notificationclick', [tag ?? '', { tag: tag ?? '', data, title, body }], { navigate });
+    const args = [tag ?? '', { tag: tag ?? '', data, title, body }];
+    n.addEventListener('show', e => { if (e.isTrusted && foreground()) emit('notificationshow', args); });
+    activation(n, 'click', 'notificationclick', args, { navigate });
     n.addEventListener('click', e => { if (e.isTrusted) { e.preventDefault(); n.close(); } });
     if (tag != null) { shown.set(tag, n); n.onclose = () => { if (shown.get(tag) === n) shown.delete(tag); }; }
     log('showNotification: shown');

@@ -69,6 +69,20 @@ for (const host of hosts.length ? hosts : ['macos', 'ios']) {
   const plistAt = readdirSync(resolve(app, 'target'), { recursive: true }).find((f) => host === 'ios' ? /iphonesimulator|ios-sim/.test(f) && f.endsWith('.app/Info.plist') : /macos/.test(f) && f.endsWith('-Info.plist'));
   const plist = plistAt ? JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(app, 'target', plistAt)])) : {};
   check(where, 'Info.plist carries the recognizer\'s purpose (D11)', plist.NSSpeechRecognitionUsageDescription === 'The conformance suite recognises what the track says.', plistAt ?? 'no Info.plist under target/');
+  const agent = await open({ host, app: name, sim, storage });
+  try {
+    await agent.prefer({ 'permission.microphone': 'granted', 'permission.speech-recognition': 'granted' });
+    await agent.tap('on-microphone');
+    await agent.clock('data');
+    const t = await texts(agent);
+    check(where, 'the agent advertises track and file inputs', t.status === 'true granted track,file true', t.status);
+    check(where, 'the agent refuses a direct microphone', t['held-error'] === 'NotSupportedError', t['held-error']);
+    await agent.prefer({ extension: 'speech-recognition.speechRecognitionStatus={"inputs":["microphone"]}' });
+    await agent.tap('on-microphone');
+    await agent.clock('data');
+    const held = (await agent.state()).slots.held;
+    check(where, 'an explicit microphone substitute starts a recognition', !!held?.id && held.error === null, JSON.stringify(held));
+  } finally { await agent.close(); }
   const s = await open({ host, app: name, bind: 'media-capture,speech-recognition', storage });
   try {
     const state = await s.state();

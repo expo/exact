@@ -1,0 +1,37 @@
+routes nav
+  home "/"
+
+component App
+  state loaded = false
+  state left = 0
+  state right = 0
+  action load
+    loaded = true
+  action advance
+    left = left + 1
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      column navigationKey=`${top(nav).id}` navigationBar="none" position="absolute" inset=0
+        scroll flex=1 min-height=0
+          if loaded
+            button "Advance" testId="advance" press=advance
+        if !loaded
+          row role="toolbar" toolbarPlacement="bottom" testId="load-tools"
+            spacer role="button" aria-label="Gap" press=advance
+            button "Load" testId="load" press=load
+        else
+          if left < 2 or left == 3
+            if left == right
+              row role="toolbar" toolbarPlacement="bottom"
+                button "Equal" testId="equal" press=advance
+            if left != right
+              row role="toolbar" toolbarPlacement="bottom" testId="unequal-tools"
+                button "Unequal" testId="unequal" press=advance
+          if left == 2 or left == 3
+            for n in [1, 2] key=n
+              if n == 1
+                row role="toolbar" toolbarPlacement="bottom" testId="loop-tools"
+                  button "Filtered" testId="filtered" press=advance
+          if left == 4
+            row role="toolbar" toolbarPlacement="bottom" testId="space-tools"
+              spacer

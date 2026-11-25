@@ -253,9 +253,7 @@ include!(concat!(env!("OUT_DIR"), "/hatches.rs"));"#
             .unwrap_or_else(|e| panic!("packages: {e}"))
     };
     let main = match platform {
-        "linux" => format!(
-            "fn main() {{ std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, {composed})); }}"
-        ),
+        "linux" => compat.linux_main(composed),
         "windows" => format!(
             "{}fn main() {{ std::process::exit(exact_windows::run_baked::<AppData, ADMIT_AGENT>({:?}, window(), PLAN, COMPAT, {composed}, SERVICES)); }}",
             compat

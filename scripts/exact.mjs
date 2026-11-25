@@ -415,6 +415,7 @@ export async function setup({check = false, platform = null, device = false, app
   const report = prebuilt ? rows : [...(platform ? await platformReport(platform, rows, { device, hermes }) : rows), cratesRow()];
   if (platform === 'android') report.push(...rows.filter(row => row.name === 'Android JDK JIT'));
   printReport(report);
+  if (check && process.platform === 'darwin' && !device && (!platform || platform === 'ios')) await (await import('../host/apple/touches.mjs')).checkSimulatorAccessibility(appDir, app?.id);
   const missing = report.filter(row => row.required && !row.ok);
   if (missing.length) throw new Error(`${missing.map(row => row.name).join(', ')} ${missing.length === 1 ? 'is' : 'are'} missing or differ; run exact setup (it installs what it can and names the rest)`);
   if (prebuilt) { console.log('Web tools ready for this app.'); return; }

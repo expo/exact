@@ -92,6 +92,30 @@ extension NavigationBarIOSTests {
         }
     }
 
+    /// UIKit gives a tab's button its identifier only once an accessibility client asks, so one it makes after that (a
+    /// tab out of More, as the bar widens) has its name alone.
+    func testATouchAimsAtATabsButtonThatHasNoIdentifier() throws {
+        guard Presenter.axRuntimeLoaded else { throw missing("accessibility", "UIKit names its tab bar's buttons only for an assistive client") }
+        let session = try fixture("tab-aim", module: false)
+        let controller = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        guard let bar = controller.shownTabBar as? UITabBar, let title = bar.items?.first?.title else { throw XCTSkip("no UITabBar shows the tabs") }
+        let place = bar.convert(bar.bounds, to: nil)
+        var buttons: [UIControl] = [], pending: [UIView] = [controller.view]
+        while let view = pending.popLast() {
+            let middle = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+            if let button = view as? UIControl, button.accessibilityLabel == title, place.contains(middle) {
+                button.accessibilityIdentifier = nil
+                buttons.append(button)
+            } else if !(view is NodeView) {
+                pending += view.subviews
+            }
+        }
+        XCTAssertFalse(buttons.isEmpty)
+        let aim = Agent(session: session).tabItem(try node(session, "tab-home"))
+        guard case .success(let aimed)? = aim else { return XCTFail(String(describing: aim)) }
+        XCTAssertTrue(buttons.contains { $0 === aimed })
+    }
+
     /// A press that changes the bar of a route that shows sets its items with
     /// UIKit's animation, as a hand-built bar's
     /// `setRightBarButtonItems(_:animated: true)` does, whether the bar held
@@ -118,10 +142,13 @@ extension NavigationBarIOSTests {
         let toggle = try node(session, "bare-toggle").id
         trailingSets = []
         session.presenter.onPress?(toggle)
-        until("the controls go, the readout stays") { !items().contains { $0.accessibilityIdentifier == "share-home" } }
+        until("the controls go, the readout comes") {
+            !items().contains { $0.accessibilityIdentifier == "share-home" } && items().contains { $0.accessibilityIdentifier == "status-home" }
+        }
         session.presenter.onPress?(toggle)
         until("the controls come back") { items().contains { $0.accessibilityIdentifier == "share-home" } }
-        XCTAssertEqual(trailingSets, [true, true], "the readout-only bar's changes animate too")
+        // The controls go, the readout comes in once it is laid out (LLP 1141.004 D3), the controls come back
+        XCTAssertEqual(trailingSets, [true, true, true], "the readout-only bar's changes animate too")
     }
 
     /// The bar leaves a touch on none of its own controls to an authored
@@ -162,6 +189,23 @@ extension NavigationBarIOSTests {
         session.presenter.apply(wireBatch([["op": "props", "id": Int(more.id), "set": ["accessibilityKeyShortcuts": "Meta+Z"]]]))
         XCTAssertFalse(more.accessibilityVisible, "the bar's item stands for the control")
         XCTAssertNotNil(session.presenter.navigationHost.tipItem(more), "the bar that shows draws it")
+        let p = session.presenter, toggle = try node(session, "bare-toggle")
+        p.apply(wireBatch([
+            ["op": "props", "id": Int(more.id), "set": ["id": "more", "accessibilityActions": "toggle"]],
+            ["op": "props", "id": Int(toggle.id), "set": ["id": "toggle", "accessibilityLabel": "Toggle bar", "accessibilityActions": "more"]]
+        ]))
+        let item = try XCTUnwrap(p.navigationHost.tipItem(more)?.0)
+        XCTAssertEqual(item.accessibilityCustomActions?.map(\.name), ["Toggle bar"])
+        let fromPage = try XCTUnwrap(toggle.accessibilityCustomActions?.first)
+        XCTAssertEqual(fromPage.name, "More")
+        var presses: [UInt32] = []
+        let saved = p.onPress
+        p.onPress = { presses.append($0) }
+        defer { p.onPress = saved }
+        XCTAssertEqual(fromPage.actionHandler?(fromPage), true)
+        let fromBar = try XCTUnwrap(item.accessibilityCustomActions?.first)
+        XCTAssertEqual(fromBar.actionHandler?(fromBar), true)
+        XCTAssertEqual(presses, [more.id, toggle.id])
         let commands = session.presenter.shortcutCommands(#selector(UIResponder.becomeFirstResponder))
         XCTAssertEqual(commands.map { [$0.input, $0.title] }, [["z", "More"]], "one command, named for the button")
         XCTAssertTrue(session.presenter.shortcut(key: "z", held: "Meta+", focus: nil) === more)

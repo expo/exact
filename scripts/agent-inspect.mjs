@@ -1229,7 +1229,7 @@ export async function tapRefusal(session, target, error) {
   if (error.transport || error.malformed) return error; // App state cannot explain malformed input or a failed transport.
   // What covers a target may leave on one of the app's timers, which the agent's frozen clock never reaches (a boot
   // overlay's `after(900, …)`, euxy FRICTION 9): the tasks still waiting, and the step that runs them.
-  if (/covers its middle/.test(error.message ?? '')) try {
+  if (/covers (?:its middle|the requested point)/.test(error.message ?? '')) try {
     const r = await session.state(), now = r?.clock;
     const due = Object.entries(r?.tasks ?? {}).filter(([, at]) => Number.isFinite(at) && at > now).sort((a, b) => a[1] - b[1]);
     if (Number.isFinite(now) && due.length) {

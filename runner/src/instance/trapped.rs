@@ -30,6 +30,12 @@ impl NodeInst {
     ) -> Result<Evaluated, InstanceError> {
         let binding = u.env.plan.binding(b);
         match u.eval_binding(b, binding.expr, frames) {
+            Ok(value) if binding.kind == BindingKind::Prop
+                && binding.id == exact_kernel::PropId::ToolbarPlacement as u16
+                && value.as_str() == Some("bottom")
+                && crate::uses::constant_str(u.env.plan, u.env.plan.code(binding.expr)) != Some("bottom") => {
+                Ok(self.invalid_row(u, b, || "toolbarPlacement computed bottom; write a literal bottom toolbar row inside the route's column and choose it with `if`".into()))
+            }
             Ok(value) => {
                 if let Some(rare) = self.rare.as_mut() {
                     rare.trapped.retain(|t| *t != b.0);
@@ -37,22 +43,28 @@ impl NodeInst {
                 Ok(Evaluated::Value(value))
             }
             Err(trap @ Trap::Pending { .. }) => Err(InstanceError::Trap(trap)),
-            Err(trap) => {
-                let trapped = &mut self.rare().trapped;
-                let first = !trapped.contains(&b.0);
-                if first {
-                    trapped.push(b.0);
-                    u.notes.push(format!(
-                        "view {} (site {}): {} trapped Trap({trap:?}){}; unset",
-                        self.view,
-                        self.node.0,
-                        row_name(&binding),
-                        trap.bound()
-                    ));
-                }
-                Ok(Evaluated::Trapped { first })
-            }
+            Err(trap) => Ok(self.invalid_row(u, b, || format!("{} trapped Trap({trap:?}){}", row_name(&binding), trap.bound()))),
         }
+    }
+
+    fn invalid_row(
+        &mut self,
+        u: &mut Update<'_>,
+        b: BindingsId,
+        why: impl FnOnce() -> String,
+    ) -> Evaluated {
+        let trapped = &mut self.rare().trapped;
+        let first = !trapped.contains(&b.0);
+        if first {
+            trapped.push(b.0);
+            u.notes.push(format!(
+                "view {} (site {}): {}; unset",
+                self.view,
+                self.node.0,
+                why()
+            ));
+        }
+        Evaluated::Trapped { first }
     }
 
     /// Unset binding `i`'s row, which trapped.

@@ -188,7 +188,9 @@ writeFileSync(join(dir, 'linear.png'), Buffer.concat([
    and press **png**: `DataError`, prior clipboard unchanged. Repeat with an
    over-64-MiB file. Press the existing **large** button for a 9000×9000
    header: `DataError`, prior clipboard unchanged. **png-bytes** is deliberately
-   unsupported on Windows; it must answer `NotSupportedError`.
+   unsupported on Windows; it must answer `NotSupportedError`. Press **html**
+   or **html-only**. Each must refuse with `Type text/html not supported on write.`
+   and leave the previous copy available.
 9. Copy a valid image again, close the writer, and paste into Paint and a
    PNG-preferring editor. Reopen and repeat **both**. Eager clipboard data
    must remain pastable after the writer exits.

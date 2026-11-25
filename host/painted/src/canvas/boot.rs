@@ -55,8 +55,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
         crate::surfaces::prepare_gpu(compat);
         // The device's colours, before anything is resolved by a role (D4).
         let palette = colors::palette();
-        if let Some(palette) = &palette {
-            palette.tell();
+        if let Some(colors) = &palette {
+            colors.roles.tell();
         }
         let mut config = crate::app::Config::from_env_static(plan, compat);
         config.preferences = device::configured().map(|d| exact_runner::Preferences {
@@ -112,8 +112,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
         p.serve_requests();
         p.serve_frame_partitions(super::frame_partitions::kept);
         surface::serve(&mut p);
-        if let Some(palette) = &palette {
-            p.set_palette(palette);
+        if let Some(colors) = &palette {
+            p.set_reader_palette(colors);
         }
         eprintln!(
             "exact: canvas {}x{} px, scale {scale}, boot {:.1} ms",

@@ -27,6 +27,8 @@ mod edges_tests;
 mod fallback;
 pub(crate) mod field;
 use field::WidthUse;
+#[cfg(any(target_os = "android", test))]
+mod android_symbols;
 #[cfg(test)]
 pub(crate) mod fixtures;
 mod flow;

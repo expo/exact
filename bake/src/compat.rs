@@ -24,6 +24,10 @@ use contract::Manifest;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+#[path = "compat_android.rs"]
+mod android;
+pub(crate) use android::{android_linked, android_uses, plan_extensions};
+
 /// The C ABI's header, whose `EXACT_ABI_VERSION` is one of the numbers.
 const ABI_HEADER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -89,7 +93,8 @@ pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// 16: per-source turn budgets. Older native hosts give every source 100 ms.
 /// 17: browser automation uses document realms. An older binary ignores the
 /// target and could run the call in an unnamed frame.
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 17;
+/// 18: browser automation passes functions for channel arguments and delivers their messages.
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 18;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -167,7 +172,7 @@ pub fn typescript_runtime_of(bundle: &[u8], grants: &str) -> u32 {
         .map_or(0, |(runtime, _)| *runtime);
     grants.lines().fold(named, |runtime, line| {
         match line.split_whitespace().next() {
-            Some("browser.automation") => runtime.max(17),
+            Some("browser.automation") => runtime.max(18),
             Some("sqlite.open") => runtime.max(10),
             _ => runtime,
         }
@@ -515,43 +520,6 @@ pub fn compatibility_id_pinned(
     Ok(compat)
 }
 
-/// What an APK is composed from beyond the compatibility inputs' other
-/// fields (LLP 1030.006 D4a): the plan's capabilities (`uses.txt`, which
-/// decides what the reader links), the Android permissions its grant lines
-/// and the source's use of module names derive (`permissions.txt`), and the
-/// package extensions it binds a Kotlin implementation for. A generation
-/// that needs more than this is a new APK; the hatch words are `hatches`.
-pub(crate) fn android_linked(
-    plan: &exact_plan::Plan,
-    ceiling: Option<&str>,
-    source: &str,
-) -> serde_json::Value {
-    serde_json::json!({
-        "uses": android_uses(plan),
-        "permissions": contract::native::android_permissions(plan, ceiling, source),
-        "extensions": plan_extensions(plan),
-    })
-}
-
-/// What the APK links for the plan, by name, as its build reads it
-/// (`contract::native::android_reach`).
-pub(crate) fn android_uses(plan: &exact_plan::Plan) -> Vec<&'static str> {
-    contract::native::android_uses(plan)
-}
-
-/// The package extensions the plan's modules, views and events name, sorted.
-pub(crate) fn plan_extensions(plan: &exact_plan::Plan) -> Vec<String> {
-    let names = plan
-        .modules
-        .iter()
-        .map(|m| m.extension)
-        .chain(plan.views.iter().map(|v| v.extension))
-        .chain(plan.module_events.iter().map(|e| e.extension));
-    let names: std::collections::BTreeSet<String> =
-        names.map(|name| plan.str(name).to_string()).collect();
-    names.into_iter().collect()
-}
-
 /// The faced tools this platform's binary compiles a door for (LLP 1133.023
 /// D8), and on the Mac those its tools helper lists (LLP 1111.000 D1): each
 /// one's signature and face join the id, so a plan that changes one is a
@@ -695,6 +663,9 @@ pub(crate) fn compatibility_with_trust(
         return Err(format!("deploy.store.{platform} must be \"0\" or \"A\""));
     }
     let binary_only = store == "0";
+    if platform == "linux" && target.contains("-windows") && !binary_only {
+        return Err("the headless Linux host on Windows has no update store; set deploy.store.linux to \"0\"".into());
+    }
     let keys = if binary_only {
         Value::Null
     } else {
@@ -854,6 +825,11 @@ pub(crate) fn compatibility_with_trust(
         "store": { "L": store, "acceptedKinds": if binary_only { vec![] } else { kinds } },
         "app": manifest.id,
     });
+    if platform == "android" {
+        if let Some(schemes) = manifest.json.pointer("/open_url/schemes") {
+            inputs["capabilities"]["openUrlSchemes"] = schemes.clone();
+        }
+    }
     // A variant's base identity, which a Rust source naming its own id names
     // (LLP 1030.008 D2); absent otherwise, so no other app's id moves.
     if let Some(variant) = manifest.json.get("variant") {

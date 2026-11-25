@@ -1208,6 +1208,40 @@ export function motionController({views,now,generation,request,applyBatch,inert,
   return api;
 }
 
+// Android Chrome recognizes contextmenu at its platform long-press time;
+// Safari needs the 500 ms fallback. Before recognition, let a quick swipe scroll.
+// touch-action is fixed at pointerdown, so touchmove must cancel after the lift.
+export function reorderPress(e, el, lift, abandon) {
+  if (!['touch', 'pen'].includes(e.pointerType)) return { move: () => true, block() {}, clear() {} };
+  const pansY = /(?:auto|manipulation|pan-y|pan-up|pan-down)/.test(getComputedStyle(el).touchAction);
+  let active = false, stopped = false, last = e;
+  const begin = () => {
+    clearTimeout(timer);
+    if (stopped || active) return;
+    active = lift(last) === true;
+    if (!active) abandon();
+  };
+  const timer = setTimeout(begin, 500);
+  return {
+    block(event) {
+      if (!stopped && event.type === 'contextmenu') begin();
+      if (active && !stopped) event.preventDefault();
+    },
+    move(v) {
+      last = v;
+      if (!active && v.timeStamp - e.timeStamp >= 500) begin();
+      if (!active && Math.hypot(v.clientX - e.clientX, v.clientY - e.clientY) >= 8) {
+        if (pansY) abandon();
+        else { active = true; clearTimeout(timer); }
+      }
+      return active;
+    },
+    clear() {
+      stopped = true; clearTimeout(timer);
+    },
+  };
+}
+
 // One physical Arrange contact and its settling source; Common owns logical keys.
 // A grip whose list has a `reorderGroup` is `group-glue.js`'s (LLP 1094): the
 // ghost, the target lists, the hold and the keys; `grouped` is its controller.
@@ -1238,7 +1272,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
   }
   function stopEdge(){if(edge!==null)cancelAnimationFrame(edge);edge=null;edgeTime=null;}
   function clearContact(d) {
-    stopEdge();if(d.binding.el.hasPointerCapture(d.pointer))d.binding.el.releasePointerCapture(d.pointer);
+    d.clearPress?.();stopEdge();if(d.binding.el.hasPointerCapture(d.pointer))d.binding.el.releasePointerCapture(d.pointer);
     for(const [el,name,fn] of d.listeners??[])el.removeEventListener(name,fn);
     d.listeners=[];
   }
@@ -1322,15 +1356,16 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
     if(!reservation&&!returning)collections.reorderContact(b.el,e.pointerId);
     let contact={x:e.clientX,y:e.clientY},drag=null;
     const events=[],on=(el,name,fn)=>{el.addEventListener(name,fn);events.push([el,name,fn]);};
-    const cleanup=()=>{for(const [el,name,fn]of events)el.removeEventListener(name,fn);if(pending===cleanup)pending=null;if(!drag){if(reservation)collections.releaseRetainedInteraction(reservation);else collections.releaseInteraction(e.pointerId);}};
+    const cleanup=()=>{press?.clear();for(const [el,name,fn]of events)el.removeEventListener(name,fn);if(pending===cleanup)pending=null;if(!drag){if(reservation)collections.releaseRetainedInteraction(reservation);else collections.releaseInteraction(e.pointerId);}};
     cleanup.handle=b.id;
     pending=cleanup;
-    on(b.el.ownerDocument,'pointermove',v=>{
-      if(v.pointerId!==e.pointerId)return;
+    let press;
+    const moved=(v,held=false)=>{
+      if(v.pointerId!==e.pointerId||!held&&!press.move(v))return;
       if(!drag){
         const dx=v.clientX-contact.x,dy=v.clientY-contact.y;
-        if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){cleanup();return;}
-        if(Math.abs(dy)<8)return;
+        if(!held&&Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){cleanup();return;}
+        if(!held&&Math.abs(dy)<8)return;
         if(returning){
           if(current!==returning||!mapping(b,v.clientY)){cleanup();return;}
           reservation=collections.transferRetainedInteraction(returning.lease,b.row,e.pointerId);
@@ -1347,7 +1382,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
         const captured=motion.captureReorder([{view:b.wrapper,key:b.wrapperKey,hold:'0'}]);
         if(captured.length!==1){collections.releaseRetainedInteraction(lease);cleanup();return;}
         const d={binding:b,map:m,lease,pointer:e.pointerId,phase:'active',value:captured[0].value,base:captured[0].value,
-          originY:v.clientY,originRaw:m.raw,x:v.clientX,y:v.clientY,listeners:events};
+          originY:v.clientY,originRaw:m.raw,x:v.clientX,y:v.clientY,listeners:events,clearPress:()=>press.clear()};
         current=d;busy=true;let ok;
         try{ok=adoptReply(d,call(d,'reorder-begin'),captured);}finally{busy=false;}
         if(!ok){current=null;collections.releaseRetainedInteraction(lease);cleanup();return;}
@@ -1355,7 +1390,10 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
         on(m.port,'scroll',()=>{if(!busy&&sampleMove(d,d.x,d.y))edges(d);});
       }
       if(sampleMove(drag,v.clientX,v.clientY)){v.preventDefault();v.stopPropagation();edges(drag);}
-    });
+    };
+    b.press=press=reorderPress(e,b.el,v=>{moved(v,true);return !!drag;},cleanup);
+    on(b.el.ownerDocument,'pointermove',moved);
+    on(b.el.ownerDocument.defaultView,'blur',()=>{cleanup();if(drag)terminal(drag,true);});
     // A touch is implicitly captured by the element it lands on, often the
     // grip's text child; taking capture to the grip bubbles that child's
     // capture loss here, which is not the contact ending (habits F10).
@@ -1366,7 +1404,8 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
   }
   function destroy(id) {
     const b=bindings.get(id);if(!b)return;group?.release(b);
-    b.el.removeEventListener('pointerdown',b.down);b.el.style.touchAction=b.touch;bindings.delete(id);
+    b.el.removeAttribute('data-exact-reorder-grip');
+    b.el.removeEventListener('pointerdown',b.down);b.el.removeEventListener('touchmove',b.block);b.el.removeEventListener('contextmenu',b.block);bindings.delete(id);
     if(pending?.handle===id)pending();
     // The completed batch supplies the terminal frame and surviving source
     // wrapper. Preserve that hold/pin until commit can capture and rebase it.
@@ -1378,7 +1417,15 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
       destroy(op.id);
       if(op.list===null||!views.has(op.id)||!views.has(op.wrapper))return;
       const b={...op,el:views.get(op.id),row:views.get(op.wrapper),generation:generation()};
-      b.touch=b.el.style.touchAction;b.el.style.touchAction='none';b.down=e=>down(b,e);
+      b.down=e=>down(b,e);b.block=e=>b.press?.block(e);
+      // The wasm host replaces cssText when the authored style changes.
+      const doc=b.el.ownerDocument;
+      if(!doc.getElementById('exact-reorder-grips'))doc.head.append(Object.assign(doc.createElement('style'),{
+        id:'exact-reorder-grips',textContent:'[data-exact-reorder-grip]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}',
+      }));
+      b.el.setAttribute('data-exact-reorder-grip','');
+      // Chromium decides whether touchmove can cancel scrolling before pointerdown.
+      b.el.addEventListener('touchmove',b.block,{passive:false});b.el.addEventListener('contextmenu',b.block);
       bindings.set(op.id,b);b.el.addEventListener('pointerdown',b.down);
       if(groups.has(op.id))group?.bind(b,groups.get(op.id));
     },
@@ -1406,7 +1453,7 @@ export function arrangeController({views,collections,motion,request,applyBatch,n
       group?.reset();
       if(current){if(current.phase==='active')terminal(current,true);if(current?.phase==='settling')finish(current);}
       if(current){clearContact(current);collections.releaseRetainedInteraction(current.lease);motion.raiseReorder(current.binding.wrapper,false);current=null;}
-      for(const b of bindings.values()){b.el.removeEventListener('pointerdown',b.down);b.el.style.touchAction=b.touch;}
+      for(const b of bindings.values()){b.el.removeAttribute('data-exact-reorder-grip');b.el.removeEventListener('pointerdown',b.down);b.el.removeEventListener('touchmove',b.block);b.el.removeEventListener('contextmenu',b.block);}
       pending?.();pending=null;bindings.clear();stopEdge();
     },
   };

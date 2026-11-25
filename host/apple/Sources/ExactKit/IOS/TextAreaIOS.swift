@@ -196,6 +196,29 @@ package final class TextArea: UITextView {
     }
 
     weak var owner: NodeView?
+    /// Whether the text fits its box, as a browser's textarea scrolls only
+    /// text that overflows: its laid-out height and vertical inset, within
+    /// half a device pixel of the box, which absorbs the arithmetic between
+    /// the kernel's layout and TextKit's. UIKit's content size rounds up to a
+    /// whole point (one line of 17-point text filling a 20.287-point field
+    /// measures 21), so it cannot tell.
+    var fits: Bool {
+        // The usage reaches the empty line a trailing newline leaves for the
+        // caret, as the kernel measures it (LLP 1008); so does TextKit 1's used
+        // rect, after a fallback, once the glyphs are laid out (it lays out none)
+        let text = textLayoutManager.map { $0.usageBoundsForTextContainer.height } ?? {
+            layoutManager.ensureLayout(for: textContainer)
+            return layoutManager.usedRect(for: textContainer).height
+        }()
+        return text + textContainerInset.top + textContainerInset.bottom <= bounds.height + 0.5 / max(1, traitCollection.displayScale)
+    }
+    /// A person drags only text that overflows: UIKit would scroll a fitting
+    /// field by the fraction its content size rounds up, and the drag would
+    /// be the field's and no ancestor's
+    package override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        if gesture === panGestureRecognizer, fits { return false }
+        return super.gestureRecognizerShouldBegin(gesture)
+    }
     /// The hardware key whose handlers ran in `pressesBegan`: UIKit's own
     /// newline or deletion for it does not run them again (`TextField.heard`).
     var heard: String?

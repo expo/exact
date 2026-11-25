@@ -27,6 +27,23 @@
       "width": "number",
       "height": "number"
     },
+    "ChannelProperties": {
+      "channel": "string"
+    },
+    "ChannelValue": {
+      "type": "enum<channel>",
+      "value": "ChannelProperties"
+    },
+    "ScriptSource": {
+      "realm": "string",
+      "origin": "string",
+      "context": "string"
+    },
+    "ScriptMessage": {
+      "channel": "string",
+      "data": "json<ScriptValue>",
+      "source": "ScriptSource"
+    },
     "ScriptTarget": {
       "realm": "option<string>",
       "context": "option<string>",
@@ -79,6 +96,7 @@
       "options": {
         "id": "string",
         "functionDeclaration": "string",
+        "arguments": "option<ChannelValue[]>",
         "sandbox": "option<string>"
       },
       "answers": "PreloadScript"

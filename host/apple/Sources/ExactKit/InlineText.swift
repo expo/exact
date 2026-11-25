@@ -76,6 +76,14 @@ extension Presenter {
               node.inlineText.indices.contains(location.index) else { return nil }
         return node.inlineText[location.index]
     }
+    func inlineHiddenFromAccessibility(_ run: InlineText) -> Bool {
+        var ancestor: InlineText? = run
+        while let current = ancestor {
+            if current.props["accessibilityElementsHidden"] == "true" { return true }
+            ancestor = inlineText(current.parent)
+        }
+        return false
+    }
     func inlineAriaUnavailable(_ id: UInt32) -> Bool {
         var current = inlineText(id)
         while let run = current {
@@ -99,7 +107,14 @@ extension Presenter {
         return false
     }
     func forgetParagraph(_ node: NodeView) {
-        for run in node.inlineText where inlineOwners[run.id]?.owner == node.id { inlineOwners.removeValue(forKey: run.id) }
+        for run in node.inlineText where inlineOwners[run.id]?.owner == node.id {
+            inlineOwners.removeValue(forKey: run.id)
+            if let name = run.props["id"] {
+                chrome.inlineNamed[name]?.remove(run.id)
+                if chrome.inlineNamed[name]?.isEmpty == true { chrome.inlineNamed[name] = nil }
+            }
+        }
+        chrome.inlineActionOwners.remove(node.id)
         node.inlineText.removeAll()
         #if os(iOS)
         node.updateContextGestures()
@@ -113,12 +128,14 @@ extension Presenter {
         #endif
         forgetParagraph(node)
         var offset = 0
+        if runs.contains(where: { $0.props["accessibilityActions"] != nil }) { chrome.inlineActionOwners.insert(id) }
         var rows = runs
         for i in rows.indices {
             let count = rows[i].paints ? rows[i].text.utf16.count : 0
             rows[i].range = NSRange(location: offset, length: count)
             offset += count
             inlineOwners[rows[i].id] = (id, i)
+            if let name = rows[i].props["id"] { chrome.inlineNamed[name, default: []].insert(rows[i].id) }
         }
         // Container runs expose the union of their descendants, including nested links.
         for i in rows.indices.reversed() {

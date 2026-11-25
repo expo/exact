@@ -222,6 +222,9 @@ impl<D: DataSource> Presenter<D> {
     pub fn long_press(&mut self, x: f32, y: f32, now_ms: f64) -> bool {
         let menu = self.context_menu_at(x, y);
         let source = self.lift_source_at(x, y);
+        if self.recognize_arrange_hold(now_ms) {
+            return true;
+        }
         if let Some(source) = source {
             if menu
                 .as_ref()
@@ -236,6 +239,37 @@ impl<D: DataSource> Presenter<D> {
         }
         self.top.lift = source.map(|source| (source, x, y));
         self.open_context_menu(menu, x, y, now_ms)
+    }
+
+    pub(in crate::presenter) fn arrange_hold_at(
+        &mut self,
+        x: f32,
+        y: f32,
+    ) -> Option<exact_runner::ReorderBinding> {
+        let hit = self.hit(x, y)?;
+        let super::super::contact::Candidate::Arrange(binding) =
+            self.arrange_candidate(self.host.kernel().node(hit)?.key)?
+        else {
+            return None;
+        };
+        let handle = self.host.kernel().node_by_key(binding.handle)?.id;
+        let menu = self.context_menu_at(x, y);
+        let source = self.lift_source_at(x, y);
+        (!menu.is_some_and(|(id, ..)| self.inside(id, handle))
+            && !source.is_some_and(|id| self.inside(id, handle)))
+        .then_some(binding)
+    }
+
+    pub(crate) fn recognize_arrange_hold(&mut self, now: f64) -> bool {
+        let Some((binding, (x, y))) = self.pending_arrange() else {
+            return false;
+        };
+        if self.arrange_hold_at(x, y) != Some(binding) || !self.lift_arrange(binding, now) {
+            return false;
+        }
+        self.top.long_presses = self.top.long_presses.wrapping_add(1);
+        self.request(Request::Haptic(Haptic::ImpactHeavy));
+        true
     }
 
     /// The context menu a long press at (`x`, `y`) found, opened: what a

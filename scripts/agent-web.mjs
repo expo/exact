@@ -78,6 +78,11 @@ export async function assertWebDistApp(dist, app) {
       `web dist is not a complete build for selected app ${app.id}; stale receipt ${resolve(dist, '.exact-build.json')}; run ${ownWebBuild(app, dist) ?? `EXACT_APP_DIR=${shellQuote(app.dir)} EXACT_WEB_DIST=${shellQuote(resolve(dist))} bun host/web/build.mjs ${app.crate('web')}`}`,
     );
 }
+/** Package substitutes belong only to the driven top-level document. */
+export function substitutesScript(values, origin, restore) {
+  return `if (window === window.top && location.origin === ${JSON.stringify(origin)}) globalThis.__exactLaunchSubstitutes = JSON.parse(${JSON.stringify(JSON.stringify({ values, restore }))});`;
+}
+
 /** Install the first launch's settings in the namespace the app actually opens. */
 export function storedScript(env, origin) {
   if (env?.EXACT_AGENT_STORAGE_FRESH !== '1' || !env.EXACT_AGENT_STORED) return '';
@@ -498,6 +503,12 @@ async function openWebUnlocked({
       if (faultScript) await call('Page.removeScriptToEvaluateOnNewDocument', { identifier: faultScript });
       faultScript = (await call('Page.addScriptToEvaluateOnNewDocument', { source })).identifier;
     };
+    let substituteScript;
+    const installSubstitutes = async (values, restore = false) => {
+      if (substituteScript) await call('Page.removeScriptToEvaluateOnNewDocument', { identifier: substituteScript });
+      substituteScript = values && Object.keys(values).length ? (await call('Page.addScriptToEvaluateOnNewDocument', { source: substitutesScript(values, page.origin, restore) })).identifier : undefined;
+    };
+    await installSubstitutes(facts.substitutes, facts.restoreSubstitutes);
     await installFaults(facts.failFetch);
     // `prefer display-mode`'s substitute (LLP 1039 D7), set in each new document before the page's scripts run, as
     // CDP's emulated media are in place at boot: a reload keeps it, and a new session starts without it.
@@ -603,10 +614,11 @@ async function openWebUnlocked({
         const ms = await evaluate("document.getElementById('exact-root')?.dataset.gpuMs ?? null");
         return ms == null ? null : Number(ms);
       },
+      installSubstitutes,
       /** A fresh test clears storage and history; `keep` reloads the current entry with its history and store
        * (LLP 1038 D7). A new `session` on a reused carrier starts from the launch display preferences and pointer,
        * never the last session's `prefer` (LLP 1069.007 D2; agent-prefer.mjs). */
-      async reset({ keep = false, failFetch, epoch, session = false } = {}) {
+      async reset({ keep = false, failFetch, substitutes, epoch, session = false } = {}) {
         if (session) {
           if (safeArea !== undefined) {
             await call('Emulation.setSafeAreaInsetsOverride', { insets: {} });
@@ -643,6 +655,7 @@ async function openWebUnlocked({
           await call('Storage.clearDataForOrigin', { origin: page.origin, storageTypes: 'all' });
         }
         const destination = withEpoch(withFaults(keep ? await evaluate('location.href') : page.href, failFetch), epoch);
+        if (!keep || substitutes !== undefined) await installSubstitutes(keep ? substitutes : facts.substitutes, keep || facts.restoreSubstitutes);
         await installFaults(failFetch ?? (keep ? undefined : facts.failFetch ?? ''));
         const previousLoader = documentLoader,
           deadline = Date.now() + 30000;

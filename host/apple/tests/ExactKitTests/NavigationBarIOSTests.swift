@@ -120,7 +120,7 @@ final class NavigationBarIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else {
             throw missing("scene", "the system keyboard needs the hosted iOS test app")
         }
-        let session = try fixture("keyboard-pop", module: false)
+        let session = try fixture("keyboard-pop", module: false, keyboardWindow: true)
         let p = session.presenter
         let view = try XCTUnwrap(session.view)
         let nav = try XCTUnwrap(p.navigationHost.primaryNavigation)
@@ -153,7 +153,7 @@ final class NavigationBarIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else {
             throw missing("scene", "the system keyboard needs the hosted iOS test app")
         }
-        let session = try fixture("keyboard-gesture-ownership", module: false)
+        let session = try fixture("keyboard-gesture-ownership", module: false, keyboardWindow: true)
         let p = session.presenter
         let nav = try XCTUnwrap(p.navigationHost.primaryNavigation)
         p.press(try node(session, "open-focused-plain").id)
@@ -169,7 +169,7 @@ final class NavigationBarIOSTests: XCTestCase {
         guard hostedWindowScene() != nil else {
             throw missing("scene", "native keyboard insets need the hosted app responder lifecycle")
         }
-        let session = try fixture("keyboard-inset-contributions", module: false)
+        let session = try fixture("keyboard-inset-contributions", module: false, keyboardWindow: true)
         let p = session.presenter
         let root = try XCTUnwrap(p.root.subviews.first as? NodeView)
         p.apply(wireBatch([["op": "props", "id": Int(root.id), "set": ["interactiveWidget": "resizes-visual"]]]))
@@ -299,7 +299,7 @@ final class NavigationBarIOSTests: XCTestCase {
 
     /// One decision's pushes, swipe, cancel and native pop (`testScreenResponderDecisionsSurviveCompletedAndCancelledPops`).
     private func screenResponderDecision(_ decision: String, legacy: Bool) throws {
-        let session = try fixture("keyboard-screen-\(decision)", module: false)
+        let session = try fixture("keyboard-screen-\(decision)", module: false, keyboardWindow: true)
         let p = session.presenter
         let nav = try XCTUnwrap(p.navigationHost.primaryNavigation)
         let opener = try node(session, "open-focused-plain").id

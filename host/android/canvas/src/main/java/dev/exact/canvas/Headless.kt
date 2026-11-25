@@ -1,7 +1,6 @@
 package dev.exact.canvas
 
 import android.content.Context
-import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import java.io.File
@@ -64,14 +63,18 @@ internal object Headless {
 /** What a process's host needs before exact2's library loads and it boots, whoever sets the process up: an activity
  * or [Headless]. */
 internal object Setup {
-    /** Write exact2's environment as the application alone decides it. Returns the application's meta-data. */
-    fun environment(app: Context, intent: android.content.Intent? = null): Bundle? {
+    var development: Boolean = false
+        private set
+
+    /** Write exact2's environment as the application alone decides it. */
+    fun environment(app: Context, intent: android.content.Intent? = null) {
         android.system.Os.setenv("XDG_CACHE_HOME", app.cacheDir.absolutePath, true)
         // Rust's `temp_dir` is TMPDIR, else /data/local/tmp, which an app cannot write. API 29 sets none, and a
         // drive with no scratch store keeps its `app:/` files under it (`exact_painted::picker`).
         android.system.Os.setenv("TMPDIR", app.cacheDir.absolutePath, false)
         val meta = app.packageManager.getApplicationInfo(app.packageName, android.content.pm.PackageManager.GET_META_DATA).metaData
-        if (meta?.getBoolean("dev.exact.development", false) == true) {
+        development = meta?.getBoolean("dev.exact.development", false) == true
+        if (development) {
             DevLoop.atLaunch(app, intent)?.let { android.system.Os.setenv("EXACT_DEV_PLAN", it, true) }
         }
         // The `protocol_handlers` this APK registers (LLP 1038 D8): exact2 puts a URL of one's scheme at its template's
@@ -87,7 +90,6 @@ internal object Setup {
         // A box's filter runs as a RenderEffect (LLP 1172.023.001 D1), which Android 12 brought; before it, exact2 runs
         // the chain on the CPU.
         if (android.os.Build.VERSION.SDK_INT < 31) android.system.Os.setenv("EXACT_FILTERS", "0", true)
-        return meta
     }
 
     /** Called once, after the launch extras and before the library's first host thread. */

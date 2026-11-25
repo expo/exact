@@ -49,6 +49,8 @@ export const KINDS = [
   ['png-bytes', 'ok png-bytes', { types: ['image/png'], image: { width: 8, height: 8 } }],
   ['apng', 'ok apng', { types: ['image/png'], image: { width: 8, height: 8 } }],
   ['text', 'ok text', { types: ['text/plain'], text: 'Copied from the fixture' }],
+  ['html', 'ok html', { types: ['text/plain', 'text/html'], text: 'Plain fallback' }],
+  ['html-only', 'ok html-only', { types: ['text/html'] }],
   ['both', 'ok both', { types: ['text/plain', 'image/png'], text: 'https://example.com/red.png', image: { width: 8, height: 8 } }],
   ['bad', 'DataError: clipboard.write: DataError: not a PNG', null],
   ['large', 'DataError: clipboard.write: DataError: too large: 9000×9000 is over 64,000,000 pixels', null],

@@ -332,13 +332,19 @@ fn only_a_row_presence_plays_registers_with_presence() {
     assert!(pressed.contains("--exact-press:"), "{pressed}");
     assert!(pressed.contains("pressFeedback()"), "{pressed}");
     assert!(!pressed.contains("pr("), "{pressed}");
-    for row in [
-        "-exact-layout-transition=\"200ms linear\"",
-        "-exact-exit-animation=\"leave 200ms linear both\"",
-        "-exact-press-scale=0.9 -exact-layout-transition=\"200ms linear\"",
+    for (row, register) in [
+        ("-exact-layout-transition=\"200ms linear\"", "pr("),
+        (
+            "-exact-exit-animation=\"leave 200ms linear both\"",
+            "fixedExit(",
+        ),
+        (
+            "-exact-press-scale=0.9 -exact-layout-transition=\"200ms linear\"",
+            "pr(",
+        ),
     ] {
         let js = page(row);
-        assert!(js.contains("pr("), "{row}: {js}");
+        assert!(js.contains(register), "{row}: {js}");
     }
 }
 

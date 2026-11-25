@@ -87,10 +87,16 @@ pub struct Native(std::sync::Arc<NativeSlots>);
 #[derive(Default)]
 pub struct NativeSlots {
     handler: std::sync::Mutex<Option<NativeHandler>>,
-    hosted: std::sync::Mutex<Option<NativeHandler>>,
+    hosted: std::sync::Mutex<Hosted>,
     hosted_call: std::sync::Mutex<Option<NativeCall>>,
     announce: std::sync::Mutex<Option<Announce>>,
     sync: std::sync::Mutex<Option<SyncAnswers>>,
+}
+
+#[derive(Default)]
+struct Hosted {
+    app: Option<NativeHandler>,
+    packages: Option<NativeHandler>,
 }
 
 /// Each module's synchronous form, by `extension.name`: the runner's answer
@@ -134,7 +140,7 @@ impl Native {
         *self.0.handler.lock().unwrap_or_else(|e| e.into_inner()) = handler;
     }
 
-    /// The handler now: the source's own, else the host's app module.
+    /// The source's handler, then the host's app module, then the package shell.
     pub fn handler(&self) -> Option<NativeHandler> {
         let own = self
             .0
@@ -143,11 +149,8 @@ impl Native {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         own.or_else(|| {
-            self.0
-                .hosted
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
+            let hosted = self.0.hosted.lock().unwrap_or_else(|e| e.into_inner());
+            hosted.app.as_ref().or(hosted.packages.as_ref()).cloned()
         })
     }
 
@@ -157,12 +160,10 @@ impl Native {
     /// `native.later` through [`Native::handler`], so it cannot shadow every
     /// package when the app links both.
     pub fn extension_handler(&self) -> Option<NativeHandler> {
-        let hosted = self
-            .0
-            .hosted
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let hosted = {
+            let hosted = self.0.hosted.lock().unwrap_or_else(|e| e.into_inner());
+            hosted.packages.as_ref().or(hosted.app.as_ref()).cloned()
+        };
         hosted.or_else(|| {
             self.0
                 .handler
@@ -177,7 +178,16 @@ impl Native {
     /// source leaves it, and it answers when the source has no handler of
     /// its own. `None` removes it.
     pub fn host(&self, handler: Option<NativeHandler>) {
-        *self.0.hosted.lock().unwrap_or_else(|e| e.into_inner()) = handler;
+        self.0.hosted.lock().unwrap_or_else(|e| e.into_inner()).app = handler;
+    }
+
+    /// A separate package dispatcher, including on a shell with no app data module.
+    pub fn host_packages(&self, handler: Option<NativeHandler>) {
+        self.0
+            .hosted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .packages = handler;
     }
 
     /// The app module's synchronous call, beside [`Native::host`]; `None`
@@ -248,6 +258,7 @@ impl Native {
             .hosted
             .lock()
             .unwrap_or_else(|e| e.into_inner())
+            .app
             .is_some()
     }
 
@@ -1233,6 +1244,21 @@ mod native_tests {
             "source",
             "the source's own native.later stays its own"
         );
+        slot.host_packages(Some(tag("packages")));
+        slot.set(None);
+        assert_eq!(run(slot.handler()), "host");
+        assert_eq!(run(slot.extension_handler()), "packages");
+        slot.host(None);
+        assert!(!slot.hosted());
+        assert_eq!(run(slot.handler()), "packages");
+        slot.host(Some(tag("another host")));
+        assert!(slot.hosted());
+        assert_eq!(run(slot.handler()), "another host");
+        assert_eq!(run(slot.extension_handler()), "packages");
+        slot.host_packages(None);
+        assert_eq!(run(slot.extension_handler()), "another host");
+        slot.host(None);
+        assert!(slot.handler().is_none());
     }
 }
 

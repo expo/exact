@@ -18,6 +18,18 @@
   },
   "names": [],
   "views": [],
-  "hatches": [],
-  "artifacts": []
+  "hatches": [
+    "optionsHatch"
+  ],
+  "artifacts": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "com.google.mlkit:translate:17.0.3",
+    "com.google.mlkit:language-id:17.0.6"
+  ],
+  "class": "exact.translation.TranslationModule"
 }

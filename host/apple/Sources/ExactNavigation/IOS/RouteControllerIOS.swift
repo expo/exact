@@ -26,6 +26,19 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// as the stack's routes are prepared, before UIKit shows any of them
     /// (`NavigationRules.bar`).
     var pushed = false
+    #if os(iOS)
+    var bottomToolbar: BottomToolbarItems?
+    #endif
+    var liftedBottomRows: [NodeView] {
+        #if os(iOS)
+        bottomToolbar?.rows ?? []
+        #else
+        []
+        #endif
+    }
+    var coveredBarNodes: [NodeView] {
+        (lifted.map { [$0] } ?? barNodes) + [scoped].compactMap { $0 } + liftedBottomRows
+    }
     weak var lifted: NodeView?
     var barNodes: [NodeView] = []
     /// The pictures the bar's faces draw (`NodeView.drawnByBar`).
@@ -167,8 +180,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     override func loadView() {
         view = PresentationMount()
         paintBackdrop()
-        view.addSubview(node)
-        host?.presenter.session?.natives.routeLoaded(node)
+        node.movingRoute(into: view) { view.addSubview(node) }
     }
 
     /// The backdrop's colours last written, light and dark.
@@ -249,18 +261,22 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             scroll.contentInsetAdjustmentBehavior = .never
             scroll.keyboardDismissMode = viewportKeyboardDismissal
             #if os(iOS)
+            KeyboardDrag.watch(scroll) { [weak scroll] in scroll?.documentNode }
             scroll.scrollsToTop = false
             #endif
             scroll.delegate = self
             view.addSubview(scroll)
             contentViewport = scroll
+            // The bar's top edge may have taken its list before the page had this viewport: a launch
+            // projects once before `interactiveWidget` is read. `select` follows a list taken later
+            followTopEdge(contentScrollView(for: .top))
         } else if !usesPageViewport, let scroll = contentViewport {
             contentViewport = nil
             keyboardInset.apply(0, to: scroll)
-            view.addSubview(node)
+            node.movingRoute(into: view) { view.addSubview(node) }
             scroll.removeFromSuperview()
         }
-        if node.superview !== contentMount { contentMount.addSubview(node) }
+        if node.superview !== contentMount { node.movingRoute(into: contentMount) { contentMount.addSubview(node) } }
         host?.presenter.regrid(node) // from the controller's view, a grid origin of its own
     }
     #if os(iOS)
@@ -369,7 +385,25 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// The route's node, left in place after a batch removed the route while
     /// UIKit still shows it (`NavigationHost.prepare`), until UIKit takes the
     /// route's view out of the window.
-    var retiringRoot: NodeView?
+    private(set) var retiringRoot: NodeView?
+    func retire() {
+        retiringRoot = node
+        // Switching tabs during a pop can detach its view without completing the disappearance.
+        guard let mount = view as? PresentationMount, mount.window != nil else { return finishRetirement() }
+        mount.didLeaveWindow = { [weak self, weak mount] in
+            // UIKit can move a view between parents in one turn. Finish outside its hierarchy callbacks.
+            DispatchQueue.main.async {
+                if mount?.window == nil { self?.finishRetirement() }
+            }
+        }
+    }
+
+    private func finishRetirement() {
+        guard let retiringRoot else { return }
+        self.retiringRoot = nil
+        (viewIfLoaded as? PresentationMount)?.didLeaveWindow = nil
+        retiringRoot.removeFromSuperview()
+    }
     /// The exit it declares, kept while it is its stack's top: it has left
     /// the tree when UIKit asks for its pop's animator (RouteTransitionIOS).
     var exitPart: RoutePart?
@@ -377,8 +411,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         super.viewDidDisappear(animated)
         // A transition that made it appear was cancelled
         appearing = false
-        retiringRoot?.removeFromSuperview()
-        retiringRoot = nil
+        finishRetirement()
     }
 
     // Follow UIKit moving this route into another controller (`NavigationHost.moved(into:)`)

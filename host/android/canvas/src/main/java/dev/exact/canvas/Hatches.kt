@@ -320,10 +320,14 @@ internal class HatchReader(activity: ExactActivity, private val hatches: ExactHa
         private const val ENDED = 2
         private val PHASES = arrayOf("down", "move", "up", "cancel")
 
+        val appType: Class<*>? by lazy {
+            try { Class.forName("exact.app.Hatches", false, HatchReader::class.java.classLoader) } catch (_: ClassNotFoundException) { null }
+        }
+
         /** The app's `exact.app.Hatches`, when it has one. One that cannot be made (its constructor threw, it has
          * none without arguments, it is no [ExactHatches]) is logged, and the app runs without its hatches. */
         fun make(activity: ExactActivity): HatchReader? {
-            val type = try { Class.forName("exact.app.Hatches") } catch (e: ClassNotFoundException) { return null }
+            val type = appType ?: return null
             return try {
                 HatchReader(activity, type.getDeclaredConstructor().newInstance() as ExactHatches)
             } catch (e: Exception) {

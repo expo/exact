@@ -452,3 +452,138 @@ component App
     assert!(r.set_display_scale(1.5).unwrap().is_some());
     assert_eq!(r.viewport().device_pixel_ratio, Some(1.5));
 }
+
+#[test]
+fn bottom_toolbar_belongs_to_one_route_column() {
+    let bar = "row role=\"toolbar\" toolbarPlacement=\"bottom\"";
+    let route = |body: &str| {
+        format!(
+            "component App\n  state left = true\n  state right = false\n  view\n    main navigationKey=\"home\"\n      column navigationKey=\"home\"\n{body}\n"
+        )
+    };
+    for (body, id) in [
+        (
+            format!("        {bar}\n        {bar}"),
+            "lower-toolbar-count",
+        ),
+        (
+            format!("        column\n          {bar}"),
+            "lower-toolbar-place",
+        ),
+        (
+            "        row toolbarPlacement=\"bottom\"".into(),
+            "lower-toolbar-place",
+        ),
+        (
+            "        row toolbarPlacement=\"\"".into(),
+            "lower-attr-value",
+        ),
+        (
+            "        row toolbarPlacement=\"botom\"".into(),
+            "lower-attr-value",
+        ),
+    ] {
+        assert_eq!(
+            contract::compile(&route(&body)).unwrap_err().id,
+            id,
+            "{body}"
+        );
+    }
+    for body in [
+        format!(
+            "        if left == right\n          {bar}\n        if left != right\n          {bar}"
+        ),
+        format!("        for n in [1,2] key=n\n          if n == 1\n            {bar}"),
+        format!(
+            "        if left == right\n          {bar}\n        if left != right\n          text \"Different\""
+        ),
+        format!("        {bar}\n        if left\n          {bar}"),
+    ] {
+        let (plan, warnings) = contract::compile_warned(&route(&body));
+        plan.unwrap();
+        assert!(
+            !warnings.iter().any(|w| w.id == "lower-toolbar-last"),
+            "{body}"
+        );
+    }
+    for before in [
+        format!("        {bar}"),
+        format!("        if left\n          {bar}"),
+    ] {
+        let (plan, warnings) =
+            contract::compile_warned(&route(&format!("{before}\n        text \"After\"")));
+        plan.unwrap();
+        assert_eq!(
+            warnings
+                .iter()
+                .filter(|w| w.id == "lower-toolbar-last")
+                .count(),
+            1
+        );
+    }
+    let dir = crate::scratch::Scratch::new(format!("toolbar-hosts-{}", std::process::id()));
+    std::fs::write(
+        dir.join("app.contract"),
+        route(&format!(
+            "        {bar}\n          if left\n            progress"
+        )),
+    )
+    .unwrap();
+    for target in ["web", "ios"] {
+        std::fs::write(
+            dir.join("app.json"),
+            format!(r#"{{"app":{{"name":"Bar","id":"dev.test.bar"}},"host":{{"{target}":{{}}}}}}"#),
+        )
+        .unwrap();
+        let (plan, _) = contract::compile_path_all_warned(&dir.join("app.contract"), false);
+        if target == "web" {
+            plan.unwrap();
+        } else {
+            assert_eq!(plan.err().unwrap()[0].id, "lower-toolbar-item");
+        }
+    }
+}
+
+#[test]
+fn shared_placement_action_keeps_its_old_words_and_cannot_make_an_unchecked_bottom_toolbar() {
+    let source = r#"component App
+  state placement = "window"
+  action place(value: string)
+    placement = value
+  view
+    column
+      row role="toolbar" toolbarPlacement=placement testId="tools"
+        text "Actions"
+      button "Keyboard" testId="keys" press=place("keyboard")
+      button "Bottom" testId="bad" press=place("bottom")
+"#;
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
+    let mut runner = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let key = runner.kernel().find_by_test_id("tools")[0];
+    for (button, expected) in [
+        ("keys", Some("keyboard")),
+        ("bad", None),
+        ("keys", Some("keyboard")),
+    ] {
+        let target = runner.kernel().find_by_test_id(button)[0];
+        let id = runner.kernel().node_by_key(target).unwrap().id;
+        runner.dispatch(id, exact_runner::Event::Press).unwrap();
+        assert_eq!(
+            runner
+                .kernel()
+                .node_by_key(key)
+                .unwrap()
+                .props
+                .str(PropId::ToolbarPlacement),
+            expected
+        );
+    }
+    assert!(agent::logs(&runner, 0).contains("write a literal bottom toolbar row"));
+}

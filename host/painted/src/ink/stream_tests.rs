@@ -31,6 +31,8 @@ pub struct Recorder {
     names: HashMap<TextureId, TextureId>,
     created: u64,
     submitted: Submission,
+    /// Whether `completed` is the device's own, as an application's frame has it.
+    live: bool,
 }
 
 impl Recorder {
@@ -111,6 +113,9 @@ impl Device for Recorder {
     fn last_use(&self, texture: TextureId) -> Result<Submission> {
         self.native.last_use(texture)
     }
+    fn orders_upload(&self, texture: TextureId) -> Result<bool> {
+        self.native.orders_upload(texture)
+    }
     fn generate_mips(&mut self, texture: TextureId) -> Result<Submission> {
         let submission = self.native.generate_mips(texture)?;
         self.submit(submission, Record::GenerateMips(self.name(texture)))
@@ -189,7 +194,9 @@ impl Device for Recorder {
     /// Every submission, so that the atlas page and pooled target the adapter
     /// chooses next follow from the drawing and not from how far the GPU has got.
     fn completed(&mut self) -> Result<Submission> {
-        self.native.wait(self.submitted)?;
+        if !self.live {
+            self.native.wait(self.submitted)?;
+        }
         self.native.completed()
     }
     fn retire_texture(&mut self, texture: TextureId) -> Result<()> {
@@ -406,7 +413,7 @@ fn list(ink: Ink, frame: &mut dyn FnMut(Pixmap, Pixmap)) {
 }
 
 /// The scene's stream, and the CPU painter's image of each frame with Ink's.
-fn record(scene: Scene) -> Option<(stream::Stream, Vec<[Pixmap; 2]>)> {
+fn record(scene: Scene, live: bool) -> Option<(stream::Stream, Vec<[Pixmap; 2]>)> {
     let native = open()?;
     let device = stream::device_name(&native);
     let records = Rc::new(RefCell::new(Vec::new()));
@@ -416,6 +423,7 @@ fn record(scene: Scene) -> Option<(stream::Stream, Vec<[Pixmap; 2]>)> {
         names: HashMap::new(),
         created: 0,
         submitted: Submission(0),
+        live,
     })));
     let (mut images, mut drawn) = (Vec::new(), Vec::new());
     scene(ink, &mut |cpu, ink| {
@@ -471,7 +479,7 @@ fn files(
 ) -> Option<BTreeMap<String, Vec<u8>>> {
     let mut files = BTreeMap::new();
     for &(name, scene) in scenes {
-        let (stream, images) = record(scene)?;
+        let (stream, images) = record(scene, false)?;
         // Replayed from the file's bytes, on a device that has drawn nothing.
         let bytes = stream.encode();
         let stream = stream::Stream::decode(&bytes);
@@ -544,4 +552,25 @@ fn the_recorded_device_calls_redraw_each_scene() {
         let listed = LARGE.to_owned() + &sums(&large, true);
         std::fs::write(format!("{STREAMS}.large"), listed).unwrap();
     }
+}
+
+/// The wgpu device holds a frame's passes until the frame's end, so the pages they
+/// sample stay in use for the whole frame. The atlases still append to them: the
+/// sheet makes the textures it makes when every call completes at once.
+#[test]
+fn a_frame_appends_to_the_atlas_pages_its_held_passes_sample() {
+    if !matches!(open(), Some(Native::Wgpu(_))) {
+        return;
+    }
+    let textures = |live| {
+        let (stream, _) = record(screens::sheet, live).unwrap();
+        let bytes = |r: &Record| match r {
+            Record::CreateTexture { desc, .. } => {
+                Some(desc.width * desc.height * desc.format.channels())
+            }
+            _ => None,
+        };
+        stream.records.iter().filter_map(bytes).collect::<Vec<_>>()
+    };
+    assert_eq!(textures(true), textures(false));
 }

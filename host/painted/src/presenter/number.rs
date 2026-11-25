@@ -167,7 +167,14 @@ impl<D: DataSource> Presenter<D> {
             cancelable: false,
             is_composing: false,
         };
-        if let Some(e) = self.apply_field_edit(id, next, caret, bound, now_ms, edit) {
+        if let Some(e) = self.apply_field_edit(
+            id,
+            next,
+            field::EditSelection::Presenter(caret),
+            bound,
+            now_ms,
+            edit,
+        ) {
             eprintln!("exact: {e}");
         }
         if let Some(Some(e)) = self.commit_text(id, now_ms) {

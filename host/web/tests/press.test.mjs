@@ -1,4 +1,4 @@
-import { hostFixtureFile as readFileSync } from './glue-fixture.mjs';
+import { hostFixtureFile as readFileSync, hostFixtureModule } from './glue-fixture.mjs';
 // Press feedback in a real browser: the shell's CSS and the input glue,
 // driven by CDP mouse and key events. A declared press (LLP 1061 D3) goes by
 // UIKit's rule, not `:active`'s: only the innermost pressable shows it, only
@@ -12,11 +12,10 @@ import { cdpBrowser, chromium, suiteBrowser } from '../../../scripts/agent-launc
 import { withLook } from '../look.mjs';
 import { engineTests, need } from '../../../scripts/coverage.mjs';
 import { readyPage } from './page.mjs';
-import { fileURLToPath } from 'node:url';
 
 const engineTest = await engineTests();
 
-const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const WEB = resolve(import.meta.dir, '..');
 const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
@@ -133,7 +132,8 @@ beforeAll(async () => {
   server = createServer((req, res) => {
     const html = { '/': page, '/unsaid': unsaid, '/unsaid?agent': unsaid, '/paint': paint, '/paint?agent': paint }[req.url];
     if (html) { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); return; }
-    res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url === '/navigation.js' ? 'navigation.js' : 'input-glue.js')));
+    const module = hostFixtureModule(req.url.slice(1));
+    res.writeHead(module ? 200 : 404, { 'content-type': 'text/javascript' }); res.end(module);
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   if (unavailable) return;

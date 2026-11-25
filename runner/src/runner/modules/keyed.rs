@@ -50,6 +50,11 @@ impl<D: DataSource> Runner<D> {
                 map.remove("permission");
             }
         }
+        if sub["list"]["show"].is_object() && !here(&sub["list"]["show"]) {
+            if let Some(list) = sub["list"].as_object_mut() {
+                list.remove("show");
+            }
+        }
         // A sheet shown on some targets alone (LLP 1133.015 D17: Apple's
         // restore): elsewhere the call goes on with no ticket.
         if sub["choose"].is_object() && !here(&sub["choose"]) {

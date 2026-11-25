@@ -42,6 +42,7 @@ fn report(k: &mut Kernel, raw: f32, contributions: &[Contribution]) -> (bool, f3
             id: 1,
             generation: 1,
             insets: Some(band),
+            frame: None,
         },
         kinds: 0,
     };

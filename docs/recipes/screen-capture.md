@@ -1,56 +1,52 @@
-# Recipe: capture before showing the window
+# Capture a macOS guide step
 
-`@exact/screen-capture` supplies `captureScreens`, `screenRecordingStatus`
-and `requestScreenRecording` (LLP 1178). Declare `device.screen-recording
-shot.purpose` and `fs.write app:/tmp`; `shot.purpose` is a localized usage
-string. Reading or drawing the files also needs `fs.read app:/tmp`.
+Declare `device.screen-recording shot.purpose` and `fs.write app:/tmp`.
+Localize the usage string. Drawing a file also needs `fs.read app:/tmp`.
+On macOS, call `requestScreenRecording()` from foreground setup if
+`screenRecordingStatus()` reports `prompt`. Captures use the existing grant.
 
 ```ts
-import { captureScreens, screenRecordingStatus, requestScreenRecording } from '@exact/screen-capture';
+import { captureScreens, getWindowAtPoint, getFrontmostWindow } from '@exact/screen-capture';
+import { getPointerPosition, getScreenDetails } from '@exact/window-management';
 
-// Ask from the foreground setup UI, before using the global shortcut.
-if ((await screenRecordingStatus()).state === 'prompt') {
-  await requestScreenRecording();
-}
+const directory = 'app:/tmp/steps';
+const { screenX: x, screenY: y } = await getPointerPosition();
+const window = await getWindowAtPoint({ x, y });
+const { captures: [step] } = await captureScreens({ directory, window: window.handle, cursor: 'always' });
+const frame = step.frame!;
+const imageX = (x - frame.x) * step.width / frame.width;
+const imageY = (y - frame.y) * step.height / frame.height;
 
-// In the shortcut handler, before showing the overlay:
-const { captures } = await captureScreens({ directory: 'app:/tmp/freeze' });
+const front = await getFrontmostWindow();
+const { currentScreen: screen } = await getScreenDetails();
+await captureScreens({ directory, screen });
+await captureScreens({ directory, screen, rect: { x: 10, y: 20, width: 160, height: 90 } });
 ```
 
-Each entry is `{path, width, height, type, screen}`. Captures are sorted
-by the display's `left`, then `top`. Use the returned `path` for each
-image. Every call creates new files in the requested directory. An app
-can keep displaying an earlier capture while the next is written. Remove
-the files when the app releases that capture.
-Width and height are physical pixels. The display record's `clientRect`
-is its rectangle in the calling window's CSS pixels. Draw the file there
-with an image, or on Windows and Linux a canvas. A canvas on macOS or
-the web cannot draw an app file.
-Set the hidden window's frame
-before capturing; with no window, `clientRect` is null. The API neither
-shows nor activates a window, and needs no `device.window-management` grant.
+Pointer and display-list reads need `device.window-management`. Window
+lookups need only the recording grant. Each returns a session handle,
+title, desktop frame and owning app. Capture includes the app's own
+windows. A covered window yields its own pixels. The default cursor is
+`never`. Window frames and pointer positions use desktop CSS pixels.
+A display region starts at its top left. Subtract the display's `left`
+and `top` from a pointer position to place a region there.
 
-On macOS, request Screen Recording permission once from the foreground
-setup UI. Capture checks permission without prompting. Windows needs no
-OS permission dialog. Both omit the pointer. macOS requests sRGB; Windows
-records GDI's SDR colors, which may look washed out on HDR displays.
-Displays need not be captured at the same instant.
+For a freeze overlay, set the hidden window's frame and call
+`captureScreens({ directory })` before showing it. Each entry gives
+`{path, width, height, type, screen}`, ordered by display left then top.
+The image dimensions are physical pixels. Draw it at `screen.clientRect`
+in window CSS pixels (null without a window). Each call writes fresh
+files. Remove them after use.
 
-Optional `type` and `quality` follow `captureCanvas`; the answer's `type`
-and filename identify what the host wrote. See [the reference](../reference.md#still-desktop-capture-exactscreen-capture)
-for size limits, encoding and publication errors.
+An agent drive needs `--storage <name>`. It uses the display-list fixture
+or `prefer extension screen-capture.screens=[…]` to include a
+`clientRect`. Its window covers the primary display and its pointer sits
+at the centre. On macOS, `prefer permission.screen-recording granted`
+grants the fixture ticket. `--bind screen-capture` uses the OS and
+requires a person present. Web and Linux support fixture captures only. Windows takes all-display stills.
+Its native window lookups and explicit selectors or cursor settings return
+`NotSupportedError`. No Windows executable was run for this change.
 
-Under the agent, capture writes a colored card with each display's index
-and physical size. A drive needs a scratch store (`--storage <name>`) for
-the files. If the app imports `getScreenDetails`, its fixture supplies the
-screens. To supply viewport rectangles too, use
-`prefer extension screen-capture.screens=[…]`, including `clientRect` where
-the fixture has a window; this overrides the display-list fixture.
-The default is the same single display as window management's.
-On macOS, `prefer permission.screen-recording granted` bypasses the
-substitute's permission ticket. `--bind screen-capture` uses the OS and
-requires a person present for a macOS drive.
-
-Real capture is unavailable on the web, Linux, and mobile hosts. Web and
-Linux implementations support fixture captures under the agent only.
-`getDisplayMedia`, one display, a region, and a named window remain out.
+For encoding, image limits, errors and platform differences, see the
+[package README](../../packages/screen-capture/README.md) and
+[reference](../reference.md#still-desktop-capture-exactscreen-capture).

@@ -129,6 +129,8 @@ fn the_dialog_and_the_menu_keep_materials_metrics() {
     let row = |title: &str, cancel: bool| Row {
         node: 1,
         title: title.into(),
+        menu_label: None,
+        subtitle: None,
         direction: exact_kernel::Direction::Ltr,
         symbol: None,
         destructive: false,

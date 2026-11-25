@@ -15,7 +15,7 @@ const TABS = true, SPLITS = true, SHEETS = true, BARS = true, CLEAR_BARS = true;
 let last = null, refused = new WeakMap();
 // The tabpanels each root last hid or showed (one it stops naming shows again); the keys of the stack it last showed.
 let managed = new WeakMap(), shown = new WeakMap();
-let written = [], gone = new Set(), cursor = 0, first = null, originIndex = null, echo = null, pop = null, draining = false;
+let memory = false, written = [], gone = new Set(), cursor = 0, first = null, originIndex = null, echo = null, pop = null, draining = false;
 const queue = [], waiters = new Set();
 let root, navigate, log, hostBack, hostGo, routeMatches = () => false, canonicalOf = (location) => location;
 let pressedLink = null, heldLink = null, reportedLinkPop = false, duplicateIds = new WeakMap();
@@ -523,11 +523,7 @@ export function historyURL(path) {
 /** Whether `e` scrolls the page by the person: a wheel, a touch's move, a key that scrolls, or a press on a scrollbar. A
 * `scroll` event cannot say: the page's own scrolls (a fragment's, scroll anchoring, a clamp) are trusted events too. */
 const byPerson = (e, el = e.target) => e.type === "keydown" ? /^(Arrow(Up|Down|Left|Right)|Page(Up|Down)|Home|End| )$/.test(e.key) && !el.closest?.("input, textarea, select, [contenteditable]") : e.type !== "pointerdown" || el instanceof Element && ((b) => e.clientX - b.left >= el.clientLeft + el.clientWidth || e.clientY - b.top >= el.clientTop + el.clientHeight)(el.getBoundingClientRect());
-const stamp = (index, op) => ({
-  exact: index,
-  id: op.top,
-  url: op.url
-});
+const stamp = (index, op) => ({ exact: index, id: op.top, url: op.url });
 /** A route's Back control, the selected route's unless named (1035.001 D1: the `id` the root's `navigationBack` names), pressable or not: the route's own, else one in no route at all (a header the routes share), as iOS resolves it (NavigationBack.control); another route's is that route's. */
 const backControl = (nav, route = selectedRoute(nav), name = nav.getAttribute("navigationBack")) => route && name !== null ? route.querySelector(`[id="${CSS.escape(name)}"]`) ?? [...nav.ownerDocument.querySelectorAll(`[id="${CSS.escape(name)}"]`)].find((control) => [null, nav].includes(control.closest("[navigationKey]"))) ?? null : undefined;
 // LLP 1116.000 D4: Back belongs to the header shadow root; bar items proxy the authored controls.
@@ -920,18 +916,36 @@ function pressBack(nav) {
   }
   control.click();
 }
+// An opaque frame can stamp a browser entry even when it cannot change its address.
+// If the browser refuses the stamp too, subsequent entries and traversals belong to this mirror.
+function writeEntry(method, entry) {
+  if (memory) return;
+  const url = historyURL(entry.url);
+  try {
+    history[method](entry, "", url);
+  } catch {
+    try { history[method]({ ...entry, address: launchLocation() }, ""); }
+    catch { memory = true; }
+  }
+}
+function traverseBrowser(delta) {
+  if (memory) return false;
+  try { history.go(delta); return true; }
+  catch { memory = true; return false; }
+}
 function go(to, from, finish = () => {}) {
+  if (memory) return finish();
   const index = browserIndex();
   const current = index !== null && originIndex !== null ? index - originIndex : from;
   if (to === current) {
     finish();
     return;
   }
-  echo = {
-    index: to,
-    finish
-  };
-  history.go(to - current);
+  echo = { index: to, finish };
+  if (!traverseBrowser(to - current)) {
+    echo = null;
+    finish();
+  }
 }
 function commit(op) {
   for (const id of op.removed) {
@@ -941,7 +955,7 @@ function commit(op) {
     first = 0;
     originIndex = browserIndex();
     written[0] = stamp(0, op);
-    history.replaceState(written[0], "", historyURL(op.url));
+    writeEntry("replaceState", written[0]);
     // After a reload, this document's entries before the current one (`launchVisits`) are the page's too, newest first,
     // as far as each is at the URL of the visit beneath the one after it: Back, the app bar's as well as the browser's,
     // then steps back to it rather than pushing it (#527). The JS target's launch builds the stack from those entries.
@@ -957,7 +971,7 @@ function commit(op) {
     // another fragment on the visit shown, or none, is one more browser entry of it, as a same-document link's is (LLP 1153 D5)
     if (written[cursor].url !== op.url) {
       written[cursor] = stamp(cursor, op);
-      history.replaceState(written[cursor], "", historyURL(op.url));
+      writeEntry("replaceState", written[cursor]);
     }
   } else {
     let j = cursor;
@@ -968,7 +982,11 @@ function commit(op) {
         cursor = j;
         // The entry gone back to takes the top's url when that changed in the same commit (`replace(back(r), u)`).
         // An entry a reload left holds the state of the page before it, which is stamped again.
-        return go(j, from, () => written[j].url === op.url && history.state?.exact === j && history.state.id === written[j].id || history.replaceState(written[j] = stamp(j, op), "", historyURL(op.url)));
+        return go(j, from, () => {
+          if (written[j].url !== op.url || !memory && (history.state?.exact !== j || history.state.id !== written[j].id)) {
+            writeEntry("replaceState", written[j] = stamp(j, op));
+          }
+        });
       }
     }
     for (const index of Object.keys(written)) {
@@ -980,14 +998,16 @@ function commit(op) {
     op.pushed = written[cursor]?.id === op.top;
     written[++cursor] = stamp(cursor, op);
     // `pushed`: an entry of the visit shown, whose place fragment.js keeps
-    history.pushState(written[cursor], "", historyURL(op.url));
+    writeEntry("pushState", written[cursor]);
     globalThis.exact?.fragment?.forget(cursor);
   }
 }
 function popped({ j, state, url, ua }) {
   const entry = written[j];
   const owned = entry && state?.exact === j && state.id === entry.id && state.url === entry.url;
-  const target = owned ? entry.url : url;
+  // After a reload a URL-less stamp can outlive the in-memory entry that wrote it.
+  const stamped = state?.address === url && Number.isInteger(state?.exact) && typeof state.url === "string";
+  const target = owned ? entry.url : stamped ? state.url : url;
   const nav = root.querySelector("[navigationBack]");
   const routes = routesOf(nav), selected = routes.indexOf(selectedRoute(nav));
   // A completed pop presses the selected route's Back control; a route with none still goes back by the root's `navigate`
@@ -995,7 +1015,7 @@ function popped({ j, state, url, ua }) {
   // control pressed (disabled, or closedby="none", refuses), else the runner's `back` from the visit the entry left (LLP 1115 D5), however routes are keyed. Any other entry unheard (Forward, or more than one away) is the runner's own `go` there (LLP 1115.000 D4.3). An entry given to `navigate` at the URL already shown, which this page did not write or which holds the visit shown, is accepted though nothing changed: a `replace` can give the only entry a reload wrote the URL of the one beneath it, and refusing would hold Back there. An earlier visit at that URL is still refused: accepting it would leave the visits after it on the stack.
   const step = owned && j === cursor - 1 && entry.id !== written[cursor]?.id, beneath = step && selected > 0 && routes[selected - 1].getAttribute("navigationKey") === String(entry.id);
   let back = beneath && !!backControl(nav), own = false, why = null;
-  pop = { ua };
+  pop = { ua, entry: owned ? entry : stamped ? state : null };
   try {
     if (back) {
       why = pressBack(nav);
@@ -1015,14 +1035,15 @@ function popped({ j, state, url, ua }) {
       cursor = j ?? cursor;
       first = Math.min(first, cursor);
       written[cursor] = stamp(cursor, last);
-      go(cursor, j ?? cursor, () => history.replaceState(written[cursor], "", historyURL(written[cursor].url)));
+      go(cursor, j ?? cursor, () => writeEntry("replaceState", written[cursor]));
       if (!pop.op) globalThis.exact?.fragment?.traverse(root, last, navigation, log);
     } else if (pop.op) {
       const op = pop.op;
+      pop = null; // A redirected traversal commits from the restored entry, including in memory.
       if (j !== null && j !== cursor) {
         go(cursor, j, () => commit(op));
       } else {
-        history.replaceState(written[cursor], "", historyURL(written[cursor].url));
+        writeEntry("replaceState", written[cursor]);
         commit(op);
       }
     } else {
@@ -1034,7 +1055,7 @@ function popped({ j, state, url, ua }) {
       if (j !== null && j !== cursor) {
         go(cursor, j);
       } else {
-        history.replaceState(written[cursor], "", historyURL(written[cursor].url));
+        writeEntry("replaceState", written[cursor]);
       }
     }
   } finally {
@@ -1067,6 +1088,8 @@ const settled = () => {
   }
 };
 export const navigation = {
+  get entry() { return pop?.entry ?? written[cursor]; },
+  samePage(url) { return canonicalOf(url) === navigation.entry?.url.split("#")[0]; },
   personScrolls: 0,
   // the person's scrolls (`byPerson`) from the page's start: one after a navigation asked a fragment's scroll cancels it (fragment.js, LLP 1153 D5)
   /** The Back or Forward being dispatched (`popped`), else null: `ua` when the browser animated it (`hasUAVisualTransition`).
@@ -1139,7 +1162,8 @@ export const navigation = {
         return;
       }
       const index = browserIndex();
-      const j = index !== null && originIndex !== null ? index - originIndex : Number.isInteger(event.state?.exact) ? event.state.exact : null;
+      // A browser traversal after writes stopped has no index in the memory stack.
+      const j = memory ? null : index !== null && originIndex !== null ? index - originIndex : Number.isInteger(event.state?.exact) ? event.state.exact : null;
       if (echo !== null && j === echo.index) {
         const finish = echo.finish;
         echo = null;
@@ -1216,6 +1240,7 @@ export const navigation = {
     cursor = 0;
     first = null;
     originIndex = null;
+    memory = false;
     echo = null;
     pop = null;
     queue.length = 0;
@@ -1435,11 +1460,18 @@ export const navigation = {
           waiters.delete(finish);
           (globalThis.exact?.afterCommit ?? ((run) => run()))(() => resolve({
             history: delta,
-            delivery: "platform"
+            delivery: memory ? "memory" : "platform"
           }));
         }
         waiters.add(finish);
-        history.go(delta);
+        if (!traverseBrowser(delta)) {
+          const state = written[cursor + delta];
+          if (state) {
+            queue.push({ j: state.exact, state, url: state.url });
+            drain();
+          }
+          settled();
+        }
       });
     },
     observation(root) {

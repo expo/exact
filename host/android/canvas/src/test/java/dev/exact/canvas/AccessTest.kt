@@ -18,6 +18,7 @@ class AccessTest {
     private class Said(
         val id: Int, val parent: Int, val role: Int, val name: String = "",
         val set: Pair<Int, Int> = 0 to 0, val grid: List<Int> = listOf(0, 0, 0, 0),
+        val actions: List<Pair<Int, String>> = emptyList(),
         val flags: Int = 0, val range: List<Float> = listOf(0f, 0f, 0f),
     )
 
@@ -38,6 +39,8 @@ class AccessTest {
             w.addAll(listOf(n.set.first, n.set.second))
             w.addAll(n.grid)
             for (s in listOf(n.name, "", "")) string(s)
+            w.add(n.actions.size)
+            for ((id, name) in n.actions) { w.add(id); string(name) }
         }
         return w.toIntArray()
     }
@@ -46,6 +49,20 @@ class AccessTest {
         val access = Access(FrameLayout(RuntimeEnvironment.getApplication()))
         access.told(Access.Told(statement(nodes)))
         return access
+    }
+
+    @Test @Config(shadows = [Acts::class]) fun spinButtonOffersResetAlongsideItsRangeSteps() {
+        val access = told(listOf(Said(3, 0, Access.SPIN_BUTTON, "Quantity",
+            actions = listOf(9 to "Reset quantity", 0x80000009.toInt() to "Clear quantity"), flags = Access.RANGE or Access.FORWARD or Access.BACKWARD)))
+        val actions = access.provider.createAccessibilityNodeInfo(3)!!.actionList
+        val reset = actions.single { it.label == "Reset quantity" }
+        val clear = actions.single { it.label == "Clear quantity" }
+        Acts.targets.clear()
+        assertTrue(access.provider.performAction(3, reset.id, null))
+        assertTrue(access.provider.performAction(3, clear.id, null))
+        assertEquals(listOf(3 to 9, 3 to 0x80000009.toInt()), Acts.targets)
+        assertTrue(actions.contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD))
+        assertTrue(actions.contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD))
     }
 
     /** A table of a header row whose first cell spans two columns, and a body whose row header spans two rows: the
@@ -253,7 +270,11 @@ class AccessTest {
         companion object {
             val asked = ArrayList<Pair<Int, Int>>()
             @JvmStatic @Implementation fun __staticInitializer__() {}
-            @JvmStatic @Implementation fun accessAct(id: Int, action: Int, value: Float): Boolean { asked += id to action; return true }
+            val targets = ArrayList<Pair<Int, Int>>()
+            @JvmStatic @Implementation fun accessAct(id: Int, action: Int, value: Float, target: Int): Boolean {
+                if (target == 0) asked += id to action else targets += id to target
+                return true
+            }
         }
     }
 }

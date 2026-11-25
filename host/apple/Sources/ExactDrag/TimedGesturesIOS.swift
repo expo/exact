@@ -22,7 +22,7 @@ extension TimedGesture {
     }
 }
 
-final class TimedPan: UIPanGestureRecognizer, TimedGesture {
+class TimedPan: UIPanGestureRecognizer, TimedGesture {
     var timestamps: (event: TimeInterval, moved: TimeInterval)?
     /// Where (window points) and when its first touch came down.
     private(set) var down: (point: CGPoint, time: TimeInterval)?

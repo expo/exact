@@ -393,6 +393,11 @@ export function forgetSimulator(udid, { retryBoot = false } = {}) {
   for (const record of keyboardNotes.keys()) if (basename(record) === `${udid}.json`) keyboardNotes.delete(record);
   saidKeyboard.delete(udid);
 }
+let simulatorTemp;
+/** CoreSimulator is shared by processes with different TMPDIRs. Keep its display and accessibility locks together. */
+export function simulatorTempDirectory() {
+  return simulatorTemp ??= (process.platform === 'darwin' && spawnSync('/usr/bin/getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).stdout?.trim()) || tmpdir();
+}
 /** `simulators()` as it was a moment ago in this process: a drive chooses its simulator before it takes the store's
  *  lock and again when it launches, a fraction of a second apart. A boot here forgets it; a shutdown by another process
  *  in between fails the launch, where a fresh list would have booted it. */
@@ -400,12 +405,12 @@ let chosenFrom = null;
 const recentSimulators = () => (chosenFrom && Date.now() - chosenFrom.at < 5000 ? chosenFrom : chosenFrom = { at: Date.now(), all: simulators() }).all;
 /** `simulator`'s choice, booting nothing: what a drive locks before it launches (agent.mjs `resolveDevice`).
  * `cached` keeps that choice for the runner's later launches, including a test's reloads. */
-export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint = 'EXACT_SIM=<udid|name>', app, dir, cached = false } = {}) {
+export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint = 'EXACT_SIM=<udid|name>', app, dir, cached = false, rememberChoice = true } = {}) {
   const key = pick => JSON.stringify([pick, tv, app, dir]);
   const used = dir ? resolve(dir, '.exact', tv ? 'simulator-tv' : 'simulator') : null;
   const lastUsed = () => { try { return used && readFileSync(used, 'utf8').trim(); } catch { return null; } };
   const remember = (dev, last) => {
-    if (used && dev.udid !== last) try { mkdirSync(dirname(used), { recursive: true }); writeFileSync(used, `${dev.udid}\n`); } catch { /* remembered next time, if it can be */ }
+    if (rememberChoice && used && dev.udid !== last) try { mkdirSync(dirname(used), { recursive: true }); writeFileSync(used, `${dev.udid}\n`); } catch { /* remembered next time, if it can be */ }
   };
   const kept = cached && driveSimulators.get(key(pick));
   if (kept) {

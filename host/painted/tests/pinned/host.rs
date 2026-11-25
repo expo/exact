@@ -1022,6 +1022,8 @@ fn a_context_menu_and_its_submenu_row_are_refused_as_popovers() {
 #[test]
 fn ordinary_node_state_is_not_routed_to_a_surface() {
     let mut p = fixture("scroll");
+    // Both state replies report the timing of the same completed frame.
+    p.frame();
     let id = 1;
     // `raster.processRunning` counts the process's decodes, which the
     // binary's other tests start and finish between the two reads.

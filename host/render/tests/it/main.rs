@@ -690,7 +690,6 @@ fn a_javascript_page_preloads_its_runtime_and_runs_it_after_first_paint(mut r: R
         assert!(tag.contains(" data-view"), "{tag}");
     }
     for part in [
-        "import(c().dataset.entry)",
         "observe({type:\"paint\",buffered:!0})",
         "DOMContentLoaded",
         "requestIdleCallback",

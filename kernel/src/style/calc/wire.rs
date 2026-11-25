@@ -32,8 +32,8 @@ pub(super) const MAX_LEVELS: usize = 2 * super::MAX_DEPTH + 2;
 /// an observation (LLP 1123 D10's leaf): its target (0 the box itself; 1 a
 /// chain entry, then its number from 1; 2 a chain kind and 3 a relation,
 /// then its index in [`Kind::ALL`] or [`Relation::ALL`]; 4 a registered
-/// target, then its name as the codec's string), its family's index in
-/// [`super::Family::ALL`], its side's index in [`Side::ALL`] (an edge, then
+/// target, then its name as the codec's string), its family (0–9 in
+/// [`super::Family::ALL`] order, 11 for the bar), its side's index in [`Side::ALL`] (an edge, then
 /// `start` and `end`), then its fallback's presence byte and
 /// the fallback; or, with family 10 and the box as its target, an owner
 /// segment (D16): its field's index in [`SegmentVar::ALL`], its column and
@@ -111,7 +111,8 @@ fn node_out(n: &Node, w: &mut Writer) {
         Node::Observe(o) => {
             w.u8(11);
             target_out(&o.target, w);
-            w.u8(o.family as u8);
+            let family = o.family as u8;
+            w.u8(if family < SEGMENT { family } else { family + 1 });
             w.u8(o.side as u8);
             optional(o.fallback.as_deref(), w);
         }
@@ -127,9 +128,9 @@ fn node_out(n: &Node, w: &mut Writer) {
     }
 }
 
-/// An observation's family byte for an owner segment, past [`super::Family::ALL`]'s.
+/// Segments have their own wire shape and precede the bar family on the wire.
 const SEGMENT: u8 = 10;
-const _: () = assert!(super::Family::ALL.len() <= SEGMENT as usize);
+const _: () = assert!(super::Family::Bar as u8 == SEGMENT);
 
 fn optional(n: Option<&Node>, w: &mut Writer) {
     match n {
@@ -279,7 +280,11 @@ fn node(r: &mut Reader<'_>, level: usize, nodes: &mut usize) -> Option<Node> {
                 }
                 family => Node::Observe(super::Observe {
                     target,
-                    family: super::Family::from_index(family)?,
+                    family: super::Family::from_index(match family {
+                        SEGMENT => return None,
+                        n if n > SEGMENT => n - 1,
+                        n => n,
+                    })?,
                     side: Side::from_index(r.u8().ok()?)?,
                     fallback: optional(r, nodes)?.map(Box::new),
                 }),
@@ -358,6 +363,17 @@ mod tests {
             let bytes = w.into_vec();
             assert_eq!(node(&mut Reader::new(&bytes), 0, &mut 0), Some(leaf));
         }
+        let mut physical_bar = Writer::new();
+        node_out(
+            &Node::Observe(super::super::Observe {
+                target: Target::Box,
+                family: super::super::Family::Bar,
+                side: Side::Left,
+                fallback: None,
+            }),
+            &mut physical_bar,
+        );
+        assert!(decode(&mut Reader::new(&physical_bar.into_vec()), StyleId::Width).is_err());
         // A family past the list and the segment's is refused, as is a segment's leaf with a
         // field past its list, an index past 15, or a chain entry for its target
         let leaf = |target: &Target, family: u8, rest: &[u8]| {
@@ -369,7 +385,7 @@ mod tests {
             w.u8(0);
             node(&mut Reader::new(&w.into_vec()), 0, &mut 0)
         };
-        assert!(leaf(&Target::Box, SEGMENT + 1, &[Edge::Top as u8]).is_none());
+        assert!(leaf(&Target::Box, SEGMENT + 2, &[Edge::Top as u8]).is_none());
         // A side past `end`
         assert!(leaf(&Target::Box, super::super::Family::Keyboard as u8, &[6]).is_none());
         assert!(

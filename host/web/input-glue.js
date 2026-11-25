@@ -1,4 +1,4 @@
-import { clickFromInput, suppressPointerClick, focusStack, viewChildren, viewParent } from './navigation.js';
+import { navigation, clickFromInput, suppressPointerClick, focusStack, viewChildren, viewParent } from './navigation.js';
 import { receive, takes } from './drag-in.js';
 // Input-only glue: loaded after the baked first pixel, independently of data readiness.
 import "./prompt-glue.js"; // a prompt's Return
@@ -192,8 +192,8 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const press = a.exactHandlers?.includes("press");
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
       || (a.target && a.target !== "_self") || a.hasAttribute("download")) { if (press) event.stopPropagation(); return; }
-    const shown = globalThis.history?.state?.url ?? location.pathname + location.search, href = a.getAttribute("href") ?? "";
-    const url = new URL(href[0] === "#" ? shown.split("#")[0] + href : a.href, location.href), to = url.pathname + url.search, here = to === location.pathname + location.search || to === shown.split("#")[0];
+    const shown = navigation.entry?.url ?? location.pathname + location.search, href = a.getAttribute("href") ?? "";
+    const url = new URL(href[0] === "#" ? shown.split("#")[0] + href : a.href, location.href), to = url.pathname + url.search, here = navigation.entry ? navigation.samePage(to) : to === shown.split("#")[0];
     // (A JS-target page with no GPU surface writes nothing in: its route table is its own.)
     const { wasm, writeIn = () => 0, navigate, go } = globalThis.exact;
     if (url.origin !== location.origin || wasm.exact_route_match(writeIn(to)) !== 1) return;

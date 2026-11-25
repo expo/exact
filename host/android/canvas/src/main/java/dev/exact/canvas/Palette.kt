@@ -1,6 +1,7 @@
 package dev.exact.canvas
 
 import android.R.color as system
+import android.app.UiModeManager
 import android.content.Context
 import android.content.res.ColorStateList
 import android.content.res.Resources
@@ -27,15 +28,58 @@ internal object Palette {
      * reads by its own names (LLP 1115.001.001 D2.3). */
     const val ROLES = 36
 
-    /** The roles light, then dark, ARGB. */
-    fun read(context: Context): IntArray = try {
-        when {
-            Build.VERSION.SDK_INT < 31 -> Legacy.palette()
-            Build.VERSION.SDK_INT < 34 -> derived(context)
-            else -> roles(context)
+    /** The light and dark ARGB roles, the contrast level and any device accent swatches. */
+    fun read(context: Context): IntArray {
+        val contrast = try {
+            if (Build.VERSION.SDK_INT >= 34) context.getSystemService(UiModeManager::class.java)?.contrast ?: 0f else 0f
+        } catch (_: RuntimeException) {
+            0f
         }
-    } catch (e: Resources.NotFoundException) {
-        Legacy.palette()
+        if (Build.VERSION.SDK_INT < 31) return Legacy.palette() + contrast.toRawBits()
+        return try {
+            val roles = if (Build.VERSION.SDK_INT >= 34) roles(context) else derived(context)
+            roles + contrast.toRawBits() + barSwatches(context)
+        } catch (_: Resources.NotFoundException) {
+            Legacy.palette() + contrast.toRawBits()
+        }
+    }
+
+    /** Chromatic swatches of the device's primary, secondary and (from API 35) error palettes.
+     * Some TV images expose the resource ids without underlying colours. */
+    @android.annotation.TargetApi(31)
+    private fun barSwatches(context: Context): IntArray {
+        val swatches = IntArray(39)
+        fun read(offset: Int, ids: IntArray) {
+            ids.forEachIndexed { i, id ->
+                swatches[offset + i] = try { context.getColor(id) } catch (_: Resources.NotFoundException) { 0 }
+            }
+        }
+        read(0, intArrayOf(
+            system.system_accent1_900, system.system_accent1_800, system.system_accent1_700,
+            system.system_accent1_600, system.system_accent1_500, system.system_accent1_400,
+            system.system_accent1_300, system.system_accent1_200, system.system_accent1_100,
+            system.system_accent1_50, system.system_accent1_10,
+        ))
+        read(13, intArrayOf(
+            system.system_accent2_900, system.system_accent2_800, system.system_accent2_700,
+            system.system_accent2_600, system.system_accent2_500, system.system_accent2_400,
+            system.system_accent2_300, system.system_accent2_200, system.system_accent2_100,
+            system.system_accent2_50, system.system_accent2_10,
+        ))
+        if (Build.VERSION.SDK_INT >= 35) read(26, intArrayOf(
+            system.system_error_900, system.system_error_800, system.system_error_700,
+            system.system_error_600, system.system_error_500, system.system_error_400,
+            system.system_error_300, system.system_error_200, system.system_error_100,
+            system.system_error_50, system.system_error_10,
+        ))
+        if (Build.VERSION.SDK_INT >= 34) {
+            read(11, intArrayOf(system.system_palette_key_color_primary_light, system.system_palette_key_color_primary_dark))
+            read(24, intArrayOf(system.system_palette_key_color_secondary_light, system.system_palette_key_color_secondary_dark))
+        }
+        if (Build.VERSION.SDK_INT >= 37 && Build.VERSION.SDK_INT_FULL >= Build.VERSION_CODES_FULL.CINNAMON_BUN_2) {
+            read(37, intArrayOf(system.system_palette_key_color_error_light, system.system_palette_key_color_error_dark))
+        }
+        return swatches
     }
 
     /** Android 14's colour roles, each a resource of its own. */

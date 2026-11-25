@@ -32,12 +32,15 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let first = try XCTUnwrap(update.chain.first)
         XCTAssertEqual(first.target.insets, view.safeAreaInsets)
         XCTAssertEqual(first.target.id, TargetIds.id(of: view))
+        // Each target's coordinate space is its bounds in its window, the window's its own
+        XCTAssertEqual(first.target.frame, view.convert(view.bounds, to: nil))
         let navigation = try XCTUnwrap(route.navigationController?.view)
         let named = update.chain.first { $0.kinds & OwnerUpdateIOS.Kind.navigation != 0 }
         XCTAssertEqual(named?.target.insets, navigation.safeAreaInsets)
         let window = try XCTUnwrap(view.window)
         let windowTarget = update.relations.first { $0.relation == OwnerUpdateIOS.Relation.window }
         XCTAssertEqual(windowTarget?.target.insets, window.safeAreaInsets)
+        XCTAssertEqual(windowTarget?.target.frame, window.bounds)
         let margins = try XCTUnwrap(update.margins)
         XCTAssertEqual(margins.root, view.layoutMargins)
         XCTAssertEqual(margins.plain, UIView().layoutMargins)
@@ -140,6 +143,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertTrue(update.barRegions.allSatisfy { $0 == nil })
         XCTAssertEqual(update.chain.count, 1)
         XCTAssertNil(update.chain[0].target.insets)
+        XCTAssertNil(update.chain[0].target.frame)
     }
 
     func testTheKernelTakesAWindowRootsUpdateUnderANegativeContribution() throws {
@@ -202,9 +206,11 @@ final class OwnerUpdateIOSTests: XCTestCase {
         var update = OwnerUpdateIOS()
         update.band = UIEdgeInsets(top: 1, left: 4, bottom: 3, right: 2)
         update.chain = [.init(target: .init(id: 5, generation: 6, insets: nil), kinds: OwnerUpdateIOS.Kind.navigation)]
-        update.relations = [.init(relation: OwnerUpdateIOS.Relation.window, target: .init(id: 7, generation: 1, insets: UIEdgeInsets(top: 8, left: 0, bottom: 0, right: 0)))]
+        update.relations = [.init(relation: OwnerUpdateIOS.Relation.window, target: .init(id: 7, generation: 1, insets: UIEdgeInsets(top: 8, left: 0, bottom: 0, right: 0),
+                                                                                       frame: CGRect(x: 0, y: 0, width: 402, height: 874)))]
         update.margins = .init(root: UIEdgeInsets(top: 9, left: 12, bottom: 11, right: 10), plain: UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8),
                                minimum: UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16), readableWidth: 672)
+        update.keyboard = .init(frame: CGRect(x: 0, y: 538, width: 402, height: 336), docked: true)
         update.barRegions = [nil, nil, .init(distance: 24, sides: (16, 8.5)), nil]
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
@@ -212,18 +218,86 @@ final class OwnerUpdateIOSTests: XCTestCase {
         func u64(_ v: UInt64) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
         w.append(1); f(1, 2, 3, 4)
         u32(0)
-        u32(1); u64(5); u64(6); w.append(0); w.append(1 << 2)
-        u32(1); w.append(3); u64(7); u64(1); w.append(1); f(8, 0, 0, 0)
+        u32(1); u64(5); u64(6); w.append(0); w.append(0); w.append(1 << 2)
+        u32(1); w.append(3); u64(7); u64(1); w.append(1); f(8, 0, 0, 0); w.append(1); f(0, 0, 402, 874)
         w.append(1); f(9, 10, 11, 12); f(8, 8, 8, 8); f(0, 16, 0, 16); f(672)
-        w.append(0)
+        w.append(1); f(0, 538, 402, 336); w.append(1)
         w.append(0)
         w += [0, 0, 1]; f(24, 16, 8.5); w.append(0)
         XCTAssertEqual([UInt8](update.encode()), w)
         // A registration: the name's length and bytes, then the target after a presence byte
         let registration = ExactNativeTarget.encode(name: "map", target: .init(id: 9, generation: 2, insets: UIEdgeInsets(top: 30, left: 0, bottom: 0, right: 0)))
         w = [3] + Array("map".utf8) + [1]
-        u64(9); u64(2); w.append(1); f(30, 0, 0, 0)
+        u64(9); u64(2); w.append(1); f(30, 0, 0, 0); w.append(0)
         XCTAssertEqual([UInt8](registration), w)
+    }
+
+    /// An owner's keyboard is its window's, as UIKit reports it, converted into the owner's view, whether or not the
+    /// owner holds the editor; the session's view installs the window's sampler with its first keyboard editor, and
+    /// the keyboard goes from the update once it hides (LLP 1123 D7).
+    func testAnOwnersKeyboardIsItsWindowsInItsView() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "the software keyboard shows only for a scene window's editor") }
+        let session = try fixture()
+        let (route, view) = try firstRoute(session)
+        let window = try XCTUnwrap(view.window), host = try XCTUnwrap(window.rootViewController)
+        let field = UITextField(frame: CGRect(x: 20, y: 80, width: 180, height: 40))
+        host.view.addSubview(field)
+        session.presenter.keyboardPrompt = field
+        var shown: CGRect?
+        let observer = NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidShowNotification, object: nil, queue: .main) { note in
+            shown = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        XCTAssertTrue(field.becomeFirstResponder())
+        until("the keyboard shows and is sampled") { shown != nil && KeyboardSampleIOS.existing(in: window)?.sample != nil }
+        let keys = window.convert(try XCTUnwrap(shown), from: window.screen.coordinateSpace)
+        let origin = view.bounds.origin
+        let keyboard = try XCTUnwrap(OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).keyboard)
+        XCTAssertTrue(keyboard.docked)
+        XCTAssertEqual(keyboard.frame.minY, view.convert(keys, from: window).minY - origin.y, accuracy: 0.5, "the route holds no editor and is told the keyboard")
+        XCTAssertEqual(keyboard.frame.height, keys.height, accuracy: 0.5)
+        field.resignFirstResponder()
+        until("the keyboard goes from the update") { OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).keyboard == nil }
+    }
+
+    /// A sheet scaled behind the sheet over it reads the window's keyboard converted into its own view, where its own
+    /// guide would end short of the keyboard (LLP 1123 D7, measured on the iPhone 18 Pro).
+    func testAScaledSheetsKeyboardIsTheWindowsInItsView() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "the software keyboard shows only for a scene window's editor") }
+        let window = UIWindow(windowScene: scene)
+        window.frame = scene.coordinateSpace.bounds
+        let root = UIViewController(), under = UIViewController(), over = UIViewController()
+        window.rootViewController = root
+        window.makeKeyAndVisible()
+        self.window = window
+        KeyboardSampleIOS.install(in: window)
+        root.present(under, animated: false)
+        under.present(over, animated: false)
+        until("the lower sheet is scaled behind the upper") { under.view.window != nil && over.view.window != nil && under.view.convert(under.view.bounds, to: window).width < window.bounds.width - 1 }
+        let field = UITextField(frame: CGRect(x: 20, y: 80, width: 180, height: 40))
+        over.view.addSubview(field)
+        var shown: CGRect?
+        let observer = NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidShowNotification, object: nil, queue: .main) { note in
+            shown = (note.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue
+        }
+        defer {
+            NotificationCenter.default.removeObserver(observer)
+            field.resignFirstResponder()
+            root.dismiss(animated: false)
+        }
+        XCTAssertTrue(field.becomeFirstResponder())
+        until("the keyboard shows and is sampled") { shown != nil && KeyboardSampleIOS.existing(in: window)?.sample != nil }
+        let keys = window.convert(try XCTUnwrap(shown), from: window.screen.coordinateSpace)
+        let keyboard = try XCTUnwrap(OwnerUpdateIOS.sample(controller: under, view: under.view, session: nil).keyboard)
+        let expected = under.view.convert(keys, from: window).offsetBy(dx: -under.view.bounds.minX, dy: -under.view.bounds.minY)
+        XCTAssertEqual(keyboard.frame.minY, expected.minY, accuracy: 0.5)
+        XCTAssertEqual(keyboard.frame.height, expected.height, accuracy: 0.5)
+    }
+
+    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
+        XCTAssertTrue(done(), what)
     }
 
     /// The native fixture booted in a window of the test host's scene, 402 by 874.

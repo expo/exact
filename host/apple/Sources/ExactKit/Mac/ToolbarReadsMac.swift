@@ -214,7 +214,7 @@ extension WindowToolbarHost {
             }
             // `aria-labelledby`: the names and words of what it names are the node's label (`authoredLabel`),
             // a readout's, a tablist's or a search field's item's name.
-            if let refs = node.props["accessibilityLabelledBy"] { refs.split(separator: " ").forEach { named(String($0)) } }
+            if let refs = node.props["accessibilityLabelledBy"] { NodeView.idRefs(refs).forEach { named($0) } }
             for child in node.childNodes { subtree(child) }
         }
         let navigation = presenter.navigation

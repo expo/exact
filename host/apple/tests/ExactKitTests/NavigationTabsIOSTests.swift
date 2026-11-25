@@ -1461,6 +1461,31 @@ extension XCTestCase {
         tabs.view.layoutIfNeeded()
     }
 
+    /// Some iPhones keep a More item even at regular width. Ask a plain UIKit bar whether this transition exists.
+    func showAllTabs(_ tabs: UITabBarController) throws {
+        setSizeClasses(tabs, horizontal: .regular)
+        let count = try XCTUnwrap(tabs.tabControllers?.count)
+        XCTAssertEqual(count, 6)
+        if tabs.tabBar.items?.count == count { return }
+        if tabs.traitCollection.userInterfaceIdiom == .phone {
+            let original = try XCTUnwrap(tabs.view.window)
+            let window = original.windowScene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: original.frame)
+            window.frame = original.frame
+            let reference = UITabBarController()
+            if #available(iOS 18.0, *) { reference.mode = tabs.mode }
+            setSizeClasses(reference, horizontal: .compact, vertical: tabs.traitCollection.verticalSizeClass)
+            reference.viewControllers = (0..<count).map { _ in UINavigationController(rootViewController: UIViewController()) }
+            window.rootViewController = reference
+            window.isHidden = false
+            defer { window.isHidden = true }
+            setSizeClasses(reference, horizontal: .regular)
+            let shown = try XCTUnwrap(tabs.tabBar.items?.count)
+            try XCTSkipIf(count == 6 && shown == 5 && reference.tabBar.items?.count == shown,
+                          "UIKit keeps the sixth tab in More at regular width on this phone")
+        }
+        waitFor("all six tabs appear on the bar") { tabs.tabBar.items?.count == count }
+    }
+
     /// The agent's tap on the node whose `testId` is `testId`.
     func tapNode(_ session: ExactSession, _ testId: String) throws {
         let node = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")

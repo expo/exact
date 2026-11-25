@@ -63,7 +63,7 @@ impl Wgpu {
                 extent(u.size),
             );
         }
-        let s = self.submit(encoder.finish())?;
+        let s = self.defer([encoder.finish()])?;
         // The submission owns the staging buffer until its copies complete.
         for u in uploads {
             self.textures.get_mut(&u.texture).unwrap().last = s;

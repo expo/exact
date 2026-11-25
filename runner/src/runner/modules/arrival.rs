@@ -51,6 +51,25 @@ fn textual(record_type: &str) -> bool {
     matches!(record_type, "text" | "url" | "absolute-url")
 }
 
+/// Check a field against the fixture list in a launch or a live drive.
+pub fn check_arrival_field<'a>(
+    extension: &str,
+    word: &str,
+    arrival: &Json,
+    value: &Json,
+    lookup: impl FnOnce(&str) -> Option<&'a Json>,
+) -> Option<String> {
+    if arrival["field"] != word {
+        return None;
+    }
+    let id = value.as_str()?;
+    let from = format!("{extension}.{}", arrival["from"].as_str().unwrap_or("tags"));
+    let found = lookup(&from)
+        .and_then(Json::as_array)
+        .is_some_and(|tags| tags.iter().any(|t| t["id"] == id));
+    (!found).then(|| format!("prefer extension: no tag `{id}` in `{from}`"))
+}
+
 impl<D: DataSource> Runner<D> {
     /// The arrival `row`'s interface declares, with its extension.
     fn arrival_of(&self, row: &ModulesRow) -> Option<(String, Json)> {
@@ -241,17 +260,11 @@ impl<D: DataSource> Runner<D> {
     ) -> Option<String> {
         let (extension, word) = key.split_once('.')?;
         let (_, arrival) = self.arrivals().into_iter().find(|(e, _)| e == extension)?;
-        if arrival["field"] != word || value == "clear" {
-            return None;
-        }
-        let id = value.as_str()?;
-        let from = format!("{extension}.{}", arrival["from"].as_str().unwrap_or("tags"));
-        let fixtures = match group.get(&from) {
-            Some(tags) => tags.as_array().cloned().unwrap_or_default(),
-            None => self.fixtures(extension, &arrival),
-        };
-        (!fixtures.iter().any(|t| t["id"] == id))
-            .then(|| format!("prefer extension: no tag `{id}` in `{from}`"))
+        check_arrival_field(extension, word, &arrival, value, |from| {
+            group
+                .get(from)
+                .or_else(|| self.extensions.preferred.get(from))
+        })
     }
 
     /// The agent set `key` from `before` to `after`: where it is an

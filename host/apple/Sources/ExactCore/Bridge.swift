@@ -192,6 +192,10 @@ package typealias TopLayerFrame = (UInt32, CGRect, CGRect?)
 package typealias TopLayerBackdrop = (UInt32, CGRect, CGRect?)
 package typealias TopLayerGeometry = (frames: [TopLayerFrame], modal: Int?, backdrop: TopLayerBackdrop?)
 
+/// A swipe's host kind, with no payload: `swiperight` (12) and `swipeleft` (61), and `swipe` (66), the platform's
+/// discrete swipe in the node's `swipe-direction` (LLP 1057.001 §8).
+package enum SwipeKind: UInt32 { case right = 12, left = 61, discrete = 66 }
+
 /// A runtime handle and its calls. `destroy` is idempotent at this layer and
 /// one-shot at the C boundary; a call after it is refused by the library by
 /// name, never a trap.
@@ -581,8 +585,8 @@ package final class Runtime {
             read(exact_hold_end(rt, token, cancel ? 1 : measured ? 2 : 0, vx, vy, now, at ?? now))
         }
     }
-    package func swiperight(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 12, 0, now)) } }
-    package func swipeleft(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 61, 0, now)) } }
+    /// A swipe's action: `swiperight` or `swipeleft`, which the node followed, or `swipe`, the platform's discrete one.
+    package func swipe(_ view: UInt32, _ kind: SwipeKind, now: Double) -> Batch { on { read(exact_dispatch(rt, view, kind.rawValue, 0, now)) } }
     /// The history swipe the Mac tracks (LLP 1115.000 D5.5): its phase,
     /// `back` or `forward`, how far along that way (0 or more), and where
     /// the pointer was as it began, in the viewport.
@@ -1264,6 +1268,8 @@ public struct RootTabs: Equatable {
     /// route can show a header, which the platform shows as its navigation
     /// bar. One fixed route with no header is a plain view controller.
     public let navigation: [Bool]
+    /// Panels whose first route can request a split, including unopened panels.
+    public let possibleSplits: [UInt32]
     /// The app left the bar's placement unsaid, by the web's rule for its
     /// own sidebar (LLP 1116.004 D1.1; `host/web/navigation.js` `placeTabBar`):
     /// read from the kernel's layout rows, which do not cross to the views.
@@ -1277,8 +1283,9 @@ public struct RootTabs: Equatable {
     /// for a development build's journal.
     public let accessory: UInt32?, accessoryNote: String?
 
-    public init(root: UInt32, tablist: UInt32, tabs: [UInt32], panels: [UInt32], footer: UInt32? = nil, navigation: [Bool] = [], unsaid: Bool, covered: Bool = false,
+    public init(root: UInt32, tablist: UInt32, tabs: [UInt32], panels: [UInt32], footer: UInt32? = nil, navigation: [Bool] = [], possibleSplits: [UInt32] = [], unsaid: Bool, covered: Bool = false,
                 accessory: UInt32? = nil, accessoryNote: String? = nil) {
+        self.possibleSplits = possibleSplits
         (self.footer, self.accessory, self.accessoryNote) = (footer, accessory, accessoryNote)
         (self.root, self.tablist, self.tabs, self.panels, self.navigation, self.unsaid, self.covered) = (root, tablist, tabs, panels, navigation, unsaid, covered)
     }
@@ -1288,7 +1295,7 @@ public struct RootTabs: Equatable {
         let ids = { (key: String) in (o[key]?.array ?? []).compactMap { $0.number.map { UInt32($0) } } }
         self.init(root: UInt32(root), tablist: UInt32(tablist), tabs: ids("tabs"), panels: ids("panels"),
                   footer: o["footer"]?.number.map { UInt32($0) }, navigation: (o["navigation"]?.array ?? []).map { $0 == .bool(true) },
-                  unsaid: o["unsaid"] == .bool(true), covered: o["covered"] == .bool(true),
+                  possibleSplits: ids("possibleSplits"), unsaid: o["unsaid"] == .bool(true), covered: o["covered"] == .bool(true),
                   accessory: o["accessory"]?.number.map { UInt32($0) }, accessoryNote: o["accessoryNote"]?.string)
     }
 }

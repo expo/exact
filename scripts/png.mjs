@@ -41,8 +41,8 @@ function* pngChunks(buf) {
   }
 }
 
-/** RGBA bytes from a PNG buffer, with colour-space chunks retained for re-encoding when requested. */
-export function decodePng(buf, { preserveColor = false } = {}) {
+/** RGBA bytes from a PNG, optionally retaining colour-space chunks and measuring opacity before conversion to eight bits. */
+export function decodePng(buf, { preserveColor = false, checkOpacity = false } = {}) {
   let width = 0, height = 0, depth = 0, color = 0, interlace = 0, palette = null, trns = null;
   const idat = [], colorChunks = [];
   for (const [type, data] of pngChunks(buf)) {
@@ -56,10 +56,17 @@ export function decodePng(buf, { preserveColor = false } = {}) {
     }
   }
   const metadata = colorChunks.length ? { colorChunks } : {};
+  if (checkOpacity) metadata.opaque = true;
   const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[color];
   if (!channels || (color === 3 && !palette)) throw new Error(`unsupported PNG: color type ${color}${color === 3 ? ' without a palette' : ''}`);
   if (depth === 8 && !interlace && (color === 6 || (color === 2 && !trns))) {
-    return { ...direct(width, height, color === 6 ? 4 : 3, inflateSync(Buffer.concat(idat))), ...metadata };
+    const image = direct(width, height, color === 6 ? 4 : 3, inflateSync(Buffer.concat(idat)));
+    if (checkOpacity && color === 6) {
+      for (let i = 3; i < image.data.length; i += 4) {
+        if (image.data[i] !== 255) { metadata.opaque = false; break; }
+      }
+    }
+    return { ...image, ...metadata };
   }
   const bits = channels * depth, bpp = Math.max(1, bits >> 3), raw = inflateSync(Buffer.concat(idat)), out = new Uint8Array(width * height * 4);
   const sample = (row, x, c) => {
@@ -68,6 +75,7 @@ export function decodePng(buf, { preserveColor = false } = {}) {
     if (depth === 8) return row[bit >> 3];
     return (row[bit >> 3] >> (8 - depth - (bit & 7))) & ((1 << depth) - 1);
   };
+  const fullAlpha = (1 << depth) - 1;
   const byte = (v) => depth === 16 ? v >> 8 : depth === 8 ? v : Math.round((v * 255) / ((1 << depth) - 1));
   // Adam7's seven passes, each a smaller image of every dx-th pixel of every dy-th row.
   const passes = interlace ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]] : [[0, 0, 1, 1]];
@@ -85,12 +93,15 @@ export function decodePng(buf, { preserveColor = false } = {}) {
         if (color === 3) {
           const k = sample(cur, x, 0);
           out[d] = palette[3 * k]; out[d + 1] = palette[3 * k + 1]; out[d + 2] = palette[3 * k + 2]; out[d + 3] = trns && k < trns.length ? trns[k] : 255;
+          if (checkOpacity && out[d + 3] !== 255) metadata.opaque = false;
         } else {
           const grey = color === 0 || color === 4, v = grey ? [sample(cur, x, 0)] : [0, 1, 2].map((c) => sample(cur, x, c));
           const [r, g, b] = (grey ? [v[0], v[0], v[0]] : v).map(byte);
           // Without an alpha channel, tRNS names the one colour that is transparent.
           const keyed = trns && v.every((s, c) => s === trns.readUInt16BE(2 * c));
-          out[d] = r; out[d + 1] = g; out[d + 2] = b; out[d + 3] = color === 4 || color === 6 ? byte(sample(cur, x, channels - 1)) : keyed ? 0 : 255;
+          const alpha = color === 4 || color === 6 ? sample(cur, x, channels - 1) : keyed ? 0 : fullAlpha;
+          out[d] = r; out[d + 1] = g; out[d + 2] = b; out[d + 3] = byte(alpha);
+          if (checkOpacity && alpha !== fullAlpha) metadata.opaque = false;
         }
       }
       [prev, cur] = [cur, prev];

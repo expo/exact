@@ -85,6 +85,19 @@
             ],
             "navigate": "navigate",
             "actions": "actions"
+          },
+          "show": {
+            "targets": ["ios", "macos", "web", "android"],
+            "event": "notificationshow",
+            "args": [
+              "tag",
+              {
+                "tag": "tag",
+                "data": "data",
+                "title": "title",
+                "body": "body"
+              }
+            ]
           }
         }
       }
@@ -217,6 +230,16 @@
       "event": "notificationclick",
       "on": "root",
       "raised": "activation",
+      "args": [
+        "string",
+        "NotificationEvent"
+      ],
+      "hold": 16
+    },
+    {
+      "event": "notificationshow",
+      "on": "root",
+      "raised": "emit",
       "args": [
         "string",
         "NotificationEvent"

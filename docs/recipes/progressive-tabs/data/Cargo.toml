@@ -1,0 +1,20 @@
+# The app's data: the DataSource that answers app.contract's sources (docs/reference.md, "Rust data sources").
+# It is a member of the workspace exact2 generates from app.json, which also holds the host crates that link it.
+[package]
+name = "progressive-tabs-data"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+workspace = "../.exact/shells"
+
+[lib]
+name = "progressive_tabs_data"
+crate-type = ["rlib"]
+
+[dependencies]
+exact-runner.workspace = true
+
+# `build.rs` writes the view's shapes as Rust structs (`contract rust`).
+[build-dependencies]
+contract.workspace = true

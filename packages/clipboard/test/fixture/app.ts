@@ -17,6 +17,7 @@ const bytes = (b64: string) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 const said = (e: unknown) => { const x = e as { name?: string; message?: string }; return `${x.name}: ${x.message}`; };
 
 const sources: Sources = {
+  pasteText: async () => ({ text: await readText() }),
   readOnMount: async () => {
     try { await readText(); return { text: 'read on mount' }; } catch (e) { return { text: said(e) }; }
   },
@@ -47,6 +48,15 @@ const sources: Sources = {
         case 'png': await write([new ClipboardItem({ 'image/png': await file('red.png', RED) })]); break;
         case 'png-bytes': await write([new ClipboardItem({ 'image/png': bytes(RED) })]); break;
         case 'apng': await write([new ClipboardItem({ 'image/png': await file('anim.png', APNG) })]); break;
+        case 'html-only': await write([new ClipboardItem({ 'text/html': '<html><body hidden><b>private draft</b></body></html>' })]); break;
+        case 'html': await write([new ClipboardItem({
+          'text/html': '<p><b onclick="void 0">Résumé</b> <a href="javascript:void(0)">note</a><script type="application/json">discard</script></p>',
+          'text/plain': 'Plain fallback',
+        })]); break;
+        case 'expiry':
+          // January 2000 in milliseconds would be in the future if read as seconds.
+          await write([new ClipboardItem({ 'text/plain': 'ephemeral note' })], { apple: { localOnly: true, expirationDate: Date.UTC(2000, 0, 1) } });
+          break;
         case 'text': await writeText('Copied from the fixture'); break;
         case 'both': await write([new ClipboardItem({ 'image/png': await file('red.png', RED), 'text/plain': 'https://example.com/red.png' })]); break;
         case 'bad': await write([new ClipboardItem({ 'image/png': new TextEncoder().encode('not a png') })]); break;

@@ -6,7 +6,9 @@ use super::*;
 use exact_runner::{Answer, DataError, Store, Value};
 
 /// The host work these tests hand out (LLP 1047.001 D12).
+#[cfg(unix)]
 struct TestWork;
+#[cfg(unix)]
 impl exact_runner::HostWork for TestWork {}
 
 #[derive(Default)]

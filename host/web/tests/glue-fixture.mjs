@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { bundleHostModule } from '../../web-js/glue.mjs';
+import { HOST_WEB_GLUE, bundleHostModule } from '../../web-js/glue.mjs';
 
 const root = resolve(import.meta.dir, '../../..');
 // As a page with popovers has it (glue.js, or a JS target page with a dialog, a menu or a popover: navigation.js
@@ -18,6 +18,12 @@ export function hostFixtureFile(path, encoding) {
     : file === resolve(root, 'host/web/grant-admission.js') ? admissionSource : null;
   return source === null ? readFileSync(path, encoding)
     : encoding ? source : Buffer.from(source);
+}
+
+/** A browser fixture uses the web host's published module names. */
+export function hostFixtureModule(name) {
+  return name === 'navigation.js' || HOST_WEB_GLUE.includes(name)
+    ? hostFixtureFile(resolve(root, 'host/web', name)) : null;
 }
 
 import { parseSync } from 'rolldown/utils';

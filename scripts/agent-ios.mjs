@@ -8,6 +8,7 @@ import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { openTouches, iosTouchInput, springboard, withAccessibilityRuntime } from '../host/apple/touches.mjs';
+import { hasSimulatorHinge, hingeHelper } from './duo/hinge.mjs';
 import { nativeKey } from './agent-keys.mjs';
 import { activateIOS, backgroundIOS, jsonLines, hangup, waitAtMost, bootRefusal, simulatorConsole, REPLY_MS } from './agent-wire.mjs';
 import { bundleId, install } from '../host/apple/build.mjs';
@@ -68,15 +69,15 @@ export async function openIOS({
     return await withSoftwareKeyboard(dev, () =>
       exclusiveIOS(dev.udid, id, () =>
         // An AX drive turns UIKit's accessibility runtime on for its launch (`withAccessibilityRuntime`).
-        withAccessibilityRuntime(dev.udid, touch === 'agent' && ax, () => // `ax`, not a bool of it: verify's is 'try'
-          openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess }).catch(error => {
+        withAccessibilityRuntime(dev.udid, touch === 'agent' && ax, accessibility => // `ax`, not a bool of it: verify's is 'try'
+          openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess, accessibility }).catch(error => {
             if (dev.cachedBooted) {
               try {
                 if (simulators().find(d => d.udid === dev.udid)?.state !== 'Booted') error.retrySimulator = true;
               } catch { /* preserve the launch error */ }
             }
             throw error;
-          }),
+          }), { check: !hostFixture && ax !== 'try', touches: touch !== 'agent' },
         ),
       ),
     );
@@ -103,7 +104,7 @@ function stuckLaunch(udid, pid) {
     io.status === 0 ? `the simulator's display is in ${shot}` : "the simulator's display could not be captured",
   ].join('; ');
 }
-async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess }) {
+async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, hostFixture, touch, onProcess, accessibility }) {
   showSimulator(dev, true); // a person watching sees what is driven, and keeps the focus
   // Real touches (LLP 1080.000, `--touch platform`; `drag`, an authored test's drag alone): the runner starts first, so
   // its own launch never backgrounds the app.
@@ -111,8 +112,9 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
     touch !== 'agent'
       ? await openTouches({
           udid: dev.udid,
+          accessibility,
           appId: id ?? bundleId(a.crate('apple')),
-          foldable: dev.type === 'iPhone-Duo',
+          foldable: hasSimulatorHinge(dev),
         })
       : null;
   // A Release build installed under the bundle id is copied aside first, and the note says how to put it back
@@ -274,6 +276,7 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
           throw new Error(why);
         },
       );
+    let helper;
     let canvasContact = false;
     return {
       host: hostFixture ? 'host-ios' : 'ios',
@@ -288,6 +291,10 @@ async function openIOSOwned({ a, bundle, id, dev, plan, size, extra, session, ho
       crashes,
       udid: dev.udid,
       installNote: kept?.note,
+      fold: !hostFixture && hasSimulatorHinge(dev) ? (degrees, land) => simulatorDisplay(dev.udid, () => {
+        helper ??= hingeHelper(dev.udid, dir);
+        return land(Number(helper('fold', degrees)));
+      }) : undefined,
       background: ms => backgroundIOS(lines, ms, id, bundle => activateIOS(['simctl', 'launch', dev.udid], bundle)),
       springboard: request =>
         springboard(touches, request, name => {

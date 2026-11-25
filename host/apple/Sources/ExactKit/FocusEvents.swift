@@ -71,6 +71,7 @@ final class FocusEvents {
     func reset() { current = nil; pending = nil }
     /// The node that has the focus, as the page was told.
     var focused: UInt32? { current?.node }
+    var blurring: UInt32? { pending?.node }
 
     private func snapshot(_ id: UInt32) -> FocusSnapshot? {
         guard let presenter, let view = presenter.textHost(id) else { return nil }

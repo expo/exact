@@ -1,0 +1,28 @@
+{
+  "$schema": "../../../scripts/app.schema.json",
+  "name": "Progressive Tabs",
+  "app": {
+    "id": "dev.exact.progressivetabs",
+    "name": "Progressive Tabs"
+  },
+  "rust": {
+    "data": {
+      "crate": "progressive-tabs-data",
+      "type": "progressive_tabs_data::ProgressiveTabs"
+    }
+  },
+  "host": {
+    "linux": {},
+    "ios": {
+      "localNetworking": "Loads sample rows and history from the loopback fixture."
+    },
+    "web": {}
+  },
+  "deploy": {
+    "store": {
+      "linux": "0",
+      "ios": "0",
+      "web": "0"
+    }
+  }
+}

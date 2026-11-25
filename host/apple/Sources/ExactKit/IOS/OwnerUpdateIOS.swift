@@ -16,6 +16,9 @@ package struct OwnerUpdateIOS: Equatable {
         package var generation: UInt64 = 1
         /// In the view's own coordinates; `nil` while it is out of a window.
         package var insets: UIEdgeInsets?
+        /// Its view's bounds converted into its window's coordinates, a bounding rectangle under a transform
+        /// (D9), `nil` out of a window; its insets stay in the view's own coordinates.
+        package var frame: CGRect?
     }
 
     /// An entry of the native chain: a controller's view and the kinds it is.
@@ -66,6 +69,9 @@ package struct OwnerUpdateIOS: Equatable {
     package var chain: [ChainEntry] = []
     package var relations: [Related] = []
     package var margins: Margins?
+    /// The keyboard in the owner's view, from its origin, and whether it is docked (D7): its window's sample
+    /// (`KeyboardSampleIOS`) converted into the view as it is now; `nil` while none shows.
+    package var keyboard: KeyboardSampleIOS.Sample?
     /// The owner's segments (D16): its active division regions split as the document's
     /// are (`Segments.split`); `nil` where it lies on one.
     var segments: ViewportFold?
@@ -133,8 +139,12 @@ package struct OwnerUpdateIOS: Equatable {
             minimum: UIEdgeInsets(top: minimum.top, left: rtl ? minimum.trailing : minimum.leading,
                                   bottom: minimum.bottom, right: rtl ? minimum.leading : minimum.trailing),
             readableWidth: ReadableWidthIOS.of(in: session.flatMap { $0.window === view.window ? $0 : nil } ?? view))
-        // The regions are in the view's bounds, the segments from its origin
+        // The regions are in the view's bounds; the segments and the keyboard are reported from its origin
         let origin = view.bounds.origin
+        if let window = view.window, var keys = KeyboardSampleIOS.existing(in: window)?.sample {
+            keys.frame = view.convert(keys.frame, from: window).offsetBy(dx: -origin.x, dy: -origin.y)
+            update.keyboard = keys
+        }
         let active = (ReservedRegions.divisions(of: view) ?? []).filter(\.active).map { $0.frame.offsetBy(dx: -origin.x, dy: -origin.y) }
         let fold = Segments.split(viewport: view.bounds.size, dividers: active)
         update.segments = fold.cols * fold.rows > 1 ? fold : nil
@@ -165,14 +175,15 @@ package struct OwnerUpdateIOS: Equatable {
     package static func target(_ view: UIView?) -> Target {
         guard let view else { return Target(id: 0, insets: nil) }
         let attached = view is UIWindow || view.window != nil
-        return Target(id: TargetIds.id(of: view), insets: attached ? view.safeAreaInsets : nil)
+        return Target(id: TargetIds.id(of: view), insets: attached ? view.safeAreaInsets : nil,
+                      frame: attached ? view.convert(view.bounds, to: nil) : nil)
     }
 
     /// The update in the kernel's wire form (`OwnerUpdate::encode`): each field in order, an
     /// optional one after a presence byte, a list after its `u32` length, little-endian;
     /// insets top, right, bottom, left. A contribution is its node, its operation and its
-    /// effect. The keyboard is absent: its executor samples it. Each edge's bar region, top, right,
-    /// bottom, left, follows the segments.
+    /// effect. The keyboard is its frame, x, y, width, height, and a docked byte. Each edge's bar
+    /// region, top, right, bottom, left, follows the segments.
     package func encode() -> Data {
         var out = Data()
         func u8(_ v: UInt8) { out.append(v) }
@@ -208,7 +219,10 @@ package struct OwnerUpdateIOS: Equatable {
             edges(m.minimum)
             f32(m.readableWidth)
         }
-        u8(0)
+        optional(keyboard) { k in
+            [k.frame.minX, k.frame.minY, k.frame.width, k.frame.height].forEach(f32)
+            u8(k.docked ? 1 : 0)
+        }
         optional(segments) { fold in
             u8(UInt8(fold.cols))
             u8(UInt8(fold.rows))
@@ -222,19 +236,20 @@ package struct OwnerUpdateIOS: Equatable {
 }
 
 extension OwnerUpdateIOS {
-    /// A target in the kernel's wire form: its id and generation (`u64` each) and its
-    /// insets after a presence byte, top, right, bottom, left.
+    /// A target in the kernel's wire form: its id and generation (`u64` each), its insets after
+    /// a presence byte, top, right, bottom, left, and its frame after one, x, y, width, height.
     static func encode(target t: Target) -> Data {
         var out = Data()
         func u64(_ v: UInt64) { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
+        func f32s(_ values: [CGFloat]) {
+            for v in values { withUnsafeBytes(of: Float(v).bitPattern.littleEndian) { out.append(contentsOf: $0) } }
+        }
         u64(t.id)
         u64(t.generation)
         out.append(t.insets == nil ? 0 : 1)
-        if let i = t.insets {
-            for v in [i.top, i.right, i.bottom, i.left] {
-                withUnsafeBytes(of: Float(v).bitPattern.littleEndian) { out.append(contentsOf: $0) }
-            }
-        }
+        if let i = t.insets { f32s([i.top, i.right, i.bottom, i.left]) }
+        out.append(t.frame == nil ? 0 : 1)
+        if let f = t.frame { f32s([f.minX, f.minY, f.width, f.height]) }
         return out
     }
 }

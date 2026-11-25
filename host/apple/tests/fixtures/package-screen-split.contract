@@ -1,0 +1,28 @@
+routes nav
+  home "/"
+    detail "/detail"
+    appDetail "/app-detail"
+
+component App
+  action open(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  view
+    main navigationBack="back" navigationKey=`${top(nav).id}` navigate=open width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+          header
+            if e.name != "home"
+              button id="back" press=back
+                text "Back"
+            text e.name role="heading" aria-level=2
+          if e.name == "home"
+            list listStyle="inset-grouped" appearance="auto" flex=1
+              section
+                link href="/detail"
+                  text "Detail"
+          else if e.name == "appDetail"
+            app-table testId="table" flex=1
+          else
+            probe-table testId="table" flex=1

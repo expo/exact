@@ -151,6 +151,8 @@ impl<D: DataSource> Presenter<D> {
             let moment = if is_new { "built" } else { "changed" };
             self.host.log(format!("hatch app: {moment}"));
             let app = App { is_new, ..app };
+            #[cfg(target_os = "android")]
+            self.requests.app_module.app(&app);
             self.hatches
                 .call(now, "app", None, moment, true, |m| m.app(&app, false));
             self.hatch_log();
@@ -562,6 +564,13 @@ impl<D: DataSource> Presenter<D> {
 
     // The frame clock (§2.4).
 
+    pub(crate) fn module_due(&self) -> Option<f64> {
+        #[cfg(target_os = "android")]
+        return self.requests.app_module.timers.next();
+        #[cfg(not(target_os = "android"))]
+        None
+    }
+
     /// The loop's next deadline: a runner timer, hatch or scroll completion.
     pub fn timer_due_ms(&self) -> Option<f64> {
         let nominal = self.host.runner().waits().next_check();
@@ -569,6 +578,7 @@ impl<D: DataSource> Presenter<D> {
         self.timer_or_scroll_due_ms()
             .into_iter()
             .chain(after)
+            .chain(self.module_due())
             .chain(nominal)
             .chain(self.idle_timer_retry.then_some(self.host.now()))
             .reduce(f64::min)
@@ -603,6 +613,9 @@ impl<D: DataSource> Presenter<D> {
         (self.hatches.shared())
             .filter(|_| self.hatches.connected())
             .and_then(|shared| shared.next_instant())
+            .into_iter()
+            .chain(self.module_due())
+            .reduce(f64::min)
             .filter(|instant| *instant <= to)
     }
 
@@ -652,15 +665,22 @@ impl<D: DataSource> Presenter<D> {
         let Some(shared) = self.hatches.shared().cloned() else {
             return true;
         };
-        for token in shared.due_afters(now) {
-            if capped && !self.hatch_fired() {
-                return false;
+        let limit = if capped {
+            COMMAND_LIMIT.saturating_sub(self.hatches.fires) as usize
+        } else {
+            usize::MAX
+        };
+        for token in shared.due_afters(now, limit) {
+            if capped {
+                self.hatches.fires += 1;
             }
             self.hatches
                 .call(now, "after", None, "fired", false, |m| m.fired(token));
             self.hatch_log();
         }
-        true
+        !capped
+            || self.hatches.fires < COMMAND_LIMIT
+            || !shared.after_due().is_some_and(|due| due <= now)
     }
 
     /// Under the agent, at the instant the clock stands at, its commits in
@@ -670,6 +690,26 @@ impl<D: DataSource> Presenter<D> {
     /// cause and any `after` now due, until nothing is queued. The limit's
     /// name when a cap is passed.
     pub fn hatch_fire(&mut self) -> Option<&'static str> {
+        #[cfg(target_os = "android")]
+        {
+            let now = self.host.now();
+            let limit = COMMAND_LIMIT.saturating_sub(self.hatches.fires) as usize;
+            for timer in self.requests.app_module.timers.take_due(now, limit) {
+                self.hatches.fires += 1;
+                self.requests.app_module.fire(timer, now);
+                self.agent_reader_turn();
+            }
+            if self.hatches.fires >= COMMAND_LIMIT
+                && self
+                    .requests
+                    .app_module
+                    .timers
+                    .next()
+                    .is_some_and(|due| due <= now)
+            {
+                return self.hatch_limit("HatchFireLimit");
+            }
+        }
         let shared = self.hatches.shared().cloned()?;
         let now = self.host.now();
         self.hatch_moments();
@@ -709,6 +749,10 @@ impl<D: DataSource> Presenter<D> {
 
     /// The `after`s due on the wall.
     pub(crate) fn hatch_timers(&mut self, now: f64) {
+        #[cfg(target_os = "android")]
+        for timer in self.requests.app_module.timers.take_due(now, usize::MAX) {
+            self.requests.app_module.fire(timer, now);
+        }
         let due = (self.hatches.shared()).and_then(|shared| shared.after_due());
         if self.hatches.connected() && due.is_some_and(|due| due <= now) {
             self.hatch_afters(now, false);

@@ -426,6 +426,42 @@ fn build_into_layout<B: Brush>(
     // Sort the inline boxes as subsequent code assumes that they are in text index order.
     // Note: It's important that this is a stable sort to allow users to control the order of contiguous inline boxes
     lcx.inline_boxes.sort_by_key(|b| b.index);
+    // VS15 separates the elements of an emoji ZWJ sequence (UTS #51 §2.7.1).
+    // It also prevents a following keycap or modifier from restyling its base.
+    if text.contains('\u{fe0e}') {
+        use icu_properties::{
+            CodePointSetData,
+            props::{Emoji, EmojiModifier},
+        };
+        let mut start = 0;
+        for end in lcx
+            .analysis_data_sources
+            .grapheme_segmenter()
+            .segment_str(text)
+            .skip(1)
+        {
+            let cluster = &text[start..end];
+            if cluster.contains('\u{fe0e}')
+                && cluster
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| CodePointSetData::new::<Emoji>().contains(ch))
+            {
+                let mut previous = None;
+                for (i, ch) in cluster.char_indices() {
+                    if previous == Some('\u{200d}')
+                        || (previous == Some('\u{fe0e}')
+                            && (ch == '\u{20e3}'
+                                || CodePointSetData::new::<EmojiModifier>().contains(ch)))
+                    {
+                        lcx.shaping_breaks.push(start + i);
+                    }
+                    previous = Some(ch);
+                }
+            }
+            start = end;
+        }
+    }
     lcx.shaping_breaks.sort_unstable();
 
     {

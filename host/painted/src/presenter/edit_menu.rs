@@ -298,7 +298,7 @@ impl<D: DataSource> Presenter<D> {
                 if let Some(error) = self.edit_field(
                     id,
                     next,
-                    selection,
+                    field::EditSelection::Presenter(selection),
                     now,
                     InputDetails {
                         input_type: "deleteContentForward".into(),

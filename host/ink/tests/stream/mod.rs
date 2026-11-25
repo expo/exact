@@ -104,25 +104,33 @@ pub fn renamed(frame: &Frame, name: impl Fn(TextureId) -> TextureId) -> Frame {
     frame
 }
 
-/// Make the stream's calls on `device`. Returns the bytes of each readback, in order.
-pub fn replay(device: &mut impl Device, records: &[Record]) -> Result<Vec<Vec<u8>>> {
-    // The device's texture for each name.
-    let mut textures = HashMap::from([(TextureId(0), TextureId(0))]);
-    let mut readbacks = Vec::new();
-    for record in records {
-        let at = |id: &TextureId| textures[id];
+/// A replay in progress: the device's texture for each of the stream's live names.
+pub struct Replay(pub HashMap<TextureId, TextureId>);
+
+impl Default for Replay {
+    fn default() -> Self {
+        Self(HashMap::from([(TextureId(0), TextureId(0))]))
+    }
+}
+
+impl Replay {
+    /// Make one of the stream's calls on `device`. Returns a readback's bytes.
+    pub fn step(&mut self, device: &mut impl Device, record: &Record) -> Result<Option<Vec<u8>>> {
+        let at = |id: &TextureId| self.0[id];
         match record {
             Record::CreateTexture { id, desc } => {
                 let texture = device.create_texture(*desc)?;
-                textures.insert(*id, texture);
+                self.0.insert(*id, texture);
             }
             Record::CreateTarget { id, size } => {
                 let texture = device.create_target(size[0], size[1])?;
-                textures.insert(*id, texture);
+                self.0.insert(*id, texture);
             }
             Record::ResizeTarget { id, target, size } => {
-                let texture = device.resize_target(at(target), size[0], size[1])?;
-                textures.insert(*id, texture);
+                // A device that makes new storage retires the old.
+                let old = self.0.remove(target).unwrap();
+                let texture = device.resize_target(old, size[0], size[1])?;
+                self.0.insert(*id, texture);
             }
             Record::Upload(u) => {
                 device.upload_texture(at(&u.texture), u.origin, u.size, &u.data)?;
@@ -157,10 +165,20 @@ pub fn replay(device: &mut impl Device, records: &[Record]) -> Result<Vec<Vec<u8
             } => {
                 device.render(&renamed(frame, |id| at(&id)), at(target), *clear)?;
             }
-            Record::Readback { texture, .. } => readbacks.push(device.readback(at(texture))?),
-            Record::Retire(texture) => device.retire_texture(at(texture))?,
+            Record::Readback { texture, .. } => return device.readback(at(texture)).map(Some),
+            Record::Retire(texture) => device.retire_texture(self.0.remove(texture).unwrap())?,
             Record::Trim => device.trim()?,
         }
+        Ok(None)
+    }
+}
+
+/// Make the stream's calls on `device`. Returns the bytes of each readback, in order.
+pub fn replay(device: &mut impl Device, records: &[Record]) -> Result<Vec<Vec<u8>>> {
+    let mut replay = Replay::default();
+    let mut readbacks = Vec::new();
+    for record in records {
+        readbacks.extend(replay.step(device, record)?);
     }
     Ok(readbacks)
 }

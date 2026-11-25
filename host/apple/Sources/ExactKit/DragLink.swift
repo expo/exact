@@ -59,6 +59,16 @@ final class NoDragHandles: DragHandles {
     #endif
 }
 
+#if os(iOS)
+/// The height recognizer on a bound scroller shares its one vertical pan with UIKit.
+package protocol SheetScrollGesture: AnyObject {
+    func receive(_ touch: UITouch, in scroll: UIScrollView) -> Bool
+    func takesEdge(in scroll: UIScrollView, direction: CGPoint) -> Bool
+    func correctOffset(in scroll: UIScrollView) -> Bool
+    func listDrag(in scroll: UIScrollView) -> (start: CGFloat, atStart: Bool)?
+}
+#endif
+
 /// A drag the session holds while its input lasts.
 package protocol DragInput: AnyObject {
     func cancel()

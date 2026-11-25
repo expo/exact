@@ -178,6 +178,9 @@ impl<D: DataSource> Runner<D> {
             self.log(format!("{}: refused, {why}", self.key(row)));
             return Decision::Now(refused);
         }
+        if self.route(row) != Route::Substitute && self.substitute(row)["shortcut"] == "register" {
+            self.note_shortcut_site(row, args, cause);
+        }
         let decision = match self.route(row) {
             Route::Real => return Decision::Forward,
             // A target's own restriction holds under the agent too (D14 step 2).
@@ -209,7 +212,7 @@ impl<D: DataSource> Runner<D> {
                 if !send && self.substitute(row)["shortcut"] == "register" {
                     self.note_registration_reader(row, args);
                 }
-                Decision::Now(self.desktop_answer(row, args))
+                Decision::Now(self.desktop_answer(row, args, cause))
             }
             // A host that names its target after boot: what the first read
             // registered goes with the answer it no longer has.

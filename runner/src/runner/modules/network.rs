@@ -75,28 +75,6 @@ impl<D: DataSource> Runner<D> {
         Some(found.map_or_else(|| json!({ "error": "NotFoundError" }), service_info))
     }
 
-    /// Whether a preferred value for a `browse` source is a network: each
-    /// entry names its instance, type, host and port.
-    pub(super) fn network_checked(&self, value: &Json) -> Result<(), String> {
-        let entries = value
-            .as_array()
-            .ok_or("the network is a list of services")?;
-        for e in entries {
-            let fields = e["name"].is_string()
-                && e["type"]
-                    .as_str()
-                    .is_some_and(exact_grants::is_service_type)
-                && e["host"].is_string()
-                && e["port"].as_u64().is_some_and(|p| (1..=65535).contains(&p));
-            if !fields {
-                return Err(format!(
-                    "each service has a `name`, a `type` (`_<name>._tcp`), a `host` and a `port`: {e}"
-                ));
-            }
-        }
-        Ok(())
-    }
-
     /// The keys a change to `key`'s preferred value asks again: its own, and
     /// each source that reads its network (`"from"`).
     pub(super) fn network_dependents(&self, key: &str) -> Vec<String> {
@@ -159,4 +137,26 @@ fn service_info(e: &Json) -> Json {
         },
         "txt": txt,
     })
+}
+
+/// Whether a preferred value for a `browse` source is a network: each
+/// entry names its instance, type, host and port.
+pub(super) fn network_checked(value: &Json) -> Result<(), String> {
+    let entries = value
+        .as_array()
+        .ok_or("the network is a list of services")?;
+    for e in entries {
+        let fields = e["name"].is_string()
+            && e["type"]
+                .as_str()
+                .is_some_and(exact_grants::is_service_type)
+            && e["host"].is_string()
+            && e["port"].as_u64().is_some_and(|p| (1..=65535).contains(&p));
+        if !fields {
+            return Err(format!(
+                "each service has a `name`, a `type` (`_<name>._tcp`), a `host` and a `port`: {e}"
+            ));
+        }
+    }
+    Ok(())
 }

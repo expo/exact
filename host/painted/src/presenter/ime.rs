@@ -254,7 +254,13 @@ impl<D: DataSource> Presenter<D> {
             cancelable: false,
             is_composing: composing,
         };
-        if let Some(error) = self.edit_field(id, next, selection, self.host.now(), details) {
+        if let Some(error) = self.edit_field(
+            id,
+            next,
+            field::EditSelection::Presenter(selection),
+            self.host.now(),
+            details,
+        ) {
             self.host.log(error);
         }
     }

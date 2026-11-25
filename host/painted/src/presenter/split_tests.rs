@@ -731,6 +731,42 @@ fn shell_bar_support_keeps_an_authored_header_split_adaptive() {
 }
 
 #[test]
+fn a_covered_split_clears_only_the_cutout_on_each_panes_outer_edge() {
+    let source = APP.replace("SPLIT", "280")
+        .replace("main navigationKey", r#"main viewport-fit="cover" navigationKey"#)
+        .replace("column navigationKey=", r#"column navigationBar="none" navigationKey="#)
+        .replace(r#"            input value=value"#, "            box height=20 width=\"100%\" testId=\"card\"\n            input value=value");
+    let mut p = boot_source(1200., &source);
+    p.serve_windows(Box::new(SplitSurface));
+    assert_eq!(p.serve_bars(Box::new(SplitSurface)), None);
+    tap(&mut p, "a");
+    p.tick(p.host.now() + 1000.);
+    for (left, right) in [(0., 0.), (52., 0.), (0., 52.), (0., 930.), (0., 0.)] {
+        assert_eq!(
+            p.set_window(Window {
+                size: (1200., 800.),
+                cutout: [0., right, 0., left],
+                ..Default::default()
+            }),
+            None
+        );
+        p.frame();
+        assert_eq!(split(&p).list_width, 280.);
+        let safe_end = 1200.0_f32 - right;
+        for (name, start, end) in [
+            ("rows", left, safe_end.min(280.)),
+            ("card", 281., safe_end.max(281.)),
+        ] {
+            let (x, _, w, _) = p.rect_of(id(&p, name)).unwrap();
+            assert!(
+                (x - start).abs() < 0.01 && (x + w - end).abs() < 0.01,
+                "{name} with {left}/{right}: {x} + {w}"
+            );
+        }
+    }
+}
+
+#[test]
 fn split_cover_and_content_stay_stable_across_sync_and_resize() {
     let mut p = boot(1200., "auto");
     let home = id(&p, "route-home");

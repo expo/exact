@@ -103,19 +103,25 @@ final class SwipeActionsIOSTests: XCTestCase {
         p.viewport.frame = window.bounds
         window.addSubview(p.viewport)
         window.makeKeyAndVisible()
-        var roots = BatchOp(op: .roots); roots.ids = [1]
+        var roots = BatchOp(op: .roots); roots.ids = [1, 5]
         apply(p, [
             create(1, "view", props: ["swipeContent": "body", "swipeTrailing": "delete", "draggable": "true", "dataTransferText": "Mount Fuji", "accessibilityLabel": "Fuji"],
                    style: ["overflow_x": "scroll", "overflow_y": "hidden"]),
             create(2, "view"),
-            create(3, "button", props: ["id": "body", "accessibilityLabel": "Open"]),
+            create(3, "button", props: ["id": "body", "accessibilityLabel": "Open", "accessibilityActions": "reset"]),
             create(4, "button", props: ["id": "delete", "accessibilityLabel": "Delete"]),
+            create(5, "button", props: ["id": "reset", "accessibilityLabel": "Reset quantity"]), frame(5, 0, 100, 30),
             children(1, [2]), children(2, [3, 4]), roots,
         ] + geometry(80))
         let owner = try XCTUnwrap(p.views[1])
         p.swipeHost.touch(owner)
         let cell = try XCTUnwrap(p.swipeHost.cell(of: owner))
         XCTAssertTrue(cell.isAccessibilityElement, "the cell speaks for the labelled button")
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        let reset = try XCTUnwrap(cell.accessibilityCustomActions?.first { $0.name == "Reset quantity" })
+        XCTAssertEqual(reset.actionHandler?(reset), true)
+        XCTAssertEqual(pressed, [5])
         let drag = try XCTUnwrap(cell.accessibilityDragSourceDescriptors?.first)
         XCTAssertTrue(drag.view === owner)
         XCTAssertEqual(drag.name, "Fuji")
@@ -213,6 +219,9 @@ final class SwipeActionsIOSTests: XCTestCase {
         _ = action.actionHandler?(action)
         XCTAssertEqual(pressed, [4], "VoiceOver's custom action presses it")
         XCTAssertTrue(delete.accessibilityElementsHidden, "the painted control, behind the content, is not read twice")
+        delete.handlers.insert("press")
+        owner.applyProps(set: ["accessibilityActions": "delete"], clear: [])
+        XCTAssertFalse(owner.hasReferencedAction(), "the offscreen swipe button is hidden from outside action lists")
 
         // Open, then a drag begins on it.
         scroll.contentOffset.x = 90
@@ -257,7 +266,8 @@ final class SwipeActionsIOSTests: XCTestCase {
                 // Rubber-banded 60 points past the action edge.
                 scroll.contentOffset.x = left ? -60 : 150
                 var target = scroll.contentOffset
-                p.swipeHost.painted.willEnd(owner, scroll, target: &target)
+                owner.heightRecognizer = SheetAtScrollStart()
+                owner.scrollViewWillEndDragging(scroll, withVelocity: .zero, targetContentOffset: &target)
                 XCTAssertEqual(pressed, [4], "leading=\(leading), rtl=\(rtl)")
                 XCTAssertEqual(target.x, left ? 90 : 0, "the row closes after its full swipe")
             }

@@ -1,12 +1,12 @@
-import { hostFixtureFile, wasmSource, glueDeclarations } from './tests/glue-fixture.mjs';
+import { hostFixtureFile, hostFixtureModule, wasmSource, glueDeclarations } from './tests/glue-fixture.mjs';
 // @ref LLP 1043.000 §3 D7/D8 — browser flow and its optional walker.
 import { test, expect } from 'bun:test';
 import { baselineIn, fragmentBaseline, fragmentDiff, framePhases, fontStyle, forgetTextBoxEdges, measurementCache, textBoxCut } from './textflow-glue.js';
 import { render } from '../../scripts/agent.mjs';
 import { cdpBrowser, chromium } from '../../scripts/agent-launch.mjs';
 import { timerWake, createTimerScheduler } from './timer-glue.js';
-import { fileURLToPath } from 'node:url';
 import { buildFlow } from '../web-js/module.mjs';
+import { localImports } from '../web-js/glue.mjs';
 import { readFileSync } from 'node:fs';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 
@@ -607,20 +607,21 @@ test('a batch that wants frames presents every animation frame and keeps timer t
 // A real DOM is needed here: document capture runs before the clone forwards
 // its event to the detached original. A mock dispatch misses the double route.
 // Run an in-page fixture (a function) in headless Chrome over these glue modules; its result by value.
-async function inChrome(fixture, modules = ['/textflow-glue.js', '/timer-glue.js', '/input-glue.js', '/prompt-glue.js', '/alert-message.js'], files = {}, runtime = false, drive = null) {
-  const served = new Set(['/navigation.js', ...modules, '/timer-waits-glue.js', '/timer-observations.js']);
-  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req) {
+async function inChrome(fixture, { files = {}, runtime = false, drive } = {}) {
+  const js = source => new Response(source, { headers: { 'content-type': 'text/javascript' } });
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', async fetch(req) {
     const path = new URL(req.url).pathname;
-    if (path === '/wasm-input.js') return new Response(glueDeclarations(wasmSource, ['attach']), { headers: { 'content-type': 'text/javascript' } });
+    if (path === '/') return new Response('<!doctype html><body><main id="root"></main>', { headers: { 'content-type': 'text/html' } });
+    if (path === '/wasm-input.js') return js(glueDeclarations(wasmSource, ['attach']));
     if (files[path]) return new Response(hostFixtureFile(files[path]), { headers: { 'content-type': path.endsWith('.wasm') ? 'application/wasm' : 'text/javascript' } });
-    if (path === '/timer-observations.js') return new Response(Bun.file(new URL('./timer-observations.js', import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
-    if (runtime && path === '/names.js') return new Response('export const sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } });
+    if (runtime && path === '/names.js') return js('export const sourceTypes = {};');
     if (runtime && path.endsWith('.js')) {
-      const js = Bun.file(new URL('../web-js' + path, import.meta.url));
-      return js.exists().then(exists => new Response(hostFixtureFile(exists ? js.name : new URL('.' + path, import.meta.url)), { headers: { 'content-type': 'text/javascript' } }));
+      const file = Bun.file(new URL('../web-js' + path, import.meta.url));
+      if (path !== '/timer-observations.js' && await file.exists()) return js(localImports(await file.text()));
+      return js(hostFixtureFile(new URL('.' + path, import.meta.url)));
     }
-    return served.has(path) ? new Response(hostFixtureFile(new URL('.' + path, import.meta.url)), { headers: { 'content-type': 'text/javascript' } })
-      : new Response('<!doctype html><body><main id="root"></main>', { headers: { 'content-type': 'text/html' } });
+    const module = hostFixtureModule(path.slice(1));
+    return module ? js(module) : new Response(null, { status: 404 });
   }});
   const suite = await cdpBrowser(), { cdp } = suite;
   try {
@@ -636,7 +637,7 @@ async function inChrome(fixture, modules = ['/textflow-glue.js', '/timer-glue.js
 }
 
 browserTest('flowed links keep press ownership and native Enter activation', async () => {
-  const result = await inChrome(flowInputFixture, undefined, {}, false, async (cdp, sessionId, deliveries) => {
+  const result = await inChrome(flowInputFixture, { drive: async (cdp, sessionId, deliveries) => {
     const focus = await cdp.send('Runtime.evaluate', { expression: `(() => {
       const link = document.querySelector('[data-flow-fragment] a');
       globalThis.enterActivation = { clicks: [], navigations: [], errors: [] };
@@ -653,7 +654,7 @@ browserTest('flowed links keep press ownership and native Enter activation', asy
       expression: '({ hash: location.hash, ...enterActivation })', returnByValue: true,
     }, sessionId);
     return { deliveries, activation: activation.result.value };
-  });
+  } });
   expect(result.activation).toEqual({
     hash: '#story', clicks: [{ trusted: true, prevented: false }], navigations: ['#story'], errors: [],
   });
@@ -670,20 +671,17 @@ browserTest('flowed links keep press ownership and native Enter activation', asy
 // test double that orders capture listeners itself. The dispatch sink stands in
 // for a Contract action; both hosts' actual listener functions run unchanged.
 browserTest('same-target capture precedes a key registered first in both web runtimes', async () => {
-  expect(await inChrome(targetKeyFixture, ['/glue.js'], {
-    '/events.js': fileURLToPath(new URL('../web-js/events.js', import.meta.url)),
-  })).toEqual([
+  expect(await inChrome(targetKeyFixture, { runtime: true })).toEqual([
     [['capture', 'key'], ['capture']],
     [['capture', 'key'], ['capture']],
   ]);
 }, 60000);
 
 async function targetKeyFixture() {
-  const [glue, rt] = await Promise.all(['/glue.js', '/events.js'].map(url => fetch(url).then(r => r.text())));
+  const { on, onKey, useCommands, Hosts } = await import('/rt.js');
+  const { stopPropagation } = await import('/commands.js');
+  useCommands({ stopPropagation });
   const attach = await fetch('/wasm-input.js').then(r => r.text());
-  const on = rt.slice(rt.indexOf('export function on('), rt.indexOf('// Each event family')).replace('export ', '');
-  // onKey hears a key with nothing focused through atBody, declared before it (0c3cf4405f).
-  const onKey = rt.slice(rt.indexOf('let BodyHeard;'), rt.indexOf('export function onMIDI')).replace('export ', '');
   const bindWasm = new Function('el', 'heard', `
     let keyEvent = null, bodyHeard; // glue.js declares both; attach reads them (0c3cf4405f)
     const views = new Map([[1, el]]), retiredViews = new WeakSet(), inputReady = true, page = null;
@@ -697,14 +695,10 @@ async function targetKeyFixture() {
     ${attach}
     attach(el, 1, ['key', 'keycapture']);
   `);
-  const bindJs = new Function('el', 'heard', `
-    let KeyEvent = null, Propagating = null;
-    const clock = { agent: true, timers: [], now: 0 }, Mutations = [], OnHooks = {};
-    ${on}
-${onKey}
+  const bindJs = (el, heard) => {
     on(el, 'key', () => heard.push('key'), onKey);
-    on(el, 'keycapture', key => { heard.push('capture'); if (key === 'x') KeyEvent.$stopped = true; }, onKey);
-  `);
+    on(el, 'keycapture', key => { heard.push('capture'); if (key === 'x') Hosts.stopPropagation(); }, onKey);
+  };
   return [bindWasm, bindJs].map(bind => {
     const el = document.createElement('input'), heard = [], result = [];
     document.getElementById('root').append(el); bind(el, heard); el.focus();
@@ -717,10 +711,13 @@ ${onKey}
   });
 }
 
+browserTest('the text flow fixture resolves the JS runtime’s shared web imports', async () => {
+  expect(await inChrome(async () => typeof (await import('/admission.js')).fetchWith,
+    { runtime: true })).toBe('function');
+});
+
 browserTest('flowed keys reach ancestors once in both web runtimes', async () => {
-  const results = await inChrome(flowKeyFixture, undefined, {
-    '/glue.js': fileURLToPath(new URL('./glue.js', import.meta.url)),
-  }, true);
+  const results = await inChrome(flowKeyFixture, { runtime: true });
   expect(results.length).toBe(4);
   for (const { runtime, nested, events, unflowed, flowed } of results) {
     const capture = ['column', ...(nested ? ['span-capture'] : []), 'capture'];
@@ -743,9 +740,7 @@ browserTest('flowed keys reach ancestors once in both web runtimes', async () =>
 }, 60000);
 
 for (const scenario of ['redispatch', 'retained copies', 'commits']) browserTest(`flowed keys preserve ${scenario}`, async () => {
-  const results = await inChrome(flowKeyFixture, undefined, {
-    '/glue.js': fileURLToPath(new URL('./glue.js', import.meta.url)),
-  }, true);
+  const results = await inChrome(flowKeyFixture, { runtime: true });
   for (const { runtime, nested, redispatch } of results) {
     if (scenario === 'redispatch') for (const [first, second] of redispatch) {
       expect({ runtime, nested, heard: second }).toEqual({ runtime, nested, heard: first });
@@ -767,9 +762,7 @@ for (const scenario of ['redispatch', 'retained copies', 'commits']) browserTest
 }, 60000);
 
 browserTest('flowed keys reach page capture consumers once', async () => {
-  const results = await inChrome(flowKeyFixture, undefined, {
-    '/glue.js': fileURLToPath(new URL('./glue.js', import.meta.url)),
-  }, true);
+  const results = await inChrome(flowKeyFixture, { runtime: true });
   for (const { runtime, nested, pageCaptures } of results) {
     for (const { kind, connected, type, unflowed, first, repeat } of pageCaptures) {
       expect({ runtime, nested, kind, connected, type, first }).toEqual({ runtime, nested, kind, connected, type,
@@ -863,8 +856,9 @@ async function flowKeyFixture() {
   const { groupController } = await import('/group-glue.js');
   const gpuSource = await fetch('/gpu-glue.js').then(r => r.text());
   const gpuListen = gpuSource.slice(gpuSource.indexOf('function listen('), gpuSource.indexOf('function agent('));
-  const { on, onKey, Hosts, act, sig, W, Before, After } = await import('/rt.js');
-  const glue = await fetch('/glue.js').then(r => r.text());
+  const { on, onKey, Hosts, useCommands, act, sig, W, Before, After } = await import('/rt.js');
+  const { preventDefault, stopPropagation } = await import('/commands.js');
+  useCommands({ preventDefault, stopPropagation });
   const attach = await fetch('/wasm-input.js').then(r => r.text());
   const bindWasm = new Function(`
     let keyEvent = null, bodyHeard; // glue.js declares both; attach reads them (0c3cf4405f)
@@ -1182,7 +1176,7 @@ browserTest('a flowed paragraph is trimmed to its own font\'s cap height, whatev
     const cut = textBoxCut({ textBoxTrim: 'trim-both', textBoxEdge: 'cap alphabetic' }, { font: '20px Arabic' }, 30, context);
     return { cap: baseline - cut.top, fallbackInk: m.actualBoundingBoxAscent };
   };
-  const { cap, fallbackInk } = await inChrome(fixture, ['/textflow-glue.js', '/timer-glue.js'], { '/arabic.ttf': new URL('../painted/tests/fonts/NotoSansArabic.ttf', import.meta.url) });
+  const { cap, fallbackInk } = await inChrome(fixture, { files: { '/arabic.ttf': new URL('../painted/tests/fonts/NotoSansArabic.ttf', import.meta.url) } });
   expect(Math.abs(cap - 20 * 0.416)).toBeLessThan(0.5);
   expect(Math.abs(fallbackInk - 20 * 0.416)).toBeGreaterThan(1); // the fallback's H is not the font's cap height
 }, 20000);
@@ -1233,8 +1227,7 @@ async function flowWidthFixture() {
 // Condensed and expanded text is measured at its width: the canvas takes font-stretch's keywords, not the
 // percentage computed style gives, and a percentage with no keyword keeps ordinary layout.
 browserTest('a flowed paragraph is measured and painted at the width CSS gives it', async () => {
-  const { between, condensedClamp, condensedHyphen, ...got } = await inChrome(flowWidthFixture, ['/textflow-glue.js', '/timer-glue.js'],
-    { '/flex.ttf': new URL('../painted/tests/fonts/RobotoFlex-subset.ttf', import.meta.url) });
+  const { between, condensedClamp, condensedHyphen, ...got } = await inChrome(flowWidthFixture, { files: { '/flex.ttf': new URL('../painted/tests/fonts/RobotoFlex-subset.ttf', import.meta.url) } });
   for (const [name, { css, measured, painted }] of Object.entries(got)) {
     expect([name, Math.abs(measured - css) < 0.5, Math.abs(painted - css) < 0.5]).toEqual([name, true, true]);
   }
@@ -1285,7 +1278,7 @@ async function controlLinesFixture() {
 // Chrome forces a break only at a line feed. Preserved, a lone carriage return or form feed has no advance and no
 // break beside it, though a canvas measures each as a space; U+2028 and U+2029 are text a line may wrap after.
 browserTest('preserved flowed text breaks and measures around break controls as CSS lays it out', async () => {
-  const got = await inChrome(controlLinesFixture, ['/textflow-glue.js', '/timer-glue.js'], { '/textflow.wasm': await buildFlow() });
+  const got = await inChrome(controlLinesFixture, { files: { '/textflow.wasm': await buildFlow() } });
   expect(got.map(({ whiteSpace, text, flowed }) => [whiteSpace, text, flowed]))
     .toEqual(got.map(({ whiteSpace, text, css }) => [whiteSpace, text, css.map(([letters, width]) => [letters, width, width])]));
   const lines = (whiteSpace, text) => got.find(g => g.whiteSpace === whiteSpace && g.text === text).css.map(l => l[0]);
@@ -1316,7 +1309,7 @@ browserTest('a clamped preserved line gives a carriage return or form feed no ad
       flow.dispose();
     }
     return out;
-  }, ['/textflow-glue.js', '/timer-glue.js'], { '/textflow.wasm': await buildFlow() });
+  }, { files: { '/textflow.wasm': await buildFlow() } });
   expect(got.map(g => g.text)).toEqual(['aaaa\rbbbb…', 'aaaa\fbbbb…', 'aaaa\rbbbb…', 'aaaa\fbbbb…']);
   for (const g of got) {
     expect(Math.abs(g.painted - g.measured)).toBeLessThan(0.1);
@@ -1346,7 +1339,7 @@ browserTest('a clamped pre line includes painted trailing spaces in its measured
     const span = paragraph.querySelector('[data-flow-fragment]');
     const result = { text: span.textContent, painted: span.getBoundingClientRect().width, measured: flow.facts(2).fragments[0].width, available };
     flow.dispose(); return result;
-  }, ['/textflow-glue.js', '/timer-glue.js']);
+  });
   expect(Math.abs(got.painted - got.measured)).toBeLessThan(0.1);
   expect(got.text).toBe('hello…');
   expect(got.painted).toBeLessThanOrEqual(got.available);
@@ -1410,7 +1403,7 @@ async function preservedTabFixture() {
 for (const clamped of [false, true]) browserTest(clamped
   ? 'clamped preserved tabs keep ordinary CSS layout instead of an overwide prefix'
   : 'right-aligned preserved tabs keep the measured and painted CSS width', async () => {
-  const cases = (await inChrome(preservedTabFixture, ['/textflow-glue.js', '/timer-glue.js'])).filter(r => r.clamped === clamped);
+  const cases = (await inChrome(preservedTabFixture)).filter(r => r.clamped === clamped);
   expect(cases.map(r => [r.whiteSpace, Math.round((r.painted - r.measured) * 100) / 100,
     r.fragments ? r.painted <= r.available : true])).toEqual([['pre', 0, true], ['pre-wrap', 0, true]]);
   for (const r of cases) {

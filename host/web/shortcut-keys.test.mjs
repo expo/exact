@@ -3,7 +3,8 @@
 // as web apps match; a Latin character is the key wherever it is (AZERTY,
 // Dvorak, German's ö), so one chord fires, never two.
 import { test, expect } from 'bun:test';
-import { inputFixtureSource } from './tests/glue-fixture.mjs';
+import { formatShortcut, resolveShortcuts } from './navigation/environment.js';
+import { glueDeclarations, hostFixtureFile, inputFixtureSource } from './tests/glue-fixture.mjs';
 import { Script } from 'node:vm';
 
 const inputScript = new Script(`${await inputFixtureSource()}\nexact.createInputHandlers({ root, views: new Map(), retiredViews: new WeakSet(), ready: () => true, inertAncestor: () => false, dispatch() {} });`, { filename: 'input-glue.js' });
@@ -61,4 +62,37 @@ test('the fallback keeps the chord\'s modifiers and refuses keys it cannot name'
 test('a Back control the bar stands for keeps its chord', () => {
   const hidden = page(['Meta+['], { shown: false }), marked = page(['Meta+['], { shown: false, marked: true });
   expect([hidden.key('[', 'BracketLeft'), hidden.clicks, marked.key('[', 'BracketLeft'), marked.clicks]).toEqual([false, [], true, ['Meta+[']]);
+});
+
+test('the Wasm prop writer resolves a portable list when setting and updating it', () => {
+  const source = hostFixtureFile(new URL('./wasm/views.js', import.meta.url), 'utf8');
+  const write = new Script(glueDeclarations(source, ['applyProps']) + '\napplyProps');
+  const element = { setAttribute(k, v) { this[k] = v; }, removeAttribute(k) { delete this[k]; } };
+  const key = 'aria-keyshortcuts';
+  for (const [nav, primary] of [[{ platform: 'iPad' }, 'Meta'], [{ userAgentData: { platform: 'Linux' } }, 'Control']]) {
+    const apply = write.runInNewContext({ host: { inputReady: true }, HTMLIFrameElement: class {}, HTMLImageElement: class {}, HTMLMediaElement: class {},
+      syncMedia() {}, syncMarkup() {}, resolveShortcuts: chords => resolveShortcuts(chords, nav) });
+    apply(element, { [key]: 'Escape\u0085Mod+O' });
+    expect(element[key]).toBe('Escape ' + primary + '+O');
+    apply(element, { [key]: 'Control+Mod\uFEFFMod+P' });
+    expect(element[key]).toBe(primary + '+P');
+    apply(element, { [key]: 'Escape Mod+Hyper+K Mod+𐐀' });
+    expect(element[key]).toBe('Escape');
+    apply(element, { [key]: 'Control+Mod' });
+    expect(element[key]).toBeUndefined();
+  }
+});
+
+test('named keys, functions and modifier order use the reader’s notation', () => {
+  for (const [chord, apple, windows] of [
+    ['Meta+Shift+Alt+Control+ArrowUp', '⌃⌥⇧⌘↑', 'Windows logo key+Ctrl+Alt+Shift+Up arrow'],
+    ['Mod+ß', '⌘ß', 'Ctrl+ß'], ['Mod+Insert', '⌘Insert', 'Ctrl+Insert'], ['Mod+𐐀', '', ''],
+    ['Mod+Enter', '⌘↩', 'Ctrl+Enter'], ['Space', 'Space', 'Spacebar'], ['Escape', '⎋', 'Esc'],
+    ['Mod++', '⌘+', 'Ctrl+Plus sign'], ['F35', 'F35', 'F35'], ['F36', '', ''],
+    ['Mod+Meta+O', '', ''], ['Mod+Control+O', '', ''], ['Hyper+O', '', ''], ['Mod+O Mod+P', '', ''],
+  ]) {
+    expect(formatShortcut(chord, { platform: 'MacIntel' })).toBe(apple);
+    expect(formatShortcut(chord, { platform: 'Win32' })).toBe(windows);
+    expect(formatShortcut(chord, {})).toBe('');
+  }
 });

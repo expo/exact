@@ -27,6 +27,20 @@ export const moduleResolution = {
 // (LLP 1153.002 D1). `"launch": false`, or an object with only its name, is the bare name.
 const entryName = entry => entry !== null && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.name === 'string'
   && Object.keys(entry).every(key => key === 'name' || key === 'launch') && ['boolean', 'undefined'].includes(typeof entry.launch) ? entry.name : entry;
+/** app.json as a JSON import in production. Keep other manifests byte-for-byte for source diagnostics. */
+export function productionManifest(source) {
+  const manifest = JSON.parse(source);
+  if (!Object.hasOwn(manifest, 'development')) return source;
+  // Keep the authored section readable in both trusts. The production checker and runtime see the same empty map.
+  manifest.development = Object.hasOwn(manifest.development, 'packages') ? { packages: {} } : {};
+  return JSON.stringify(manifest);
+}
+/** Web package code can import the authored manifest or the resolved manifest a game keeps beside its shells. */
+export function productionManifestImports(app) {
+  const files = new Set([resolve(app), realpathSync(app)].flatMap(dir => ['app.json', '.shells/app.json'].map(file => resolve(dir, file))));
+  for (const file of [...files]) if (existsSync(file)) files.add(realpathSync(file));
+  return id => files.has(id) ? productionManifest(readFileSync(id, 'utf8')) : null;
+}
 const manifestOf = app => {
   let manifest = {};
   try { manifest = JSON.parse(readFileSync(resolve(app, existsSync(resolve(app, '.shells/app.json')) ? '.shells/app.json' : 'app.json'), 'utf8')); } catch { /* no manifest: none declared */ }

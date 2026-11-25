@@ -30,6 +30,34 @@ struct ReadTests {
             precondition(item.setString(text, forType: type))
             return item
         }
+        func writeItem(_ record: [String: Any]) -> [String: Any] {
+            var answer: [String: Any]?
+            module.later("write", ["data": [record]], preferred: nil) { answer = $0 }
+            let end = Date(timeIntervalSinceNow: 10)
+            while answer == nil && Date() < end { _ = RunLoop.main.run(mode: .default, before: end) }
+            return answer!
+        }
+        let html = #"<b onclick="void 0">Résumé</b> <a href="javascript:void(0)">note</a><script>discard</script><a href="https://example.org/">safe</a>"#
+        for fallback in [nil, "", "plain"] as [String?] {
+            var record = ["text/html": html]
+            record["text/plain"] = fallback
+            precondition(writeItem(record).isEmpty)
+            precondition(board.pasteboardItems?.count == 1)
+            let item = board.pasteboardItems!.first!
+            let data = item.data(forType: .html)!
+            let stored = String(decoding: data, as: UTF8.self)
+            precondition(stored.contains("<b>Résumé</b>") && stored.contains("<a>note</a>"))
+            precondition(stored.contains("https://example.org/") && !stored.contains("script") && !stored.contains("discard"))
+            precondition(item.string(forType: .string) == fallback)
+        }
+        let nearLimit = "<p>" + String(repeating: "a", count: 1_048_560 - 7) + "</p>"
+        precondition(writeItem(["text/html": nearLimit]).isEmpty)
+        precondition(board.data(forType: .html) == Data(nearLimit.utf8))
+        let change = board.changeCount
+        precondition(writeItem(["text/html": String(repeating: "&", count: 220_000)])["error"] as? String == "DataError")
+        let nested = String(repeating: "<div>", count: 700) + "note" + String(repeating: "</div>", count: 700)
+        precondition(writeItem(["text/html": nested])["error"] as? String == "NotAllowedError")
+        precondition(board.changeCount == change)
         let plain = NSPasteboard.PasteboardType(UTType.plainText.identifier)
         check([], [])
         check([item("first", plain), item("second", .string)], ["first", "second"])
@@ -59,6 +87,11 @@ struct ReadTests {
             fatalError("could not convert oriented JPEG")
         }
         precondition(image.width == 4 && image.height == 8)
+        precondition(writeItem(["image/png": ["base64": image.png.base64EncodedString()], "text/html": html, "text/plain": "note"]).isEmpty)
+        let mixed = board.pasteboardItems!
+        precondition(mixed.count == 1 && mixed[0].string(forType: .string) == "note")
+        precondition(mixed[0].data(forType: .html) != nil && mixed[0].data(forType: .png) != nil)
+        precondition(NSImage(data: mixed[0].data(forType: .tiff)!) != nil)
         let full = String(repeating: "é", count: 524288)
         check([item(full, .string)], [full])
         board.clearContents()

@@ -5,6 +5,7 @@ import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { sourceMapReader, render, identifyLayoutNodes } from '../../scripts/agent-inspect.mjs';
+import { agentInput, textBaseline } from './agent-input.js';
 import { viewChildren } from './navigation/lists.js';
 
 test('the JS agent tree lists authored children but not a hatch part as a view', () => {
@@ -187,8 +188,9 @@ ${declaration('agent')}
 this.agent = agent; this.ready = agentInputReady;`, context);
   const ready = context.ready(), first = context.agent({ op: 'tree' });
   expect(typeof first.then).toBe('function');
-  finish({ viewBox: () => ({}) });
+  finish({ ...agentInput, watchGlides() {} });
   await ready;
+  expect(context.host.textBaseline).toBe(textBaseline);
   expect(await first).toEqual({ op: 'tree' });
   expect(context.agent({ op: 'layout' })).toEqual({ op: 'layout' });
   expect(loads).toBe(1);

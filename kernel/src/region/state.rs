@@ -1003,7 +1003,7 @@ fn publish(
             continue;
         };
         let inline = arena.is_inline_run(s);
-        let frame = if inline { Frame::default() } else { f.frame };
+        let frame = f.frame;
         let moved = !arena.frame(s).bits_eq(frame) || arena.flags(s).has(NodeFlags::CREATED);
         let hidden = arena.style(s).display == crate::Display::None;
         arena.set_frame(s, frame);

@@ -104,8 +104,7 @@ enum ResetGate {
         // Events on the old tree's views: as the gestures and inputs above.
         "contextmenu(_:now:)": "a context menu asked of the old tree",
         "dblclick(_:now:)": "a double click on the old tree",
-        "swiperight(_:now:)": "a swipe on the old tree",
-        "swipeleft(_:now:)": "a swipe on the old tree",
+        "swipe(_:_:now:)": "a swipe on the old tree",
         "historySwipe(_:phase:direction:amount:client:now:)": "a history swipe's progress told to the old tree's root",
         "scrollend(_:now:)": "an old scroller's end",
         "scrolldragstart(_:now:)": "a drag of an old scroller",
@@ -122,6 +121,7 @@ enum ResetGate {
         "moveInto(_:target:contentY:scrollTop:inside:now:)": "a grouped reorder moving on the old tree",
         "groupStep(_:step:now:)": "a grouped reorder's keyboard step on the old tree",
         "groupEnd(_:drop:now:)": "a grouped reorder ending as its list goes",
+        "drop(before:)": "a queued grouped reorder's token and view ids belong to the old tree; the replacement list shows the new runtime's order",
         "groupFinish(_:now:)": "a grouped reorder finishing as its list goes",
         "media(_:event:payload:now:)": "an old media view's event as it goes",
         "load(_:now:)": "an old image's or frame's load",
@@ -205,6 +205,13 @@ enum ResetGate {
 }
 
 extension ExactSession {
+    /// UIKit has finished its move, but its drop still belongs to the retiring list (LLP 1121 X1).
+    package func discardQueuedReorder() {
+        let call = "drop(before:)"
+        guard runtime.holds(call) else { return }
+        ExactJournal.shared.record("reset.drop", ["call": call, "reason": ResetGate.dropped[call]!])
+    }
+
     /// The presenter's reset with this runtime held (the one it replaces the old tree's with): nothing the
     /// teardown sets off reaches it. Its calls wait in `heldCalls` for `replayHeld`, after the committed batch.
     func resetHeld() {

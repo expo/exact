@@ -606,3 +606,149 @@ fn a_geometry_fact_follows_the_window() {
     assert!(p.set_window(wide).is_none());
     assert_eq!(frame_of(&p, "half").2, 400.0);
 }
+
+#[test]
+fn a_folding_feature_reports_its_state_and_splits_only_the_window_it_divides() {
+    use serde_json::json;
+    let mut p = boot(
+        r#"shape Segment
+  x: number
+  y: number
+  width: number
+  height: number
+shape V
+  segments: Segment[]
+  devicePosture: string
+  horizontalViewportSegments: number
+  verticalViewportSegments: number
+  height: number
+component App
+  resource v = exactViewport() as shape V
+  view
+    main width="100%" height="100%" position="relative" interactive-widget="resizes-visual"
+      box position="absolute" testId="pane" left="env(viewport-segment-left 1 0, 0px)" width="env(viewport-segment-width 1 0, 100%)" height=20
+"#,
+    );
+    let window = phone(); // The page starts 30 points down and is 754 points tall.
+    let columns = json!([[0, 0, 175, 754], [185, 0, 215, 754]]);
+    let rows = json!([[0, 0, 400, 350], [0, 370, 400, 384]]);
+    for (state, axis, band, posture, cols, nr, rects) in [
+        (2, 1, [175., 185.], "folded", 2, 1, columns.clone()),
+        (
+            2,
+            1,
+            [195., 205.],
+            "folded",
+            2,
+            1,
+            json!([[0, 0, 195, 754], [205, 0, 195, 754]]),
+        ),
+        (1, 1, [175., 185.], "continuous", 2, 1, columns),
+        (1, 0, [175., 185.], "continuous", 1, 1, json!([])),
+        (2, 2, [380., 400.], "folded", 1, 2, rows),
+        (
+            2,
+            1,
+            [201., 201.],
+            "folded",
+            2,
+            1,
+            json!([[0, 0, 201, 754], [201, 0, 199, 754]]),
+        ),
+        (
+            2,
+            2,
+            [20., 40.],
+            "folded",
+            1,
+            2,
+            json!([[0, 0, 400, 0], [0, 10, 400, 744]]),
+        ),
+        (
+            2,
+            2,
+            [10., 20.],
+            "folded",
+            1,
+            2,
+            json!([[0, 0, 400, 0], [0, 0, 400, 754]]),
+        ),
+        (0, 0, [0.; 2], "continuous", 1, 1, json!([])),
+    ] {
+        p.folding_feature(state, axis, band);
+        assert_eq!(p.set_window(window), None);
+        let (mut resource, _) = viewport(&p, 0);
+        let records = resource
+            .as_object_mut()
+            .unwrap()
+            .remove("segments")
+            .unwrap();
+        let boxes: Vec<_> = records
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| json!([r["x"], r["y"], r["width"], r["height"]]))
+            .collect();
+        assert_eq!(
+            json!(boxes),
+            if cols * nr == 1 {
+                json!([[0, 0, 400, 754]])
+            } else {
+                rects.clone()
+            }
+        );
+        assert_eq!(
+            resource,
+            json!({"devicePosture":posture,
+            "horizontalViewportSegments":cols, "verticalViewportSegments":nr, "height":754})
+        );
+        assert_eq!(env(&mut p)["viewport-segments"], rects);
+        if cols == 2 {
+            let (x, _, w, _) = frame_of(&p, "pane");
+            assert_eq!(
+                json!([x as i32, w as i32]),
+                json!([rects[1][0], rects[1][2]])
+            );
+        }
+    }
+
+    let before = p.host.kernel().env();
+    let invalid = exact_runner::Fold {
+        cols: 0,
+        ..exact_runner::Fold::FLAT
+    };
+    assert!(p
+        .host
+        .set_window_view(None, Some([11.; 4]), None, Some((invalid, vec![])))
+        .is_err());
+    assert_eq!(p.host.kernel().env(), before);
+
+    p.folding_feature(2, 2, [380., 400.]);
+    let since = journal_end(&p);
+    assert_eq!(
+        p.set_window(Window {
+            keyboard: [0., 0., 500., 0.],
+            ..window
+        }),
+        None
+    );
+    assert_eq!(viewport(&p, since).1, 1);
+    assert_eq!(
+        env(&mut p)["viewport-segments"],
+        json!([[0, 0, 400, 350], [0, 370, 400, 0]])
+    );
+
+    let mut content = boot(&page(r#"interactive-widget="resizes-content""#));
+    content.folding_feature(2, 2, [380., 400.]);
+    assert_eq!(
+        content.set_window(Window {
+            keyboard: [0., 0., 500., 0.],
+            ..window
+        }),
+        None
+    );
+    assert_eq!(
+        env(&mut content)["viewport-segments"],
+        json!([[0, 0, 400, 270], [0, 370, 400, 0]])
+    );
+}

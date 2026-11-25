@@ -176,7 +176,7 @@ internal object FilePicker {
 
     private fun failure(e: Exception) = "file picker: ${e.message ?: e.javaClass.simpleName}"
 
-    private fun displayName(resolver: ContentResolver, uri: Uri, index: Int): String {
+    fun displayName(resolver: ContentResolver, uri: Uri, index: Int): String {
         val supplied = try {
             resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
                 if (it.moveToFirst()) it.getString(0) else null

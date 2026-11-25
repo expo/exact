@@ -200,6 +200,16 @@ sample({ count: 'two' });
         { extension: 'cloud', owner: '@scratch/cloud/apple', send: 'sample', args: { count: 2 } },
         { extension: 'cloud', owner: '@scratch/cloud-fast', source: 'reading', args: {} },
       ]);
+      const previousFetch = globalThis.fetch;
+      try {
+        globalThis.__exact_module = undefined;
+        globalThis.fetch = async () => Response.json({ error: 'NotSupportedError' }, { status: 500 });
+        expect(await bound.reading().catch(e => e.name)).toBe('NotSupportedError');
+        globalThis.fetch = async () => Response.json({ value: 8 }, { status: 500 });
+        expect(await bound.reading().catch(e => e.name)).toBe('UnknownError');
+      } finally {
+        globalThis.fetch = previousFetch;
+      }
       const priorSync = globalThis.__exact_module_sync;
       globalThis.__exact_module_sync = body => { calls.push(body); return { value: 8 }; };
       try {

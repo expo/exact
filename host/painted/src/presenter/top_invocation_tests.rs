@@ -1035,3 +1035,24 @@ fn a_letter_in_an_open_menu_focuses_the_row_it_starts() {
     assert!(p.surface().is_none());
     assert_eq!(p.host().runner().slot("said"), Some(&Value::str("renamed")));
 }
+
+#[test]
+fn replacing_the_only_window_keeps_system_back_registered() {
+    thread_local! { static ACTIVE: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) }; }
+    let (mut p, _) = super::tests::windowed();
+    super::tests::tap(&mut p, "ask").unwrap();
+    let first = p.surface().unwrap().serial;
+    p.hosted_back(Some(|layers| {
+        ACTIVE.with_borrow_mut(|r| r.push(layers[1] != 0))
+    }));
+    let key = p.host.kernel().find_by_id("notice")[0];
+    assert!(p.present(Some(key), "notice", None, None, true, 3.));
+    assert_ne!(first, p.surface().unwrap().serial);
+    ACTIVE.with_borrow_mut(|values| {
+        let active = std::mem::take(values);
+        assert!(
+            !active.is_empty() && active.iter().all(|v| *v),
+            "{active:?}"
+        );
+    });
+}

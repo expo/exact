@@ -30,7 +30,7 @@ class SwatchModule(context: ExtensionContext) : ExactExtension(context) {
     /** What it reads of its configuration: the label, and the key by its length and last four characters only. */
     private val config: String get() {
         val key = context.config.optString("apiKey")
-        return "label=${context.config.optString("label", "none")} apiKey=${if (key.isEmpty()) "none" else "${key.length} chars ending ${key.takeLast(4)}"}"
+        return "label=${context.config.optString("label", "none")} apiKey=${if (key.isEmpty()) "none" else "${key.length} chars ending ${key.takeLast(4)}"} development=${context.development}"
     }
 
     override fun view(tag: String, session: String, id: String, context: Context, props: JSONObject, emit: (String, String) -> Unit): View {

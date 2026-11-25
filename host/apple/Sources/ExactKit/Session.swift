@@ -480,7 +480,7 @@ public final class ExactSession {
     private(set) var fillInFlight = false { didSet { releaseWaitingFirings() } }
     typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?, cause: AnyObject?)
     /// Work waiting for a slice or a batch to finish, in request order. A stale slice releases its work next turn.
-    var afterFill: [IdleWork] = [], draining = false, idleScheduled = false
+    var afterFill: [IdleWork] = [], draining = false, idleScheduled = false, outside: [() -> Void] = [], callingOut = false
     /// A slice's batch is applying, ahead of the work that waited for it
     var fillLanding = false
     private(set) var viewsEpoch = 0
@@ -838,7 +838,7 @@ public final class ExactSession {
             apply(runtime.focusEvent(id, entering: kind == "focusin", target: target, related: related, now: now()))
         } }
         presenter.onContextmenu = { [unowned self] id in applyInput(runtime.contextmenu(id, now: now()), at: id) }
-        presenter.onSwiperight = { [unowned self] id in applyInput(runtime.swiperight(id, now: now()), at: id) }
+        presenter.onSwiperight = { [unowned self] id in applyInput(runtime.swipe(id, .right, now: now()), at: id) }
         presenter.onRefresh = { [unowned self] id in applyInput(runtime.refresh(id, now: now()), at: id) }
         presenter.onPan = { [unowned self] id, dx, dy in applyInput(runtime.pan(id, dx: dx, dy: dy, now: now()), at: id) }
         presenter.onPanRelease = { [unowned self] id, vx, vy in applyInput(runtime.panRelease(id, vx: vx, vy: vy, now: now()), at: id) }
@@ -1468,7 +1468,7 @@ public final class ExactSession {
         state = .destroyed
         natives.endViewBindings()
         agentPasteboard.map(AgentPasteboard.remove)
-        let waiting = afterFill; afterFill.removeAll()
+        let waiting = afterFill; afterFill.removeAll(); outside.removeAll()
         waiting.forEach { $0.cancelled?() }
         cancelAuthSessions()
         taskTimers.cancel(); clockTimer?.invalidate(); timerAdmissions.takeover()

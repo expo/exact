@@ -148,6 +148,7 @@ fn observation_cost_of_many_owners() {
                     id: u64::from(root),
                     generation: 1,
                     insets: Some([0.0, right, 0.0, left]),
+                    frame: None,
                 };
                 let chain = vec![ChainEntry { target, kinds: 0 }];
                 let report = NativeTargets {

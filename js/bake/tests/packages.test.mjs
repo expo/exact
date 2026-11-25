@@ -64,6 +64,28 @@ async function bundle(stage, replay = false) {
   }
 }
 
+test("a production data bundle importing app.json reads an empty development package map", async () => {
+  const { app, stage, put, close } = linkedApp();
+  try {
+    const canary = 'package-development-only-7c96';
+    const manifest = JSON.stringify({ name: 'shared-app-name', development: { packages: { swatch: { web: { label: canary } } } } });
+    for (const dir of [app, stage]) {
+      put(join(dir, 'app.json'), manifest);
+      put(join(dir, 'app.ts'), "import manifest from './app.json'; export const text = JSON.stringify(manifest), names = Object.keys(manifest.development.packages);");
+    }
+    for (const production of [false, true]) {
+      await configure(stage, false, parseSync, false, rolldown, 'app.ts', production);
+      await check(stage, join(libraries, 'tsc'), libraries);
+      const code = await bundle(stage);
+      const { names } = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'));
+      expect(names).toEqual(production ? [] : ['swatch']);
+      expect(code).toContain('shared-app-name');
+      expect(code.includes(canary)).toBe(!production);
+    }
+    expect(readFileSync(join(app, 'app.json'), 'utf8')).toBe(manifest);
+  } finally { close(); }
+});
+
 test('a linked module checks against the app peer across subpath exports', async () => {
   const fixture = linkedApp();
   const { stage, peerDir } = fixture;

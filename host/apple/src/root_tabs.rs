@@ -160,6 +160,12 @@ impl<D: DataSource> Host<D> {
         let arena = kernel.arena();
         let covered =
             arena.slot_of(tabs.tablist).and_then(|s| arena.cover(s)) == Some(HostCover::Whole);
+        let splits = self.runner.possible_split_panels(&tabs.panels);
+        let splits = if splits.is_empty() {
+            String::new()
+        } else {
+            format!(",\"possibleSplits\":[{}]", list(&splits))
+        };
         let navigation = self.runner.panels_need_navigation(&tabs.panels);
         let navigation = navigation
             .iter()
@@ -182,7 +188,7 @@ impl<D: DataSource> Host<D> {
                 format!(",\"accessoryNote\":{}", serde_json::Value::String(note))
             });
         format!(
-            "{{\"root\":{root},\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}{footer}{accessory}{note}}}",
+            "{{\"root\":{root},\"tablist\":{},\"tabs\":[{}],\"panels\":[{}],\"navigation\":[{navigation}],\"unsaid\":{unsaid},\"covered\":{covered}{splits}{footer}{accessory}{note}}}",
             tabs.tablist,
             list(&tabs.tabs),
             list(&tabs.panels)

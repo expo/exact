@@ -88,6 +88,7 @@ pub const RECIPES: &[(&str, &str)] = &[
     recipe!("phone-manifest"),
     recipe!("porting-and-release"),
     recipe!("ports-and-browsers"),
+    recipe!("progressive-tabs"),
     recipe!("purchases"),
     recipe!("push"),
     recipe!("random-and-shuffle"),

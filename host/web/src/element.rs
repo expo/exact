@@ -1047,8 +1047,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::AccessibilityInvalid => "aria-invalid",
             PropId::AccessibilityDescribedBy => "aria-describedby",
             PropId::AccessibilityLabelledBy => "aria-labelledby",
-            // HTML's own attribute, so the browser makes the box focusable
-            // (LLP 1088 D7.3); `data-tabindex` would be ignored.
+            PropId::AccessibilityActions => "aria-actions",
+            // The browser owns focusability (LLP 1088 D7.3).
             PropId::TabIndex => "tabindex",
             PropId::AccessibilityRequired => "aria-required",
             PropId::AccessibilityHasPopup => "aria-haspopup",

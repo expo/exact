@@ -1,5 +1,6 @@
 //! Tests Observe's painted-host launch parts against a local sink. A separate
 //! test binary because it installs a panic hook and sets process environment.
+#![cfg(unix)]
 
 mod observe {
     include!("../../../../modules/observe/linux/launch.rs");

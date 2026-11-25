@@ -111,5 +111,6 @@ final class HeightDragHold {
             session.presenter.collections.releaseInteractionLater(ifCurrent: pin)
         }
     }
-    func cancel() { finish(downward: lastDisplacement, time: time, cancel: true) }
+    func finish(time: Double, cancel: Bool) { finish(downward: lastDisplacement, time: time, cancel: cancel) }
+    func cancel() { finish(time: time, cancel: true) }
 }

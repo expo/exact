@@ -331,8 +331,8 @@ pub(crate) struct Lowerer<'a> {
     /// Where a native button may not be, from the nearest ancestor that says.
     pub(crate) button_context: Option<&'static str>,
     pub(crate) guards: Vec<Expr>,
-    /// Whether the element being lowered is a popover's direct child.
-    pub(crate) popover_child: bool,
+    /// Which menu container, if any, supplies the element being lowered as a row.
+    menu_parent: Option<menu_rows::Parent>,
     /// Where the element being lowered sits relative to a navigation root.
     nav_place: routes::NavPlace,
     host_transforms: std::collections::BTreeSet<(Span, u32)>,
@@ -386,7 +386,7 @@ pub fn lower_all(
             span: checked.expanded.root.span,
         }]);
     }
-    let (mut asset_errors, asset_warnings) = asset_root
+    let (mut asset_errors, mut notes) = asset_root
         .filter(|_| !theme::retained::stops_at_retention())
         .map(|root| {
             let checking = contract_checking::Checking::new(checked);
@@ -403,11 +403,12 @@ pub fn lower_all(
         profile,
         warned.as_ref().map(|_| &mut text_styles),
     );
+    asset_errors.extend(routes::bottom_toolbar::check(checked, &mut notes));
     if let Some((selection, out)) = warned {
         out.extend(warnings::with_text_styles(
             checked,
             &text_styles,
-            asset_warnings,
+            notes,
             selection,
         ));
     }
@@ -435,8 +436,7 @@ fn lower_with_sites(
     profile: Profile,
     text_styles: Option<&mut warnings::TextStyles>,
 ) -> Result<(Plan, Option<Sites>), Vec<LowerError>> {
-    // An earlier compile's targets and roles go first: lowering may stop
-    // before the design is read, and the warnings still run.
+    // Warnings can run even if lowering stops before the design is read.
     control_roles::unlowered();
     let Checked {
         file,
@@ -499,7 +499,7 @@ fn lower_with_sites(
         parent_horizontal_flex: Some(false),
         button_context: None,
         guards: Vec::new(),
-        popover_child: false,
+        menu_parent: None,
         nav_place: Default::default(),
         host_transforms: Default::default(),
         arm_scopes: BTreeMap::new(),
@@ -642,7 +642,7 @@ fn lower_body(
             });
         }
     }
-    // Each component's parts and the rows its classes bring them (LLP 1139 D2).
+    lint::action_targets(checked, &mut l.errors);
     l.check_anatomy(file);
     l.errors.extend(provenance::check(checked));
     let refused = l.declare_keyframes(file);
@@ -996,7 +996,7 @@ impl<'a> Lowerer<'a> {
                 let new_button_context = step.button_context.or(self.button_context);
                 let button_context =
                     std::mem::replace(&mut self.button_context, new_button_context);
-                let popover_child = std::mem::replace(&mut self.popover_child, step.popover_child);
+                let menu_parent = std::mem::replace(&mut self.menu_parent, step.menu_parent);
                 let bounded = std::mem::replace(&mut self.parent_bounded_column, step.bounded);
                 let stacks = std::mem::replace(&mut self.parent_stacks, step.stacks);
                 let nav_place = std::mem::replace(&mut self.nav_place, step.nav_place);
@@ -1029,7 +1029,7 @@ impl<'a> Lowerer<'a> {
                 self.parent_bounded_column = bounded;
                 self.parent_stacks = stacks;
                 self.button_context = button_context;
-                self.popover_child = popover_child;
+                self.menu_parent = menu_parent;
                 self.parent_positioned = parent_positioned;
                 self.svg_depth -= step.enters as u32;
                 lowered

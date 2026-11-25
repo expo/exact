@@ -558,11 +558,18 @@ extension NavigationHost {
     /// Called from `willShow`, UIKit's place for it: the bar moves with the
     /// transition, an interactive pop's included, and back on a cancel.
     func showBar(_ nav: UINavigationController, for c: RouteController? = nil, animated: Bool) {
+        #if os(iOS)
+        showBottomToolbar(nav, for: c ?? barTop(nav), animated: animated)
+        #endif
         // Nested in a split's list column, the detail's column has its bar
         // hidden by UIKit, which shows its top in the list's: the route on top
         // decides that bar, under its own column's opt-outs (LLP 1127 D7)
-        if let split, nav === split.detail, split.nested { return showBar(split.list, for: c, animated: animated) }
-        let c = c ?? barTop(nav)
+        if let split, nav === split.detail, split.nested { return showNavigationBar(split.list, for: c, animated: animated) }
+        showNavigationBar(nav, for: c, animated: animated)
+    }
+
+    private func showNavigationBar(_ nav: UINavigationController, for route: RouteController?, animated: Bool) {
+        let c = route ?? barTop(nav)
         guard let stack = stacks[ObjectIdentifier(nav)] else { return }
         // The bar's tint is the route's accent, as a hand-built app tints its bar for the screen it shows:
         // its title, items and field in the tint draw it and grey behind a sheet or an alert. A tint a

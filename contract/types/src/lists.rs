@@ -12,6 +12,32 @@ use contract_syntax::{Expr, Span, UnOp};
 use exact_plan::Stdlib;
 use std::collections::BTreeSet;
 
+/// Infer and unify a list literal's items in source order.
+pub(super) fn literal(
+    items: &[Expr],
+    mut infer_item: impl FnMut(usize, &Expr) -> Result<Ty, TypeError>,
+) -> Result<Ty, TypeError> {
+    let mut item = Ty::Unknown;
+    for (i, x) in items.iter().enumerate() {
+        let t = infer_item(i, x)?;
+        crate::held::value(&t, x, "a list")?;
+        item = match item.unify(&t) {
+            Some(u) => u,
+            None => {
+                return err(
+                    "type-list-item",
+                    format!(
+                    "a list's items have one type: item {} is `{t}`, the items before it `{item}`",
+                    i + 1
+                ),
+                    x.span(),
+                )
+            }
+        };
+    }
+    Ok(Ty::List(Box::new(item)))
+}
+
 /// How each `x.length` resolved, by its span (@ref LLP 1116.015 D2, as
 /// amended 2026-10-17): the parser writes `length(x)` for it, and the checker
 /// reads a record's `length` field instead when the receiver is a record whose
@@ -204,7 +230,16 @@ fn infer_built(
             span,
         );
     }
-    let first = infer(&args[0], scope, shapes)?;
+    let first = match (args, f) {
+        ([Expr::List(items, at), needle @ Expr::Str(..)], Stdlib::Includes | Stdlib::IndexOf) => {
+            let ty = literal(items, |_, item| {
+                crate::enums::operand(item, needle, scope, shapes)
+            })?;
+            shapes.bounded(&ty, *at)?;
+            ty
+        }
+        _ => infer(&args[0], scope, shapes)?,
+    };
     let argument = |i: usize, want: &str, given: &Ty| {
         err(
             "type-argument",
@@ -260,7 +295,16 @@ fn infer_built(
                 Ty::String | Ty::Enum(_) if second.is_string() => Ok(found),
                 Ty::String | Ty::Enum(_) => argument(1, "string", &second),
                 Ty::List(item) => match item.unify(&second) {
-                    Some(Ty::String | Ty::Enum(_) | Ty::Number | Ty::Bool) => Ok(found),
+                    Some(Ty::String | Ty::Enum(_) | Ty::Number | Ty::Bool) => {
+                        crate::enums::compare_literal(item, &args[1], shapes)?;
+                        if let Expr::List(values, _) = &args[0] {
+                            for value in values {
+                                crate::enums::compare_literal(&second, value, shapes)?;
+
+                            }
+                        }
+                        Ok(found)
+                    }
                     Some(other) => err(
                         "type-argument",
                         format!(

@@ -1,18 +1,20 @@
-import { hostFixtureFile } from './tests/glue-fixture.mjs';
+import { navigationSource } from './tests/glue-fixture.mjs';
+import { runtimeSource, standIns } from './tests/stand-ins.mjs';
 import { test, expect } from 'bun:test';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
 // The real browser performs origin checks and Window ownership; no DOM doubles.
 test('iframe replies keep order and ownership, with no queue across replacement or navigation', async () => {
+  const modules = standIns(['commands.js']);
+  modules.set('commands.js', runtimeSource('commands.js'));
+  modules.set('navigation.js', navigationSource);
+  modules.set('frame-messages.js', Bun.file(new URL('./frame-messages.js', import.meta.url)));
   const server = Bun.serve({ port: 0, fetch(request) {
     const path = new URL(request.url).pathname;
-    if (path === '/frame-messages.js') return new Response(Bun.file(new URL('./frame-messages.js', import.meta.url)));
-    if (path === '/commands.js') return new Response(Bun.file(new URL('../web-js/commands.js', import.meta.url)));
-    if (path === '/navigation.js') return new Response(hostFixtureFile(new URL('./navigation.js', import.meta.url)), { headers: { 'content-type': 'text/javascript' } });
-    if (path === '/prompt-glue.js') return new Response(Bun.file(new URL('./prompt-glue.js', import.meta.url)));
-    if (path === '/alert-message.js') return new Response(Bun.file(new URL('./alert-message.js', import.meta.url)));
-    if (path === '/menu-rows.js') return new Response(Bun.file(new URL('./menu-rows.js', import.meta.url)));
+    const module = modules.get(path.slice(1));
+    if (module !== undefined) return new Response(module, { headers: { 'content-type': 'text/javascript' } });
     if (path.startsWith('/guest')) return new Response(`<body>Guest<script>window.received=[];addEventListener('message',e=>{received.push(e.data);document.body.textContent=JSON.stringify(received);parent.postMessage({seen:e.data},'*')})</script>`, { headers: { 'content-type': 'text/html' } });
+    if (path !== '/') return new Response(null, { status: 404 });
     return new Response(`<main id="exact-root"></main><script type="module">
       import * as frames from '/frame-messages.js';
       import {postMessage} from '/commands.js';

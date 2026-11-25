@@ -203,6 +203,10 @@ impl Catalog {
         locale: &str,
     ) -> Self {
         super::fallback::configure(&mut collection, locale);
+        #[cfg(target_os = "android")]
+        fonts::installed()
+            .symbols
+            .configure(&mut collection, locale);
         Self::attach(
             FontContext {
                 collection,

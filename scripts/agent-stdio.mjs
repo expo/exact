@@ -132,11 +132,15 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const installPhoneApp = () => {
     const installed = spawnSync('xcrun', ['devicectl', 'device', 'install', 'app', '--device', ph.udid, deviceBundle], { encoding: 'utf8' });
     if (installed.status !== 0) throw new Error(`device install: ${installed.stderr || installed.stdout || installed.error?.message}`);
-    if (world) {
+    const copyFixture = (path, name) => {
       const copied = spawnSync('xcrun', ['devicectl', 'device', 'copy', 'to', '--quiet', '--device', ph.udid,
-        '--domain-type', 'appDataContainer', '--domain-identifier', a.id, '--source', resolve(world), '--destination', 'tmp/exact-agent.world'], { encoding: 'utf8', timeout: 45000 });
-      if (copied.status !== 0) throw new Error(`phone world copy: ${copied.stderr || copied.error || copied.stdout}`);
-      extra = { ...extra, EXACT_WORLD: '~/tmp/exact-agent.world' };
+        '--domain-type', 'appDataContainer', '--domain-identifier', a.id, '--source', resolve(path), '--destination', 'tmp/' + name], { encoding: 'utf8', timeout: 45000 });
+      if (copied.status !== 0) throw new Error(`phone ${name} copy: ${copied.stderr || copied.error || copied.stdout}`);
+      return '~/tmp/' + name;
+    };
+    if (world) extra = { ...extra, EXACT_WORLD: copyFixture(world, 'exact-agent.world') };
+    if (extra.EXACT_AGENT_SUBSTITUTES?.startsWith('@')) {
+      extra = { ...extra, EXACT_AGENT_SUBSTITUTES: '@' + copyFixture(extra.EXACT_AGENT_SUBSTITUTES.slice(1), 'exact-agent-substitutes.json') };
     }
   };
   // A Mac bundle carries its own assets (bundle.mjs copies the capture into Contents/Resources); a bare binary

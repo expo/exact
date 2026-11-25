@@ -135,6 +135,8 @@ impl Call {
 #[derive(Default)]
 pub(in crate::runner) struct Calls {
     waiting: VecDeque<Call>,
+    /// The cold door reports no view while dispatching this action.
+    dispatching_hidden: bool,
     current: Option<Call>,
     /// The calls that ended, for `state.intents` and the door's `called`.
     ended: VecDeque<Json>,
@@ -236,9 +238,16 @@ impl<D: DataSource> Runner<D> {
             Some(i) => format!("control:{}", self.plan.str(self.plan.controls[i].kind)),
             None => format!("tool:system:{door}"),
         };
+        let hidden_entry = call.how.cold && call.how.hidden;
+        let cause = if origin == CallOrigin::Action {
+            Cause::control(id, call.how.foreground)
+        } else {
+            Cause::call(false, id)
+        };
         self.log(format!("{by} {name} dispatched"));
-        let cause = Cause::call(origin == CallOrigin::Action, id);
+        self.calls.dispatching_hidden = hidden_entry;
         let result = self.as_cause(cause, |r| r.run_action(tool.action, args, &[]));
+        self.calls.dispatching_hidden = false;
         match result {
             Ok(receipt) => Ok(Some(receipt)),
             Err(e) => {
@@ -391,23 +400,33 @@ impl<D: DataSource> Runner<D> {
 pub(crate) struct LinkedTools;
 
 impl<D: DataSource> Runner<D> {
-    /// Take off this commit's commands from `first` that a call does not
-    /// run, when the commit is a call's work (LLP 1111 D4a), after the call
-    /// too (LLP 1133.023 D7a). Not the tool seam's: a remote Play and a
-    /// world's marked message keep these rules in an app with no tool.
-    pub(in crate::runner) fn skip_in_call(&mut self, first: usize) {
+    /// Refuse a restricted contributor's request to show a hidden window
+    /// (LLP 1133.023 D7a). A call's remaining commands follow LLP 1111 D4a,
+    /// including in an app with no declared tools.
+    pub(in crate::runner) fn filter_call_commands(&mut self, first: usize) {
         let cause = self.cause();
-        if !cause.is_call() {
+        let hidden_show = cause
+            .hidden_show_reason()
+            .filter(|_| self.page.hidden || self.calls.dispatching_hidden);
+        if !cause.is_call() && hidden_show.is_none() {
             return;
         }
         let mut i = first;
         while i < self.commands.len() {
-            let name = self.commands[i].name.clone();
-            if RUN.contains(&name.as_str()) {
+            let command = &self.commands[i];
+            if let Some(reason) = hidden_show.filter(|_| command.shows_window()) {
+                let name = self.commands.remove(i).name;
+                if cause.is_call() && SKIPPED.contains(&name.as_str()) {
+                    self.seams.tools.call_skipped(self, &name);
+                }
+                self.log(format!("{name}: refused: hidden page ({reason})"));
+                continue;
+            }
+            if !cause.is_call() || RUN.contains(&command.name.as_str()) {
                 i += 1;
                 continue;
             }
-            self.commands.remove(i);
+            let name = self.commands.remove(i).name;
             if SKIPPED.contains(&name.as_str()) {
                 let t = self.seams.tools;
                 t.call_skipped(self, &name);

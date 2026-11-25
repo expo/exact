@@ -22,20 +22,21 @@ fn structure_role(node: &NodeRef<'_>) -> Option<i32> {
     })
 }
 
-/// A labelled empty item still belongs to the list. Keep its real bounds so
-/// keyboard and screen-reader navigation can find it without adding a hit area.
-pub(super) fn empty_item_bounds(
+/// An empty list item or live region can occupy a line of zero height.
+pub(super) fn empty_bounds(
     rect: Rect4,
     clip: Rect4,
     node: &NodeRef<'_>,
     role: i32,
+    live: i32,
 ) -> Option<Rect4> {
-    if role != role::LIST_ITEM
-        || (rect.2 != 0. && rect.3 != 0.)
-        || !node
+    let named_item = role == role::LIST_ITEM
+        && node
             .props
             .str(PropId::AccessibilityLabel)
-            .is_some_and(|s| !s.trim().is_empty())
+            .is_some_and(|s| !s.trim().is_empty());
+    if (rect.2 != 0. && rect.3 != 0.)
+        || !(named_item || matches!(live, flag::POLITE | flag::ASSERTIVE))
     {
         return None;
     }
@@ -48,7 +49,61 @@ pub(super) fn empty_item_bounds(
     Some((x, y, w, h))
 }
 
+fn has_inline_live_region(node: &NodeRef<'_>) -> bool {
+    node.child_nodes().any(|child| {
+        child.node_type == NodeType::Text
+            && child.style.display != Display::None
+            && child.props.bool(PropId::AccessibilityElementsHidden) != Some(true)
+            && (child.props.str(PropId::AccessibilityLive).is_some()
+                || matches!(
+                    child.props.str(PropId::AccessibilityRole),
+                    Some("status" | "alert")
+                )
+                || has_inline_live_region(&child))
+    })
+}
+
+impl Scope {
+    /// A transparent ancestor can silence an enclosing region without publishing a node.
+    pub(super) fn with_live(mut self, node: &NodeRef<'_>) -> Self {
+        let role = node.props.str(PropId::AccessibilityRole);
+        let live = node.props.str(PropId::AccessibilityLive).or(match role {
+            Some("status") => Some("polite"),
+            Some("alert") => Some("assertive"),
+            _ => None,
+        });
+        let setting = match live {
+            Some("polite") => flag::POLITE,
+            Some("assertive") => flag::ASSERTIVE,
+            Some("off") => flag::LIVE_OFF,
+            _ => 0,
+        };
+        if setting != 0 || self.live != flag::LIVE_OFF {
+            self.live = setting;
+        }
+        self
+    }
+}
+
 impl<D: DataSource> Presenter<D> {
+    pub(super) fn access_inline_controls(&self, b: &mut Build, node: &NodeRef<'_>, scope: Scope) {
+        if node.props.str(PropId::Text).is_some() {
+            return;
+        }
+        for child in node.child_nodes().filter(|n| n.node_type == NodeType::Text) {
+            if child.style.display == Display::None
+                || child.props.bool(PropId::AccessibilityElementsHidden) == Some(true)
+            {
+                continue;
+            }
+            if self.access_pressable(&child) || self.action_group(&child) {
+                self.access_walk(b, child.id, scope);
+            } else {
+                self.access_inline_controls(b, &child, scope.with_live(&child));
+            }
+        }
+    }
+
     /// Walk `id` and what is under it into the tree.
     pub(super) fn access_walk(&self, b: &mut Build, id: ViewId, scope: Scope) {
         let Some(node) = self.host.kernel().node(id) else {
@@ -67,6 +122,7 @@ impl<D: DataSource> Presenter<D> {
         if self.access_excluded(&node) {
             return;
         }
+        scope = scope.with_live(&node);
         if let Some(said) = node.props.bool(PropId::AccessibilityDisabled) {
             scope.disabled = said;
         }
@@ -142,6 +198,11 @@ impl<D: DataSource> Presenter<D> {
             {
                 if let Some(own) = b.out.last_mut() {
                     own.view = target.id;
+                    for action in self.access_actions(&target) {
+                        if !own.actions.iter().any(|a| a.0 == action.0) {
+                            own.actions.push(action);
+                        }
+                    }
                 }
             }
             return;
@@ -215,13 +276,35 @@ impl<D: DataSource> Presenter<D> {
                 return;
             }
             let text = node.node_type == NodeType::Text;
+            // A single label cannot give its spans different announcement priorities.
+            if text && self.access_label(&node).is_none() && has_inline_live_region(&node) {
+                let role = if node.props.heading().is_some() {
+                    role::HEADING
+                } else {
+                    role::GROUP
+                };
+                if let Some(own) = self.access_emit(b, &scope, &node, role, 0, [0.; 3], || {
+                    Some((String::new(), String::new()))
+                }) {
+                    scope.parent = own;
+                    for child in node
+                        .child_nodes()
+                        .filter(|child| child.node_type == NodeType::Text)
+                    {
+                        self.access_walk(b, child.id, scope);
+                    }
+                }
+                return;
+            }
             let name = || {
                 let label = self.access_label(&node);
                 let name = label.unwrap_or_else(|| match text {
                     true => self.access_inline_words(&node),
                     false => String::new(),
                 });
-                (!name.trim().is_empty()).then_some((name, String::new()))
+                (!name.trim().is_empty()
+                    || text && matches!(scope.live, flag::POLITE | flag::ASSERTIVE))
+                .then_some((name, String::new()))
             };
             // @ref LLP 1115.000 D12.5 — a heading by its role, never by an
             // `aria-level` alone (the kernel's `Props::heading`).
@@ -366,10 +449,20 @@ impl<D: DataSource> Presenter<D> {
                 {
                     scope.parent = own;
                 }
-            } else if (dialog.is_none() && Self::access_live(&node) != 0)
+            } else if (dialog.is_none()
+                && (matches!(scope.live, flag::POLITE | flag::ASSERTIVE)
+                    || self.action_group(&node)))
                 || (label.is_some() && matches!(aria, Some("group" | "radiogroup" | "region")))
+                || (node.props.get(PropId::TabIndex).is_some() && self.focusable(node.id))
             {
-                let words = (label.unwrap_or_default(), String::new());
+                let name = label.unwrap_or_else(|| {
+                    if node.props.str(PropId::AccessibilityActions).is_some() {
+                        self.access_name(&node)
+                    } else {
+                        String::new()
+                    }
+                });
+                let words = (name, String::new());
                 if let Some(own) =
                     self.access_emit(b, &scope, &node, role::GROUP, 0, [0.0; 3], || Some(words))
                 {

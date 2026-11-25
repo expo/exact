@@ -180,6 +180,8 @@ fn a_scrollers_keyboard_dismissal_is_its_authored_mode_and_unsaid_nothing() {
         (r#" keyboardDismissMode="none""#, 0),
         (r#" keyboardDismissMode="on-drag""#, 64),
         (r#" keyboardDismissMode="interactive""#, 128),
+        (r#" keyboardDismissMode="on-drag-with-accessory""#, 64),
+        (r#" keyboardDismissMode="interactive-with-accessory""#, 128),
     ] {
         let source = PAGE_OF_SCROLLERS.replace(
             r#"testId="inner" width=400"#,

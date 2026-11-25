@@ -62,10 +62,93 @@ Chrome 138 or later has `Translator` and `LanguageDetector`.
    a percentage, then the translation once Chrome has the pack.
 3. Firefox and Safari have no `Translator`: the menu has no Translate.
 
-## Android phone (stage 4, not built)
+## Android phone
 
-The Kotlin implementation over ML Kit is not built (LLP 1133.027 §12, stage
-4's as-built note). When it lands: on a Pixel, translate the message with
-Wi-Fi on; the line reads "Downloading Japanese…" while ML Kit fetches the
-model (about 30 MB), then the translation with "Translated with Google" and
-Google's attribution graphic (D10).
+The Android package uses ML Kit translate 17.0.3 and bundled language ID
+17.0.6. Creating a translator downloads the pair's missing models. English
+ships with the SDK. Concurrent creates for one pair share the transfer and
+the download conditions of the create that starts it. A failed download answers `NetworkError`, as in the
+[web model creation algorithm](https://webmachinelearning.github.io/writing-assistance-apis/#create-an-ai-model-object).
+
+1. In Excord on a Pixel, with Wi-Fi on, translate the Japanese message: the
+   button should read "Translate with Google". Check "Downloading Japanese…"
+   while the pack arrives, then the translation and its adjacent Google
+   Translate attribution graphic (D10). The app owns these labels.
+2. Kill Excord and open it again: the pair reads `available` at once, and a
+   translate needs no network (turn Wi-Fi and data off and translate again).
+3. Clear Excord's storage in Settings → Apps → Excord → Storage, open it
+   again: the pair reads `downloadable` (ML Kit keeps its models in the app's
+   own storage), and translating downloads again. Android has no setting
+   that removes one model while the app runs, so the `not-installed` failure
+   (a model gone under a live translator) has no hand check here; the
+   package reads the installed models before using the translator.
+
+The package drive is `bun packages/translation/test/agent.mjs android`. Set
+`ANDROID_SERIAL` to select the emulator. To exercise ML Kit in the built
+fixture, run `bun exact.mjs agent android --bind translation` with its tap,
+clock and state operations.
+
+The contributor tested on 2026-11-24 with a POCO X6 Pro (Android 14, HyperOS 1.0), not rooted, the fixture's
+minified release build, ML Kit `translate` 17.0.3 and `language-id` 17.0.6:
+
+| Step | Result |
+| --- | --- |
+| ja→en before any download | `downloadable` |
+| Create | `downloading` (no progress), then `available` after 2.9 s; `translator-1 ja en google-translate` |
+| Translate 明日の会議は十時からです。 | "Tomorrow's meeting is from ten o'clock." |
+| Relaunch | ja→en `available` at once |
+| Detect ja, ru, ko, empty | `ja 0.993`, `ru 0.9998`, `ko 0.9996`, each with `und` holding the rest; empty `und 1` |
+| zh-TW→en, en→en-GB, ja→xx | `unavailable`, `unsupported-options`; a create fails `NotSupportedError` (ML Kit's Chinese is Simplified) |
+| Translate after Destroy | `InvalidStateError` |
+| `agent.mjs android` | all passed |
+
+ML Kit 17.0.3 writes the source message and the full translation to Android
+logcat. The emulator reproduced both under the `native` and `exact` tags.
+A bug report or log capture can include both. The contributor also saw
+translation output on the POCO over wireless adb.
+
+On the Android 16 arm64 emulator, an ordinary Wi-Fi connection downloaded
+`en_ja.zip` from Google's model server in 9.2 s. Android recorded
+48,033,822 bytes transferred. The 31 installed files occupied 63,391,975
+bytes of file content. The model list changed from `["en"]` to
+`["en","ja"]`. The [Japanese pack](https://redirector.gvt1.com/edgedl/translate/offline/v5/high/r29/en_ja.zip) was fetched by ML Kit.
+
+- The sentence above and 1,262 characters in eight paragraphs translated
+  online and in airplane mode. The long translation kept all eight paragraphs.
+  The detector returned `ja` at 0.9931 for the sentence.
+- In airplane mode with Wi-Fi and mobile data off, creating fr→en returned
+  `NetworkError`. The pair stayed `downloadable` with no create pending.
+  Moving the Japanese pack out of the model directory under a live translator
+  made its next translation fail `InvalidStateError`, `not-installed`.
+- With both download conditions set, Android queued the request on mobile
+  data while unplugged. It had transferred zero bytes on Wi-Fi while
+  unplugged and completed after charging resumed.
+- With Play services disabled, the installed pair still translated. The
+  missing pair answered `unavailable`, `device-not-eligible`.
+- Only an app importing `@exact/translation` pays the APK cost. The final
+  signed arm64 fixture grew from 76,497,832 to 95,077,691 bytes
+  (+18,579,859). The first qualified build measured +18,563,543 bytes
+  on the same fixture. Both figures include the bundled language detector
+  and the 16,361,032-byte translation JNI library. Without the import, all
+  688 APK entry contents matched the parent and the APK had zero translation
+  classes.
+
+The shared fixture keeps its Android lock and verification metadata in
+`packages/barcode-detection/test/fixture/`. Both Android agent suites build
+against these files in strict mode. To update the graph, run
+`bun exact.mjs android --write-locks` in the generated fixture app and
+copy its `gradle.lockfile` and `gradle-verification.xml` back together.
+
+ML Kit’s default Android provider starts a model-directory migration at
+process launch. An APK binding translation uses Google’s manual initialization
+at the first bound ML Kit client. App-owned Kotlin that calls ML Kit directly
+uses `exact.app.ExactMlKit.initialize(context)` before that call. All clients
+share this process-wide initializer.
+[Google’s initialization API](https://developers.google.com/android/reference/com/google/mlkit/common/MlKit)
+
+Excord’s attribution UI and the Pixel hand check remain open.
+
+The bundled detector checks that it supports every expected language before
+creating a handle. ML Kit has no hints argument, so detection still considers
+all its languages. If the SDK cannot read its translation model inventory,
+availability reports `model-not-ready` and create returns `OperationError`.

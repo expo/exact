@@ -603,6 +603,8 @@ fn it_goes_where_a_button_goes_and_admits_dialog_and_popover_invokers() {
         "row toolbarPlacement=\"window\" role=\"toolbar\"\n  button appearance=\"auto\" buttonStyle=\"filled\" toolbarPlacement=\"navigation\" press=go\n    text \"Edit\"",
         "button appearance=\"auto\" press=go aria-keyshortcuts=\"Meta+S\"\n  text \"Save\"",
         "column id=\"menu\" popover=\"auto\" role=\"menu\"\n  button appearance=\"auto\" role=\"menuitem\" press=go\n    image \"symbol:send\"\n    text \"Send\"\n  if busy\n    button appearance=\"auto\" press=go\n      text \"Wait\"",
+        "column popover=\"auto\"\n  column role=\"group\"\n    if busy\n      button appearance=\"auto\" press=go\n        image \"symbol:send\"\n        text \"Send\"\n        text \"Send a copy\"",
+        "column popover=\"auto\"\n  column role=\"group\"\n    button buttonStyle=\"plain\" press=go\n      text \"Send\"",
         "scroll swipeContent=\"body\" swipeTrailing=\"mute\" overflow-x=\"scroll\" width=200 height=40\n  row id=\"body\" width=200 height=40\n    button appearance=\"auto\" press=go\n      text \"Open\"\n  button id=\"mute\" appearance=\"auto\" press=go aria-label=\"Mute\"\n    image \"symbol:send\"",
         "column id=\"confirm\" popover=\"auto\" role=\"alertdialog\"\n  text \"Delete it?\"\n  button appearance=\"auto\" popovertarget=\"confirm\" popovertargetaction=\"hide\" press=go destructive=true\n    text \"Delete\"\n  button appearance=\"auto\" popovertarget=\"confirm\" popovertargetaction=\"hide\"\n    text \"Cancel\"",
         "dialog id=\"ask\" closedby=\"any\"\n  button appearance=\"auto\" commandfor=\"ask\" command=\"close\" press=go\n    text \"Send\"",
@@ -615,6 +617,8 @@ fn it_goes_where_a_button_goes_and_admits_dialog_and_popover_invokers() {
         "button appearance=\"auto\" press=go role=\"dialog\"\n  text \"Go\"",
         "button appearance=\"auto\" press=go type=\"submit\"\n  text \"Go\"",
         "column id=\"menu\" popover=\"auto\"\n  row\n    button appearance=\"auto\" press=go\n      text \"Deep\"",
+        "column popover=\"auto\"\n  column role=\"group\"\n    column role=\"group\"\n      button appearance=\"auto\" press=go\n        text \"Deep\"",
+        "column popover=\"auto\"\n  column role=\"group\"\n    button appearance=\"none\" press=go\n      button appearance=\"auto\" press=go\n        text \"Nested\"",
         // A projection makes one item of a custom button, dropping what it holds.
         "row role=\"toolbar\" toolbarPlacement=\"window\"\n  button press=go\n    button appearance=\"auto\" press=go\n      text \"Inner\"",
     ] {

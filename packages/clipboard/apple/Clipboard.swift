@@ -1,5 +1,5 @@
 // @exact/clipboard on Apple (LLP 1133.006): the Async Clipboard API's
-// `write` with a `ClipboardItem` of `image/png` and `text/plain`.
+// `write` with a `ClipboardItem` of PNG, plain text and sanitized HTML.
 //
 // - The image is sanitized, as the specification asks and Chrome does: the
 //   PNG is decoded and a new PNG of its pixels written, so nothing else in
@@ -20,6 +20,7 @@ import CryptoKit
 import ExactPackage
 import Foundation
 import ImageIO
+import libxml2
 import UniformTypeIdentifiers
 #if os(macOS)
 import AppKit
@@ -31,7 +32,7 @@ public final class ClipboardModule: ExactPackage {
     /// D2's bounds: an image file by path, as bytes, its decoded pixels, and the text.
     static let mostFile = 64 * 1024 * 1024, mostBytes = 2 * 1024 * 1024, mostPixels = 64_000_000, mostText = 1024 * 1024
     /// The types this module writes (D1).
-    static let types: Set<String> = ["text/plain", "image/png"]
+    static let types: Set<String> = ["text/plain", "text/html", "image/png"]
 
     let context: ExactPackageContext
     /// The number of the latest write: one still decoding whose number is older lands nothing.
@@ -54,7 +55,7 @@ public final class ClipboardModule: ExactPackage {
             read(textOnly: name == "readText", reply: reply)
         case "write":
             guard let items = args["data"] as? [Any] else { return reply(refused("TypeError", "write takes a list of ClipboardItem")) }
-            write(items, reply: reply)
+            write(items, apple: args["apple"], reply: reply)
         case "writeText":
             guard let text = args["data"] as? String else { return reply(refused("TypeError", "writeText takes a string")) }
             write([["text/plain": text]], reply: reply)
@@ -81,7 +82,32 @@ public final class ClipboardModule: ExactPackage {
         return ["error": code, "message": message]
     }
 
-    private func write(_ items: [Any], reply: @escaping ([String: Any]) -> Void) {
+    private struct WriteOptions {
+        #if !os(macOS)
+        var values: [UIPasteboard.OptionsKey: Any] = [:]
+        #endif
+
+        init(_ apple: Any?) throws {
+            #if !os(macOS)
+            guard let apple else { return }
+            guard let words = apple as? [String: Any] else { throw FileRefusal(code: "TypeError", message: "apple options must be an object") }
+            if let local = words["localOnly"] {
+                guard let flag = local as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID() else {
+                    throw FileRefusal(code: "TypeError", message: "apple.localOnly must be a boolean")
+                }
+                values[.localOnly] = flag.boolValue
+            }
+            if let value = words["expirationDate"] {
+                guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(), number.doubleValue.isFinite else {
+                    throw FileRefusal(code: "TypeError", message: "apple.expirationDate must be finite epoch milliseconds")
+                }
+                values[.expirationDate] = Date(timeIntervalSince1970: number.doubleValue / 1000)
+            }
+            #endif
+        }
+    }
+
+    private func write(_ items: [Any], apple: Any? = nil, reply: @escaping ([String: Any]) -> Void) {
         // Chrome resolves an empty write and leaves the clipboard as it was.
         guard let item = items.first else { return reply([:]) }
         guard items.count == 1 else { return reply(refused("NotAllowedError", "Support for multiple ClipboardItems is not implemented.")) }
@@ -94,6 +120,12 @@ public final class ClipboardModule: ExactPackage {
             guard let s = t as? String else { return reply(refused("TypeError", "text/plain is a string")) }
             guard s.utf8.count <= Self.mostText else { return reply(refused("DataError", "text/plain is over 1 MiB")) }
             text = s
+        }
+        var html: String?
+        if let value = record["text/html"] {
+            guard let string = value as? String else { return reply(refused("TypeError", "text/html is a string")) }
+            guard string.utf8.count <= Self.mostText else { return reply(refused("DataError", "text/html is over 1 MiB")) }
+            html = string
         }
         var source: Data?
         switch record["image/png"] {
@@ -111,39 +143,41 @@ public final class ClipboardModule: ExactPackage {
         default:
             return reply(refused("TypeError", "image/png is an app:/ path or bytes"))
         }
+        let options: WriteOptions
+        do { options = try WriteOptions(apple) }
+        catch let why as FileRefusal { return reply(refused(why.code, why.message)) }
+        catch { return reply(refused("TypeError", error.localizedDescription)) }
         // This write supersedes any still decoding (D2).
         latest += 1
         let number = latest
         if let w = inFlight { inFlight = nil; w.reply(refused("AbortError", "a later write superseded it")) }
         inFlight = (number, context.request, reply)
-        let land = { [weak self] (image: Sanitized?) in
+        let finish = { [weak self] (result: Result<(String?, Sanitized?), FileRefusal>) in
             guard let self, self.latest == number, let w = self.inFlight, w.number == number else { return }
             self.inFlight = nil
-            w.reply(self.land(text: text, image: image))
-        }
-        guard let source else { return land(nil) }
-        queue.async {
-            let result = Self.sanitized(source)
-            DispatchQueue.main.async { [weak self] in
-                switch result {
-                case .success(let image): land(image)
-                case .failure(let why):
-                    guard let self, self.latest == number, let w = self.inFlight, w.number == number else { return }
-                    self.inFlight = nil
-                    w.reply(self.refused("DataError", why.description))
-                }
+            switch result {
+            case .success(let (html, image)): w.reply(self.land(text: text, html: html, image: image, options: options))
+            case .failure(let why): w.reply(self.refused(why.code, why.message))
             }
+        }
+        guard html != nil || source != nil else { return finish(.success((nil, nil))) }
+        queue.async { [html, source] in
+            let result = Result { () throws -> (String?, Sanitized?) in
+                (try html.map(Self.sanitizedHTML), try source.map { try Self.sanitized($0).get() })
+            }.mapError { $0 as? FileRefusal ?? FileRefusal(code: "DataError", message: String(describing: $0)) }
+            DispatchQueue.main.async { finish(result) }
         }
     }
 
     /// The pasteboard written now, and what state discloses of the write.
-    private func land(text: String?, image: Sanitized?) -> [String: Any] {
-        guard let board = paste(text: text, image: image) else {
-            return refused("UnknownError", "the session's private pasteboard could not be made")
+    private func land(text: String?, html: String?, image: Sanitized?, options: WriteOptions) -> [String: Any] {
+        guard let board = paste(text: text, html: html, image: image, options: options) else {
+            return refused("UnknownError", "could not write the pasteboard item")
         }
         writes += 1
         var types: [String] = []
         if text != nil { types.append("text/plain") }
+        if html != nil { types.append("text/html") }
         if image != nil { types.append("image/png") }
         var shown: [String: Any] = ["types": types, "pasteboard": board.name, "platformTypes": board.types]
         if let text { shown["text"] = String(text.prefix(200)) }
@@ -151,9 +185,11 @@ public final class ClipboardModule: ExactPackage {
             shown["image"] = ["width": image.width, "height": image.height, "bytes": image.png.count,
                               "sha256": SHA256.hash(data: image.png).map { String(format: "%02x", $0) }.joined()]
             let bytes = NumberFormatter.localizedString(from: image.png.count as NSNumber, number: .decimal)
-            say("wrote image/png \(image.width)×\(image.height) (\(bytes) bytes)\(text == nil ? "" : " and text/plain")")
+            say("wrote image/png \(image.width)×\(image.height) (\(bytes) bytes)\(types.filter { $0 != "image/png" }.map { " and " + $0 }.joined())")
+        } else if html == nil, let text {
+            say("wrote text/plain (\(text.utf8.count) bytes)")
         } else {
-            say("wrote text/plain (\(text?.utf8.count ?? 0) bytes)")
+            say("wrote \(types.joined(separator: " and "))")
         }
         // The agent's view of the module (`state.extensions.clipboard.implementation`, §7 item 3).
         context.state(["writes": writes, "lastWrite": shown])
@@ -362,37 +398,91 @@ public final class ClipboardModule: ExactPackage {
     }
 
     #if os(macOS)
-    private func paste(text: String?, image: Sanitized?) -> (name: String, types: [String])? {
+    private func paste(text: String?, html: String?, image: Sanitized?, options: WriteOptions) -> (name: String, types: [String])? {
         let board = self.board
-        board.clearContents()
+        let item = NSPasteboardItem()
         if let image {
-            // As a hand-built AppKit app copies an image, then the PNG the web names (D5).
             let picture = NSImage(cgImage: image.cgImage, size: NSSize(width: image.width, height: image.height))
-            board.writeObjects([picture])
-            board.addTypes([.png], owner: nil)
-            board.setData(image.png, forType: .png)
-        }
-        if let text {
-            if image == nil { board.setString(text, forType: .string) } else {
-                board.addTypes([.string], owner: nil)
-                board.setString(text, forType: .string)
+            for type in picture.writableTypes(for: board) where type != .png {
+                guard let data = picture.pasteboardPropertyList(forType: type) as? Data, item.setData(data, forType: type) else { return nil }
             }
+            guard item.setData(image.png, forType: .png) else { return nil }
         }
+        if let html, !item.setData(Data(html.utf8), forType: .html) { return nil }
+        if let text, !item.setString(text, forType: .string) { return nil }
+        board.clearContents()
+        guard board.writeObjects([item]) else { return nil }
         return (board.name.rawValue, (board.types ?? []).map(\.rawValue))
     }
     #else
     /// Nil when the session's private pasteboard could not be made: never the person's in its place.
-    private func paste(text: String?, image: Sanitized?) -> (name: String, types: [String])? {
+    private func paste(text: String?, html: String?, image: Sanitized?, options: WriteOptions) -> (name: String, types: [String])? {
         guard let board else { return nil }
         var item: [String: Any] = [:]
         if let image { item[UTType.png.identifier] = image.png }
+        if let html { item[UTType.html.identifier] = Data(html.utf8) }
         if let text { item[UTType.utf8PlainText.identifier] = text }
-        board.setItems([item], options: [:])
+        board.setItems([item], options: options.values)
         return (board.name.rawValue, board.types)
     }
     #endif
 
     // MARK: sanitizing (D1, D2)
+
+    private static let formatting = Set("a b blockquote br caption code dd del div dl dt em h1 h2 h3 h4 h5 h6 hr i ins kbd li mark ol p pre s small span strong sub sup table tbody td th thead tfoot tr u ul".split(separator: " ").map(String.init))
+    private static let containers: Set<String> = ["html", "body", "main", "section", "article", "header", "footer"]
+
+    /// Emit only known markup from the parsed tree. libxml2's HTML parser never renders the document.
+    private static func sanitizedHTML(_ html: String) throws -> String {
+        if html.isEmpty { return "" }
+        let flags = HTML_PARSE_NONET.rawValue | HTML_PARSE_NOERROR.rawValue | HTML_PARSE_NOWARNING.rawValue
+        let failure = FileRefusal(code: "NotAllowedError", message: "could not sanitize text/html")
+        guard let parser = htmlNewParserCtxt() else { throw failure }
+        defer { htmlFreeParserCtxt(parser) }
+        guard let doc = htmlCtxtReadMemory(parser, html, Int32(html.utf8.count), nil, "UTF-8", Int32(flags)) else { throw failure }
+        defer { xmlFreeDoc(doc) }
+        // libxml2 can return a partial document when it reaches its nesting limit.
+        guard xmlCtxtGetLastError(parser)?.pointee.level != XML_ERR_FATAL else { throw failure }
+        var output = ""
+        func escaped(_ value: String) -> String {
+            value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        func copy(_ node: xmlNodePtr) {
+            if node.pointee.type == XML_TEXT_NODE, let text = node.pointee.content {
+                output += escaped(String(cString: text))
+                return
+            }
+            guard node.pointee.type == XML_ELEMENT_NODE, xmlHasProp(node, "hidden") == nil else { return }
+            let tag = String(cString: node.pointee.name)
+            let keep = formatting.contains(tag)
+            guard keep || containers.contains(tag) else { return }
+            if keep {
+                output += "<" + tag
+                if tag == "a", let value = xmlGetProp(node, "href") {
+                    defer { xmlFree(value) }
+                    let href = String(cString: value)
+                    if let url = URLComponents(string: href), let scheme = url.scheme?.lowercased(),
+                       scheme == "mailto" || (["http", "https"].contains(scheme) && url.host?.isEmpty == false) {
+                        output += " href=\"" + escaped(href) + "\""
+                    }
+                }
+                output += ">"
+                if tag == "br" || tag == "hr" { return }
+            }
+            var child = node.pointee.children
+            while let current = child {
+                copy(current)
+                child = current.pointee.next
+            }
+            if keep { output += "</" + tag + ">" }
+        }
+        if let root = xmlDocGetRootElement(doc) { copy(root) }
+        // AppKit's HTML importer defaults to a legacy encoding without a charset signature.
+        if output.utf8.contains(where: { $0 >= 0x80 }) { output = "\u{feff}" + output }
+        guard output.utf8.count <= mostText else { throw FileRefusal(code: "DataError", message: "sanitized text/html is over 1 MiB") }
+        return output
+    }
 
     struct Sanitized {
         let png: Data

@@ -9,7 +9,7 @@ use crate::analysis::AnalysisDataSources;
 #[derive(Debug, Default)]
 pub(crate) struct CharCluster {
     pub chars: Vec<Char>,
-    pub is_emoji: bool,
+    pub emoji_presentation: Option<bool>,
     pub map_len: usize,
     pub start: u32,
     pub end: u32,
@@ -85,7 +85,7 @@ pub(crate) enum Status {
 impl CharCluster {
     pub(crate) fn clear(&mut self) {
         self.chars.clear();
-        self.is_emoji = false;
+        self.emoji_presentation = None;
         self.map_len = 0;
         self.start = 0;
         self.end = 0;

@@ -707,10 +707,7 @@ fn alert(
     }
 }
 
-/// Material's menu: 48 dp rows, each a label with a leading symbol where
-/// its button has one (a check where it is `aria-checked`), a destructive
-/// row in the error role, a line where the author wrote a separator, and a
-/// section's title over its rows.
+/// Menu rows share their measured text and icon slots with painting and hit testing.
 fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bool) -> Layout {
     let (dark, scale) = (inputs.dark, inputs.font_scale);
     // WinUI's MenuFlyout_themeresources.xaml: narrow input padding, 16 px
@@ -727,6 +724,14 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
         (Some(symbol), _) => Some(symbol.clone()),
         (None, true) => Some("checkmark".to_string()),
         (None, false) => None,
+    };
+    let trailing_check = |row: &Row| !desktop && row.checked && row.symbol.is_some();
+    let trailing = |row: &Row| {
+        if trailing_check(row) {
+            symbol + inset
+        } else {
+            0.
+        }
     };
     let rows = || {
         entries.iter().filter_map(|e| match e {
@@ -755,15 +760,30 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
     } else {
         LABEL_LARGE
     };
-    let labels: Vec<Option<Rc<Paragraph>>> = (entries.iter())
+    let labels: Vec<_> = (entries.iter())
         .map(|entry| {
             let room = |indent: f32| (widest - 2.0 * inset - indent).max(1.);
             Some(match entry {
                 Entry::Item(row) if desktop => {
                     let p = paragraph(engine, &row.title, Type(14., 20., 400, 0.), scale, None);
-                    p.ellipsized(room(indent(row))).unwrap_or(p)
+                    (p.ellipsized(room(indent(row))).unwrap_or(p), None)
                 }
-                Entry::Item(row) => label(engine, row, inputs, room(indent(row)), None),
+                Entry::Item(row) => {
+                    let width = room(indent(row) + trailing(row));
+                    let title = label(engine, row, inputs, width, None);
+                    let detail = row.subtitle.as_ref().map(|(text, direction)| {
+                        let p = directed_paragraph(
+                            engine,
+                            text,
+                            BODY_MEDIUM.emboldened(inputs.bold_text),
+                            scale,
+                            Some(width),
+                            *direction,
+                        );
+                        p.ellipsized(width).unwrap_or(p)
+                    });
+                    (title, detail)
+                }
                 Entry::Header(title, _, direction) => {
                     let p = directed_paragraph(
                         engine,
@@ -773,7 +793,7 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
                         None,
                         if desktop { Direction::Ltr } else { *direction },
                     );
-                    p.ellipsized(room(0.)).unwrap_or(p)
+                    (p.ellipsized(room(0.)).unwrap_or(p), None)
                 }
                 Entry::Separator => return None,
             })
@@ -782,19 +802,20 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
     let content = (entries.iter().zip(&labels))
         .filter_map(|(entry, p)| {
             let indent = match entry {
-                Entry::Item(row) => indent(row),
+                Entry::Item(row) => indent(row) + trailing(row),
                 _ => 0.,
             };
-            Some(indent + p.as_ref()?.width)
+            let (title, detail) = p.as_ref()?;
+            Some(indent + title.width.max(detail.as_ref().map_or(0., |p| p.width)))
         })
         .fold(0.0, f32::max);
     let width = (content + 2.0 * inset).clamp(range.0.min(widest), widest);
     let (mut items, mut targets) = (Vec::new(), Vec::new());
     let mut y = padding;
     for (entry, p) in entries.iter().zip(labels) {
-        let (row, p) = match (entry, p) {
-            (Entry::Item(row), Some(p)) => (row, p),
-            (Entry::Header(_, node, _), Some(p)) => {
+        let (row, p, detail) = match (entry, p) {
+            (Entry::Item(row), Some((p, detail))) => (row, p, detail),
+            (Entry::Header(_, node, _), Some((p, _))) => {
                 let tall = (p.height + 12.).max(if desktop { 28. } else { MENU_HEADER });
                 let ink = inputs.contrast.filter(|_| desktop).map_or_else(
                     || Role::OnSurfaceVariant.color(dark),
@@ -818,10 +839,11 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
             }
         };
         y += margin;
+        let text_height = p.height + detail.as_ref().map_or(0., |p| p.height);
         let tall = if desktop {
-            (p.height + 9.).max(28.)
+            (text_height + 9.).max(28.)
         } else {
-            (p.height + 16.0).max(MENU_ROW)
+            (text_height + 16.0).max(MENU_ROW)
         };
         let (ink, tint) = match (row.enabled, row.destructive) {
             (false, _) => (Role::Disabled, Role::Disabled),
@@ -836,24 +858,42 @@ fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bo
             || tint.color(dark),
             |p| if row.enabled { p.text } else { p.disabled },
         );
-        if let Some(role) = lead(row) {
-            let x = if !desktop && inputs.direction == Direction::Rtl {
-                width - inset - symbol
-            } else {
-                inset
-            };
-            let at = (x, y + (tall - symbol) / 2.0);
-            let rect = (at.0, at.1, symbol, symbol);
-            items.push(Item::Symbol(role, rect, tint));
-        }
-        let x = inset + indent(row);
-        let x = if !desktop && inputs.direction == Direction::Rtl {
-            label_x(&p, width - x, 1.)
-        } else {
-            label_x(&p, x, 0.)
+        let rtl = !desktop && inputs.direction == Direction::Rtl;
+        let icon_rect = |start| {
+            let x = if rtl { width - start - symbol } else { start };
+            (x, y + (tall - symbol) / 2., symbol, symbol)
         };
-        let at = (x, y + (tall - p.height) / 2.0);
+        if let Some(role) = lead(row) {
+            items.push(Item::Symbol(role, icon_rect(inset), tint));
+        }
+        if trailing_check(row) {
+            items.push(Item::Symbol(
+                "checkmark".into(),
+                icon_rect(width - inset - symbol),
+                tint,
+            ));
+        }
+        let start = inset + indent(row);
+        let x = |p: &Paragraph| {
+            if rtl {
+                label_x(p, width - start, 1.)
+            } else {
+                label_x(p, start, 0.)
+            }
+        };
+        let top = y + (tall - text_height) / 2.;
+        let at = (x(&p), top);
+        let detail_top = top + p.height;
         items.push(Item::Text(p, at, ink, row.node));
+        if let Some(p) = detail {
+            let at = (x(&p), detail_top);
+            let color = if row.enabled {
+                Role::OnSurfaceVariant
+            } else {
+                Role::Disabled
+            };
+            items.push(Item::Text(p, at, color.color(dark), row.node));
+        }
         let rect = if desktop {
             (4., y, width - 8., tall)
         } else {
@@ -1178,6 +1218,8 @@ mod tests {
         let row = Row {
             node: 2,
             title: "بداية هذا النص العربي الطويل الذي يستمر حتى نهاية العبارة".into(),
+            menu_label: None,
+            subtitle: None,
             direction: Direction::Rtl,
             symbol: Some("checkmark".into()),
             destructive: false,
@@ -1254,6 +1296,8 @@ mod tests {
             Entry::Item(Row {
                 node: 2,
                 title: "One".into(),
+                menu_label: None,
+                subtitle: None,
                 direction: exact_kernel::Direction::Ltr,
                 symbol: None,
                 destructive: false,
@@ -1339,6 +1383,8 @@ mod tests {
         let row = Row {
             node: 2,
             title: "Action label".into(),
+            menu_label: None,
+            subtitle: None,
             direction: exact_kernel::Direction::Ltr,
             symbol: Some("calendar".into()),
             destructive: false,

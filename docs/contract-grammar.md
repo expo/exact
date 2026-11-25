@@ -842,8 +842,11 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "before" "data" NL                   (* the first step does not wait for data *)
               | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
                                                      (* media feature, page fact, or permission.<module>; before observations *)
+              | extension-preference NL               (* available at boot *)
               | "answer" "source" IDENT "with" json NL (* what a source answers under verify *)
               | "fail" "fetch" STRING [ "times" NUMBER ] NL ; (* armed before the first data load *)
+extension-preference = "prefer" "extension" extension-key "=" ( json | "clear" ) ;
+extension-key = ? a drive key of the form extension.name or extension.name#import-path ? ;
 step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                                                      (* bytes into an input; or clock ticks: bpm, ms *)
               | "tap" STRING [ "hover" | "dblclick" | "contextmenu"
@@ -865,6 +868,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "authorize" [ "cancel" ] NL           (* the held sign-in, against the app's server (oauth recipe) *)
               | "presence" ( "allow" | "cancel" | "fail" | "lockout" | "invalidated" ) NL
                                                      (* answer the pending user-presence prompt, as tap @presence *)
+              | "fold" NUMBER NL        (* hinge angle from 0 through 180 degrees on an iOS simulator with a hinge *)
               | "background" NUMBER NL  (* whole milliseconds on iOS *)
               | "clock" ( "settle" | "data" | "+" NUMBER [ "real" ] | NUMBER ) NL
               | "clock" "held" { IDENT } [ NUMBER ( "s" | "ms" ) ] NL
@@ -874,6 +878,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "resize" NUMBER "x" NUMBER NL        (* the window, mid-test: 800x600 *)
               | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
                                                      (* change a media preference, page fact or module permission now *)
+              | extension-preference NL               (* subsequent calls see the value *)
               | "prefer" midi-fact { midi-fact } NL  (* each fact at most once *)
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
@@ -1085,6 +1090,28 @@ optional tolerance is in points and defaults to zero. On graphical hosts, `basel
 reads the first rendered text baseline in viewport points. A box without a reported
 text baseline fails the assertion.
 
+`display="none"` keeps a node in the test tree. Assert a hidden pane with
+`expect layout "list-pane" width == 0` and a shown one with a positive width;
+`expect tree missing "list-pane"` asserts that the node was removed.
+
+`size` leads a test's steps, as the launch lines below do. A file that does not
+parse runs no tests; read file-level errors as well as pass/fail totals. Give each initial
+width its own test. To check that a draft survives a width change in one session,
+use `resize` and scope the test to hosts that can perform it:
+
+```contract-test
+test "a draft survives a window resize" on web, macos, linux
+  size 1000x700
+  type "draft" "Eggs"
+  resize 390x844
+  expect text "draft" == "Eggs"
+```
+
+The drivers that perform `resize` are web, macOS and Linux; iOS refuses a
+mid-test `resize`. Changing a session's initial size
+does not test rotation or live iPad window resizing. The Android APK runs at
+the device's size and skips tests with `size`; `--headless` accepts it.
+
 Each test is a session of its own, opened with its
 launch lines: `size 1200x800`, `epoch "2026-09-21T12:00:00Z"`, `time-zone
 "America/New_York"`, `locale "fr-FR"` and `seed 7` are the driver's `--size`,
@@ -1098,10 +1125,29 @@ a module's permission (`prefer permission.notifications granted`, `denied` or
 single-value page facts, such as `prefer online false`, use the drive's parser
 and aliases; quote numeric values. On the Chromium web host, `prefer safe-area "47 0 34 0"`
 sets the top, right, bottom and left safe-area insets in whole CSS pixels. The
-browser applies them to CSS `env()` values. Native hosts use the device's insets. Folds (`posture`, `segments`, `gap`), mode
-pins and extension substitutes are drive-only for now. Defaults
+browser applies them to CSS `env()` values. Native hosts use the device's insets. Folds (`posture`, `segments`, `gap`) and mode
+pins require a drive. Defaults
 merge by resolved fact name, so aliases override each other; duplicate leading
 lines for one fact are errors. A bad name or value fails that test at its line.
+A package substitute uses the drive's key `<extension>.<name>[#<import-path>]`.
+Both parts take ASCII letters, digits and underscores. The extension can also
+contain hyphens. For example,
+`prefer extension store.outcome="cancel"`. The compiler checks the package,
+the substitute name and each JSON value where it is written, including file
+defaults that a test overrides. A record supplies its required fields unless
+the declaration fills them or accepts a partial value. Omit each status field
+that the package assigns to a permission on the test's host. The host supplies
+its declared status on an unavailable target. Otherwise it supplies the
+permission state, which a test can set with
+`prefer permission.<name> granted|denied|prompt`.
+`prefer extension store.outcome=clear`
+restores the package default. A leading line supplies the value before the
+app's first call. A later line changes subsequent calls. A package that reads
+its value once at startup sees a mid-test change on the next launch.
+Each test and each replay starts from package defaults and runs its lines in
+order. A reload or verify relaunch receives the current substitutes together,
+including a tag list and the tag in the field.
+
 The latest values survive `reload` and verify's relaunch. A file whose
 assertions depend on the date says so in the file. `epoch now` is the machine's
 clock, read once as each test launches, for a test whose app talks to a live
@@ -1591,8 +1637,12 @@ neither refuses the commit because it has no value to display.
 
 Finite string parameters are written `enum<"draft", "published">`. Members must be
 quoted, distinct strings, with at least one member. A literal call argument must be a
-member; a dynamic argument must have a compatible declared enum type. Shapes may
-use enums too; a source answer outside the declared vocabulary fails its shape check.
+member. A dynamic argument must have a compatible declared enum type. In `==` and
+`!=`, a string literal compared with an enum must be a member, in either operand
+order. This includes literals inside `some(…)` and list literals when comparing
+options and lists. The same rule applies to item comparisons in a list’s `includes` and
+`indexOf`. A dynamic string can be compared with any enum. Shapes may use enums
+too. A source answer outside the declared vocabulary fails its shape check.
 Generated TypeScript uses the corresponding string literal union. An enum's placeholder
 is its first member. Enums use ordinary string values at the data seam.
 
@@ -1661,6 +1711,11 @@ element's own props, pass to the module as one object. A package view accepts on
 its declared props and events beyond standard box attributes and common module
 events; an undeclared attribute is `lower-native-attr`.
 A literal `role` must name a concrete ARIA role, or it is refused.
+
+| ARIA attribute | Value | Meaning |
+| --- | --- | --- |
+| `aria-actions` | Space-separated element ids | Offers each target's press under its accessible name. A literal reference must name another element with a literal id in the expanded view and a press handler or link destination. Computed references resolve against mounted elements. |
+
 A known attribute binds to the module's box, and the box takes only layout,
 box and paint rows, handlers, `testId`, `id`, `class`, `data-*`, `role`, ARIA,
 `disabled` and `inert`; any other known name (`color`, `value`, `command`, `href`)
@@ -2172,6 +2227,7 @@ host.
 | Payload appended to captured arguments | Handler names |
 | --- | --- |
 | A string, then optionally an `InputEvent` | `change`, `input` on a text field, textarea, `select`, date or time input, and `type="radio"` (the radio's `value`); an action taking one more parameter also hears the [target](#form-controls-radio-inputevent-setselectionrange) |
+| A tag string, then optionally a `NotificationEvent` | `notificationshow` on the root for a local post presented while visible, and `notificationclick` for a click ([notifications](reference.md#notifications)) |
 | One string | `message`, `error`, `pictureinpictureerror` (why picture in picture failed) |
 | A string, then optionally a `KeyboardEvent` | `keycapture` (capture-phase `keydown`), `key` (bubble-phase `keydown`) and `keyup`: the key's name; an action taking one more parameter also hears the [modifiers, the physical key and whether it repeats](#keys) |
 | Two numbers, then optionally a `ScrollEvent` | `scroll`: left and top; an action taking one more parameter also hears the scroller's extents (below) |
@@ -2204,7 +2260,7 @@ host.
 | Zero or one frame record (the action takes it or leaves it) | on an `iframe`: `currententrychange`, `navigatesuccess` and `navigateerror` (`FrameNavigation`), `capture` (`FrameCapture`), `download` (`FrameDownload`), `newwindow` (`FrameNewWindow`) and `userpromptopened` (`FrameUserPrompt`) |
 | Zero or one `MIDIMessageEvent` (the action takes it or leaves it) | `midimessage`, on an element with `midiinputs=` ([MIDI](#midi-exactmidi-sendmidi-midimessage)) |
 | Zero or one `MouseEvent` (the action takes it or leaves it) | `press`: the modifier keys held, `shiftKey`, `ctrlKey`, `altKey`, `metaKey` (a shift-click, a ⌘-click; all false from a keyboard or assistive activation), and where the pointer was, `clientX`, `clientY`, from the viewport (0, 0 from a keyboard or assistive activation, as Chrome's; a popover's `left`/`top` can open it there, LLP 1021 D2) |
-| None | `enterpictureinpicture`, `leavepictureinpicture`, `beforeunload`, `cancel`, `close`, `scrollend`, `scrolldragstart`, `focus`, `blur`, `submit`, `load`, `dblclick`, `swiperight`, `swipeleft`, `refresh`, `loadedmetadata`, `play`, `playing`, `pause`, `ended`, `waiting`, `seeking`, `seeked`, `ratechange`, `volumechange`, `canplay`, `reachstart`, `reachend` |
+| None | `enterpictureinpicture`, `leavepictureinpicture`, `beforeunload`, `cancel`, `close`, `scrollend`, `scrolldragstart`, `focus`, `blur`, `submit`, `load`, `dblclick`, `swiperight`, `swipeleft`, `swipe`, `refresh`, `loadedmetadata`, `play`, `playing`, `pause`, `ended`, `waiting`, `seeking`, `seeked`, `ratechange`, `volumechange`, `canplay`, `reachstart`, `reachend` |
 
 On text fields and textareas, `input` reports every edit. An `input` handler
 should update raw draft state so live search, validation and button enablement
@@ -2515,9 +2571,9 @@ the drag carries files, plain text or a link and its source allows a copy
 readable under `fs.read doc:/`), `text`, `url` and the modifiers. `text` is
 the drag's plain text, its items' joined by line breaks; `url` is its first
 link that is not a file (a `file:` URL is a file), of any scheme, so check
-it before following it. Each is `""` when the drag has none, and neither is
-made from the other: a link whose source gives no plain text has `text` `""`. Files of any type
-are taken, and a dropped folder is a folder's handle (`fs.stat` says
+it before following it. Each is `""` when the drag has none, so a link
+whose source gives no plain text has `text` `""`. Each file
+arrives as a `doc:` handle, whatever its type, on the hosts that take files (the reference's table), and a dropped folder, on a host that takes one, is a folder's handle (`fs.stat` says
 `isDirectory`, `fs.readdir` lists it); the app never learns an absolute
 path. A drag with files over an `input` or a `textarea` inside such a node
 is the node's, as on the web, where its listener prevents the field's own
@@ -2536,10 +2592,17 @@ A browser without `getAsFileSystemHandle` hands the app read-only copies.
 iOS and iPadOS take a drag from another app or from the same one through
 UIKit's drop interaction, a file as a copy and no folder; a field there
 keeps text, links and text files, and the text of a drag that also carries
-files, as UIKit's text views do. tvOS, Linux, Android and the terminal take
-no drop yet. The driver's
+files, as UIKit's text views do. Android takes one from another app or
+from the same one, a file as a copy of its `content:` item and no folder,
+and no `file:` path, which another app cannot share; a field there keeps
+text, links and text files, as Android's text views do, unless the field
+declares `drop`, and gives a file to the `drop` above it. Android's apps
+send a link as text, so Android alone makes `url` from text: while a drop
+has no `url` yet, a text item whose whole last line is an `http://` or
+`https://` link gives that link as `url`, and its lines before it, such as
+the title Chrome sends, as `text`. tvOS, Linux and the terminal take no drop. The driver's
 `tap <target> drop [<path…>] [--text "…"] [--url "…"]` drops files,
-folders (not on iOS), text and a link, at least one of them, as a test's
+folders (not on iOS or Android), text and a link, at least one of them, as a test's
 `tap "zone" drop …` step does.
 
 `dragenter` and `dragleave` are DOM's, as a node hears them when it ignores
@@ -2662,10 +2725,17 @@ column key=move paste=pasteAt(selected) copy=copyCells cut=cutCells
 ```
 
 A Paste button or menu command can send a mutation whose data code calls
-`readText()` or `read()` from `@exact/clipboard` on macOS, iOS and the web.
+`readText()` or `read()` from `@exact/clipboard` on macOS, iOS, Android and the web.
+Android requires window focus and supplies `text/plain` and `image/png`.
 Declare `clipboard.read` in the data source's grants. A mount, tool, wake or
 headless session rejects with `NotAllowedError` and `person-required`.
 iOS decides whether to show its system paste prompt before reading another app's copy. The agent reads its session pasteboard.
+
+Data code can write `text/html` on macOS, iOS and the web. Pass the markup
+as a string in a `ClipboardItem` with an optional `text/plain` fallback.
+The host sanitizes the HTML before writing the item. An iOS write accepts
+a second argument such as `{ apple: { localOnly: true, expirationDate: when } }`,
+where `when` is epoch milliseconds. Other hosts ignore these options. [Clipboard formats](reference.md#clipboard-images).
 
 To write an image, data code imports `@exact/clipboard` (LLP 1133.006): the
 Clipboard API's `write([new ClipboardItem({"image/png": path, "text/plain":
@@ -3130,6 +3200,18 @@ the virtual clock).
   … paste` too and the paste never lands. On iPadOS a hardware keyboard's
   F13–F24 reach `key` handlers but no shortcut (UIKit's key commands name
   F1–F12 only); the driver's reach both, as everywhere.
+  `Mod` is the primary modifier in any modifier position. It means `Meta`
+  on Apple platforms and `Control` elsewhere. In a single chord, combining
+  `Mod` with either spelling is ambiguous. Chords in a list are alternatives for the
+  same action, including when two resolve to the same chord. The web reads
+  `navigator.userAgentData.platform` when present and otherwise
+  `navigator.platform`; an iPad reporting Mac receives Command. A server
+  render omits an attribute containing `Mod` until the browser sets the
+  resolved `aria-keyshortcuts` on the element. The host checks chord spelling
+  in literal attributes, list items, conditional arms, concatenations and state
+  initializers, while the compiler checks the literal `-exact-menu-keys` override.
+  `formatShortcut(chord)` gives one chord's key cap in the reader's notation,
+  or the empty string for an invalid chord or during server rendering.
 - **The Mac's menu bar.** Every button whose chord holds ⌘ is also a menu
   item, titled by its `aria-label` (or its text), placed by its chord as
   Apple's HIG places one: ⌘, is Settings…; ⌘[ ⌘] and a `tablist`'s tabs are
@@ -3189,9 +3271,9 @@ the virtual clock).
   On a top-level root, `-exact-menu-keys="close-window=none"` keeps File ▸
   Close Window (built with ⌘W) in its place with no chord, so ⌘W reaches the
   page, and `close-window=Meta+Shift+W` gives it ⇧⌘W. `close-window` is the
-  one id; the chord is one `aria-keyshortcuts` chord with `Meta` that is not
+  one id; the chord is one `aria-keyshortcuts` chord with `Meta` or `Mod` that is not
   one of the host's or the system's own (⌘Q, ⌘W, ⌘H, ⌘M, ⌘-comma and the like).
-  Another id, an id named twice, a chord without `Meta`, a standard chord,
+  Another id, an id named twice, a chord without `Meta` or `Mod`, a standard chord,
   expressions and non-root use fail with `lower-menu-keys`. With nothing
   holding ⌘W, AppKit's Close All ⌥⌘W shows as a row of its own: an app that
   removes ⌘W declares `-exact-menu-remove="close-all"` too. An app command
@@ -3350,7 +3432,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `setRangeText(id, text[, start, end[, selectionMode]])`: a field's range replacement, one `input`, preserve selection by default; one undo step on macOS, focused iOS fields and the Markdown editor ([form controls](#form-controls-radio-inputevent-setselectionrange)) | [Chrome comparison](../host/web/tests/field-range.test.mjs) |
 | `copyText(text)` | [Messages](../apps/messages/app.contract) |
 | `startTrace_EXPERIMENTAL()`, `stopTrace_EXPERIMENTAL()`: experimental, so named while the trace's fields may still change; a recording of each UI update UIKit makes, observed without asking for one or for a frame rate (iOS and tvOS 18 and later), elsewhere of each display-link callback, from which it estimates the frames the display showed again, from an app's own control and in any build, a production one included; `stopTrace_EXPERIMENTAL()` puts the trace on the clipboard as compact JSON and in a `trace-recording-*.json` file in the app's temporary directory; `stopTrace_EXPERIMENTAL(maxBytes)` copies it cut to that many bytes (its totals and scroll segments as rows, then the frames late the longest first, as many as fit), for a conversation that limits a message (a budget too small for its totals gets a note naming the size that fits them; that note can exceed the requested budget), and still saves the whole trace. On iOS it splits each scroll a person makes of an element's scroller, a route's page or the document into its drag and its glide, with its frame rate and delay relative to the display’s fastest rate; a Mac recording follows no scroller. It lists each late frame with its cause, its scroll offset, its update's phases, the main thread's busy time, its overrun and commit time, batches and host phases; [Frame trace fields](#frame-trace-fields) says what each field means. Apple hosts (tvOS, with no clipboard, only saves the file); the web and Linux refuse it in the journal | [`TraceRecording.swift`](../host/apple/Sources/ExactKit/TraceRecording.swift) |
-| `openURL(url)`: an absolute `http`, `https`, `mailto` or `tel` URL, or one of a scheme app.json's `open_url.schemes` declares (`"open_url": {"schemes": ["vscode", "zed"]}`, an editor's deep link), opened by whatever the system registered for it; the web's JS target, macOS and iOS open declared schemes (a browser asks first) and journal one nothing could open, and under the agent journal them instead (`openURL vscode: …`). Under the agent an `http` or `https` URL opens in the driver's browser on the web, in a tab the drive does not control, while macOS and iOS journal it and open nothing, so a test cannot go on in the opened page. `openURL(url, id)` also says whether it opened, as Electron's `shell.openExternal` does: `change` at the element `id` names hears `opened` when the system took the URL, or `failed` when it was refused or nothing could open it (no app registered for its scheme, a host with no browser). The web hears `opened` for any URL it hands the browser, which does not say what opened it. Where the agent's drive journals an open instead, macOS answers whether an app is registered for the URL and the other hosts answer `opened` A link's `href` of a declared scheme opens on macOS and iOS, which hand followed links to `openURL`; the web writes no such `href` (its link policy keeps the four schemes). `file`, `javascript`, `data` and the other schemes that run or read content cannot be declared. Any other scheme is refused in the journal (LLP 1133.000 §2) | No Contract fixture; the hosts' dispatch, such as [`host/web-js/commands.js`](../host/web-js/commands.js), [`OpenURL.swift`](../host/apple/Sources/ExactKit/OpenURL.swift) |
+| `openURL(url)`: an absolute `http`, `https`, `mailto` or `tel` URL, or one of a scheme app.json's `open_url.schemes` declares (`"open_url": {"schemes": ["vscode", "zed"]}`, an editor's deep link), opened by whatever the system registered for it; the web's JS target, Android, macOS and iOS open declared schemes and journal one nothing could open. On the web the browser asks first. Under the agent these hosts journal the declared scheme instead (`openURL vscode: …`). Under the agent an `http` or `https` URL opens in the driver's browser on the web, in a tab the drive does not control, while macOS and iOS journal it and open nothing, so a test cannot go on in the opened page. `openURL(url, id)` also says whether it opened, as Electron's `shell.openExternal` does: `change` at the element `id` names hears `opened` when the system took the URL, or `failed` when it was refused or nothing could open it (no app registered for its scheme, a host with no browser). The web hears `opened` for any URL it hands the browser, which does not say what opened it. Where the agent's drive journals an open instead, macOS answers whether an app is registered for the URL and the other hosts answer `opened`. A link's `href` of a declared scheme opens on macOS and iOS, which hand followed links to `openURL`; Android and the web keep inline links to the four ordinary schemes. `file`, `javascript`, `data` and the other schemes that run or read content cannot be declared. Any other scheme is refused in the journal (LLP 1133.000 §2) | No Contract fixture; the hosts' dispatch, such as [`host/web-js/commands.js`](../host/web-js/commands.js), [`OpenURL.swift`](../host/apple/Sources/ExactKit/OpenURL.swift) |
 | `setScheme(scheme)`: the app's scheme, `"light"`, `"dark"` or `"system"` (follow the system's appearance) | [Caltrain](../apps/caltrain/app.contract), [Markdown](../apps/markdown/app.contract) |
 | `setLocale(tag)`: the language the app's strings read, over the host's locale: `t(…)` texts, `lang`, `dir` and `exactTime().resolvedLocale` follow the table `tag` resolves to, by the lookup the host's locale takes (`"de-AT"`, then `"de"`, then the base). `exactTime().locale` and `formatLocale` stay the device's. The choice is kept across launches and applies before the first frame of the next; `setLocale("")` forgets it and follows the host's locale. A literal tag is checked here (`type-set-locale`), a computed one in the log when it runs; an app with no strings tables is refused (`type-strings-missing`) | [strings tests](../contract/cli/tests/it/strings.rs) |
 | `setMode(axis, value)`: sets one of the window's app modes, an axis of the app's design (`app.forma`) to one of its values, as `setMode("dark-style", "dim")`; a subtree pins its own with `-exact-mode` (LLP 1121 D5) | [Forma recipe](recipes/forma.md), [compiler tests](../contract/cli/tests/it/forma.rs) |
@@ -3384,7 +3466,7 @@ headless Linux host has no browser, clipboard, editor or dev menu: its
 journaled as unsupported there (it has no media player), and `haptic` does nothing. Its `selectText` focuses the field
 with its whole text selected, which the next typed key or Backspace replaces.
 On Android the same host has the platform behind it (LLP 1115.001 D5): `openURL` and a
-link out open the browser, the mail app or the dialer, `copyText` writes the clipboard,
+link out open the browser, the mail app or the dialer. `openURL` also opens declared schemes. `copyText` writes the clipboard,
 `haptic` and `-exact-press-haptic` play, and `share` shows the Sharesheet; notifications
 and the pickers are still refused there.
 iOS closes no window either: its `close` is journaled as unsupported. On the web,

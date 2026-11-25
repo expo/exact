@@ -80,3 +80,36 @@ fn file_handlers_are_linux_and_windows_binary_metadata() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn android_bakes_outgoing_schemes_independently_of_incoming_handlers() {
+    let dir = app("outgoing-schemes");
+    let mut manifest = Manifest::read(&dir).unwrap();
+    manifest.json["host"]["android"]["urlSchemes"] = serde_json::json!(["incoming"]);
+    let bake = |manifest: &Manifest| {
+        compatibility_with_trust(
+            &dir,
+            "android",
+            "aarch64-linux-android",
+            manifest,
+            Some(""),
+            "development",
+        )
+        .unwrap()
+    };
+    let before = bake(&manifest);
+    assert!(before.inputs["capabilities"]
+        .get("openUrlSchemes")
+        .is_none());
+    manifest.json["open_url"]["schemes"] = serde_json::json!(["outgoing"]);
+    let after = bake(&manifest);
+    assert_ne!(before.id, after.id);
+    assert_eq!(
+        after.inputs["capabilities"]["openUrlSchemes"],
+        serde_json::json!(["outgoing"])
+    );
+    assert_eq!(
+        after.inputs["capabilities"]["urlSchemes"],
+        serde_json::json!(["incoming"])
+    );
+}

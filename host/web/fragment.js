@@ -7,11 +7,11 @@
 // which runs the runner's `scrollToFragment`. `arm` comes with the router change that asks for a scroll, `scroll` once
 // the data has settled, and `cancel` with the app's own `scrollIntoView`, which wins.
 
-let armed = null, held = null;
+let armed = null, held = null, navigation;
 // Where each history entry (navigation.js's `exact`) left the scrollers it moved: what Back or Forward between two
 // fragments of one visit puts back, as the browser restores a traversed entry's scroll position. Weak references
 // let removed routes go; one reference per element lets later scroll events update its place in the entry.
-const kept = new Map(), references = new WeakMap(), entry = () => globalThis.history?.state?.exact;
+const kept = new Map(), references = new WeakMap(), state = () => navigation?.entry ?? globalThis.history?.state, entry = () => state()?.exact;
 function reference(el) {
   if (!references.has(el)) references.set(el, new WeakRef(el));
   return references.get(el);
@@ -48,7 +48,7 @@ function keep(r, at = entry()) {
 /** The fragment of a location: everything after its first `#`. */
 const fragmentOf = url => { const at = url?.indexOf("#") ?? -1; return at < 0 ? "" : url.slice(at + 1); };
 /** Whether the history entry shown is still `visit` at `fragment` (navigation.js writes `id` and `url`). */
-export const shows = (visit, fragment, s = globalThis.history?.state) => !s || (s.id === visit && fragmentOf(s.url) === fragment);
+export const shows = (visit, fragment, s = state()) => !s || (s.id === visit && fragmentOf(s.url) === fragment);
 /** The fragment percent-decoded, then UTF-8 decoded without BOM or fail (HTML, "find a potential indicated element"). */
 function decoded(fragment) {
   const bytes = [], utf8 = new TextEncoder();
@@ -66,6 +66,7 @@ const byId = (r, id) => id ? [...r.querySelectorAll("[id]")].find(el => el.id ==
  * by the person since (`person.personScrolls`, counted by navigation.js from the page's start) cancels it, and the
  * hold of an earlier one ends. */
 export function arm(root, op, person) {
+  navigation = person;
   const r = route(root, op.top), at = entry();
   if (op.pushed && r && at != null) {
     keep(r, at - 1);

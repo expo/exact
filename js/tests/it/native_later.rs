@@ -71,6 +71,39 @@ fn native_later_answers_from_the_modules_own_thread() {
     assert!(native.handler().is_none());
 }
 
+#[test]
+fn a_package_shell_reports_no_app_module_and_its_refusal_rejects() {
+    for (has_module, synchronous) in [
+        (
+            false,
+            "NotSupportedError|NotSupportedError: no app native module is installed for native.call",
+        ),
+        (true, "Error|the app's module answers no native.call"),
+    ] {
+        let root = Root::new();
+        let mut m = root.module();
+        let slot = m.native().unwrap();
+        let handler: exact_runner::NativeHandler = std::sync::Arc::new(|_, _| {});
+        if has_module {
+            slot.host(Some(handler));
+        } else {
+            slot.host_packages(Some(handler));
+        }
+        m.activate().unwrap();
+        let mut store = Store::new(GRANTS, []);
+        let a = args("native-probe", "");
+        assert!(
+            matches!(m.answer(&mut store, "work", &a), Ok(Answer::Later(request)) if request.is_native())
+        );
+        let refused = exact_runner::Outcome::module_refusal("NotSupportedError", None);
+        let answer = m.parse(&mut store, "work", &a, refused).unwrap();
+        assert_eq!(
+            finish(&mut m, &mut store, &a, answer),
+            format!("{has_module}|{synchronous}|NotSupportedError|NotSupportedError")
+        );
+    }
+}
+
 /// A module that takes no long calls answers `native.later` through `call`.
 #[test]
 fn native_later_without_a_handler_answers_now() {

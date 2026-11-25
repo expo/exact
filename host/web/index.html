@@ -384,6 +384,7 @@
   /* LLP 1123 D9: a content owner's local insets, which a length reads as `var(--exact-safe-area-inset-*)`, each
      registered so it computes to a length and inherits. The document's are the browser's `env()`; a sheet the
      look draws says its own (neutral.css). */
+  :root { --exact-bar-inset-start: 0px; --exact-bar-inset-end: 0px; }
   @property --exact-safe-area-inset-top { syntax: "<length>"; inherits: true; initial-value: 0px; }
   @property --exact-safe-area-inset-right { syntax: "<length>"; inherits: true; initial-value: 0px; }
   @property --exact-safe-area-inset-bottom { syntax: "<length>"; inherits: true; initial-value: 0px; }

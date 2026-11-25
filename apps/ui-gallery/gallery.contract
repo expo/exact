@@ -129,6 +129,7 @@ component GalleryDemo
     liftPicked: string
     os: string
     dragNote: DragNote
+    dragDevice: string
     dropPreviews: DropPreview[]
     dropFiles: action
     active: bool
@@ -394,7 +395,7 @@ component GalleryDemo
                 text "Favorite"
           if section == "drag"
             text "Try dragging a card into another app." font="-exact-subheadline" color="-exact-secondary-label" padding-bottom=8 testId=`intro-${section}`
-            DragDrop(host=os, note=dragNote, previews=dropPreviews, dropFiles=dropFiles)
+            DragDrop(host=os, device=dragDevice, note=dragNote, previews=dropPreviews, dropFiles=dropFiles)
 
 component LimitControl
   props
