@@ -8,5 +8,5 @@ export const site = {
   locale: 'en_US',
   shareImage: '/assets/og-image.png',
   description:
-    'Exact is a cross-platform application runtime: an interface in Contract, data in TypeScript or Rust, on the web, macOS, iOS and Linux.',
+    'Exact is an all-platform framework for real apps on the web, iOS, macOS, Android, Linux, and more.',
 };
