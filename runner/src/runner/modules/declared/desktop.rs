@@ -35,6 +35,9 @@ const MODIFIERS: &[&str] = &["Alt", "Control", "Shift", "Meta"];
 /// 1133.025 D3). ARIA's space-separated alternatives are refused: one chord
 /// per registration.
 pub fn chord_refusal(keys: &str) -> Option<&'static str> {
+    if crate::desktop::single_side_shortcut(keys).is_err() {
+        return Some("invalid");
+    }
     if keys.is_empty() || keys.contains(char::is_whitespace) {
         return Some("invalid");
     }
@@ -178,6 +181,9 @@ impl<D: DataSource> Runner<D> {
     fn chord_answer(&self, row: &ModulesRow, keys: &str) -> (bool, Json) {
         if let Some(reason) = chord_refusal(keys) {
             return (false, json!(reason));
+        }
+        if crate::desktop::single_side_shortcut(keys) == Ok(true) && self.host_target() != "macos" {
+            return (false, json!("unsupported"));
         }
         let register = (self.plan.modules.iter())
             .find(|m| {

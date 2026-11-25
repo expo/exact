@@ -1040,41 +1040,34 @@ fn test_preference_error_names_supported_facts_and_drive_only_forms() {
         "page fact",
         "module permission",
         "Quote numbers",
-        "Folds (`posture`, `segments`, `gap`), mode pins and extension substitutes are drive-only for now",
+        "Folds (`posture`, `segments`, `gap`) and mode pins require an agent drive",
     ] {
         assert!(e.message.contains(form), "{} lacks {form}", e.message);
     }
 }
 
 #[test]
-fn extension_preferences_name_the_drive_at_the_preference_name() {
-    for (line, name, position) in [
-        (
-            r#"test "low power mode"
-  prefer extension device.powerState={"lowPowerMode":true}"#,
-            "extension",
-            (2, 10, 19),
-        ),
-        (
-            "prefer extension device.powerState=clear",
-            "extension",
-            (1, 8, 17),
-        ),
-        (
-            "prefer Extension store.outcome=clear",
-            "Extension",
-            (1, 8, 17),
-        ),
-    ] {
-        let e = parse(line).unwrap_err();
-        assert_eq!(e.id, "syntax-drive-only-preference");
-        assert_eq!((e.span.line, e.span.col, e.span.end_col), position);
-        assert!(e.message.contains(&format!("`prefer {name}`")));
-        assert!(e
-            .message
-            .contains("cannot set extension substitutes or a package's agent values"));
-        assert!(e
-            .message
-            .contains("prefer extension <extension>.<name>=<JSON>|clear"));
-    }
+fn mode_pins_name_the_drive_at_the_preference_name() {
+    let e = parse("test \"dense\"\n  prefer mode density=compact").unwrap_err();
+    assert_eq!(e.id, "syntax-drive-only-preference");
+    assert_eq!((e.span.line, e.span.col), (2, 10));
+    assert!(e.message.contains("in an agent drive"));
+}
+
+#[test]
+fn package_preferences_use_the_drive_key_and_lowercase_step_name() {
+    parse("test \"qualified\"\n  prefer extension sdk-2.status#@fixture/sdk-2/apple=clear")
+        .unwrap();
+    parse(
+        r#"test "JSON"
+  prefer extension pkg.doc={
+    "price":1.25e-5,
+    "text":"a\rb\f\/c\uD83D\uDE00"
+  }
+  clock settle"#,
+    )
+    .unwrap();
+    let error = parse("test \"qualified\"\n  prefer Extension sdk.status=clear").unwrap_err();
+    assert_eq!((error.span.line, error.span.col), (2, 10));
+    assert!(error.message.contains("prefer extension"));
 }

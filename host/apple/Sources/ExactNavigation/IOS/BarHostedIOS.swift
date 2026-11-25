@@ -40,6 +40,13 @@ final class HostedItemView: UIView {
     private(set) var size = CGSize.zero
     /// What the element showed as it left or lost its size (`keepPicture`).
     private(set) var picture: UIView?
+    enum Edge { case leading, trailing }
+    /// Where the element is drawn in an item UIKit makes wider than it (a
+    /// spinner alone, in an item of UIKit's minimum width): at the bar's edge
+    /// for the item nearest it (`NavigationHost.project`), on the bar's layout
+    /// margin where a wider item's edge falls; otherwise centred, as UIKit's own
+    /// spinner draws in a custom view's frame.
+    var edge: Edge? { didSet { if edge != oldValue { setNeedsLayout() } } }
     private var relay: MountRelay?
     private var readout: UIAccessibilityElement?
     private lazy var width = widthAnchor.constraint(equalToConstant: 0)
@@ -56,6 +63,7 @@ final class HostedItemView: UIView {
         // A bar item stays bar-sized at the accessibility text sizes, where a long press shows it
         // larger (LLP 1141.004 D3); UIKit shows the viewer only at those sizes.
         addInteraction(UILargeContentViewerInteraction())
+        registerForTraitChanges([UITraitLayoutDirection.self]) { (view: HostedItemView, _) in view.setNeedsLayout() }
     }
     required init?(coder: NSCoder) { nil }
 
@@ -181,7 +189,13 @@ final class HostedItemView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let frame = CGRect(x: 0, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
+        let slack = bounds.width - size.width, rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
+        let x: CGFloat = switch edge {
+        case .leading?: rtl ? slack : 0
+        case .trailing?: rtl ? 0 : slack
+        case nil: max(0, slack) / 2
+        }
+        let frame = CGRect(x: x, y: (bounds.height - size.height) / 2, width: size.width, height: size.height)
         if stand.frame != frame { stand.frame = frame }
         readout?.accessibilityFrameInContainerSpace = bounds
     }

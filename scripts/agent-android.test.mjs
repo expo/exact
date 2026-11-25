@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { pollUntil } from './agent-launch.mjs';
+import { launchEnvironment, launchFacts, pollUntil } from './agent-launch.mjs';
 import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, androidPermissionPrompt, gradleApp, reverseRoot } from './agent-android.mjs';
 
 const focusCommand = "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'";
@@ -261,13 +261,15 @@ test('the Android reader uses a variant\'s package for lookup, launch and drive 
     writeFileSync(record, JSON.stringify({ package: 'com.example.android_app' }));
     expect(() => androidDeploy(fixture.app, fixture.bin, fixture.env)).toThrow(`installs as com.example.android_app, not ${id}: build it again (bun exact.mjs android --variant dev)`);
     writeFileSync(record, JSON.stringify({ package: id }));
-    const deployed = androidDeploy(fixture.app, fixture.bin, fixture.env);
+    const substitutes = launchEnvironment(launchFacts({substitutes: {"store.active": true}}), 'android').EXACT_AGENT_SUBSTITUTES;
+    const deployed = androidDeploy(fixture.app, fixture.bin, { ...fixture.env, EXACT_AGENT_SUBSTITUTES: substitutes });
     expect(deployed.dir).toBe(`/data/local/tmp/exact/${id}`);
     child = deployed.spawn();
     const closed = once(child, 'close');
     child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
     expect(await closed).toEqual([0, null]);
     const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands.some(args => args[0] === 'shell' && args[1].includes("x_agent_substitutes") && args[1].includes(substitutes))).toBe(true);
     expect(commands.some(args => args[0] === 'shell' && args[1].includes(`pm path '${id}'`))).toBe(true);
     expect(commands.some(args => args[0] === 'shell' && args[1].includes(`${id}/dev.exact.app.MainActivity`))).toBe(true);
     expect(commands.some(args => args.join(' ').includes(fixture.app.id))).toBe(false);

@@ -295,15 +295,7 @@ final class BarHostedIOSTests: XCTestCase {
             throw missing("scene", "UIKit lays out the bar in the app window")
         }
         let p = route([], kids: [])
-        let c = RouteController(try XCTUnwrap(p.views[1])), nav = UINavigationController(rootViewController: c)
-        c.host = p.navigationHost
-        window.isHidden = true
-        window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
-        window.rootViewController = nav
-        window.makeKeyAndVisible()
-        p.navigationHost.registerStack(nav)
-        p.navigationHost.prepareRoutes([c], in: nav)
+        let (c, nav) = try shownRoute(p, in: scene)
         func shown() -> [UIBarButtonItem] { c.navigationItem.rightBarButtonItems ?? [] }
         func frame(_ w: Double, _ h: Double) -> [String: Any] { ["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": w, "h": h] }
         p.apply(wireBatch([status(4), text(5, "Updating"), ["op": "children", "id": 4, "ids": [5]], ["op": "children", "id": 2, "ids": [3, 4]]]))
@@ -330,9 +322,9 @@ final class BarHostedIOSTests: XCTestCase {
         XCTAssertTrue(shown().isEmpty, "emptied, it leaves")
         XCTAssertNotNil(view.picture, "with a picture of what it showed")
         XCTAssertEqual(view.bounds.width, 90, accuracy: 0.5, "at the size it had")
-        p.apply(wireBatch([frame(80, 22)]))
+        p.apply(wireBatch([frame(20, 20)]))
         XCTAssertTrue(shown().first === item && view.picture == nil, "given a size again, it comes back as itself")
-        waitFor("UIKit lays the item out again") { view.window != nil && abs(view.bounds.width - 80) < 0.5 }
+        waitFor("UIKit lays the item out again") { view.window != nil && view.bounds.width < 89 }
         // Moved in the header, it reads the same to the bar, which hosts it again
         p.apply(wireBatch([["op": "create", "id": 6, "kind": "view"], ["op": "children", "id": 6, "ids": [4]], ["op": "children", "id": 2, "ids": [3, 6]]]))
         XCTAssertEqual(try bar(p).trailing.map(\.id), [4])
@@ -343,6 +335,44 @@ final class BarHostedIOSTests: XCTestCase {
         p.apply(wireBatch([["op": "children", "id": 6, "ids": []], ["op": "destroy", "id": 5], ["op": "destroy", "id": 4]]))
         XCTAssertNotNil(moved.picture, "the element leaves a picture of it in the item")
         XCTAssertTrue(shown().isEmpty, "which UIKit takes out")
+    }
+
+    /// UIKit gives an item narrower than its minimum (a spinner alone) that
+    /// minimum, and the readout is drawn in it (D3): at the bar's edge in the
+    /// item nearest it, on the bar's layout margin where a wider item's edge
+    /// falls, a leading one where no Back button is; centred in any other, as
+    /// UIKit's own spinner draws in a custom view's frame.
+    func testANarrowReadoutSitsAtTheBarsEdgeOnlyInTheOutermostItem() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "UIKit lays out the bar in the app window")
+        }
+        let frame = { (id: Int) -> [String: Any] in ["op": "frame", "id": id, "x": 0.0, "y": 0.0, "w": 20.0, "h": 20.0] }
+        let p = route([status(7), status(6), status(4), frame(7), frame(6), frame(4)], kids: [6, 4], header: [7, 3, 6, 4])
+        let (c, nav) = try shownRoute(p, in: scene)
+        p.navigationHost.prepareRoutes([c], in: nav)
+        func view(_ items: [UIBarButtonItem]?, _ id: UInt32) throws -> HostedItemView {
+            try XCTUnwrap((items ?? []).compactMap { $0.customView as? HostedItemView }.first { $0.node.id == id }, "\(id)")
+        }
+        let (leading, outer, inner) = (try view(c.navigationItem.leftBarButtonItems, 7), try view(c.navigationItem.rightBarButtonItems, 4), try view(c.navigationItem.rightBarButtonItems, 6))
+        waitFor("UIKit widens each item to its minimum") { [leading, outer, inner].allSatisfy { $0.window != nil && $0.bounds.width > 20.5 } }
+        for v in [leading, outer, inner] { v.layoutIfNeeded() }
+        XCTAssertEqual(leading.stand.frame.minX, 0, accuracy: 0.5, "the leading item's at its leading edge")
+        XCTAssertEqual(outer.stand.frame.maxX, outer.bounds.width, accuracy: 0.5, "the outermost trailing item's at its trailing edge")
+        XCTAssertEqual(inner.stand.frame.midX, inner.bounds.midX, accuracy: 0.5, "an inner one's centred")
+    }
+
+    /// A route over the hand-built presenter `p`, the root of a stack Exact keeps, shown in the app's window.
+    private func shownRoute(_ p: Presenter, in scene: UIWindowScene) throws -> (RouteController, UINavigationController) {
+        let c = RouteController(try XCTUnwrap(p.views[1])), nav = UINavigationController(rootViewController: c)
+        c.host = p.navigationHost
+        window.isHidden = true
+        window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = nav
+        window.makeKeyAndVisible()
+        p.navigationHost.registerStack(nav)
+        p.navigationHost.prepareRoutes([c], in: nav)
+        return (c, nav)
     }
 
     func testAPressInAReadoutsPopoverUsesThePopoversMount() throws {

@@ -551,8 +551,8 @@ fn tests(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    match contract::tests(&src).and_then(|t| contract::properties(&src).map(|p| (t, p))) {
-        Ok((mut t, mut p)) => {
+    match contract_syntax::parse(&src) {
+        Ok(file) => {
             let test = std::path::Path::new(input);
             let paired = test.with_file_name(
                 test.file_name()
@@ -562,6 +562,9 @@ fn tests(args: &[String]) -> ExitCode {
             );
             let app = test.with_file_name("app.contract");
             let app = if app.is_file() { app } else { paired };
+            let substitutes = contract::check_test_substitutes(&app, &file, None);
+            let mut t = contract::tests_with_defaults(file.tests, &file.launch);
+            let mut p = file.properties;
             let properties = if p.is_empty() {
                 Ok(())
             } else {
@@ -573,6 +576,7 @@ fn tests(args: &[String]) -> ExitCode {
                 .into_iter()
                 .flatten()
                 .chain(states.err().into_iter().flatten())
+                .chain(substitutes.err().into_iter().flatten())
                 .collect();
             if !errors.is_empty() {
                 for e in errors {

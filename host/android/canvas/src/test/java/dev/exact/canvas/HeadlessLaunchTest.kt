@@ -117,6 +117,24 @@ class HeadlessLaunchTest {
             @JvmStatic @Implementation fun drew(): Boolean { turns += "drew"; return false }
             @JvmStatic @Implementation fun dataActive(unshown: Boolean): Int { turns += "dataActive $unshown"; return 1 }
             @JvmStatic @Implementation fun fds() = IntArray(0)
+            var backTargets = intArrayOf(1, 1, 1)
+                set(value) { field = value; if (subscribed) Native.requestBack(value) }
+            private var subscribed = false
+            @JvmStatic @Implementation fun hostedBack(on: Boolean): Boolean {
+                subscribed = on
+                if (on) Native.requestBack(backTargets)
+                return true
+            }
+            var beforeBack: (() -> Unit)? = null
+            @JvmStatic @Implementation fun back(kind: Int, id: Int): Int {
+                beforeBack?.also { beforeBack = null }?.invoke()
+                turns += "back $kind $id"
+                return if (kind == 0 || kind == backTargets[1]) 1 else -1
+            }
+            @JvmStatic @Implementation fun backProgress(kind: Int, id: Int, phase: Int, progress: Float, edge: Int): Boolean {
+                turns += "preview $kind $id $phase"
+                return true
+            }
             @JvmStatic @Implementation fun background(applying: Boolean): Double { turns += "background"; return -1.0 }
             @JvmStatic @Implementation fun nextDue() = -1.0
         }

@@ -180,8 +180,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     override func loadView() {
         view = PresentationMount()
         paintBackdrop()
-        view.addSubview(node)
-        host?.presenter.session?.natives.routeLoaded(node)
+        node.movingRoute(into: view) { view.addSubview(node) }
     }
 
     /// The backdrop's colours last written, light and dark.
@@ -274,10 +273,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         } else if !usesPageViewport, let scroll = contentViewport {
             contentViewport = nil
             keyboardInset.apply(0, to: scroll)
-            view.addSubview(node)
+            node.movingRoute(into: view) { view.addSubview(node) }
             scroll.removeFromSuperview()
         }
-        if node.superview !== contentMount { contentMount.addSubview(node) }
+        if node.superview !== contentMount { node.movingRoute(into: contentMount) { contentMount.addSubview(node) } }
         host?.presenter.regrid(node) // from the controller's view, a grid origin of its own
     }
     #if os(iOS)

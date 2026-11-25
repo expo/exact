@@ -49,6 +49,31 @@ export const RECEIVER_ACTIONS = new Set([
 /** The foreground service types a package's service may declare. */
 export const SERVICE_TYPES = new Set(['systemExempted']);
 
+/** Translation's registrar eagerly migrates model files when ML Kit's provider initializes the process. */
+const defersMlKit = bound => bound.some(b => b.maven?.some(c => c.startsWith('com.google.mlkit:translate:')));
+
+/** Kotlin factories for the bound packages. When translation defers ML Kit, all SDK clients share its initializer. */
+export function extensionFactories(bound) {
+  const deferred = defersMlKit(bound);
+  return bound.map(pkg => {
+    const usesMlKit = deferred && pkg.maven?.some(c => c.startsWith('com.google.mlkit:') || c.startsWith('com.google.android.gms:play-services-mlkit-'));
+    const guard = pkg.className === 'exact.translation.TranslationModule' ? 'if (!c.agent) ' : '';
+    const init = usesMlKit ? `${guard}ExactMlKit.initialize(c.application); ` : '';
+    return `        ${JSON.stringify(pkg.extension)} to { c -> ${init}${pkg.className}(c) },`;
+  });
+}
+
+/** Emitted beside the roster of an APK that defers ML Kit. Google's manual initializer runs once per process. */
+export const mlKitInitializer = bound => defersMlKit(bound) ? ['', `object ExactMlKit {
+    private var initialized = false
+
+    @Synchronized fun initialize(context: android.content.Context) {
+        if (initialized) return
+        com.google.mlkit.common.MlKit.initialize(context)
+        initialized = true
+    }
+}`] : [];
+
 /** The packages a fragment may make visible (`<queries>`): Health Connect's provider on Android 13 and earlier (LLP
  * 1133.026 D19 item 3). */
 export const QUERY_PACKAGES = new Set(['com.google.android.apps.healthdata']);
@@ -201,6 +226,7 @@ function addQueries(queries, list, refuse) {
  * A refused entry names its source. A rationale activity carries the app's privacy policy as meta-data. */
 export function manifestFragment(bound, { privacyPolicy = null, appQueries = [] } = {}) {
   const lines = [], queries = new Set(), names = new Set(), removed = new Set();
+  if (defersMlKit(bound)) removed.add('com.google.mlkit.common.internal.MlKitInitProvider');
   addQueries(queries, appQueries, (what) => { throw new Error(`app.json host.android.queries: ${what} (LLP 1133.030 D9's allow-list)`); });
   const car = carAppService(bound);
   if (car) {

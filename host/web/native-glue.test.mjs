@@ -105,9 +105,9 @@ test('the wasm host identifies a package view before loading the app artifact', 
   const state = { packageViewOwners: { 'swatch-box': '@fixture/swatch' } };
   const attached = [];
   const native = { attach: element => attached.push(element.localName) };
-  const create = Function('host', 'pageNative', 'log', 'afterNativePaint', 'loadAfterPaint',
+  const create = Function('host', 'pageNative', 'HAS_PACKAGE_VIEWS', 'log', 'afterNativePaint', 'loadAfterPaint',
     glueDeclarations(glue, ['nativeCreate']) + '; return nativeCreate;')(
-      state, false, () => {}, async () => {}, async () => () => native);
+      state, false, false, () => {}, async () => {}, async () => () => native);
   const swatch = { localName: 'swatch-box' };
   create(swatch, 1);
   expect(swatch.exactNative.status()).toEqual({
@@ -126,9 +126,9 @@ test('a wasm game can still supply a package tag in the app artifact', async () 
   }, { customElements: { get: () => true }, MutationObserver: class { observe() {} } });
   const state = { packageViewOwners: { 'swatch-box': '@fixture/swatch', 'words-panel': '@fixture/words' } };
   const glue = readFileSync(new URL('./wasm/views.js', import.meta.url), 'utf8');
-  const create = Function('host', 'pageNative', 'log', 'afterNativePaint', 'loadAfterPaint',
+  const create = Function('host', 'pageNative', 'HAS_PACKAGE_VIEWS', 'log', 'afterNativePaint', 'loadAfterPaint',
     glueDeclarations(glue, ['nativeCreate']) + '; return nativeCreate;')(
-      state, true, () => {}, async () => {}, async () => h.exact.nativeHost);
+      state, true, false, () => {}, async () => {}, async () => h.exact.nativeHost);
   const place = (localName, id) => {
     const el = { localName, getAttribute: () => null };
     create(el, id);
@@ -140,4 +140,42 @@ test('a wasm game can still supply a package tag in the app artifact', async () 
   expect(provided.state).toBe('ready');
   expect(absent.error).toBe('the web wasm target cannot load the view factory for <words-panel> from @fixture/words');
   expect(app.error).toBe('the module artifact has no factory for app-absent');
+});
+
+test('a wasm package view loads the session’s factory table after paint without an app artifact', async () => {
+  const state = { packageViewOwners: { 'swatch-box': '@fixture/swatch' } };
+  const loaded = [], attached = [];
+  const create = Function('host', 'pageNative', 'HAS_PACKAGE_VIEWS', 'PACKAGE_VIEW_OWNERS', 'agentMode', 'now', 'afterNativePaint', 'loadAfterPaint', 'log',
+    glueDeclarations(readFileSync(new URL('./wasm/views.js', import.meta.url), 'utf8'), ['nativeCreate']) + '; return nativeCreate;')(
+    state, false, true, state.packageViewOwners, false, () => 0, async () => loaded.push('paint'), async file => {
+      loaded.push(file);
+      return () => ({ attach: el => attached.push(el.localName) });
+    }, () => {});
+  create({ localName: 'swatch-box' }, 7);
+  await state.packageNative;
+  expect(loaded).toEqual(['paint', './packages/views.js']);
+  expect(attached).toEqual(['swatch-box']);
+});
+
+test('a loading package view catches up with props and retires a late handle', async () => {
+  const h = host(null, { customElements: { get: () => true }, MutationObserver: class { observe() {} disconnect() {} } });
+  const waiting = [], updates = [], destroyed = [], logs = [];
+  const table = h.exact.nativeHost({ log: line => logs.push(line), packages: {
+    serves: () => true,
+    make: (_, { view }) => new Promise(resolve => waiting.push(() => resolve({
+      setProps: p => updates.push(p.caption), destroy: () => destroyed.push(view),
+    }))),
+  } });
+  let props = '{"caption":"old"}';
+  const nodes = [1, 2].map(id => ({ exactNative: { name: 'swatch-box', id }, getAttribute: () => props }));
+  const pending = nodes.map(node => table.attach(node));
+  await Promise.resolve();
+  props = '{"caption":"new"}';
+  nodes[1].exactNative.destroyed = true;
+  table.destroy(nodes[1]);
+  for (const release of waiting) release();
+  await Promise.all(pending);
+  expect(updates).toEqual(['new']);
+  expect(destroyed).toEqual([2]);
+  expect(logs.some(line => line.includes('destroy threw'))).toBe(false);
 });

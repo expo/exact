@@ -46,14 +46,23 @@ open class ExactActivity : Activity() {
         val start = stops
         view.viewTreeObserver.registerFrameCommitCallback { if (start == stops) { drawn = true; Controls.ready(this) } }
     }
-    private var moduleOwners: ModuleOwners? = null
+    internal var moduleOwners: ModuleOwners? = null
+        private set
     private var retainedModules: Any? = null
     private var moduleState: Bundle? = null
     // Primitive lifecycle facts keep AndroidX off the path of apps without module or hatch views.
     private var modulePhase = 1
     internal fun prepareHostedView() {
         if (moduleOwners == null) {
-            moduleOwners = ModuleOwners(root, moduleState, retainedModules).also { it.move(modulePhase) }
+            moduleOwners = ModuleOwners(root, moduleState, retainedModules, ::leave, ::commitBack, ::backProgress).also {
+                it.subscribe()
+                it.move(modulePhase)
+                if (Build.VERSION.SDK_INT >= 33) {
+                    it.onBackPressedDispatcher.setOnBackInvokedDispatcher(backCallback)
+                    backCallback.take(it.onBackPressedDispatcher.hasEnabledCallbacks())
+                }
+            }
+            requests.surfaces?.connectBack()
             moduleState = null
             retainedModules = null
         }
@@ -156,7 +165,7 @@ open class ExactActivity : Activity() {
         Extensions.bind(this)
         Setup.assets(applicationContext)
         // What the host asks of the platform (LLP 1115.001 D5), acted on here, on the main thread.
-        requests = Requests(this).also { it.back = { goes -> takeBack(goes) } }
+        requests = Requests(this).also { it.back = ::takeBack }
         // No background of its own: the window's shows behind the page, the launch theme's surface until the host says
         // the page's ([chrome]).
         root = Root(this)
@@ -286,43 +295,123 @@ open class ExactActivity : Activity() {
     private val backCallback by lazy { Back(this) }
     private var takesBack = false
     private fun takeBack(on: Boolean) {
+        moduleOwners?.let { it.subscribe(); return }
         if (on == takesBack) return
         takesBack = on
         if (Build.VERSION.SDK_INT >= 33) backCallback.take(on)
     }
-    private fun back() { if (Exact.back()) view.invalidate() else finish() }
+    private fun commitBack(kind: Int, id: Int): Int {
+        if (kind == 5 && requests.surfaces?.dismissBack(id) == true) return 1
+        return Exact.back(kind, id).also {
+            if (it == 1) view.invalidate() else if (it == 0) finish()
+        }
+    }
+    private fun back() { commitBack(0, 0) }
+    @Suppress("DEPRECATION")
+    private fun leave() { if (Build.VERSION.SDK_INT < 33) super.onBackPressed() else finish() }
     /** Predictive Back's gesture as it goes ([Native.backProgress]): exact2 previews the pop or the sheet's close. */
-    private fun backProgress(phase: Int, progress: Float, edge: Int) { Exact.backProgress(phase, progress, edge); view.invalidate() }
+    private fun backProgress(kind: Int, id: Int, phase: Int, progress: Float, edge: Int) {
+        Exact.backProgress(kind, id, phase, progress, edge)
+        view.invalidate()
+    }
 
     /** Before Android 13 Back arrives here, and the app's routes take it while they have somewhere to go. */
     @Deprecated("Android 13's OnBackInvokedDispatcher takes Back from then on ([Back]).")
     override fun onBackPressed() {
-        if (Build.VERSION.SDK_INT < 33 && takesBack) back() else @Suppress("DEPRECATION") super.onBackPressed()
+        if (Build.VERSION.SDK_INT < 33) {
+            moduleOwners?.let { it.receiveBack(); return }
+            if (takesBack) { back(); return }
+        }
+        @Suppress("DEPRECATION") super.onBackPressed()
     }
 
     /** [takeBack]'s callback from Android 13, in a class of its own: an older release never resolves its types. From
      * Android 14 it hears the gesture as it goes, so exact2 can preview what Back does (LLP 1115.001 D6, D12). */
     @android.annotation.TargetApi(33)
-    private class Back(activity: ExactActivity) {
-        private val dispatcher = activity.onBackInvokedDispatcher
-        private val callback: android.window.OnBackInvokedCallback =
-            if (Build.VERSION.SDK_INT >= 34) Predictive.callback(activity) else android.window.OnBackInvokedCallback { activity.back() }
+    private class Back(private val activity: ExactActivity) : android.window.OnBackInvokedDispatcher {
+        private val root = activity.onBackInvokedDispatcher
+        private var surface: android.window.OnBackInvokedDispatcher? = null
+        private var hosted: android.window.OnBackInvokedCallback? = null
+        private var registered = false
+        private fun target(): android.window.OnBackInvokedCallback? {
+            Exact.backHandoff?.flush()
+            return hosted
+        }
+        private fun entry(current: () -> Boolean): android.window.OnBackInvokedCallback =
+            if (Build.VERSION.SDK_INT >= 34) Predictive.callback(activity, ::target, current)
+            else android.window.OnBackInvokedCallback {
+                val handler = target()
+                if (current()) handler?.onBackInvoked() ?: activity.back()
+            }
+
+        private val callback = entry { true }
+        private var surfaceCallback: android.window.OnBackInvokedCallback? = null
+
         fun take(on: Boolean) {
-            if (on) dispatcher.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
-            else dispatcher.unregisterOnBackInvokedCallback(callback)
+            if (registered == on) return
+            registered = on
+            if (on) {
+                root.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
+                surfaceCallback?.let { surface?.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, it) }
+            } else {
+                root.unregisterOnBackInvokedCallback(callback)
+                surfaceCallback?.let { surface?.unregisterOnBackInvokedCallback(it) }
+            }
+        }
+
+        // A focusable window needs the same entry point. The activity keeps its place at default priority.
+        fun surface(next: android.window.OnBackInvokedDispatcher?, current: () -> Boolean) {
+            val window = next?.takeUnless { it === root }
+            if (window === surface) return
+            if (registered) surfaceCallback?.let { surface?.unregisterOnBackInvokedCallback(it) }
+            surface = window
+            surfaceCallback = window?.let { entry(current) }
+            if (registered) surfaceCallback?.let { window?.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, it) }
+        }
+
+        override fun registerOnBackInvokedCallback(priority: Int, callback: android.window.OnBackInvokedCallback) {
+            hosted = callback
+            take(true)
+        }
+        override fun unregisterOnBackInvokedCallback(callback: android.window.OnBackInvokedCallback) {
+            take(false)
         }
     }
 
-    /** Android 14's `OnBackAnimationCallback`, in an object of its own: an older release never resolves its types. The
-     * system eases the progress; the edge is `BackEvent`'s (0 the left, 1 the right). */
+    @android.annotation.TargetApi(33)
+    internal fun backSurface(window: android.window.OnBackInvokedDispatcher?, current: () -> Boolean = { false }) { backCallback.surface(window, current) }
+
     @android.annotation.TargetApi(34)
     private object Predictive {
-        fun callback(activity: ExactActivity) = object : android.window.OnBackAnimationCallback {
-            override fun onBackStarted(e: android.window.BackEvent) = activity.backProgress(0, e.progress, e.swipeEdge)
-            override fun onBackProgressed(e: android.window.BackEvent) = activity.backProgress(1, e.progress, e.swipeEdge)
-            override fun onBackCancelled() = activity.backProgress(2, 0f, 0)
-            override fun onBackInvoked() = activity.back()
-        }
+        fun callback(activity: ExactActivity, target: () -> android.window.OnBackInvokedCallback?, current: () -> Boolean) =
+            object : android.window.OnBackAnimationCallback {
+                private var started = false
+                private var handler: android.window.OnBackAnimationCallback? = null
+                override fun onBackStarted(e: android.window.BackEvent) {
+                    handler = target() as? android.window.OnBackAnimationCallback
+                    started = current()
+                    if (!started) { handler = null; return }
+                    handler?.onBackStarted(e) ?: activity.backProgress(0, 0, 0, e.progress, e.swipeEdge)
+                }
+                override fun onBackProgressed(e: android.window.BackEvent) {
+                    if (!started) return
+                    if (!current()) { onBackCancelled(); return }
+                    handler?.onBackProgressed(e) ?: activity.backProgress(0, 0, 1, e.progress, e.swipeEdge)
+                }
+                override fun onBackCancelled() {
+                    if (!started) return
+                    handler?.onBackCancelled() ?: activity.backProgress(0, 0, 2, 0f, 0)
+                    started = false
+                    handler = null
+                }
+                override fun onBackInvoked() {
+                    val selected = if (started) handler else target()
+                    if (!current()) { onBackCancelled(); return }
+                    started = false
+                    handler = null
+                    selected?.onBackInvoked() ?: activity.back()
+                }
+            }
     }
 
     /** The starting window goes the moment the first frame is drawn (Android 12's SplashScreen), in an object of its
@@ -831,6 +920,7 @@ open class ExactActivity : Activity() {
         accessibility.removeAccessibilityStateChangeListener(accessWatch)
         requests.destroy()
         release()
+        if (Build.VERSION.SDK_INT >= 33 && moduleOwners != null) backCallback.take(false)
         moduleOwners?.destroy(isChangingConfigurations)
         // A recreated activity can finish before mounting its first module view.
         if (moduleOwners == null && !isChangingConfigurations) retainedModules?.let { ModuleOwners.clear(it) }
@@ -841,8 +931,10 @@ open class ExactActivity : Activity() {
      * finished: its stop and onDestroy come after this activity's create or start) lets go of the host now, before
      * this one's view takes it, and from then on tells the host nothing. */
     private fun take() {
-        Exact.reader?.get()?.takeIf { it !== this }?.release()
+        if (reads()) return
+        Exact.reader?.get()?.release()
         Exact.reader = java.lang.ref.WeakReference(this)
+        moduleOwners?.subscribe()
     }
 
     /** Whether this activity's view is the one that reads the host. An activity that was replaced before it stopped
@@ -863,6 +955,7 @@ open class ExactActivity : Activity() {
         fields?.leaving()
         if (Fields.context === this) Fields.context = null
         if (!reads()) return
+        moduleOwners?.unsubscribe()
         if (::view.isInitialized) view.stopMainWakes()
         Exact.reader = null
         Exact.owner?.let { it.published = {}; it.asked = null; it.chrome = {} }
@@ -873,7 +966,7 @@ open class ExactActivity : Activity() {
     /** The launch extras that reach exact2 as its environment, written before its library loads; the launching
      * intent's URL or share only when it [arrived] now. */
     private fun environment(arrived: Boolean) {
-        val meta = Setup.environment(applicationContext, intent)
+        Setup.environment(applicationContext, intent)
         if (arrived) {
             launchUrl()?.let { android.system.Os.setenv("EXACT_LAUNCH_URL", it, true) }
             // A share that starts the app is its launch location, claimed before the boot (LLP 1133.024 D5).
@@ -881,7 +974,7 @@ open class ExactActivity : Activity() {
         }
         // filters=0: a box's filter runs on the CPU, not as a RenderEffect (exact2's EXACT_FILTERS), to compare.
         if (intent.getStringExtra("filters") == "0") android.system.Os.setenv("EXACT_FILTERS", "0", true)
-        if (meta?.getBoolean("dev.exact.development", false) != true) return
+        if (!Setup.development) return
         // rows=0: no kept rows, every frame walks every row (exact2's EXACT_ROWS), to compare.
         if (intent.getStringExtra("rows") == "0") android.system.Os.setenv("EXACT_ROWS", "0", true)
         // imgvp=N: keep N viewports of decoded pictures (exact2's EXACT_IMAGE_VIEWPORTS; 12 by default).
@@ -900,7 +993,7 @@ open class ExactActivity : Activity() {
         }
         listOf("x_agent", "x_auth_fixture", "x_hatches", "x_agent_storage", "x_agent_storage_fresh", "x_agent_stored", "x_plan", "x_store",
             "x_agent_epoch", "x_agent_seed", "x_agent_locale", "x_agent_format_locale", "x_agent_time_zone",
-            "x_agent_fail_fetch", "x_agent_process", "x_agent_home", "x_agent_login_env",
+            "x_agent_substitutes", "x_agent_fail_fetch", "x_agent_process", "x_agent_home", "x_agent_login_env",
             "x_agent_share", "x_agent_bind", "x_agent_pads", "x_agent_timing", "x_agent_presentation", "x_agent_chrome",
             "x_rows", "x_moves", "x_idle_frames", "x_slots", "x_lower", "x_row_reuse",
             "x_image_viewports", "x_defer_collections", "x_log_journal",

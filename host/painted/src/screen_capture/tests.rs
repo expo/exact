@@ -932,6 +932,7 @@ fn the_painted_substitute_captures_the_looked_up_window_for_one_session() {
     let context = Context::new(
         "screen-capture",
         true,
+        true,
         Default::default(),
         Default::default(),
         Default::default(),

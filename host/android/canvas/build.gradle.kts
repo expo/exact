@@ -9,6 +9,11 @@ tasks.withType<KotlinCompile>().configureEach {
 }
 // An app's build gives the reader a build directory of its own (`-PcanvasBuildDir`, agent-android.mjs).
 providers.gradleProperty("canvasBuildDir").orNull?.let { layout.buildDirectory = file(it) }
+// A locked app also verifies the reader's test graph. Include the translation suite in that graph
+// when the app binds it, and always in the standalone reader tests.
+val translationLibraries = listOf("com.google.mlkit:translate:17.0.3", "com.google.mlkit:language-id:17.0.6")
+val testTranslation = !providers.gradleProperty("mavenLock").isPresent ||
+    providers.gradleProperty("maven").orNull.orEmpty().split(',').containsAll(translationLibraries)
 android {
     namespace = "dev.exact.canvas"
     compileSdk { version = release(37) { minorApiLevel = 2 } }
@@ -51,6 +56,9 @@ android {
             "../../../packages/recording/android", "../../../packages/recording/test",
             "../../../packages/speech-recognition/android", "../../../packages/speech-recognition/test",
         ))
+        if (testTranslation) getByName("test").kotlin.directories.addAll(listOf(
+            "../../../packages/translation/android", "../../../packages/translation/test",
+        ))
     }
     // Robolectric keeps a sandbox for each SDK level and shadow set the tests name, more than
     // Gradle's default 512 MB worker holds.
@@ -64,6 +72,7 @@ dependencies {
     composeCompilerForTests("org.jetbrains.kotlin:kotlin-compose-compiler-plugin-embeddable:${KotlinCompilerVersion.VERSION}")
     testImplementation(platform(libs.compose.bom))
     testImplementation(libs.compose.material3)
+    testImplementation("androidx.activity:activity-compose:1.9.0")
     testImplementation(libs.compose.test.junit4)
     testImplementation("androidx.core:core:1.16.0")
     testImplementation("com.google.firebase:firebase-messaging:26.0.1")
@@ -77,6 +86,7 @@ dependencies {
     testImplementation("com.google.android.play:app-update:2.1.0")
     testImplementation("com.google.mlkit:face-detection:16.1.7")
     testImplementation("com.google.mlkit:text-recognition:16.0.1")
+    if (testTranslation) translationLibraries.forEach { testImplementation(it) }
     testImplementation("com.google.mlkit:barcode-scanning:17.3.0")
     testImplementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
     testImplementation("junit:junit:4.13.2")

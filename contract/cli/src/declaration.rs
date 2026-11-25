@@ -15,6 +15,7 @@ mod implementation;
 mod json;
 mod permissions;
 
+pub(crate) use json::{agent_shapes, agent_value_fits};
 use json::{is_json, json_holds};
 
 /// A refusal: its id and message; the caller adds the `use`'s span.
@@ -57,7 +58,7 @@ pub(crate) fn read(
                 .as_str()
                 .ok_or_else(|| refuse("an interface has a `name`".into()))?;
             let dir = path.parent().unwrap_or(Path::new("."));
-            file.uses = implementation::shape_imports(&json, dir, origin, consulted, span).map_err(refuse)?;
+            file.uses = implementation::shape_imports(&json, dir, origin, consulted, span, |_, _| {}).map_err(refuse)?;
             let implementations = implementation::endorsed(dir).map_err(refuse)?;
             for (subpath, implementation) in &implementations {
                 let names: Vec<UseName> = object(&implementation["shapes"])

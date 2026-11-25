@@ -1,7 +1,7 @@
 // Firefox and WebKit carrier for scripts/agent.mjs. Chrome deliberately stays
 // in agent-web.mjs on its direct CDP pipe; importing Playwright is deferred until
 // one of these browsers is selected.
-import { storedScript } from './agent-web.mjs';
+import { storedScript, substitutesScript } from './agent-web.mjs';
 import { MalformedOperation, keyArguments } from './agent-keys.mjs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -318,6 +318,12 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
     };
     await installFaults(facts.failFetch);
     const address = agentPage(new URL(hosted.url), { facts, storage, env });
+    let substituteScript;
+    const installSubstitutes = async (values, restore = false) => {
+      await substituteScript?.dispose();
+      substituteScript = values && Object.keys(values).length ? await page.addInitScript(substitutesScript(values, address.origin, restore)) : undefined;
+    };
+    await installSubstitutes(facts.substitutes, facts.restoreSubstitutes);
     const stored = storedScript(env, address.origin);
     const seedScript = stored && await page.addInitScript(stored);
     await page.goto(address.href, { waitUntil: 'commit' });
@@ -405,8 +411,9 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
     const carrier = {
       host: 'web', browser: name, phasedTouch: false, boot, hostLines, evaluate, launchFacts: facts,
       async gpuMs() { const ms = await page.locator('#exact-root').getAttribute('data-gpu-ms'); return ms == null ? null : Number(ms); },
+      installSubstitutes,
       /** A fresh document on this page: its origin's storage emptied, or `keep`ing it (a test's `reload`, mail F19). */
-      async reset({ keep = false, failFetch, epoch } = {}) {
+      async reset({ keep = false, failFetch, substitutes, epoch } = {}) {
         await pointer.release();
         mouseAt = null;
         for (const keys of heldKeys.values()) for (const key of [...keys].reverse()) await page.keyboard.up(key).catch(() => {});
@@ -423,6 +430,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
           await context.clearCookies();
         }
         const destination = withEpoch(withFaults(keep ? page.url() : address.href, failFetch), epoch);
+        if (!keep || substitutes !== undefined) await installSubstitutes(keep ? substitutes : facts.substitutes, keep || facts.restoreSubstitutes);
         await installFaults(failFetch ?? (keep ? undefined : facts.failFetch ?? ''));
         hostLines.length = 0;
         if (keep) await reloadPlaywrightPage(page, destination);

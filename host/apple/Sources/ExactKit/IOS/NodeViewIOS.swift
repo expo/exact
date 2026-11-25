@@ -1203,6 +1203,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         Self.scrollLayoutEpoch &+= 1
         if Self.containerMoves == 0 { pressEpoch &+= 1; cancelPressContact(reparenting: true); presenter?.unshown(self) } // a new parent: shown elsewhere
         super.didMoveToSuperview()
+        if superview != nil { presenter?.session?.natives.retryWaitingScreens(in: self) }
         Self.textRasterAncestryChanged(self)
         Self.extensionsUnder(self)
         ScrollMembership.epoch &+= 1

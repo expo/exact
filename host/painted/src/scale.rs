@@ -156,6 +156,16 @@ impl<D: DataSource> Host<D> {
             let at_ms = self.now_ms;
             return (self.commit(&[Timed { at_ms, receipt }], None)).map_or(Ok(true), Err);
         }
+        // A rotation can swap the cutout's side without changing the viewport
+        // or producing a commit. A centered sheet's overlap also follows its width.
+        if self.navigation.bars.room.is_some()
+            && (size.is_some()
+                || insets.is_some_and(|edges| {
+                    edges != [before.top, before.right, before.bottom, before.left]
+                }))
+        {
+            restyled |= self.project_bars();
+        }
         if size.is_some() {
             let laid_out = self.layout().err();
             self.observe_layout();

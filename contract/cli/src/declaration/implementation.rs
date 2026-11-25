@@ -13,6 +13,7 @@ pub(super) fn shape_imports(
     origin: &Origin,
     consulted: &mut Vec<PathBuf>,
     span: Span,
+    mut record: impl FnMut(&str, &Value),
 ) -> Result<Vec<UseDecl>, String> {
     let Some(imports) = json.get("shapeImports") else {
         return Ok(Vec::new());
@@ -45,6 +46,7 @@ pub(super) fn shape_imports(
                     "{path}'s {name} must be a record of numbers, strings or booleans"
                 ));
             }
+            record(name, &source["shapes"][name]);
             records.push(UseName {
                 name: name.into(),
                 alias: None,

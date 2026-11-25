@@ -231,6 +231,9 @@ class ExtensionContext internal constructor(
     /** The activity that shows the app now, if one does: a permission's rationale is read from it. */
     val activity: Activity? get() = Extensions.front()
 
+    /** The trust with which the APK was built. */
+    val development: Boolean get() = Setup.development
+
     /**
      * Under the agent, unless the drive bound this extension as in production (`--bind`): an implementation that is its
      * own substitute then opens no device and asks the OS for nothing (LLP 1133.006 D8).

@@ -7,6 +7,9 @@ import android.os.HandlerThread
 import android.view.View
 import android.widget.EditText
 import android.widget.FrameLayout
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.compose.BackHandler
+import androidx.activity.findViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -86,6 +89,10 @@ class ComposeModuleTest {
     }
 
     class Reader : ExactActivity() {
+        var platform: android.window.OnBackInvokedDispatcher? = null
+        @android.annotation.TargetApi(33)
+        override fun getOnBackInvokedDispatcher() = platform ?: super.getOnBackInvokedDispatcher()
+
         companion object { internal var publication: Owner? = null }
         val module = Module()
         val plain = PlainModule()
@@ -148,6 +155,7 @@ class ComposeModuleTest {
 
     @Before fun start() {
         Exact.owner = null; Exact.reader = null; Exact.live = true; Exact.unshown = false
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 1, 1)
         AuthTest.Environment.values.clear()
         controller.create().start().resume().visible()
     }
@@ -170,6 +178,7 @@ class ComposeModuleTest {
         assertNull(root.findViewTreeLifecycleOwner())
         assertNull(root.findViewTreeSavedStateRegistryOwner())
         assertNull(root.findViewTreeViewModelStoreOwner())
+        assertNull(root.findViewTreeOnBackPressedDispatcherOwner())
         controller.pause().stop().start().resume()
         assertNull(root.findViewTreeLifecycleOwner())
     }
@@ -188,12 +197,244 @@ class ComposeModuleTest {
         assertNotNull(owner)
         assertSame(owner, root.findViewTreeSavedStateRegistryOwner())
         assertSame(owner, root.findViewTreeViewModelStoreOwner())
+        assertSame(owner, root.findViewTreeOnBackPressedDispatcherOwner())
         activity.mount()
         settle()
         val view = activity.module.view
         assertSame(owner, view.findViewTreeLifecycleOwner())
         assertSame(owner, view.findViewTreeSavedStateRegistryOwner())
         assertSame(owner, view.findViewTreeViewModelStoreOwner())
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun systemBackClosesAnExactSheetThenVisitsBothComposeLevelsBeforePopping() {
+        val requests = ReflectionHelpers.getField<Requests>(activity, "requests")
+        requests.perform(intArrayOf(5, 0, 1, 1))
+        activity.mount()
+        val level = mutableStateOf(2)
+        activity.module.view.setContent {
+            BackHandler(enabled = level.value > 0) { level.value-- }
+            BasicText("level ${level.value}")
+        }
+        settle()
+        val turns = HeadlessLaunchTest.Host.turns
+        turns.clear()
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 2, 42, 2, 42)
+        activity.onBackPressed()
+        assertEquals(listOf("back 2 42"), turns.filter { it.startsWith("back ") })
+        assertEquals(2, level.value)
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 1, 1)
+        for (expected in listOf(1, 0)) {
+            activity.onBackPressed()
+            settle()
+            assertEquals(expected, level.value)
+        }
+        activity.onBackPressed()
+        assertEquals(listOf("back 2 42", "back 1 1"), turns.filter { it.startsWith("back ") })
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(0, 0, 0)
+        assertFalse(activity.module.view.findViewTreeOnBackPressedDispatcherOwner()!!.onBackPressedDispatcher.hasEnabledCallbacks())
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun aSheetAndADirectHandlerFollowAndroidXRegistrationOrderAcrossStop() {
+        activity.mount()
+        val owners = activity.content.findViewTreeOnBackPressedDispatcherOwner()!!
+        val turns = HeadlessLaunchTest.Host.turns
+        turns.clear()
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 2, 42, 2, 42)
+        val direct = object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() { turns += "back direct" }
+        }
+        owners.onBackPressedDispatcher.addCallback(direct)
+        activity.onBackPressed()
+        controller.pause().stop().start().resume()
+        activity.onBackPressed()
+        assertEquals(listOf("back direct", "back direct"), turns.filter { it.startsWith("back ") })
+        direct.remove()
+        activity.onBackPressed()
+        assertEquals("back 2 42", turns.last { it.startsWith("back ") })
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun aMenuKeepsBackWhenAnExactSheetOpensBeneathIt() {
+        activity.mount()
+        val turns = HeadlessLaunchTest.Host.turns
+        turns.clear()
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 4, 30, 4, 30)
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 4, 30, 2, 42, 4, 30)
+        activity.onBackPressed()
+        assertEquals(listOf("back 4 30"), turns.filter { it.startsWith("back ") })
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun aClosedSelectOnTheFirstRouteHandsItsPendingBackToTheHostedHandler() {
+        activity.mount()
+        var received = 0
+        activity.module.view.setContent { BackHandler { received++ } }
+        settle()
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 4, 30, 4, 30)
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(0, 0, 0)
+        activity.onBackPressed()
+        assertEquals(1, received)
+        assertFalse(activity.isFinishing)
+    }
+
+    @Config(sdk = [33, 34])
+    @Test fun theWindowRegistrationFollowsEnabledHandlersAndForwardsPredictiveEvents() {
+        var registered: android.window.OnBackInvokedCallback? = null
+        activity.platform = object : android.window.OnBackInvokedDispatcher {
+            override fun registerOnBackInvokedCallback(priority: Int, callback: android.window.OnBackInvokedCallback) {
+                assertEquals(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, priority)
+                registered = callback
+            }
+            override fun unregisterOnBackInvokedCallback(callback: android.window.OnBackInvokedCallback) {
+                assertSame(registered, callback)
+                registered = null
+            }
+        }
+        activity.mount()
+        val turns = HeadlessLaunchTest.Host.turns
+        turns.clear()
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            val animation = registered as android.window.OnBackAnimationCallback
+            val event = android.window.BackEvent(0f, 180f, 0.5f, android.window.BackEvent.EDGE_LEFT)
+            HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 2, 42, 2, 42)
+            animation.onBackStarted(event)
+            animation.onBackProgressed(event)
+            animation.onBackCancelled()
+            assertEquals(listOf("preview 2 42 0", "preview 2 42 1", "preview 2 42 2"),
+                turns.filter { it.startsWith("preview ") })
+        }
+        registered!!.onBackInvoked()
+        val expected = if (android.os.Build.VERSION.SDK_INT >= 34) "back 2 42" else "back 1 1"
+        assertTrue(expected in turns)
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(0, 0, 0)
+        assertNull(registered)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun aPendingSheetShouldCloseBeforeTheMountedHandler() {
+        activity.mount()
+        var level = 2
+        activity.module.view.setContent { BackHandler { level-- } }
+        settle()
+        val presenter = HandlerThread("sheet request").apply { start() }
+        try {
+            Exact.backHandoff!!.awaitOwner(android.os.Handler(presenter.looper)) {
+                HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 2, 42, 2, 42)
+            }
+        } finally {
+            presenter.quitSafely()
+            presenter.join(5000)
+            assertFalse(presenter.isAlive)
+        }
+        // Back arrives before the reader draws the requested sheet.
+        activity.onBackPressed()
+        assertEquals("the sheet should take Back before the hosted handler", 2, level)
+        assertEquals("back 2 42", HeadlessLaunchTest.Host.turns.last { it.startsWith("back ") })
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun lateReportsShouldKeepTheNewerHandlerInsideTheSheet() {
+        activity.mount()
+        val requests = ReflectionHelpers.getField<Requests>(activity, "requests")
+        val sheet = intArrayOf(1, 2, 42, 2, 42)
+        HeadlessLaunchTest.Host.backTargets = sheet
+
+        var level = 2
+        activity.module.view.setContent { BackHandler { level-- } }
+        settle()
+        // Availability reports queued before the owner subscribed can still reach the activity.
+        requests.perform(intArrayOf(5, 0, 1, 0))
+        requests.perform(intArrayOf(5, 0, 1, 1))
+        activity.onBackPressed()
+        assertEquals("the later hosted callback should keep its place", 1, level)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun aPendingWindowShouldKeepAnEnabledCallbackOnAPushedRoute() {
+        activity.mount()
+        val requests = ReflectionHelpers.getField<Requests>(activity, "requests")
+        assertTrue(activity.moduleOwners!!.onBackPressedDispatcher.hasEnabledCallbacks())
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 5, 8, 5, 8)
+        requests.perform(intArrayOf(5, 0, 1, 0))
+        assertTrue("Back should remain registered until the native window arrives",
+            activity.moduleOwners!!.onBackPressedDispatcher.hasEnabledCallbacks())
+        activity.onBackPressed()
+        assertEquals("back 5 8", HeadlessLaunchTest.Host.turns.last { it.startsWith("back ") })
+    }
+
+    @Config(sdk = [33])
+    @Test fun closingASheetKeepsANewerPlatformHandlerAheadOfTheRoute() {
+        val callbacks = mutableListOf<android.window.OnBackInvokedCallback>()
+        val window = object : android.window.OnBackInvokedDispatcher {
+            override fun registerOnBackInvokedCallback(priority: Int, callback: android.window.OnBackInvokedCallback) {
+                assertEquals(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, priority)
+                callbacks.add(callback)
+            }
+            override fun unregisterOnBackInvokedCallback(callback: android.window.OnBackInvokedCallback) {
+                assertTrue(callbacks.remove(callback))
+            }
+        }
+        activity.platform = window
+        val requests = ReflectionHelpers.getField<Requests>(activity, "requests")
+        requests.perform(intArrayOf(5, 0, 1, 1))
+        var calls = 0
+        window.registerOnBackInvokedCallback(android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { calls++ }
+        activity.mount()
+        callbacks.last().onBackInvoked()
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 2, 42, 2, 42)
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 1, 1)
+        callbacks.last().onBackInvoked()
+        assertEquals(2, calls)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun aRetiredDialogStillReceivingBackCannotPopItsRoute() {
+        activity.mount()
+        val surfaces = ReflectionHelpers.getField<Requests>(activity, "requests").surfaces!!
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 5, 8, 5, 8)
+        surfaces.told(intArrayOf(8, Surfaces.ALERT, 1, 0, 0, 120, 80, 0, 0, 0), 0)
+        val dialog = org.robolectric.shadows.ShadowDialog.getLatestDialog()
+        assertTrue(dialog.isShowing)
+        HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 1, 1)
+        val turns = HeadlessLaunchTest.Host.turns
+        turns.clear()
+        dialog.onBackPressed()
+        assertFalse("Back from the retired window reached the route", "back 1 1" in turns)
+        surfaces.told(intArrayOf(8, Surfaces.CLOSED, 0, 0, 0, 0, 0, 0, 0, 0), 0)
+        activity.onBackPressed()
+        assertTrue("back 1 1" in turns)
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun aPressQueuedBehindPresentationReachesTheNewLayer() {
+        activity.mount()
+        val turns = HeadlessLaunchTest.Host.turns
+        turns.clear()
+        HeadlessLaunchTest.Host.beforeBack = {
+            HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 4, 30, 4, 30)
+        }
+        activity.onBackPressed()
+        assertEquals("back 4 30", turns.last { it.startsWith("back ") })
+    }
+
+    @Test fun anInputTurnCanRegisterASheetWhileTheMainThreadWaitsForIt() {
+        activity.mount()
+        val owner = Owner(false, false, 0) { "0" }
+        try {
+            owner.running(false)
+            owner.sync(publish = false) {}
+            assertTrue(owner.answer(2000) {
+                HeadlessLaunchTest.Host.backTargets = intArrayOf(1, 2, 42, 2, 42)
+            })
+        } finally {
+            Exact.backHandoff!!.flush()
+            val thread = ReflectionHelpers.getField<HandlerThread>(owner, "thread")
+            thread.quitSafely()
+            thread.join(5000)
+            assertFalse(thread.isAlive)
+        }
     }
 
     @Test fun aPlainComposeModuleKeepsItsViewAndCompositionAcrossAStop() {

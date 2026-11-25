@@ -26,11 +26,19 @@ final class PlainTab: UIViewController {
         guard let route else { return }
         route.view.backgroundColor = view.backgroundColor
         route.view.tintColor = route.node.ownAccent
-        NodeView.containerMoves += 1
-        defer { NodeView.containerMoves -= 1 }
-        for child in view.subviews { route.view.addSubview(child) }
+        moveBootChildren(view.subviews, of: route, into: route.view)
         route.bootSurface = nil
         self.route = nil
+    }
+
+    private func moveBootChildren(_ children: [UIView], of route: RouteController, into container: UIView) {
+        NodeView.containerMoves += 1
+        defer { NodeView.containerMoves -= 1 }
+        for child in children {
+            let finish = route.node.presenter?.session?.natives.prepareScreenMove(child, into: container)
+            container.addSubview(child)
+            finish?()
+        }
     }
 
     override func loadView() { view = UIView() }
@@ -63,9 +71,7 @@ final class PlainTab: UIViewController {
             next.bootSurface = view
             view.backgroundColor = next.view.backgroundColor
             view.tintColor = next.node.ownAccent
-            NodeView.containerMoves += 1
-            for child in next.view.subviews { view.addSubview(child) }
-            NodeView.containerMoves -= 1
+            moveBootChildren(next.view.subviews, of: next, into: view)
             next.fitContentViewport()
             return
         }

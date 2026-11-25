@@ -107,6 +107,12 @@ test("one package can declare its own POI car service and map templates", () => 
   assert.throws(() => fragment({ ...carAppService, validator: 'ALLOW_ALL_HOSTS_VALIDATOR' }), /validator.*ALLOW_ALL_HOSTS_VALIDATOR/);
 });
 
+test('only the translation graph defers ML Kit initialization to its first client', () => {
+  const pkg = name => ({ maven: [`com.google.mlkit:${name}`] });
+  assert.doesNotMatch(manifestFragment([pkg('barcode-scanning:17.3.0')]), /MlKitInitProvider/);
+  assert.match(manifestFragment([pkg('translate:17.0.3')]), /MlKitInitProvider" tools:node="remove"/);
+});
+
 test('an implementation with no fragment adds nothing', () => {
   assert.equal(manifestFragment(impl(undefined)), '');
   assert.equal(manifestFragment([]), '');

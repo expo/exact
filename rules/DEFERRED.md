@@ -727,12 +727,12 @@ commands, writes on the location (`todo add milk`), and printing a GUI app
   delivery on Windows (LLP 1115.004 D15).
 - **Android.** Same, until 2026-10-07. **Admitted (Charlie, 2026-10-07,
   waiver):** "admit android. we are working on android now -- it's becoming
-  real. amend that." Unblocks Android as a supported host instead of work
-  below the line:
+  real. amend that." Unblocks Android as a supported host instead of work below the line:
   - **Its host work:** the Canvas host (LLP 1076 §3.3) and the GPU painter.
     **Expanded (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).**
     Pocket Lab may colour Android’s bars through their elements and the root accent (LLP 1115.001 D11).
   - **Parley's Android arm** (`text/parley-android`, LLP 1085.000).
+  - **Hosted Back (Charlie, 2026-11-24, "recs ok"; panel 4–0).** Module and hatch views share system Back and its predictive gesture with the route and dismissible layers through the root dispatcher (LLP 1115.001 D6).
   - **A place in the sweep.**
 
   No take was named; the ruling stands as its own waiver until Charlie names
@@ -1660,6 +1660,10 @@ reading. Nothing that isn't HTML is added by it.
   refused (LLP 1133.021 §11): continuous background location, beacons,
   visits and significant-change launches, overlays, directions, search, a
   default web tile source and a web geocoder.
+  **Expanded (Charlie, 2026-11-24, "recs ok"):** packages read the build's
+  development trust and take development-only app config (AA3, panel 3–1,
+  LLP 1133.001 D5 and 1133.021 §9 item 7). SwiftPM dependencies build in
+  release configuration and the APK stays non-debuggable.
 - **Expanded (Charlie, 2026-10-26, "Accept r5, services first
   (Recommended)", waived; LLP 1133.033 §13 question 9):** a foreground
   service the host keeps on Android, claimed by a package for a capture
@@ -1928,8 +1932,12 @@ reading. Nothing that isn't HTML is added by it.
   **Android text reads (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 3–1).**
   Pocket Lab’s Paste text button and paste at the caret require person-started work and window input focus.
   Without either, reject with `NotAllowedError`. On a focused read, `readText()` returns the first plain-text
-  item and `read()` returns only `text/plain`. An empty clipboard gives `""` and `[]` respectively
+  item and `read()` includes its `text/plain` representation. An empty clipboard gives `""` and `[]` respectively
   (LLP 1133.006 D6 and the Android entry in D7).
+  **Android image reads and writes (Charlie, 2026-11-24, "ask panel about questions then follow recs of panel"; panel 4–0).**
+  Pocket Lab’s Paste image reads an `image/*` content URI as a sanitized temporary PNG under D2 and D6’s bounds.
+  Android writes of plain text, HTML with a plain alternative and PNG through the host’s file provider are
+  admitted and await implementation. A text write over the Binder bound is refused.
   **Formatted clipboard writes (Charlie, 2026-11-24, "recs ok").** Pocket Lab
   can write sanitized `text/html` on macOS, iOS and the web (LLP 1133.006 D1).
   **Device-local and expiring copies (Charlie, 2026-11-24, "recs ok").**
@@ -1938,8 +1946,7 @@ reading. Nothing that isn't HTML is added by it.
   `android.isSensitive`, Windows clipboard reads, Windows HTML writes, `text/uri-list` until a
   second consumer asks, RTF, custom formats, file
   promises, several items in one write, a Contract `write`, a
-  clipboard-change event, the Linux cell, Android image reads and all Android `@exact/clipboard` writes,
-  including HTML and images.
+  clipboard-change event and the Linux cell.
   **Built (maintainers' agent, 2026-11-12, #196;
   LLP 1133.006 D7):** Windows
   writes a PNG by `app:/` path, sanitized within the same 64 MiB file and
@@ -2327,6 +2334,11 @@ D5, LLP 1069.007 §3 P1):** `prefer` stays as the ninth operation, and it is the
 one that sets every device fact by its web name: display preferences, and the
 page and place facts of LLP 1069.000. A new fact is a form of `prefer`, never a
 tenth operation.
+
+**Admitted (Charlie, 2026-11-24, "recs ok"; panel 3–1, LLP 1017.000 P7).**
+An authored test may set a package substitute with `prefer extension`. The driver
+owns its value for the test, starts replay from defaults, applies changes to
+later calls and supplies current values at relaunch (expo/exact#1610).
 
 **Ruled (Charlie, 2026-10-02: "it's probably worth a waiver to a 10th op I think";
 LLP 1079 D7):** `perf` is the tenth operation and takes none away: a subtree's work

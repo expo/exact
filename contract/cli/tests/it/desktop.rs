@@ -301,6 +301,68 @@ fn a_shortcut_is_listed_while_read_and_pressed_by_its_ref() {
 }
 
 #[test]
+fn single_side_shortcuts_are_standalone_and_macos_only() {
+    let app = App::new("sides");
+    let path = app.0.join("app.contract");
+    for keys in ["MetaRight", "AltRight"] {
+        std::fs::write(
+            &path,
+            APP.replace("Meta+Shift+2", keys)
+                .replace("Meta+Shift+3", keys),
+        )
+        .unwrap();
+        for (target, registered) in [("macos", true), ("windows", false)] {
+            let mut r = boot(&app, target);
+            let entry = &shortcuts(&r)[0];
+            assert_eq!(entry["registered"], registered);
+            act(&mut r, "check");
+            if registered {
+                assert!(show(&r, "checked").contains("true"));
+                let ticket = entry["ref"].as_u64().unwrap();
+                op(&mut r, json!({"op":"tap", "ticket":ticket})).unwrap();
+                assert_eq!(
+                    (text(&r, "pressed"), text(&r, "lifts")),
+                    ("1".into(), "1".into())
+                );
+            } else {
+                assert_eq!(entry["reason"], "unsupported");
+                assert!(show(&r, "checked").contains("unsupported"));
+            }
+        }
+    }
+    for keys in [
+        "MetaLeft",
+        "AltLeft",
+        "ShiftRight",
+        "ControlLeft",
+        "RightMeta",
+        "Shift+AltRight",
+    ] {
+        std::fs::write(
+            &path,
+            APP.replace("keys=chord", &format!("keys=\"{keys}\""))
+                .replace("Meta+Shift+3", keys),
+        )
+        .unwrap();
+        let errors = contract::compile_path_all(&path, false)
+            .err()
+            .expect("invalid side");
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|e| e.id == "contract-module-shortcut"
+                    && e.message.contains(keys)
+                    && e.message.contains("MetaRight")
+                    && e.message.contains("AltRight"))
+                .count(),
+            2
+        );
+        std::fs::write(&path, APP.replace("Meta+Shift+2", keys)).unwrap();
+        assert_eq!(shortcuts(&boot(&app, "macos"))[0]["reason"], "invalid");
+    }
+}
+
+#[test]
 fn a_shortcut_keeps_the_cause_that_registered_it() {
     let app = App::new("registrar");
     let source = r#"use globalShortcut, globalshortcut, GlobalShortcut from "@exact/global-shortcuts"

@@ -514,9 +514,7 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
         // ingest ~1.1 ms after the answer was ready (every tap; an answer ready at 4.6 ms was drawn from 7.2 ms).
         val main = android.os.Process.myPid()
         val stays = pinned && waitPin && try { Native.colocate(main) } catch (e: UnsatisfiedLinkError) { false }
-        val task = FutureTask { if (pinned) Native.fastCores(); f(); produce() }
-        handler.post(task)
-        return try { task.get(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS); true } catch (e: java.util.concurrent.TimeoutException) { false } finally {
+        return try { waitForOwner(waitMs) { if (pinned) Native.fastCores(); f(); produce() }; true } catch (e: java.util.concurrent.TimeoutException) { false } finally {
             if (stays) try { Native.fastThread(main, isHeld && mainFast) } catch (e: UnsatisfiedLinkError) {}
         }
     }
@@ -563,27 +561,27 @@ internal class Owner(private val hwbuf: Boolean, private val fast: Boolean, prio
      * [ms] in all, the main thread waiting (the activity going to the background). Whether they were. */
     fun drainStore(ms: Long): Boolean {
         val until = System.nanoTime() + ms * 1_000_000
-        val task = FutureTask { Native.storeDrain(((until - System.nanoTime()) / 1_000_000).coerceAtLeast(0).toInt()) }
-        handler.post(task)
-        return try { task.get(ms, java.util.concurrent.TimeUnit.MILLISECONDS) } catch (e: java.util.concurrent.TimeoutException) { false }
+        return try {
+            waitForOwner(ms) { Native.storeDrain(((until - System.nanoTime()) / 1_000_000).coerceAtLeast(0).toInt()) }
+        } catch (e: java.util.concurrent.TimeoutException) { false }
     }
 
     /** Run [f] on the exact thread and wait for it (Back, a surface's window): rare, and the answer is needed now. */
     fun <T> sync(publish: Boolean = true, f: () -> T): T {
         if (Looper.myLooper() == thread.looper) return f()
-        val task = FutureTask { val r = f(); if (publish) produce(); r }
+        return waitForOwner(null) { f().also { if (publish) produce() } }
+    }
+
+    private fun <T> waitForOwner(waitMs: Long?, work: () -> T): T {
+        if (Looper.myLooper() == main.looper) Exact.backHandoff?.let { return it.awaitOwner(handler, waitMs, work) }
+        val task = FutureTask(work)
         handler.post(task)
-        return task.get()
+        return if (waitMs == null) task.get() else task.get(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS)
     }
 
     /** Run [f] on the exact thread and wait for it, publishing nothing: a question that changes nothing
      * ([ExactForma]). */
-    fun <T> ask(f: () -> T): T {
-        if (Looper.myLooper() == thread.looper) return f()
-        val task = FutureTask<T> { f() }
-        handler.post(task)
-        return task.get()
-    }
+    fun <T> ask(f: () -> T): T = sync(publish = false, f = f)
 
     /** exact2's next stream, if it has one: copied, queued, and the main thread told. */
     private fun produce(vsync: Boolean = false) {
@@ -778,12 +776,19 @@ internal object Exact {
     /** A key's wait: typing sends them in bursts. */
     const val KEY_WAIT_MS = 2L
 
-    fun back(): Boolean = owner?.sync { Native.back() } ?: Native.back()
+    @Volatile var backHandoff: BackHandoff? = null
+
+    fun hostedBack(on: Boolean): Boolean {
+        val o = owner ?: return Native.hostedBack(on)
+        return o.sync(publish = false) { Native.hostedBack(on) }
+    }
+
+    fun back(kind: Int, id: Int): Int = owner?.sync { Native.back(kind, id) } ?: Native.back(kind, id)
     /** Predictive Back's start (0), progress (1) or cancel (2): drawn in the frame it arrives for, as a key is. */
-    fun backProgress(phase: Int, progress: Float, edge: Int) {
+    fun backProgress(kind: Int, id: Int, phase: Int, progress: Float, edge: Int) {
         val o = owner
-        if (o != null) { o.input(); if (o.answer(WAIT_MS) { Native.backProgress(phase, progress, edge) }) answered() }
-        else Native.backProgress(phase, progress, edge)
+        if (o != null) { o.input(); if (o.answer(WAIT_MS) { Native.backProgress(kind, id, phase, progress, edge) }) answered() }
+        else Native.backProgress(kind, id, phase, progress, edge)
     }
     /** A URL given to the running app ([Native.open], LLP 1133.023 D15 item 3): on exact2's thread, in order. */
     fun open(href: String) { val o = owner; if (o != null) { o.input(); o.call { Native.open(href) } } else Native.open(href) }
@@ -878,7 +883,11 @@ internal object Exact {
      * [Requests]) and with whatever a chosen row's handler changed in the page (a stream). */
     fun surface(serial: Int, what: Int, x: Float, y: Float) {
         val o = owner
-        if (o != null) { if (what != 2) o.input(); o.call { Native.surface(serial, what, x, y) } }
+        if (o != null) {
+            if (what != 2) o.input()
+            val deliver = { Native.surface(serial, what, x, y) }
+            if (what == Surfaces.DISMISSED && backHandoff != null) o.sync(f = deliver) else o.call(deliver)
+        }
         else { Native.surface(serial, what, x, y); mainThreadTurned() }
     }
 

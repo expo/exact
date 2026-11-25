@@ -197,6 +197,40 @@ class ExactViewDetachTest {
         }
     }
 
+    @Test fun aRowDrawsTheSamePixelsAfterAnInlineFrameDropsItsDisplayList() {
+        val view = view()
+        try {
+            val player = view.get<Player>("main")
+            val worker = view.get<ExecutorService>("worker")
+            val f = { n: Int -> n.toFloat().toBits() }
+            val body = intArrayOf(1, f(1), 0, 0, f(1), 0, 0,
+                2, android.graphics.Color.BLUE, f(2), f(4), f(9), f(7)) + IntArray(8)
+            val draw = IntBuffer.wrap(intArrayOf(15, 1, 0, f(20), f(20), body.size + 1) + body + 16)
+            fun pixels(node: RenderNode): IntArray {
+                val bitmap = android.graphics.HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap",
+                    RenderNode::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+                    .invoke(null, node, 20, 20) as Bitmap
+                val copy = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                return IntArray(400).also {
+                    copy.getPixels(it, 0, 20, 0, 0, 20, 20)
+                    copy.recycle(); bitmap.recycle()
+                }
+            }
+            for (shown in listOf(true, false)) {
+                view.call("makeRow", draw, 0, shown)
+                worker.submit {}.get(5, TimeUnit.SECONDS)
+                shadowOf(Looper.getMainLooper()).idle()
+                val node = player.row(1)!!
+                val before = pixels(node)
+                assertEquals(android.graphics.Color.BLUE, before[5 * 20 + 3])
+                // While a reorder lift paints this row inline, HWUI drops the detached node's display list.
+                node.discardDisplayList()
+                assertFalse(node.hasDisplayList())
+                assertArrayEquals("row recorded ${if (shown) "on main" else "on the worker"}", before, pixels(player.row(1)!!))
+            }
+        } finally { view.detach() }
+    }
+
     @Test fun aDetachedViewRecordsNoRows() {
         val view = view()
         view.detach()

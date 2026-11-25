@@ -39,8 +39,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod admit;
 mod agent;
+pub use agent::check_source_substitute;
 mod answered;
 mod arrival;
+pub use arrival::check_arrival_field;
 mod bound;
 mod ceremony;
 mod declared;
@@ -601,23 +603,29 @@ impl<D: DataSource> Runner<D> {
         }
         let sub = self.substitute_for(row, args);
         let permission = &sub["permission"];
-        let name = permission["name"].as_str()?;
-        let state = self.permission_state(name);
-        if !send && permission["status"].as_str() == Some(self.plan.str(row.declared)) {
+        let status_source = permission["status"] == self.plan.str(row.declared)
+            || self.extensions.preferred.contains_key(&self.key(row));
+        let statuses = if !send && status_source {
+            self.statuses_of(row)
+        } else {
+            Vec::new()
+        };
+        if !statuses.is_empty() {
             let mut status = self.value_of(row).unwrap_or(json!({}));
-            // Each permission this source answers the state of, in its field:
-            // a path into a record the status has (`android.notifications`).
-            // A target whose restriction makes the module absent keeps its
-            // own answer (`unknown`, LLP 1133.030 D7).
-            let absent =
-                self.substitute(row)["targets"][self.host_target()]["available"] == json!(false);
-            for p in self.statuses_of(row).into_iter().filter(|_| !absent) {
-                if let (Some(field), Some(name)) = (p["field"].as_str(), p["name"].as_str()) {
-                    set_path(&mut status, field, json!(self.permission_state(name)));
+            if error_code(&status).is_none() {
+                for p in statuses {
+                    if let (Some(field), Some(name)) = (p["field"].as_str(), p["name"].as_str()) {
+                        let state = permits::fixed_state(&sub, self.host_target(), field)
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| self.permission_state(name));
+                        set_path(&mut status, field, state.into());
+                    }
                 }
             }
             return Some(Decision::Now(status));
         }
+        let name = permission["name"].as_str()?;
+        let state = self.permission_state(name);
         // A name admitted with no permission is never held or refused, and
         // a request answers the status in every state but `prompt` (LLP
         // 1133.004 §7).

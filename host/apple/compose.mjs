@@ -108,7 +108,7 @@ public func exactPackageCreate(_ raw: UnsafeMutableRawPointer) -> UnsafeMutableR
 /** Each used package's configuration for an Apple `target` (`ios`, `macos` or `tvos`), by extension, refused as
  * package-config.mjs says; `release` is a production or distributed build. */
 export const appleConfig = (app, target, extensions, release) =>
-  packageConfig(app.dir, target, { extensions, release, warn: (m) => console.warn(`${app.name}: ${m}`) });
+  packageConfig(app.dir, target, { extensions, release, development: !release, warn: (m) => console.warn(`${app.name}: ${m}`) });
 
 /** The initial library contains metadata and factories, without importing a package's implementation, and each
  * package's configuration (`config`, [appleConfig]'s) as JSON, which `ExactPackageContext.config` reads. */
@@ -200,8 +200,9 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
     }
     if (!packages.length) { placed.add(dir); return; }
     const coreName = wrapped ? '@rpath/ExactModules.framework/ExactModules' : '@rpath/libexact_modules.dylib';
-    const seamObject = objectArgs('ExactPackage', [seam], dir, null);
-    const stub = [...flags(dir), '-module-name', 'ExactPackage', '-emit-module',
+    const buildCondition = production || distribution ? [] : ['-D', 'EXACT_DEVELOPMENT'];
+    const seamObject = [...objectArgs('ExactPackage', [seam], dir, null), ...buildCondition];
+    const stub = [...flags(dir), ...buildCondition, '-module-name', 'ExactPackage', '-emit-module',
       '-emit-module-path', resolve(dir, 'ExactPackage.swiftmodule'),
       '-emit-tbd', '-emit-tbd-path', resolve(dir, 'ExactPackage.tbd'),
       '-Xfrontend', '-tbd-install_name', '-Xfrontend', coreName, seam];
@@ -215,7 +216,7 @@ export function packageCompiler({ packages, packageDir, packageTargets, packageC
       writeFileSync(adapter, packageAdapter(p));
       const sources = [...packageCopies[i], adapter];
       const sdkImports = p.swiftPackages?.length ? ['-D', 'SWIFT_PACKAGE', ...product.imports] : [];
-      const object = [...objectArgs(p.module, sources, dir), ...sdkImports, ...(!production && !distribution ? ['-D', 'EXACT_DEVELOPMENT'] : [])];
+      const object = [...objectArgs(p.module, sources, dir), ...sdkImports, ...buildCondition];
       const os = dir === packageDir ? (ios ? tv ? 'tvos' : 'ios' : 'macos')
         : packageTargets.get(dir)[1].some(arg => arg.includes('-apple-ios')) ? 'ios' : 'macos';
       const floor = minimum && typeof minimum === 'object' ? minimum[os] : minimum;

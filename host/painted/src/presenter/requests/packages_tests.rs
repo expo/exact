@@ -131,6 +131,7 @@ impl Package for Probe {
         let origin = self.context.origin();
         HEARD.with(|h| h.borrow_mut().push(format!("later {name} {args} {origin}")));
         match name {
+            "development" => reply.send(json!(self.context.development())),
             "status" => reply.send(json!({ "state": STATE.with(|s| *s.borrow()) })),
             _ => reply.send(json!({ "name": name })),
         }
@@ -200,6 +201,20 @@ fn call_status(
     handler(body.to_string().into_bytes(), reply);
     p.run_commands(Nothing::default);
     rx
+}
+
+#[test]
+fn package_reads_the_binarys_trust() {
+    for trust in ["production", "development"] {
+        let mut p = boot();
+        p.set_delivery_from_compat(&json!({"embedded": {"trust": trust}}).to_string());
+        p.serve_packages(vec![Entry::of::<Probe>("probe")]);
+        let answer = call(
+            &mut p,
+            json!({"extension": "probe", "source": "development"}),
+        );
+        assert_eq!(answer.recv().unwrap(), json!(trust == "development"));
+    }
 }
 
 #[test]

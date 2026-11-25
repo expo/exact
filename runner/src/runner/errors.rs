@@ -43,6 +43,7 @@ pub enum RunnerError {
         fix: String,
     },
     InvalidFaults(String),
+    InvalidSubstitutes(String),
     Plan(PlanError),
     NotOneRoot(usize),
     Trap(Trap),
@@ -176,6 +177,7 @@ impl std::fmt::Debug for RunnerError {
                 .field("host", host)
                 .field("fix", fix)
                 .finish(),
+            Self::InvalidSubstitutes(why) => write!(f, "invalid launch substitutes: {why}"),
             Self::InvalidFaults(why) => write!(f, "invalid launch fetch fixtures: {why}"),
             Self::Plan(value) => f.debug_tuple("Plan").field(value).finish(),
             Self::NotOneRoot(value) => f.debug_tuple("NotOneRoot").field(value).finish(),

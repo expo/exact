@@ -373,6 +373,36 @@ final class ScrollInsetsIOSTests: XCTestCase {
         XCTAssertEqual(reacting.seen, [scroll.adjustedContentInset])
     }
 
+    /// A scroll view's indicators take its own safe area where UIKit's adjustment gives them none: the sides always,
+    /// as UIKit's adjustment never moves an indicator off the scroll view's side, and the top and bottom too while
+    /// that adjustment is off. They follow the safe area, and D14's writer, which writes them whole, takes none of it.
+    func testAScrollViewsIndicatorsTakeTheSafeAreaUIKitsAdjustmentLeavesOut() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 678)), root = UIViewController()
+        window.rootViewController = root
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let strip = UIEdgeInsets(top: 20, left: 0, bottom: 34, right: 84)
+        root.additionalSafeAreaInsets = strip
+        let scroll = ScrollView(frame: root.view.bounds)
+        root.view.addSubview(scroll)
+        window.layoutIfNeeded()
+        let safe = scroll.safeAreaInsets
+        XCTAssertGreaterThanOrEqual(safe.right, 84)
+        let sides = UIEdgeInsets(top: 0, left: safe.left, bottom: 0, right: safe.right)
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, sides, "UIKit adds the top and bottom itself")
+        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, sides)
+        scroll.automaticallyAdjustsScrollIndicatorInsets = false
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, safe, "with UIKit's adjustment off, the whole safe area")
+        root.additionalSafeAreaInsets = .zero
+        window.layoutIfNeeded()
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, scroll.safeAreaInsets, "it follows the safe area")
+        root.additionalSafeAreaInsets = strip
+        window.layoutIfNeeded()
+        scroll.writtenWhole = true
+        XCTAssertEqual(scroll.verticalScrollIndicatorInsets, .zero, "D14's writer writes them whole")
+        XCTAssertEqual(scroll.horizontalScrollIndicatorInsets, .zero)
+    }
+
     func testAWriteOutOfAWindowWritesNothing() {
         let owner = UIView(frame: CGRect(x: 0, y: 0, width: 300, height: 600))
         let scroll = UIScrollView(frame: owner.bounds)

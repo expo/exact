@@ -417,6 +417,11 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
     el.exactIntersect?.();
     el.exactPanRetire?.();
   }
+  if (HAS_PACKAGE_VIEWS) {
+    host.packageViews?.dispose();
+    host.packageViews = null;
+    host.packageNative = null;
+  }
   views.clear();
   messageFrames.clear();
   messageViews.clear();

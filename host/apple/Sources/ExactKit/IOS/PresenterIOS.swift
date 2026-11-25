@@ -1362,15 +1362,16 @@ package final class Presenter {
         for (rank, child) in contained.enumerated() {
             let i = rank + offset
             if i < current.count && current[i] === child { continue }
-            // One already here is past `i` (those before it are in place):
-            // moved as UIKit moves it, without asking for every subview again
-            // (a pooled row comes back from past the rows, each a move).
+            // A pooled row already here comes forward from past the rows in place.
             let wasHere = child.superview === container
             let was = wasHere && i < current.count ? current[i...].firstIndex { $0 === child } : nil
-            container.insertSubview(child, at: i)
             if wasHere {
+                container.insertSubview(child, at: i)
                 if let was { current.remove(at: was); current.insert(child, at: i) } else { current = container.subviews }
-            } else { current.insert(child, at: i); regrid(child) }
+            } else {
+                child.movingRoute(into: container) { container.insertSubview(child, at: i) }
+                current.insert(child, at: i); regrid(child)
+            }
         }
         flats.mounted(parent.id)
         if parent === navigation.container { navigation.placeOwner() }

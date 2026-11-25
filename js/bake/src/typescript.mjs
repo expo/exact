@@ -14,7 +14,7 @@ import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespac
 // The bake writes the binding's generator beside this file in its stage (js/bake/src/resident.rs `BINDING`).
 import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
-import { checkPreloadBackend, checkerOutput, declaredSettings, envReads, inlineSettings, moduleResolution, orderImportEdges, packageOrigin, recordSourceInputs, resolutionCandidates, settingSources } from './__exact_env.mjs';
+import { checkPreloadBackend, checkerOutput, declaredSettings, envReads, inlineSettings, moduleResolution, orderImportEdges, packageOrigin, productionManifest, recordSourceInputs, resolutionCandidates, settingSources } from './__exact_env.mjs';
 import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
 export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
@@ -928,7 +928,7 @@ export function snapbackMutationTypes(declarations) {
 
 /** With `web`, for the web's bundles: a setting a launch may give is inlined as any other, as no launch gives one
  * there (LLP 1153.002 D2). */
-export async function configure(stage, incremental=false, parse, web=false, build, discoveryEntry='app.ts') {
+export async function configure(stage, incremental=false, parse, web=false, build, discoveryEntry='app.ts', production=!developmentTrust(process.env)) {
   const app=capturedOrigins(stage).at(-1)[1];
   const inside = (path) => {
     if (path !== stage && !path.startsWith(stage+sep)) throw new Error('tsconfig: path outside captured app: '+path);
@@ -1006,6 +1006,11 @@ export async function configure(stage, incremental=false, parse, web=false, buil
   if (existsSync(modulePath)) {
     const original=resolve(stage,'__exact_backend_source.json');
     const modules=existsSync(original) ? new Map(Object.entries(JSON.parse(readFileSync(original,'utf8')))) : settingSources(stage);
+    // Check and bundle the same JSON. A whole-manifest import must not carry development values into the app.
+    if (production) for (const file of ['app.json', '.shells/app.json']) {
+      const path = resolve(stage, file);
+      if (existsSync(path)) modules.set(file, productionManifest(modules.get(file) ?? readFileSync(path, 'utf8')));
+    }
     for (const [file,code] of modules) if (readFileSync(resolve(stage,file),'utf8')!==code) writeFileSync(resolve(stage,file),code);
     build ??= createRequire(import.meta.url)('rolldown').rolldown;
     try {

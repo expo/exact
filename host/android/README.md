@@ -667,7 +667,7 @@ capability has a call of its own.
 | 2 | a haptic (`haptic()`, a pressable's `-exact-press-haptic`) | one word: 1 `selection`, 2 `impact-light`, 3 `impact-medium` (and `impact`), 4 `impact-heavy`, 5 `impact-soft`, 6 `impact-rigid`, 7 `success`, 8 `warning`, 9 `error` | `View.performHapticFeedback` | none |
 | 3 | `copyText` | a string | the clipboard (`ClipboardManager`) | none |
 | 4 | `share` | one word saying which of the three the app gave (bit 0 the title, 1 the text, 2 the URL), then three strings: title, text, URL; then each file's `app:/` path, a string each, to the end (LLP 1094.000 D7) | the Sharesheet (`ACTION_SEND` in a chooser) | `shared`, `dismissed`, or why it could not be shown; exact2 journals `share: shared`, `share: dismissed` or `share: refused: …` |
-| 5 | whether Back has somewhere to go in the app (D6) | one word: 1 or 0 | registers its `OnBackInvokedCallback` while it has, and unregisters it while it has not, so Back at the first screen is the system's own and leaves with its animation | none |
+| 5 | whether Back has somewhere to go in the app (D6) | 1 or 0 | enables the activity’s Back callback until a hosted view installs its dispatcher | none |
 | 6 | the software keyboard | two words: 0 hidden, 1 shown for an `input`, 3 for a `textarea`; then the hosted field it is for (D8), or 0 for a field exact2 paints | for a hosted field, that `EditText` takes the focus and shows its own keyboard (`Fields.focus`); else `Keys.show` | none |
 | 7 | the top layer's surface (D10, below) | its serial; what it is (0 it closed, 1 an alert, 2 a menu); flags (bit 0 Back and Escape dismiss it, bit 1 a tap outside does, bits 2 and 3 the corner a menu grows from: its right side, its bottom); where its window goes in the activity's window and its size (x, y, width, height, pixels; an alert's place is the platform's); its container's corner radius and elevation in pixels, as float bits; a count, then that many words: its picture, an op stream of its own | makes, repaints, moves or dismisses that surface's window (`Surfaces.told`) | none by id: what happens in the window is told by `Native.surface` |
 | 8 | whether a displayed element says `wakelock="screen"` (LLP 1125 D11) | one word: 1 or 0; a reader's view starts at 0, so a reader made again is told only a 1 | `View.setKeepScreenOn` on the reader's view, so the screen stays on while its window is shown | none |
@@ -783,7 +783,7 @@ See the [native module recipe](../../docs/recipes/native-module.md).
 
 ### Compose module views
 
-A module may return a plain `ComposeView` with `setContent`. `ExactActivity` stays a plain `Activity`. The first module view or hatch's `host` view installs lifecycle, saved-state registry and ViewModel store owners on the reader's `Root` before attaching. Later views share them. Apps with neither kind create no owners. Compose's window recomposer follows the activity's start and stop. Material pickers keep their separate owners.
+A module may return a plain `ComposeView` with `setContent`. `ExactActivity` stays a plain `Activity`. The first module view or hatch's `host` view installs lifecycle, saved-state registry, ViewModel store and Back dispatcher owners on the reader's `Root` before attaching. Later views share them. Apps with neither kind create no owners. Compose's window recomposer follows the activity's start and stop. Material pickers keep their separate owners.
 
 ```kotlin
 object HelloCompose : NativeModule {
@@ -799,7 +799,7 @@ Register it as `"hello-compose"` in `exact.app.Modules.modules` and app.json's `
 
 Home and return keep every mounted module view. The activity reparents it onto the new reader in the same window. A view that observes its immediate parent can rebind that observer in `onFinishTemporaryDetach`. The view's fields and Compose's `remember` and `rememberSaveable` survive. A node that leaves still follows the module's `reset` or `destroy` path. Process death recreates the views and restores `rememberSaveable` from the activity's saved state. Module views share a ViewModelStore. The activity retains it across configuration changes and clears it on every other destruction. Use separate ViewModel keys for independent views.
 
-`Root` supplies no `OnBackPressedDispatcherOwner`, so Compose `BackHandler` needs an owner supplied by the module. That dispatcher's callbacks run in reverse registration order; it is not connected to Exact's system Back callback. Exact handles system Back for its routes (on Android 13+, at `PRIORITY_DEFAULT`); a module that registers a separate platform callback at the same priority competes by registration order, with the most recently registered called first. Emit an app event for navigation through Exact's routes.
+**Back ownership.** A hosted view can use Compose `BackHandler` or `PredictiveBackHandler` directly. The route, dismissible layers and hosted handlers share the root’s `OnBackPressedDispatcher`. System Back goes to the most recently registered enabled callback. A sheet opened over a hosted handler closes first. Once that handler is disabled, the route takes Back. From Android 14 the selected callback also receives gesture progress and cancellation. Exact registers each layer when it requests presentation and keeps that registration until dismissal. A hosted handler added inside the layer takes Back before the layer closes.
 
 ### Hosted input and lifecycle
 
@@ -1442,11 +1442,11 @@ The cut was the smallest one. Left in the reader:
     the screen is a finger's. The 12 or 24-hour clock is `exactTime().formatLocale`'s hour cycle: where it differs
     from the locale's own, the locale with `-u-hc-h12` or `-u-hc-h23`, as Apple tells it. The layout direction and
     bold text cross too and change nothing yet: exact2 has no door for them.
-  - *Back, in order* (D6, `Native.back`): from the navigation root's selected route, the Back control the root names,
-    else the root's `navigate`, else the runner's own `back`. The reader takes Back only while exact2 says it has
-    somewhere to go (a request, above), so at the first screen Back is the system's own and leaves the app with
-    its animation. An open alert or menu closes first (D10): its window takes Back by the system's own routing.
-    From Android 14 Back is previewed as the gesture goes ([Sheets and route motion](#sheets-and-route-motion-llp-1115001-d10-d12)).
+  - *Back, in order* (D6, `Native.back`): the keyboard closes first. A hosted handler and Exact’s dismissible
+    layers take Back in their dispatcher’s registration order (see “Compose module views”). The selected route
+    presses its named Back control, calls the root’s `navigate`, or uses the runner’s `back`. With nowhere to go,
+    the system leaves the app with its animation. Android 14 and later preview a route or sheet as the gesture goes
+    ([Sheets and route motion](#sheets-and-route-motion-llp-1115001-d10-d12)).
   - *A finger is a finger* (D7.4, D7.6). Each touch says what touched (`Native.touch`'s tool type), so a finger is a
     `touch` pointer to the app, hovers nothing, and shows no focus on what it presses. A key shows the focus again, but typing at a text field on the soft keyboard does not. The focus looks as Compose's, never as a ring:
     what presses shows its state layer (its content's colour at 10% over its shape, a checkbox's circle round its

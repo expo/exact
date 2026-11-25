@@ -8,7 +8,7 @@ import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { ROOT, contractTool } from './tools.mjs';
-import { faultRequest as rawFaultRequest, preferGroups } from './agent-prefer.mjs';
+import { faultRequest as rawFaultRequest, packageClock, preferExtension, preferGroups } from './agent-prefer.mjs';
 import { open } from './agent.mjs';
 import { duringOp } from './agent-drag.mjs';
 import { dragExpectation } from './agent-drag-out.mjs';
@@ -805,6 +805,10 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // A test's launch lines lead its steps and override the drive's flags (habits F7).
     // The drive's `--fail-fetch` is every test's, with its own leading `fail fetch` lines added (LLP 1103 D3).
     const facts = { size, seed, locale, formatLocale, timeZone, epoch, failFetch };
+    const substitutes = {};
+    const retainSubstitute = ({ key, value, clear }, table = substitutes) => {
+      if (clear) delete table[key]; else table[key] = value;
+    };
     const lines = [], preferences = [], stored = [], sessions = [];
     const media = {}, permissions = {}; // the latest of each, which a `reload` applies again
     let beforeData = false, leading = 0, reset = null, opensAt = null; // `at`'s location, where the app opens (LLP 1153 D5)
@@ -824,6 +828,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       else if (st.op === 'answer-fetch') facts.failFetch = [facts.failFetch, faultSpecOf([{prefix: st.prefix, method: st.method, hits: 0, armed: true, response: st.response}])].filter(Boolean).join('\n');
       else if (st.op === 'size') facts.size = [st.width, st.height];
       else if (st.op === 'at') opensAt = st.value;
+      else if (st.op === 'prefer-extension') retainSubstitute(st);
       else if (st.op === 'prefer') preferences.push(st);
       else if (LAUNCH[st.op]) facts[LAUNCH[st.op]] = st.value;
       else break;
@@ -833,6 +838,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     if (host === 'web' && opensAt && /^https?:\/\//.test(url ?? '')) opensAt = new URL(opensAt, url).href;
     // Replay uses the already-resolved facts, including an authored `epoch now` (LLP 1116.007 D3.4).
     if (replayLaunch) Object.assign(facts, replayLaunch);
+    facts.substitutes = substitutes;
+    delete facts.restoreSubstitutes;
     // A size the carrier cannot give: run at another, the test would fail on what that size was to show.
     if (apk && facts.size) { landed({ name: t.name, index: n, failures: [], notes, skipped: `size ${facts.size.join('x')}: the APK runs at the phone's size; --headless takes it` }); continue; }
     // A zone or locale the driver refuses fails this test at its line, not the run. `epoch now` is read here, once
@@ -904,7 +911,6 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     }
     const prefer = async (st) => {
       const name = st.name.toLowerCase().replace(/[^a-z]/g, '').replace(/^prefers?/, '');
-      if (name === 'extension') throw new Error(`test prefer: ${st.name} is drive-only for now. A test file cannot set extension substitutes or a package's agent values. In an agent drive, use \`prefer extension <extension>.<name>=<JSON>|clear\``);
       if (['posture', 'segments', 'gap', 'mode'].includes(name)) throw new Error(`test prefer: ${st.name} is drive-only for now; authored tests cannot set folds (posture, segments, gap) or mode pins`);
       const parsed = preferGroups({ [st.name]: st.value });
       if (Object.keys(parsed.midi).length) throw new Error('test prefer: use prefer midi inside a test for MIDI facts');
@@ -928,6 +934,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     // It asks what persists, so storage the app started and did not await finishes first, as `clock data` lands it
     // (LLP 1097 D9): a write lost at `reload` is what a crash does. The next `logs` begins with what it waited for.
     const reload = async () => {
+      facts.restoreSubstitutes = true;
       mutationClock.reset();
       const b = (await s.state().catch(() => ({}))).background, waiting = b ? b.queued + b.inFlight : 0;
       if (waiting) {
@@ -940,7 +947,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       const now = await s.state().catch((e) => { throw new Error(`reload: could not read the fault table to carry: ${e.message}`); });
       const failFetch = now.faults ? faultSpecOf(now.faults) : undefined;
       facts.epoch = await reached();
-      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; s.contact = null; resetLogs(s); }
+      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, substitutes, epoch: facts.epoch }); s.now = 0; s.contact = null; resetLogs(s); }
       else {
         const environment = { ...(env ?? {}), ...fixture };
         if (now.store?.some(name => name.startsWith('exact.state.#window.'))) {
@@ -1042,6 +1049,21 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
         if (st.op === 'type') { typed.add(st.target); touched.add(st.target); } else if (INPUTS.has(st.op) || st.op === 'reload') typed.clear();
         switch (st.op) {
           case 'size': case 'at': case 'epoch': case 'time-zone': case 'locale': case 'seed': case 'before-data': case 'fresh': case 'stored': case 'signed-in': break; // the session opened with it
+          case 'prefer-extension':
+            if (n >= leading) {
+              const next = {...substitutes};
+              retainSubstitute(st, next);
+              // The package callback may itself open the next document.
+              await s.carrier.installSubstitutes?.(next, true);
+              try {
+                await preferExtension(s, { op: 'prefer', extension: { [st.key]: st.clear ? 'clear' : st.value }, ...(st.value === 'clear' ? { literal: true } : {}) });
+              } catch (e) {
+                await s.carrier.installSubstitutes?.(substitutes, true);
+                throw e;
+              }
+              retainSubstitute(st);
+            }
+            break;
           case 'prefer': if (n >= leading) await prefer(st); break;
           // A driver fault (LLP 1103): a leading one was a launch line; a later one arms (or re-arms) now, a `pass` stops it.
           case 'fail-fetch': {
@@ -1151,7 +1173,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
           }
           case 'clipboard': delivered(await s.type(st.target, { clipboard: st.edit, text: st.text })); input = st.line; break;
           case 'background': await s.background(st.ms); input = null; break;
-          case 'clock': await s.clock(st.arg); input = null; loaded = true; if (/^\+?\d/.test(st.arg)) unpolled = null; break;
+          case 'clock': await packageClock(s, st.arg); input = null; loaded = true; if (/^\+?\d/.test(st.arg)) unpolled = null; break;
           // The driver writes through the app's server as another person (LLP 1116.006 D8), not the app: nothing it
           // shows changes until it reads again.
           case 'request': await serverRequest(server, st); unpolled = st.line; break;

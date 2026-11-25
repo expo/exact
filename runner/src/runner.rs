@@ -151,7 +151,7 @@ mod apply;
 mod live_time;
 pub mod midi;
 mod modules;
-pub use modules::AppState;
+pub use modules::{check_arrival_field, check_source_substitute, AppState};
 mod calls;
 pub use calls::CallHow;
 mod module_seam;
@@ -1029,6 +1029,7 @@ impl<D: DataSource> Runner<D> {
             fragment_warned: Default::default(),
             conformed: Default::default(),
         };
+        runner.seams.modules.launch_substitutes(&mut runner)?;
         runner.record_replacement(carried);
         runner.init_slots(carried, launch)?;
         runner.carry_modes(carried.map_or(&[], |c| &c.modes));

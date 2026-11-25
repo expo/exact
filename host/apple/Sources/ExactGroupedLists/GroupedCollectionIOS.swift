@@ -3,7 +3,7 @@ import ExactKit
 import UIKit
 
 /// A grouped list's collection view, by type, for the agent's wheel.
-final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsumer {
+final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsumer, SafeIndicators {
     #if os(iOS)
     weak var reorderList: GroupedListView?
     private var contact: GroupedReorderContact?
@@ -61,6 +61,15 @@ final class GroupedCollectionView: UICollectionView, GroupedScroller, BandConsum
     }
     /// The list's node, which the collection is the scroll view of.
     private var owner: NodeView? { superview as? NodeView }
+    /// Its indicators take its safe area where UIKit's adjustment gives none, `sideSafeArea` included, as a plain
+    /// scroller's do (`SafeIndicatorTerm`).
+    private var safeIndicators = SafeIndicatorTerm()
+    var writtenWhole = false { didSet { safeIndicators.sync(self) } }
+    override var automaticallyAdjustsScrollIndicatorInsets: Bool { didSet { safeIndicators.sync(self) } }
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        safeIndicators.sync(self)
+    }
     /// An inset UIKit moves outside a layout of the list reaches the arrangement, as a plain scroller's does
     /// (`ScrollView.adjustedContentInsetDidChange`).
     override func adjustedContentInsetDidChange() {

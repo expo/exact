@@ -17,9 +17,10 @@ import {
 import { preferGroups, preferOp } from './agent-prefer.mjs';
 import { axTree } from './agent-ax.mjs';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { encodePng } from './png.mjs';
-import { dirname, resolve } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   peekLogs,
   takeWorldLogs,
@@ -50,6 +51,22 @@ const CLOCK_STEP_MS = 1000,
  * 4x and never past CLOCK_SPAN_MS of world time. */
 export const clockSpan = (span, elapsedMs) =>
   Math.max(CLOCK_STEP_MS, Math.min(span * 4, CLOCK_SPAN_MS, (span * CLOCK_BUDGET_MS) / Math.max(1, elapsedMs)));
+async function openWithSubstitutes(env, launch) {
+  const spec = env.EXACT_AGENT_SUBSTITUTES;
+  if (!spec || Buffer.byteLength(spec) < 8192) return launch();
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-substitutes-'));
+  const path = resolve(dir, basename(dir) + '.json');
+  const discard = () => rmSync(dir, {recursive:true, force:true});
+  try {
+    writeFileSync(path, spec, {mode:0o600});
+    env.EXACT_AGENT_SUBSTITUTES = '@' + path;
+    const carrier = await launch();
+    const close = carrier.close.bind(carrier);
+    carrier.close = async (...args) => { try { return await close(...args); } finally { discard(); } };
+    return carrier;
+  } catch (error) { discard(); throw error; }
+}
+
 /** Open a session on `host` ('web' | 'macos' | 'ios' | 'linux'); `url` opens
  * the same app address on each host; `plan` boots a local compiled contract;
  * `env` adds to a native host's environment; `reader` drives Android's app
@@ -83,6 +100,8 @@ export async function open({
   timeZone,
   epoch,
   failFetch,
+  substitutes,
+  restoreSubstitutes,
   mediaClock = 'wall',
   lineHeight = null,
   scale,
@@ -93,8 +112,8 @@ export async function open({
   browser ??= 'chrome';
   if (!['chrome', 'firefox', 'webkit'].includes(browser))
     throw new Error(`browser: chrome, firefox or webkit, not ${browser}`);
-  const facts = launchFacts({ seed, locale, formatLocale, timeZone, epoch, failFetch, env });
-  env = { ...env, ...launchEnvironment(facts) };
+  const facts = launchFacts({ seed, locale, formatLocale, timeZone, epoch, failFetch, substitutes, restoreSubstitutes, env });
+  env = { ...env, ...launchEnvironment(facts, host) };
   if (world && !['web', 'mac', 'macos', 'ios', 'linux', 'windows'].includes(host))
     throw new Error(`world restore unavailable on this host yet: ${host}`);
   if (world && statSync(world).size > WORLD_LIMIT)
@@ -184,7 +203,7 @@ export async function open({
       env = developmentLaunchEnvironment(['--run', '--url', url], env ?? {});
     } else env = { ...(env ?? {}), EXACT_LAUNCH_URL: url };
   }
-  const carrier = attach !== undefined
+  const carrier = await openWithSubstitutes(env, async () => attach !== undefined
     ? await openAttached({ host, app, pid: attach === true ? null : attach, session, device: Boolean(device || pick) })
     : device
     ? await openDevice({ host: 'ios', plan, world, size, env, app, device, phone: pick, touch, onProcess })
@@ -220,7 +239,7 @@ export async function open({
                     mediaClock,
                     lineHeight,
                     port: webPort(port, { ...process.env, ...env }),
-                  });
+                  }));
   const mapLocator =
     plan ??
     carrier.plan ??

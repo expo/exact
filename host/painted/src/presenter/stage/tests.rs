@@ -460,6 +460,31 @@ fn a_sheet_dragged_fast_then_held_before_release_stays_open() {
 }
 
 #[test]
+fn the_sheet_keeps_its_back_callback_while_a_push_covers_it() {
+    let mut p = phone();
+    tap(&mut p, "open-info");
+    after(&mut p, 1000.);
+    let sheet = id(&p, "route-info");
+    assert_eq!(p.back_layers().sheet, sheet);
+    tap(&mut p, "open-settings");
+    after(&mut p, 1000.);
+    let layers = p.back_layers();
+    assert!(layers.route);
+    assert_eq!(layers.sheet, 0);
+    assert_eq!(layers.stacked_sheets, [sheet]);
+    assert!(!p.dispatched_progress(2, sheet, 0, 0.0, 0, p.host.now()));
+    assert!(!p.dispatched_progress(2, sheet, 1, 0.5, 0, p.host.now()));
+    assert_eq!(p.dispatched_back(2, sheet, p.host.now()), -1);
+    assert!(has(&p, "route-settings"));
+    p.dispatched_back(1, 1, p.host.now());
+    p.run_commands(|| ());
+    assert_eq!(p.back_layers().sheet, sheet);
+    p.dispatched_back(2, sheet, p.host.now());
+    p.run_commands(|| ());
+    assert!(p.back_layers().stacked_sheets.is_empty());
+}
+
+#[test]
 fn back_closes_a_sheet_which_slides_out_of_the_window() {
     let mut p = phone();
     tap(&mut p, "open-info");

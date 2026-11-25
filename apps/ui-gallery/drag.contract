@@ -87,7 +87,7 @@ component DragDrop
   derive acrossSteps = "Open the other app beside UI Gallery. Then hold a card until it lifts and drag it across."
   derive homeSteps = "Hold a card until it lifts. Keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there."
   derive iosSteps = device == "pad" ? acrossSteps : device == "duo-open" ? acrossSteps : device == "duo-closed" ? "Open iPhone Duo to show the other app beside UI Gallery, then drag a card across. Or, with it closed, hold a card until it lifts, keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there." : device == "phone" ? homeSteps : "On iPad or an open iPhone Duo, open the other app beside UI Gallery and drag a card across. On iPhone, hold a card until it lifts, keep holding it, swipe up from the bottom with another finger to go Home, then open the other app and drop it there."
-  derive drops = host == "macos" or host == "web" or host == "windows" or host == "ios"
+  derive drops = host == "macos" or host == "web" or host == "windows" or host == "ios" or host == "android"
   state over = false
   state dropped: string[] = []
   state droppedText = ""
@@ -166,19 +166,20 @@ component DragDrop
         image "symbol:download" font-size=28 color="-exact-secondary-label" aria-hidden=true
         text (not drops ? "You can't drop into UI Gallery on this device yet." : over ? "Let go to drop" : "Drop a file, text or a link from another app here") class=DragTitle text-align="center" testId="drop-prompt"
         if dropCount > 0
-          text `Got ${dropped.length} ${dropped.length == 1 ? "file" : "files"}` class=DragCaption testId="drop-count"
-          // Each file's picture where the platform can draw it, over a document icon that shows where it can't
-          for p in previews key=p.id
-            row column-gap=10 align-items="center" width="100%" max-width=420 testId="drop-file"
-              column position="relative" width=48 height=48 flex-shrink=0 align-items="center" justify-content="center" border-radius=8 overflow="hidden" background-color="-exact-secondary-background"
-                image "symbol:document" font-size=22 color="-exact-secondary-label" aria-hidden=true
-                if p.picture != ""
-                  image p.picture position="absolute" left=0 top=0 width="100%" height="100%" object-fit="cover" aria-hidden=true
-              column flex=1 min-width=0 row-gap=2
-                text p.name class=DragCaption font-weight=600 color="-exact-label" overflow-wrap="anywhere" testId="drop-file-name"
-                if p.size != ""
-                  text p.size class=DragCaption
-          if droppedText != ""
-            text `Text: ${droppedText}` class=DragCaption max-width="100%" overflow-wrap="anywhere" testId="drop-text"
-          if droppedLink != ""
-            text `Link: ${droppedLink}` class=DragCaption max-width="100%" overflow-wrap="anywhere" testId="drop-link"
+          column align-self="stretch" align-items="flex-start" row-gap=6
+            text `Got ${dropped.length} ${dropped.length == 1 ? "file" : "files"}` class=DragCaption testId="drop-count"
+            // Each file's picture where the platform can draw it, over a document icon that shows where it can't
+            for p in previews key=p.id
+              row column-gap=10 align-items="center" width="100%" max-width=420 testId="drop-file"
+                column position="relative" width=48 height=48 flex-shrink=0 align-items="center" justify-content="center" border-radius=8 overflow="hidden" background-color="-exact-secondary-background"
+                  image "symbol:document" font-size=22 color="-exact-secondary-label" aria-hidden=true
+                  if p.picture != ""
+                    image p.picture position="absolute" left=0 top=0 width="100%" height="100%" object-fit="cover" aria-hidden=true
+                column flex=1 min-width=0 row-gap=2
+                  text p.name class=DragCaption font-weight=600 color="-exact-label" overflow-wrap="anywhere" testId="drop-file-name"
+                  if p.size != ""
+                    text p.size class=DragCaption
+            if droppedText != ""
+              text `Text: ${droppedText}` class=DragCaption max-width="100%" overflow-wrap="anywhere" testId="drop-text"
+            if droppedLink != ""
+              text `Link: ${droppedLink}` class=DragCaption max-width="100%" overflow-wrap="anywhere" testId="drop-link"

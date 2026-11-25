@@ -3,7 +3,7 @@
 use super::*;
 
 /// The hosts a test's `on` names, as the driver names them.
-const TEST_HOSTS: [&str; 7] = ["web", "macos", "ios", "tvos", "linux", "windows", "android"];
+pub const TEST_HOSTS: [&str; 7] = ["web", "macos", "ios", "tvos", "linux", "windows", "android"];
 
 impl Parser {
     /// `font "Name" = "path.ttf"`, or a block of `weight [weight] [italic] =
@@ -125,6 +125,7 @@ impl Parser {
                         | Step::AnswerFetch { .. }
                         | Step::AnswerSource { .. }
                         | Step::Prefer { .. }
+                        | Step::PreferExtension { .. }
                 )
         });
         if let Some(late) = late {
@@ -499,6 +500,7 @@ impl Parser {
     fn json_value(&mut self) -> R<String> {
         let token = self.next();
         Ok(match token.kind {
+            TokenKind::Json(raw) => raw,
             TokenKind::Punct(open @ ("{" | "[")) => {
                 let close = if open == "{" { "}" } else { "]" };
                 let mut out = String::from(open);
@@ -560,14 +562,28 @@ impl Parser {
                     name.push('.');
                     name.push_str(&self.ident()?.0);
                 }
-                // A whole word or quoted value already parses. The driver refuses those
-                // per test so the other tests in the file still run.
-                if !matches!((self.peek_kind(), self.peek2()),
-                    (TokenKind::Ident(_) | TokenKind::Str(_), TokenKind::Newline | TokenKind::Eof))
-                    && prefer_key(&name) == "extension" {
+                if prefer_key(&name) == "extension" && name != "extension" {
+                    return Err(SyntaxError { id: "syntax-expected-step", message: "write `prefer extension <extension>.<name>=<JSON>|clear`".into(), span: name_span });
+                }
+                if name == "extension" {
+                    let (key, _) = self.ident()?;
+                    if !key.contains('.') {
+                        return self.err("syntax-expected-step", "expected <extension>.<name>=<JSON>|clear");
+                    }
+                    self.expect_punct("=")?;
+                    let value = if self.at_ident("clear") {
+                        self.next();
+                        None
+                    } else {
+                        Some(self.json_value()?)
+                    };
+                    self.newline()?;
+                    return Ok(Step::PreferExtension { key, value, span });
+                }
+                if prefer_key(&name) == "mode" && matches!(self.peek2(), TokenKind::Punct("=")) {
                     return Err(SyntaxError {
                         id: "syntax-drive-only-preference",
-                        message: format!("`prefer {name}` sets an extension substitute in a drive. A test file can set media preferences, page facts and module permissions. It cannot set extension substitutes or a package's agent values. In an agent drive, use `prefer extension <extension>.<name>=<JSON>|clear`"),
+                        message: "`prefer mode` pins a mode in an agent drive. Use `prefer mode <axis>=<value>` there".into(),
                         span: name_span,
                     });
                 }
@@ -575,7 +591,7 @@ impl Parser {
                     Token { kind: TokenKind::Ident(value) | TokenKind::Str(value), .. } => value,
                     token => return Err(SyntaxError {
                         id: "syntax-expected-step",
-                        message: "`prefer` takes a media feature, a page fact (including `root-font-size`) or a module permission and its value. Quote numbers and values with punctuation, as `prefer root-font-size \"24\"` or `prefer permission.notifications granted`. Folds (`posture`, `segments`, `gap`), mode pins and extension substitutes are drive-only for now".into(),
+                        message: "`prefer` takes a media feature, a page fact (including `root-font-size`) or a module permission and its value. Quote numbers and values with punctuation, as `prefer root-font-size \"24\"` or `prefer permission.notifications granted`. Use `prefer extension <extension>.<name>=<JSON>|clear` for a package substitute. Folds (`posture`, `segments`, `gap`) and mode pins require an agent drive".into(),
                         span: token.span,
                     }),
                 };
@@ -1336,6 +1352,7 @@ pub(super) const LAUNCH: [&str; 13] = [
 pub(super) fn launch_word(step: &Step) -> &'static str {
     match step {
         Step::Prefer { .. } => "prefer",
+        Step::PreferExtension { .. } => "prefer extension",
         Step::Size { .. } => "size",
         Step::At { .. } => "at",
         Step::Epoch { .. } => "epoch",
@@ -1382,6 +1399,9 @@ pub fn same_launch(a: &Step, b: &Step) -> bool {
     }
     if let (Step::Prefer { name: x, .. }, Step::Prefer { name: y, .. }) = (a, b) {
         return prefer_key(x) == prefer_key(y);
+    }
+    if let (Step::PreferExtension { key: x, .. }, Step::PreferExtension { key: y, .. }) = (a, b) {
+        return x == y;
     }
     let word = launch_word(a);
     !word.is_empty() && word == launch_word(b)

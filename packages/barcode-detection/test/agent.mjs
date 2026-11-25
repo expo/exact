@@ -30,7 +30,7 @@ for (const host of hosts.length ? hosts : ['web']) {
     const serial = env.ANDROID_SERIAL;
     if (!serial) throw new Error('Set ANDROID_SERIAL to the emulator to drive');
     const abi = run('adb', ['-s', serial, 'shell', 'getprop', 'ro.product.cpu.abi'], app, env).trim();
-    run('bun', [join(root, 'scripts/agent-android.mjs'), 'build', app, '--apk', '--release', '--abis', abi, '--write-locks'], root, env);
+    run('bun', [join(root, 'scripts/agent-android.mjs'), 'build', app, '--apk', '--release', '--abis', abi], root, env);
     const apk = join(app, 'target/android/app/outputs/apk/release/app-release.apk');
     const out = run('bun', [join(root, 'scripts/agent.mjs'), 'android', '--reader', '--app', app,
       '--storage', `faces-${process.pid}`, 'clock data', ...portraitSteps()], root, { ...env, EXACT_ANDROID_BIN: apk });

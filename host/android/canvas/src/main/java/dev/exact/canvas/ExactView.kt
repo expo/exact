@@ -74,7 +74,9 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val fonts = java.util.concurrent.ConcurrentHashMap<Int, Font>()
     private val images = HashMap<Int, Bitmap>()
     private val animated = HashMap<Int, android.graphics.drawable.AnimatedImageDrawable>()
-    /** Kept rows, one RenderNode each, recorded once and drawn until freed. */
+    private val rowDrawings = RowDrawings {
+        resolving(Player(fonts)).also { it.width = width; it.height = height; it.window.set(main.window) }
+    }
     private val rows = HashMap<Int, android.graphics.RenderNode>()
     /** Rows the last stream freed: dropped when the next stream arrives, as the last one may be replayed again. */
     private val freeing = ArrayList<Int>()
@@ -105,8 +107,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val bounds = Bounds().also { it.row = { id -> rows[id] } }
     private val measured = RectF()
     private val placed = android.graphics.Rect()
-    /** A Player that draws the stream into this view: every id resolved to its node, and each row's and layer's slots
-     * that lost their drawings recorded again as it is drawn. */
+    /** Resolve the stream's node references against the live scene. */
     private fun resolving(p: Player): Player {
         p.origins = nativeOrigins
         p.dotsAtOnce = (context as Activity).intent.getStringExtra("dots") != "0"
@@ -115,7 +116,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         p.image = { images[it] }
         p.animated = { animated[it] }
         p.native = { natives?.node(it) ?: fields?.node(it) }
-        p.row = { id -> rows[id]?.also { slots.refill(id) } ?: pending[id]?.let { rows[it]?.also { _ -> slots.refill(it) } } }
+        fun row(id: Int) = rows[id]?.let { slots.refill(id); rowDrawings.drawn(it) }
+        p.row = { id -> row(id) ?: pending[id]?.let { row(it) } }
         p.group = { id -> groups.getOrPut(id) { android.graphics.RenderNode("exact group").apply { setClipToBounds(false) } } }
         p.holder = { id -> scrolling.holder(id) }
         p.slot = { slots.nodes[it] }
@@ -1291,9 +1293,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                 if (into.setClipToBounds(clip) || resized) nativeOrigins.moved(into)
                 tokens[id] = tokens.remove(previous) ?: nextToken++
             } else tokens[id] = nextToken++
-            val c = into.beginRecording()
-            main.replay(c, b, body, end, into = into)
-            into.endRecording()
+            rowDrawings.record(into, b, body, end, main)
             rows.put(id, into)?.let { if (it !== into) it.discardDisplayList() }
         }
     }
@@ -1410,8 +1410,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * replaces draws in its place. */
     private fun record(id: Int, previous: Int, node: android.graphics.RenderNode, b: IntBuffer, body: Int, end: Int) {
         if (worker.isShutdown) return
-        val copy = IntArray(end - body)
-        for (k in copy.indices) copy[k] = b.get(body + k)
+        val copy = rowDrawings.save(node, b, body, end)
         val pictures = picturesCopy ?: HashMap(images).also { picturesCopy = it }
         val playing = playingCopy ?: HashMap(animated).also { playingCopy = it }
         val elements = natives?.snapshot() ?: emptyMap()

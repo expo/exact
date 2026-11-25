@@ -234,6 +234,16 @@ fn step_json(step: &Step, s: &mut String) {
             s.push_str("{\"op\":\"locale\",\"value\":");
             q(tag, s);
         }
+        Step::PreferExtension { key, value, .. } => {
+            s.push_str("{\"op\":\"prefer-extension\",\"key\":");
+            q(key, s);
+            if let Some(json) = value {
+                s.push_str(",\"value\":");
+                s.push_str(json);
+            } else {
+                s.push_str(",\"clear\":true");
+            }
+        }
         Step::Prefer { name, value, .. } => {
             s.push_str("{\"op\":\"prefer\",\"name\":");
             q(name, s);

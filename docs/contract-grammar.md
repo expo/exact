@@ -842,8 +842,11 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "before" "data" NL                   (* the first step does not wait for data *)
               | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
                                                      (* media feature, page fact, or permission.<module>; before observations *)
+              | extension-preference NL               (* available at boot *)
               | "answer" "source" IDENT "with" json NL (* what a source answers under verify *)
               | "fail" "fetch" STRING [ "times" NUMBER ] NL ; (* armed before the first data load *)
+extension-preference = "prefer" "extension" extension-key "=" ( json | "clear" ) ;
+extension-key = ? a drive key of the form extension.name or extension.name#import-path ? ;
 step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
                                                      (* bytes into an input; or clock ticks: bpm, ms *)
               | "tap" STRING [ "hover" | "dblclick" | "contextmenu"
@@ -875,6 +878,7 @@ step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
               | "resize" NUMBER "x" NUMBER NL        (* the window, mid-test: 800x600 *)
               | "prefer" IDENT { "." IDENT } ( IDENT | STRING ) NL
                                                      (* change a media preference, page fact or module permission now *)
+              | extension-preference NL               (* subsequent calls see the value *)
               | "prefer" midi-fact { midi-fact } NL  (* each fact at most once *)
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
@@ -1121,10 +1125,29 @@ a module's permission (`prefer permission.notifications granted`, `denied` or
 single-value page facts, such as `prefer online false`, use the drive's parser
 and aliases; quote numeric values. On the Chromium web host, `prefer safe-area "47 0 34 0"`
 sets the top, right, bottom and left safe-area insets in whole CSS pixels. The
-browser applies them to CSS `env()` values. Native hosts use the device's insets. Folds (`posture`, `segments`, `gap`), mode
-pins and extension substitutes are drive-only for now. Defaults
+browser applies them to CSS `env()` values. Native hosts use the device's insets. Folds (`posture`, `segments`, `gap`) and mode
+pins require a drive. Defaults
 merge by resolved fact name, so aliases override each other; duplicate leading
 lines for one fact are errors. A bad name or value fails that test at its line.
+A package substitute uses the drive's key `<extension>.<name>[#<import-path>]`.
+Both parts take ASCII letters, digits and underscores. The extension can also
+contain hyphens. For example,
+`prefer extension store.outcome="cancel"`. The compiler checks the package,
+the substitute name and each JSON value where it is written, including file
+defaults that a test overrides. A record supplies its required fields unless
+the declaration fills them or accepts a partial value. Omit each status field
+that the package assigns to a permission on the test's host. The host supplies
+its declared status on an unavailable target. Otherwise it supplies the
+permission state, which a test can set with
+`prefer permission.<name> granted|denied|prompt`.
+`prefer extension store.outcome=clear`
+restores the package default. A leading line supplies the value before the
+app's first call. A later line changes subsequent calls. A package that reads
+its value once at startup sees a mid-test change on the next launch.
+Each test and each replay starts from package defaults and runs its lines in
+order. A reload or verify relaunch receives the current substitutes together,
+including a tag list and the tag in the field.
+
 The latest values survive `reload` and verify's relaunch. A file whose
 assertions depend on the date says so in the file. `epoch now` is the machine's
 clock, read once as each test launches, for a test whose app talks to a live
@@ -2702,7 +2725,7 @@ column key=move paste=pasteAt(selected) copy=copyCells cut=cutCells
 
 A Paste button or menu command can send a mutation whose data code calls
 `readText()` or `read()` from `@exact/clipboard` on macOS, iOS, Android and the web.
-Android requires window focus and supplies only `text/plain`.
+Android requires window focus and supplies `text/plain` and `image/png`.
 Declare `clipboard.read` in the data source's grants. A mount, tool, wake or
 headless session rejects with `NotAllowedError` and `person-required`.
 iOS decides whether to show its system paste prompt before reading another app's copy. The agent reads its session pasteboard.

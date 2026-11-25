@@ -141,7 +141,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/access/actions.rs", "Presenter::access_custom_action"],
     ["painted:host/painted/src/presenter/access/scroll.rs", "Presenter::access_scroll_to"],
     ["painted:host/painted/src/presenter/addressed_tap.rs", "Presenter::presses_itself Presenter::tap Presenter::tap_at"],
-    ["painted:host/painted/src/presenter/back.rs", "Presenter::system_back"],
+    ["painted:host/painted/src/presenter/back.rs", "Presenter::route_back Presenter::system_back"],
     ["painted:host/painted/src/presenter/bars.rs", "Presenter::bar_choose Presenter::bar_listener"],
     ["painted:host/painted/src/presenter/clipboard.rs", "Presenter::clipboard_action"],
     ["painted:host/painted/src/presenter/collection.rs", "Presenter::collection_scroll_turn Presenter::dispatch_authored_scroll"],
@@ -413,7 +413,8 @@ export const classifications = [
       "Java_dev_exact_canvas_Native_scratchStorage Java_dev_exact_canvas_Native_sensorInput Java_dev_exact_canvas_Native_surfaceHas " +
       "Java_dev_exact_canvas_Native_underAgent"],
     ["painted:host/painted/src/canvas/jni_frames.rs", "Java_dev_exact_canvas_Native_frameRates Java_dev_exact_canvas_Native_frameWindow"],
-    ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_backProgress"],
+    ["painted:host/painted/src/canvas/keys.rs", "CanvasHost::hosted_back"],
+    ["painted:host/painted/src/canvas/jni_keys.rs", "Java_dev_exact_canvas_Native_backProgress Java_dev_exact_canvas_Native_hostedBack"],
     ["painted:host/painted/src/canvas/jni_scroll.rs", "Java_dev_exact_canvas_Native_flingEnded Java_dev_exact_canvas_Native_refresh Java_dev_exact_canvas_Native_snapsAround"],
     ["painted:host/painted/src/canvas/journal.rs", "CanvasHost::echo_journal"],
     ["painted:host/painted/src/canvas/refine.rs", "CanvasHost::scale"],
@@ -1007,7 +1008,7 @@ export const classifications = [
     "host/painted/src/package.rs Context exposes a session package instance; canvas/jni_extensions.rs binds the current reader extensions. Session reload replaces the context native slot.", [
     ["painted:host/painted/src/canvas/jni_extensions.rs", "agent bind_later invoked now sensor_input surface_has under_agent"],
     ["painted:host/painted/src/package.rs",
-      "Context::agent Context::cache Context::changed Context::data Context::desktop Context::displays Context::emit Context::extension Context::foreground Context::label Context::log " +
+      "Context::agent Context::cache Context::changed Context::data Context::desktop Context::development Context::displays Context::emit Context::extension Context::foreground Context::label Context::log " +
       "Context::notifier Context::now Context::origin Context::pads Context::request Context::session Context::temporary Entry::of"],
   ]),
   group("region and text", ["one-shot"], "text request/source, font recipe, paint context and current paragraph/cache residency", "UI-owned",
@@ -1325,7 +1326,7 @@ export const classifications = [
     "The named painted adapter reads or updates the current Presenter through the runner or its Host forwarding API. runner/src/runner/router.rs validates visits against the live router; replacement/retirement changes that owner.", [
     ["painted:host/painted/src/presenter/history.rs", "Presenter::history_action"],
     ["painted:host/painted/src/presenter/stage.rs",
-      "Presenter::desktop_stage Presenter::place_sheets Presenter::stage_page_route Presenter::stage_paint Presenter::stage_sheets Presenter::stage_shows " +
+      "Presenter::back_sheets Presenter::desktop_stage Presenter::place_sheets Presenter::stage_page_route Presenter::stage_paint Presenter::stage_sheets Presenter::stage_shows " +
       "Presenter::sync_stage Presenter::top_sheet"],
   ]),
   group("picture results", ["one-shot"], "pending image/picture source, decode generation and current presentation consumers", "UI-owned",

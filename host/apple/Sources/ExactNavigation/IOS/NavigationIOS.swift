@@ -317,7 +317,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for (owner, ids) in logicalChildren {
             guard let parent = owner == container?.id ? container : presenter.views[owner] else { continue }
             for (index, node) in ids.compactMap({ presenter.views[$0] }).enumerated() where presenter.views[node.id] === node {
-                parent.container.insertSubview(node, at: index)
+                node.movingRoute(into: parent.container) { parent.container.insertSubview(node, at: index) }
                 presenter.regrid(node)
             }
         }
@@ -891,7 +891,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         for (owner, ids) in logical {
             guard let parent = owner == root.id ? root : presenter.views[owner] else { continue }
             for (index, node) in ids.compactMap({ presenter.views[$0] }).enumerated() where presenter.views[node.id] === node {
-                parent.container.insertSubview(node, at: index)
+                node.movingRoute(into: parent.container) { parent.container.insertSubview(node, at: index) }
                 presenter.regrid(node)
             }
         }

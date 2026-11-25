@@ -21,6 +21,51 @@ impl<D: DataSource> Modules<D> for LinkedModules {
         Box::new(super::Extensions::default())
     }
 
+    fn launch_substitutes(&self, r: &mut Runner<D>) -> Result<(), RunnerError> {
+        if !crate::agent::carried() {
+            return Ok(());
+        }
+        let Ok(spec) = std::env::var("EXACT_AGENT_SUBSTITUTES") else {
+            return Ok(());
+        };
+        let spec = if let Some(path) = spec.strip_prefix('@') {
+            let path = if let Some(relative) = path.strip_prefix("~/") {
+                std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .ok_or_else(|| {
+                        RunnerError::InvalidSubstitutes("no app home for the launch fixture".into())
+                    })?
+                    .join(relative)
+            } else {
+                std::path::PathBuf::from(path)
+            };
+            std::fs::read_to_string(path)
+                .map_err(|e| RunnerError::InvalidSubstitutes(e.to_string()))?
+        } else {
+            spec
+        };
+        let snapshot: Json = serde_json::from_str(&spec)
+            .map_err(|e: serde_json::Error| RunnerError::InvalidSubstitutes(e.to_string()))?;
+        let group = snapshot["values"]
+            .as_object()
+            .ok_or_else(|| RunnerError::InvalidSubstitutes("expected a substitute table".into()))?;
+        if group.is_empty() {
+            return Ok(());
+        }
+        if let Some(target @ ("linux" | "windows" | "android" | "ios" | "macos" | "tvos")) =
+            snapshot["target"].as_str()
+        {
+            r.module_target = Some(target.to_owned());
+        }
+        r.check_substitutes(group, true, snapshot["restore"] == true)
+            .map_err(RunnerError::InvalidSubstitutes)?;
+        for (key, value) in group {
+            r.note_track(key, value);
+            r.extensions.preferred.insert(key.clone(), value.clone());
+        }
+        Ok(())
+    }
+
     fn abort_held_of(&self, r: &mut Runner<D>, id: u64, message: &str) {
         r.abort_held_of_linked(id, message)
     }

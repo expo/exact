@@ -1,6 +1,6 @@
 // @exact/global-shortcuts on macOS (LLP 1133.025 D3): a chord registered
 // system-wide with Carbon's `RegisterEventHotKey` while something reads it,
-// and a modifier pair (`Shift+Shift`) heard by a `.flagsChanged` monitor.
+// and modifier shortcuts heard by a `.flagsChanged` monitor.
 // The app's composed module calls it outside the agent; under the agent the
 // runner's substitute answers, unless the drive binds it.
 //
@@ -92,7 +92,7 @@ public final class GlobalShortcutsModule: ExactPackage {
 }
 
 /// The process's hot keys: one Carbon registration per chord, one monitor
-/// for every pair, and the readers of each.
+/// shared by the modifier shortcuts, and the readers of each.
 private final class HotKeys {
     static let shared = HotKeys()
 
@@ -121,7 +121,7 @@ private final class HotKeys {
         let number = next
         next += 1
         let chord = Chord(number: number)
-        if Self.pair(keys) != nil {
+        if Self.modifier(keys) != nil {
             guard AXIsProcessTrusted() else { return (false, "not-allowed") }
             guard installMonitors() else { return (false, "unsupported") }
         } else {
@@ -145,7 +145,7 @@ private final class HotKeys {
     /// Whether `keys` could be registered now, keeping nothing.
     func check(_ keys: String) -> (Bool, String?) {
         if chords[keys] != nil { return (true, nil) }
-        if Self.pair(keys) != nil {
+        if Self.modifier(keys) != nil {
             guard AXIsProcessTrusted() else { return (false, "not-allowed") }
             let installed = !monitors.isEmpty
             guard installMonitors() else { return (false, "unsupported") }
@@ -170,7 +170,7 @@ private final class HotKeys {
         guard chord.readers.isEmpty else { return }
         if let ref = chord.ref { UnregisterEventHotKey(ref) }
         chords[keys] = nil
-        if !chords.keys.contains(where: { Self.pair($0) != nil }) { removeMonitors() }
+        if !chords.keys.contains(where: { Self.modifier($0) != nil }) { removeMonitors() }
     }
 
     private func press(_ keys: String, _ chord: Chord) {
@@ -235,11 +235,14 @@ private final class HotKeys {
         }
     }
 
-    // MARK: Pairs
+    // MARK: Modifier shortcuts
 
-    /// The key codes and device flag mask of a modifier pair (`Shift+Shift`), or nil.
-    private static func pair(_ keys: String) -> (left: UInt16, right: UInt16, mask: UInt)? {
+    private static func modifier(_ keys: String) -> (first: UInt16, second: UInt16?, mask: UInt)? {
         switch keys {
+        case "MetaRight":
+            (UInt16(kVK_RightCommand), nil, UInt(NX_DEVICERCMDKEYMASK))
+        case "AltRight":
+            (UInt16(kVK_RightOption), nil, UInt(NX_DEVICERALTKEYMASK))
         case "Shift+Shift":
             (UInt16(kVK_Shift), UInt16(kVK_RightShift), UInt(NX_DEVICELSHIFTKEYMASK | NX_DEVICERSHIFTKEYMASK))
         case "Control+Control":
@@ -279,10 +282,10 @@ private final class HotKeys {
         let code = event.keyCode
         // Device flags describe both sides at this event, even if the monitor missed an earlier change.
         for (keys, chord) in chords {
-            guard let pair = Self.pair(keys) else { continue }
-            if event.modifierFlags.rawValue & pair.mask != pair.mask {
+            guard let modifier = Self.modifier(keys) else { continue }
+            if event.modifierFlags.rawValue & modifier.mask != modifier.mask {
                 lift(keys, chord)
-            } else if code == pair.left || code == pair.right {
+            } else if code == modifier.first || code == modifier.second {
                 press(keys, chord)
             }
         }

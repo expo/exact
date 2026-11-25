@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test';
 import { bindingChanges, packagedKinds, repack, repackedBuild, versionsOf } from './repack.mjs';
 import { frameworkInfo, plistFile } from './assets.mjs';
 import { EXTENSION_KINDS } from './extensions.mjs';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { repackBase, reservedPlan } from './native-extras.mjs';
+import { nativeExtras, repackBase, reservedPlan } from './native-extras.mjs';
 
 // A template base's compat.json (`exact new`, the placeholder icon) and an app's bake from it.
 const compat = (inputs, rest = {}) => ({ id: 'c', target: 'aarch64-apple-ios', inputs: { platform: 'ios', executors: ['hermes'], trust: 'development', minimumOS: '17.0', ...inputs }, embedded: { trust: 'development', plan: 'p1', assets: 'a1' }, ...rest });
@@ -62,6 +62,35 @@ test('a development archive is a repack base, and repack runs, only with EXACT_E
   } finally {
     if (was === undefined) delete process.env.EXACT_EXPERIMENTAL; else process.env.EXACT_EXPERIMENTAL = was;
   }
+});
+
+// An installed Apple implementation's record names its package root, a directory: the digest a repack base records
+// names a Swift package shipped there by its files, wherever the checkout is.
+test('a repack base names an installed implementation, and the Swift package it ships by its files', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-native-extras-'));
+  const at = (where) => {
+    const app = { dir: resolve(dir, where, 'app'), manifest: {}, modulesFor: () => ({}) }, root = resolve(app.dir, 'node_modules/probe');
+    const write = (name, text) => { mkdirSync(resolve(root, name, '..'), { recursive: true }); writeFileSync(resolve(root, name), text); };
+    write('package.json', JSON.stringify({ name: 'probe', version: '1.0.0', exports: { '.': './exact.json', './apple': './apple/exact.json' } }));
+    write('exact.json', JSON.stringify({ kind: 'interface', name: 'probe' }));
+    write('apple/Bridge.swift', 'final class Bridge {}\n');
+    writeFileSync(resolve(app.dir, 'app.ts'), '');
+    return { app, write, digest: () => nativeExtras(app, 'ios', { probe: 'probe' }) };
+  };
+  const implementation = (swiftPackages) => JSON.stringify({ kind: 'implementation', implements: 'probe', platform: 'apple', targets: ['ios'], class: 'Bridge', sources: { swift: ['Bridge.swift'] }, ...(swiftPackages ? { swiftPackages } : {}) });
+  try {
+    const one = at('one');
+    one.write('apple/exact.json', implementation());
+    expect(one.digest()).toMatch(/^[0-9a-f]{64}$/);
+    one.write('apple/exact.json', implementation([{ path: 'Kit', products: ['Kit'] }]));
+    one.write('apple/Kit/Package.swift', '// swift-tools-version:5.9\n');
+    one.write('apple/Kit/Sources/Kit/Value.swift', 'public let value = 1\n');
+    const shipped = one.digest(), two = at('two');
+    for (const name of ['apple/exact.json', 'apple/Kit/Package.swift', 'apple/Kit/Sources/Kit/Value.swift']) two.write(name, readFileSync(resolve(one.app.dir, 'node_modules/probe', name), 'utf8'));
+    expect(two.digest()).toBe(shipped);
+    one.write('apple/Kit/Sources/Kit/Value.swift', 'public let value = 2\n');
+    expect(one.digest()).not.toBe(shipped);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a repack's receipt names what its own bake read and selected, not its base's", () => {

@@ -298,10 +298,51 @@ public final class ExactView: UIView {
     public override func paste(_ sender: Any?) { rootHearer(#selector(paste(_:)))?.clipboard(#selector(paste(_:))) }
     #endif
 
+    private var finishScreenMove: (() -> Void)?
+    private var disappearingOwner: UIViewController?
+    private var unmountAfterAppearance = false
+
+    public override func willMove(toSuperview newSuperview: UIView?) {
+        if let newSuperview, superview != nil, let window, newSuperview.window === window {
+            finishScreenMove = session.natives.prepareScreenMove(self, into: newSuperview)
+        }
+        super.willMove(toSuperview: newSuperview)
+    }
+
+    public override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        let finish = finishScreenMove
+        finishScreenMove = nil
+        finish?()
+    }
+
     public override func willMove(toWindow newWindow: UIWindow?) {
+        // Unmount retires the navigation hierarchy before UIKit's next turn. Finish
+        // its disappearance while the visible route still contains its children.
+        if newWindow == nil, window != nil, session.natives.hasScreens {
+            if let owner = session.presenter.navigation.primaryOwner, owner.viewIfLoaded?.window != nil {
+                // A pop may already have removed the embedding controller from the
+                // window's controller hierarchy. UIKit finishes that disappearance.
+                var host = owner
+                while let parent = host.parent ?? host.presentingViewController { host = parent }
+                unmountAfterAppearance = host !== window?.rootViewController || owner.transitionCoordinator != nil
+                if !unmountAfterAppearance {
+                    disappearingOwner = owner
+                    owner.beginAppearanceTransition(false, animated: false)
+                }
+            } else {
+                session.natives.setScreensMounted(false, in: self)
+            }
+        }
         // Child didMoveToWindow callbacks can retry focus before our own
         // didMoveToWindow. Wait until their native owners have been installed.
-        if newWindow != nil { session.presenter.navigation.willMount() }
+        if newWindow != nil {
+            if unmountAfterAppearance {
+                unmountAfterAppearance = false
+                session.presenter.navigation.unmounted()
+            }
+            session.presenter.navigation.willMount()
+        }
         if newWindow !== window {
             session.natives.windowLeaving(window) // its window hatch ends while the window is there
         }
@@ -310,6 +351,9 @@ public final class ExactView: UIView {
 
     public override func didMoveToWindow() {
         super.didMoveToWindow()
+        let owner = disappearingOwner
+        disappearingOwner = nil
+        owner?.endAppearanceTransition()
         ExactApp.shared.refreshDevPills() // in the window it joined, or another's (DevPill.swift)
         // The window it joined takes the accent; one it left has its own back
         session.presenter.accent.apply()
@@ -329,7 +373,13 @@ public final class ExactView: UIView {
         if window == nil {
             session.presenter.menus.unmounted()
             session.presenter.modals.unmounted()
-            session.presenter.navigation.unmounted()
+            if unmountAfterAppearance {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, unmountAfterAppearance, window == nil else { return }
+                    unmountAfterAppearance = false
+                    if session.state != .destroyed { session.presenter.navigation.unmounted() }
+                }
+            } else { session.presenter.navigation.unmounted() }
             if session.state != .destroyed { _ = fitKeyboard(in: session.presenter.pageFrame) }
         } else {
             // Install native ownership after UIKit finishes attaching this
@@ -338,6 +388,7 @@ public final class ExactView: UIView {
                 guard let self, window != nil, session.state != .destroyed else { return }
                 fit()
                 session.presenter.navigation.mounted()
+                session.natives.setScreensMounted(true, in: self)
                 session.presenter.syncAccessibility()
                 #if os(iOS)
                 // Nothing focused (autofocus has run): this view holds the

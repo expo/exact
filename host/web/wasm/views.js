@@ -1,6 +1,6 @@
 import { symbolBox, symbolSize, symbolPlaceholder, syncSymbolPlaceholder, symbolFit, tintFit } from "../symbol-geometry.js";
 import { downForDrag, elementOf, lightDomDragPath, observeDragInput, pressedAt } from "../drag-input.js";
-import { picker, track, iframeLoading, localAssetURL, host, pageNative, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
+import { picker, track, iframeLoading, localAssetURL, host, agentMode, pageFacts, pageNative, loadAfterPaint, moduleReady, views, writeIn, now, afterNativePaint, log, retiredViews, lists, root, encoder, readOut, imageProbes, inflight, IMAGE_ERROR, CORS_ERROR, heldValues, composing, loadDecorations, markupPending, scrollDocs, followScroll, pendingScrolls, DATA_LIMIT, authoredDisabled, holdWake, holdOrientation } from "../glue.js";
 import { pageGivenFiles, commitGuestOrigin, frameURL, refuseURL, valuedControl, renderMarkup, editMenu, inertAncestor, contextAt, liveById, navigates, navigableURL, dataURL, settleValue, fitVisualViewport } from "../navigation.js";
 import { send } from "./commit.js";
 import { attach } from "./input.js";
@@ -84,6 +84,9 @@ export function syncMedia(el, set = {}, clear = []) {
   // Attached once the data executor settles (a report before then is dropped), reporting what the element has then; `clock settle` waits for it, not `inflight`, which a module replacement drains during activation. A load or a seek in flight then holds a settle too, as on the JS target (media-glue.js `mediaHold`; `removeMedia` lets it go).
 }
 export function nativeCreate(el, id) {
+  const pkg = HAS_PACKAGE_VIEWS && Object.hasOwn(PACKAGE_VIEW_OWNERS, el.localName)
+    && PACKAGE_VIEW_OWNERS[el.localName] === host.packageViewOwners?.[el.localName];
+  const generation = pkg && host.incarnation;
   const st = el.exactNative = {
     id,
     name: el.localName,
@@ -97,22 +100,27 @@ export function nativeCreate(el, id) {
     },
     destroy() {
       this.destroyed = true;
-      host.nativeHost?.then((h) => h.destroy(el));
+      if (pkg) host.packageNative?.then(h => h.destroy(el), () => {});
+      else host.nativeHost?.then((h) => h.destroy(el));
     }
   };
   const owners = host.packageViewOwners;
   if (owners && Object.hasOwn(owners, st.name)) {
     const owner = owners[st.name] || "the declaring package";
     st.missingFactory = `the web wasm target cannot load the view factory for <${st.name}> from ${owner}`;
-    // An app artifact can already supply this tag (LLP 1024 D2). With no artifact the refusal is known now.
-    if (!pageNative) {
+    // A bare plan can name a package the page did not build. An app artifact may supply that tag (LLP 1024 D2).
+    if (!pageNative && !pkg) {
       st.state = "error";
       st.error = st.missingFactory;
       log(`native ${st.name} #${id}: error: ${st.error}`);
       return;
     }
   }
-  (host.nativeHost ??= afterNativePaint().then(() => loadAfterPaint("./native-glue.js", "nativeHost")).then((make) => make({
+  (host[pkg ? "packageNative" : "nativeHost"] ??= afterNativePaint().then(() => pkg
+    ? loadAfterPaint("./packages/views.js", "wasmViewHost").then(bind => options => bind({
+      host, generation, agentMode, now, foreground: () => !(pageFacts.bits() & 1), changed: topic => send(host.wasm.exact_changed(writeIn(topic)))
+    }, options))
+    : loadAfterPaint("./native-glue.js", "nativeHost")).then((make) => make({
     log,
     dispatch(el, kind, text) {
       const id = Number(el.dataset.view);
@@ -121,9 +129,11 @@ export function nativeCreate(el, id) {
       }
     }
   }))).then((h) => h.attach(el), (e) => {
-    host.nativeHost = null;
+    if (pkg && host.incarnation !== generation) return;
+    if (pkg) host.packageNative = null;
+    else host.nativeHost = null;
     st.state = st.missingFactory ? "error" : "unavailable";
-    st.error = st.missingFactory ?? String(e?.message ?? e);
+    st.error = pkg ? `${st.missingFactory}: ${e?.message ?? e}` : st.missingFactory ?? String(e?.message ?? e);
     log(`native ${st.name} #${id}: ${st.state}: ${st.error}`);
   });
 }

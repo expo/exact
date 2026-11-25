@@ -166,7 +166,7 @@ export function arrivals({ rows, held, preferred, release, raise, say, valueOf }
     /** Why `prefer extension key=value` is refused for a field word, or null. */
     refusal(key, v, group) {
       const extension = key.slice(0, key.indexOf(".")), word = key.slice(key.indexOf(".") + 1), a = byExtension.get(extension);
-      if (!a || a.field !== word || v === "clear") return null;
+      if (!a || a.field !== word) return null;
       const from = `${extension}.${a.from}`, tags = Object.hasOwn(group, from) ? group[from] : fixtures(extension, a);
       return (Array.isArray(tags) ? tags : []).some(t => t.id === v) ? null : `prefer extension: no tag \`${v}\` in \`${from}\``;
     },

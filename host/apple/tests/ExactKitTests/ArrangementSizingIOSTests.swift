@@ -374,6 +374,28 @@ final class ArrangementSizingIOSTests: XCTestCase {
         XCTAssertEqual(pane.intrinsicContentSize.width, room.width, accuracy: 1, "an overlay that stacks the panes sizes no axis: the room's")
     }
 
+    /// As a Duo folds, UIKit lays the panes out again inside an animation: a pane's content takes its new box in that layout,
+    /// so that the animation moves it with the pane.
+    func testAPanesContentMovesInTheAnimationUIKitLaysThePaneOutIn() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        guard let scene = hostedWindowScene() else { throw missing("scene", "a frame that shows the pane needs a scene") }
+        let (session, controller, pane) = try fixture(CGSize(width: 1000, height: 600))
+        window?.windowScene = scene
+        let primary = try node("primary")
+        controller.updateArrangement(across(.absolute(300)))
+        waitFor("a frame shows the pane's content 300 points wide", cap: 5, facts: { "pane \(pane.bounds), content \(primary.frame)" }) {
+            self.window?.layoutIfNeeded(); controller.view.layoutIfNeeded()
+            return abs(primary.bounds.width - 300) < 1 && session.presenter.showed(primary)
+        }
+        UIView.animate(withDuration: 0.5) {
+            controller.updateArrangement(self.across(.absolute(400)))
+            controller.view.layoutIfNeeded()
+        }
+        XCTAssertEqual(pane.bounds.width, 400, accuracy: 1)
+        XCTAssertEqual(primary.bounds.width, pane.bounds.width, accuracy: 1, "laid out with the pane")
+        XCTAssertNotNil(primary.layer.animation(forKey: "bounds.size") ?? primary.layer.animation(forKey: "bounds"), "and moved with it")
+    }
+
     func testIntrinsicAllocationFollowsContentAndOtherDimensionsStillWork() throws {
         guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
         let (session, controller, pane) = try fixture()

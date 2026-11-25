@@ -80,20 +80,20 @@
         "additionalProperties": { "type": "string" }
       }
     },
+    "development": {
+      "description": "Development-trust overrides for declared package keys, by interface and target.",
+      "type": "object", "additionalProperties": false, "properties": { "packages": { "$ref": "#/properties/packages" } }
+    },
     "packages": {
       "description": "Each package's configuration by target (LLP 1133.021 §9 item 7), as its interface's `config` declares it, read at bake and written into the bundle: {\"@exact/maps\": {\"web\": {\"tiles\": \"https://tile.openstreetmap.org/{z}/{x}/{y}.png\"}, \"android\": {\"apiKey\": {\"env\": \"EXACT_GOOGLE_MAPS_API_KEY\"}}}}. A key typed `env` names the environment variable that holds its value, never the value; the value still ships inside the app.",
-      "type": "object",
-      "additionalProperties": {
-        "type": "object",
-        "propertyNames": { "enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"] },
+      "type": "object", "additionalProperties": {
+        "type": "object", "propertyNames": { "enum": ["ios", "tvos", "macos", "web", "linux", "windows", "android"] },
         "additionalProperties": {
-          "type": "object",
-          "additionalProperties": {
+          "type": "object", "additionalProperties": {
             "anyOf": [
               { "type": ["string", "number", "boolean"] },
               { "type": "object", "properties": { "env": { "type": "string" } }, "required": ["env"], "additionalProperties": false }
-            ]
-          }
+            ] }
         }
       }
     },

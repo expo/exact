@@ -44,6 +44,9 @@ const MODIFIERS: [(&str, u32); 4] = [("Alt", 1), ("Control", 2), ("Shift", 4), (
 /// why it is not one: `None` for a key this table has no code for.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn chord(keys: &str) -> Result<(u32, u32), &'static str> {
+    if exact_runner::desktop::single_side_shortcut(keys).map_err(|_| "invalid")? {
+        return Err("unsupported");
+    }
     let parts: Vec<&str> = keys.split('+').collect();
     let (key, modifiers) = parts.split_last().ok_or("invalid")?;
     if let [a, b] = parts[..] {
@@ -664,6 +667,10 @@ mod tests {
     fn a_chord_is_its_modifier_bits_and_virtual_key() {
         assert_eq!(chord("Meta+Shift+2"), Ok((8 | 4, 0x32)));
         assert_eq!(chord("Control+Alt+k"), Ok((2 | 1, 0x4B)));
+        for side in ["MetaRight", "AltRight"] {
+            assert_eq!(chord(side), Err("unsupported"));
+        }
+        assert_eq!(chord("ControlRight"), Err("invalid"));
         assert_eq!(chord("F12"), Ok((0, 0x7B)));
         assert_eq!(chord("Control+ArrowUp"), Ok((2, 0x26)));
         assert_eq!(chord("Shift+Shift"), Err("not-allowed"));

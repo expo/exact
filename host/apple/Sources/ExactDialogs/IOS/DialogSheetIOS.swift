@@ -629,7 +629,9 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         controller.updateSheet(for: dialog)
         controller.relay = MountRelay(presenter, mount: controller.view)
         #endif
+        presenter.session?.natives.leaving(dialog)
         controller.scroller.addSubview(dialog)
+        presenter.session?.natives.moved(dialog)
         controller.paintBackdrop()
         dialog.isHidden = false
         controller.isModalInPresentation = refuses(dialog)
@@ -740,9 +742,11 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate, Di
         presenter?.elementScrolls.cancel(inside: dialog)
         dialog.isHidden = true
         if live(dialog), let parent = entry.parent {
+            presenter?.session?.natives.leaving(dialog)
             parent.insertSubview(dialog, at: min(entry.index, parent.subviews.count))
             dialog.frame = entry.frame
             presenter?.regrid(dialog)
+            presenter?.session?.natives.moved(dialog)
         } else {
             dialog.removeFromSuperview()
         }

@@ -35,7 +35,7 @@ import { guardFlags, reportBuilt } from './help.mjs';
 import { androidImplementations } from '../js/bake/src/typescript.mjs';
 import { packageConfigs, sourceString } from '../js/bake/src/package-config.mjs';
 import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
-import { carAppService, configMetaData, fragmentPermissions, manifestFragment, withAppLinks, withProtocolHandlers, withMetaData, withAuthCallbacks } from './android-manifest.mjs';
+import { carAppService, configMetaData, extensionFactories, mlKitInitializer, fragmentPermissions, manifestFragment, withAppLinks, withProtocolHandlers, withMetaData, withAuthCallbacks } from './android-manifest.mjs';
 import { androidLinkFilters, androidLinkNotes } from './links.mjs';
 import { androidShareActivity } from './share-target.mjs';
 import { CHANNELS_RECEIVER, androidNotificationResources, googleServices } from './android-channels.mjs';
@@ -214,6 +214,7 @@ export function androidDeploy(app, bin, env) {
     if (existsSync(rust)) run(['push', rust, `${dir}/`], 'push the plan\'s Rust module');
     vars.EXACT_PLAN = `${dir}/${basename(plan)}`;
   }
+  pushSubstitutes(vars, dir, run);
   Object.assign(vars, { HOME: home, EXACT_ASSETS: dir, EXACT_NATIVE_LIBS: dir, EXACT_PAINTER: env.EXACT_PAINTER ?? 'cpu' });
   const assignments = Object.entries(vars).map(([k, v]) => `${k}=${quote(v)}`).join(' ');
   const shot = `${dir}/agent-shot.png`, { lease, release: releasePorts } = reverseForDrive(tool, serial, vars);
@@ -300,7 +301,6 @@ export function apkRecord(app, apk = readerApk(app)) {
 /** The reader's own sources, which every APK compiles. */
 export const READER_SOURCES = ['canvas/src', 'video/src', 'widgets/src', 'app/src', 'soundarm', '../apple/soundarm'].map((d) => resolve(READER, d));
 
-// A reader failure whose cleanup succeeded.
 const RELAY_CLEANED_ERROR = 70;
 
 /** The reader carrier (LLP 1107 D1): install the APK and return what `androidDeploy` returns, with a process that
@@ -347,9 +347,11 @@ function readerDeploy(app, apk, env) {
     run(['shell', `chmod 644 ${quote(plan)}`], 'chmod the plan');
     env = { ...env, EXACT_PLAN: plan };
   }
-  const vars = readerVariables(env), { lease, release: releasePorts } = reverseForDrive(tool, serial, vars);
+  const vars = readerVariables(env), fixture = pushSubstitutes(vars, dir, run);
+  const { lease, release: releasePorts } = reverseForDrive(tool, serial, vars);
   const cleanup = code => {
     if (code !== 0 && code !== RELAY_CLEANED_ERROR) spawnSync(tool, ['-s', serial, 'shell', 'am', 'force-stop', id], { timeout: 5000 });
+    if (fixture) spawnSync(tool, ['-s', serial, 'shell', 'rm', '-f', fixture], { timeout: 5000 });
     releasePorts();
   };
   return {
@@ -364,6 +366,14 @@ function readerDeploy(app, apk, env) {
   };
 }
 
+function pushSubstitutes(vars, dir, run) {
+  if (!vars.EXACT_AGENT_SUBSTITUTES?.startsWith('@')) return;
+  const path = vars.EXACT_AGENT_SUBSTITUTES.slice(1), remote = dir + '/' + basename(path);
+  run(['push', path, remote], 'push package substitutes');
+  run(['shell', 'chmod 644 ' + quote(remote)], 'chmod package substitutes');
+  vars.EXACT_AGENT_SUBSTITUTES = '@' + remote;
+  return remote;
+}
 /** What the reader reads of a drive's `env`, which reaches it as its `x_<name>` launch extras (`ExactActivity`'s
  * `environment`): EXACT_AGENT and every EXACT_AGENT_* (the store, the epoch, the locale, the seed, the fetch faults),
  * EXACT_STORE (`real`: the platform's stores, a conformance suite's), the auth fixture a test declares
@@ -1135,9 +1145,10 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
   const bound = androidImplementations(app.dir, extensions);
   const maven = mavenCoordinates(app, bound);
   if (!writeLocks && !mavenLocksPresent(app, maven)) return null;
-  // A release profile or production trust is a release (package-config.mjs).
-  let config; const release = profile === 'release' || env.EXACT_UPDATE_TRUST === 'production';
-  try { config = packageConfigs(app.dir, 'android', { extensions, release, env, warn: (m) => console.warn(`${app.name}: ${m}`) }); configMetaData(config); } catch (error) { console.error(`${app.name}: ${error.message}`); return null; }
+  const compat = JSON.parse(readFileSync(resolve(out, 'compat.json'), 'utf8')), development = compat.embedded?.trust !== 'production';
+  // The release profile also enforces release-required keys under development trust.
+  let config; const release = profile === 'release' || !development;
+  try { config = packageConfigs(app.dir, 'android', { extensions, release, development, env, warn: (m) => console.warn(`${app.name}: ${m}`) }); configMetaData(config); } catch (error) { console.error(`${app.name}: ${error.message}`); return null; }
   // Firebase's options for an app that pushes (LLP 1133.004.000 D6). The file beside app.json needs no configuration
   // line, so the refusal is the push implementation's own rather than a `required` key's.
   let firebase = null;
@@ -1155,7 +1166,6 @@ function assembleApk(app, env, profile, writeLocks, bundle, abis, dirs) {
   // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
   if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
   const compose = composeArgs(uses, app.dir, bound, env);
-  const compat = JSON.parse(readFileSync(resolve(out, 'compat.json'), 'utf8')), development = compat.embedded?.trust !== 'production';
   // The library's baked identity is the one the APK installs under, as `assertAppleIdentity` holds an Apple build to it
   // (LLP 1030.008 D2): the JavaScript and the Rust readers resolved the same variant.
   if (compat.inputs?.app !== app.id) { console.error(`${app.name}: the library's baked app id is ${compat.inputs?.app}, not ${app.id}: build it again`); return null; }
@@ -1307,14 +1317,14 @@ function extensionArgs(app, out, config, bound, firebase, development) {
     writeFileSync(resolve(generated, 'exact/app/ExactExtensions.kt'), ['// Written by scripts/agent-android.mjs (LLP 1133.001 D5); never edited.', 'package exact.app', '',
       'class ExactExtensions : dev.exact.canvas.ExtensionRoster {',
       '    override val extensions: Map<String, (dev.exact.canvas.ExtensionContext) -> dev.exact.canvas.ExactExtension> = mapOf(',
-      ...bound.map((b) => `        ${JSON.stringify(b.extension)} to { c -> ${b.className}(c) },`), '    )',
+      ...extensionFactories(bound), '    )',
       // Each view a package serves, by the extension that makes it (LLP 1133.001 D1).
       `    override val views: Map<String, String> = mapOf(${bound.flatMap((b) => (b.views ?? []).map((tag) => `${JSON.stringify(tag)} to ${JSON.stringify(b.extension)}`)).join(', ')})`,
       // The extensions made after the reader's first frame, not at their first call (LLP 1133.015 D16 item 1).
       `    override val startAtLoad: List<String> = listOf(${bound.filter((b) => b.start).map((b) => JSON.stringify(b.extension)).join(', ')})`,
       // Each extension's configuration as JSON (LLP 1133.021 §9 item 7).
       `    override val config: Map<String, String> = mapOf(${config.filter((c) => bound.some((b) => b.extension === c.extension) && Object.keys(c.values).length).map((c) => `${JSON.stringify(c.extension)} to ${sourceString(JSON.stringify(c.values), 'kotlin')}`).join(', ')})`,
-      '}', ''].join('\n'));
+      '}', ...mlKitInitializer(bound), ''].join('\n'));
   }
   // The app’s and packages’ queries and the packages’ components, under the allow-list (LLP 1133.030 D9), with
   // the app's privacy policy for an activity that shows it (LLP 1133.026 D4), and the vendor meta-data the packages'

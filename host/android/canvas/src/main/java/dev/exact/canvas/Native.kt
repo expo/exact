@@ -295,14 +295,15 @@ object Native {
     /** A key, down or up, by the web's `code` and `key` ([Keys.named]): Tab, or a remote's D-pad arrow or Select.
      * [shift]: Shift is held with it, which Android tells with the key rather than as a key of its own. */
     @JvmStatic external fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean, shift: Boolean)
-    /** System Back (LLP 1115.001 D6): whether the app took it. From its navigation root's selected route it goes to
-     * the Back control the root names, else to the root's `navigate` handler, else it is the runner's own `back`;
-     * false when there is nowhere to go back to, and the activity finishes. The reader takes Back only while the
-     * host says it has somewhere to go (a request, [requests]). */
-    @JvmStatic external fun back(): Boolean
+    /** Subscribe to presentation requests, including the layers already open. False means the host has not booted. */
+    @JvmStatic external fun hostedBack(on: Boolean): Boolean
+    @JvmStatic fun requestBack(layers: IntArray) { Exact.backHandoff?.request(layers) }
+    /** Commit the selected callback. A target dismissed during the gesture returns -1.
+     * Kind 0 follows the presenter's order. It returns 1 when taken or 0 when the activity should leave. */
+    @JvmStatic external fun back(kind: Int, id: Int): Int
     /** Predictive Back as it goes (Android 14): `phase` 0 started, 1 moved, 2 cancelled; `progress` 0 to 1 as the
      * system eases it; `edge` 0 the left, 1 the right. Whether exact2 previews it. The commit is [back]. */
-    @JvmStatic external fun backProgress(phase: Int, progress: Float, edge: Int): Boolean
+    @JvmStatic external fun backProgress(kind: Int, id: Int, phase: Int, progress: Float, edge: Int): Boolean
     /** A URL given to the running app: its location goes to the navigation root's `navigate` (LLP 1133.023 D15 item 3). */
     @JvmStatic external fun open(href: String)
     /** A share given to the running app, `{"target", "share"}` as [Shares.request] writes it (LLP 1133.024 D5). */

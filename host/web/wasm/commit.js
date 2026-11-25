@@ -1254,6 +1254,7 @@ export function applyBatch(batch) {
       globalThis.exact.gpu?.syncPerformance?.();
       globalThis.exact.gpu?.drainRecords();
       globalThis.exact.gpu?.layout?.();
+      if (HAS_PACKAGE_VIEWS) host.packageViews?.report();
       globalThis.exact.committed?.();
       // A commit may settle the request a replacement waits for (boot.js).
       globalThis.exact.replacementChanged?.();

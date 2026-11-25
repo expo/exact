@@ -16,6 +16,7 @@ use std::rc::Rc;
 #[derive(Default)]
 pub(in crate::presenter) struct Packages {
     table: Vec<Entry>,
+    development: bool,
     made: Vec<(&'static str, Box<dyn Package>, Context)>,
     /// Extensions told they run under the agent (`--bind` names the others).
     agent: Vec<&'static str>,
@@ -45,7 +46,8 @@ impl Packages {
     /// The table the entry handed over; which of them run told they are
     /// under the agent: under the agent, all but those `EXACT_AGENT_BIND`
     /// names (`--bind`).
-    pub(super) fn set(&mut self, table: Vec<Entry>, agent: bool) {
+    pub(super) fn set(&mut self, table: Vec<Entry>, agent: bool, development: bool) {
+        self.development = development;
         let bound = std::env::var("EXACT_AGENT_BIND").unwrap_or_default();
         self.agent = (table.iter())
             .map(|e| e.extension)
@@ -194,6 +196,7 @@ impl Packages {
         let context = Context::new(
             entry.extension,
             self.agent.contains(&entry.extension),
+            self.development,
             self.native.clone(),
             self.now.clone(),
             self.lines.clone(),

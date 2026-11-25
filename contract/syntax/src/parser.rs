@@ -38,7 +38,7 @@ mod steps;
 mod theme;
 mod tool;
 mod view;
-pub use steps::{is_launch, same_launch};
+pub use steps::{is_launch, same_launch, TEST_HOSTS};
 use steps::{launch_word, LAUNCH};
 
 /// A parse failure.
@@ -1457,6 +1457,7 @@ impl Parser {
 fn describe(k: &TokenKind) -> String {
     match k {
         TokenKind::Ident(w) => format!("`{w}`"),
+        TokenKind::Json(_) => "a JSON value".into(),
         TokenKind::Number(n) => format!("number {n}"),
         TokenKind::Str(_) => "a string".into(),
         TokenKind::Template(_) => "a template string".into(),

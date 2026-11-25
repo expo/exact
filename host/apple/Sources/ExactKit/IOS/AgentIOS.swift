@@ -949,11 +949,12 @@ extension Agent {
     /// ancestor taking the touch is how a finger reaches a node that takes
     /// none itself. `v` may be a native view standing for a node (a
     /// grouped list's cell or accessory).
-    func obscured(_ v: UIView, at p: CGPoint, hit: UIView) -> String? {
+    func obscured(_ v: UIView, at p: CGPoint, hit: UIView, barItem: Bool = false) -> String? {
         if let container = presenter.keyboardContainer,
            let top = presenter.keyboardGuideTop(in: container), p.y >= container.convert(CGPoint(x: 0, y: top), to: nil).y {
             return "its middle is under the software keyboard; dismiss it or scroll the target above it first (state shows keyboard.top)"
         }
+        if barItem { return Self.barItemReceives(hit, in: v) ? nil : Agent.covers(hit) }
         // A child lifted over the tab container is still the target's (LLP 1083.000 D4)
         let inside = sequence(first: hit, next: { self.presenter.layoutParent(of: $0) }).contains { $0 === v }
         if hit === v || inside || (hit is NodeView && v.isDescendant(of: hit)) { return nil }

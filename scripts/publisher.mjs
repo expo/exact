@@ -251,7 +251,7 @@ export function binaryInputChanges(bytes, app, compat, appleIcons, evidence = bi
   const launchImage = platform === 'ios' ? launchImageInventory(app) : null;
   const nativeResources = apple ? nativeResourceInventory(app, null, platform) : [];
   const metadata = { ...(appleAssetCatalogs.length ? { appleAssetCatalogs } : {}), ...(launchImage ? { launchImage } : {}), ...(nativeResources.length ? { nativeResources } : {}), ...(apple && evidence.metadata.appleExtensions !== undefined ? { appleExtensions: evidence.metadata.appleExtensions } : {}),
-    ...nativeManifestMetadata(app.manifest, platform, compat.target, env), delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys };
+    ...nativeManifestMetadata(app.manifest, platform, compat.target, env, compat.embedded?.trust !== 'production'), delivery: compat.delivery, store: compat.inputs.store, keys: compat.inputs.keys };
   const keys = new Set([...Object.keys(metadata), ...Object.keys(evidence.metadata)]);
   const changed = [...keys].filter(key => canonicalJson(metadata[key] ?? null) !== canonicalJson(evidence.metadata[key] ?? null));
   const roots = { app: app.dir, exact: ROOT, workspace: app.workspace ?? app.dir };

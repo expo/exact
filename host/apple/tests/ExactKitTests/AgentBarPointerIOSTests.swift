@@ -206,7 +206,10 @@ final class AgentBarPointerIOSTests: XCTestCase {
         let spare = try entry("Spare"), other = UIControl(frame: try XCTUnwrap(spare.item.frame(in: bar)))
         other.accessibilityIdentifier = "BackButton"
         bar.addSubview(other)
-        assertRefused(spare, overflowed: false, "under a control with another name")
+        XCTAssertTrue((aim(spare.node)["error"] as? String)?.contains("covers its middle") == true)
+        presses = []
+        XCTAssertNotNil(agent.tap(["id": Int(spare.node.id)])["error"])
+        XCTAssertTrue(presses.isEmpty)
         other.removeFromSuperview()
 
         for e in try entries() { try assertPlaced(e) }

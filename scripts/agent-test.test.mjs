@@ -1449,7 +1449,7 @@ test('single-value page facts replay by canonical name and drive-only forms are 
   const dir = mkdtempSync(join(tmpdir(), 'exact-test-page-')), script = join(dir, 'check.mjs');
   writeFileSync(join(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
   const pageFacts = {frozen:'false', 'visibility-state':'hidden', online:'false', 'can-share':'false', 'can-share-files':'false', 'can-share-pictures':'false', 'can-open-files':'false', 'iframe-partition':'false', 'has-focus':'false', 'keyboard-navigation':'true', 'bold-text':'true', 'root-font-size':'24px', 'display-scale':'2', 'gpu-tier':'low'};
-  const driveOnly = {posture:'folded', segments:'2x1', gap:'40', mode:'density=compact', extension:'nfc.field=clear', Segments:'2x1', Mode:'density=compact', Extension:'nfc.field=clear'};
+  const driveOnly = {posture:'folded', segments:'2x1', gap:'40', mode:'density=compact', Segments:'2x1', Mode:'density=compact'};
   writeFileSync(join(dir, 'app.test.contract'), `test "page facts"\n${Object.entries(pageFacts).map(([name,value]) => `  prefer ${name} ${JSON.stringify(value)}\n`).join('')}  expect state ready == true\n  prefer Online true\n  prefer rootFontSize "28px"\n  reload\n  expect state ready == true\n${Object.entries(driveOnly).map(([name,value]) => `test "refuse ${name}"\n  prefer ${name} ${JSON.stringify(value)}\n`).join('')}`);
   writeFileSync(script, `
     import assert from 'node:assert/strict';

@@ -1087,7 +1087,7 @@ fn preference_aliases_share_launch_defaults_and_duplicate_detection() {
         ("permission.notifications", "permission.Notifications"),
         ("permission.health.steps", "permission.healthsteps"),
         ("unknown-name", "unknownName"),
-        ("extension", "Extension"),
+        ("theme", "Theme"),
         ("preferSegments", "segments"),
     ] {
         let source =

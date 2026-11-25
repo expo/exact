@@ -292,9 +292,10 @@ impl<D: DataSource> Presenter<D> {
             Ok(true) => {}
             Err(e) => return Some(e),
         }
+        // A cover can move content without changing the kernel's commit epoch.
+        self.dirty = true;
         if let Some(size) = size {
             self.field_reveal = true;
-            self.dirty = true;
             self.viewport = size;
             self.images.fit(self.viewport, self.brush.scale);
             self.collection.advance_all();

@@ -19,7 +19,7 @@ export const run = (cmd, args, cwd, env = process.env) => {
  * escape, and its part no build output, log, state or receipt may hold ([LEAK], plain even where JSON escapes the
  * rest); the fixture reports the key as `apiKey=<length> chars ending <last four>`. */
 export const LEAK = `sentinel-${process.pid}-k9Qz`, KEY = `x$"\\${LEAK}`;
-export const reportedConfig = (target) => `label=swatch ${target} apiKey=${KEY.length} chars ending ${KEY.slice(-4)}`;
+export const reportedConfig = (target) => `label=swatch ${target} apiKey=${KEY.length} chars ending ${KEY.slice(-4)} development=true`;
 process.env.SWATCH_KEY = KEY;
 
 /** The fixture app's directory and its bundle id. */
@@ -30,7 +30,8 @@ export function makeFixture() {
   rmSync(join(app, 'app.test.contract'), { force: true });
   // Its configuration on every target: the key from SWATCH_KEY, which the suites set to [KEY].
   const appJson = JSON.parse(readFileSync(join(app, 'app.json'), 'utf8')), id = appJson.app.id;
-  appJson.packages = { '@fixture/swatch': Object.fromEntries(['web', 'android', 'ios', 'macos'].map((t) => [t, { apiKey: { env: 'SWATCH_KEY' }, label: `swatch ${t}` }])) };
+  appJson.packages = { '@fixture/swatch': Object.fromEntries(['web', 'android', 'ios', 'macos'].map((t) => [t, { apiKey: { env: 'SWATCH_KEY' } }])) };
+  appJson.development = { packages: { '@fixture/swatch': Object.fromEntries(['web', 'android', 'ios', 'macos'].map(t => [t, { label: `swatch ${t}` }])) } };
   writeFileSync(join(app, 'app.json'), JSON.stringify(appJson, null, 2));
   writeFileSync(join(app, 'app.ts'), readFileSync(join(app, 'app.ts'), 'utf8').replace('__APP_ID__', id));
   const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));

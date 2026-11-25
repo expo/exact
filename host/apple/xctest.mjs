@@ -13,6 +13,34 @@ const read = (cmd, args, opts = {}) => spawnSync(cmd, args, { encoding: 'utf8', 
 /** The device set xcodebuild makes the simulator clones for parallel test runners in. */
 const TESTING_DEVICES = resolve(homedir(), 'Library/Developer/XCTestDevices');
 
+/** The package-screen test loads a package and its app module through their usual separate libraries. */
+export async function packageViewFixture(root, fixtureDir, triple, appId, env, runApple) {
+  const { packageCompiler, composedModule, moduleLibraryLinkArgs, moduleSeam } = await import('./compose.mjs');
+  const dir = resolve(fixtureDir, 'package-screen'), fixtures = resolve(root, 'host/apple/tests/fixtures');
+  const tags = ['probe-table', 'probe-plain'];
+  const packages = [{ extension: 'screen-probe', module: 'ScreenProbe', className: 'ScreenPackage', views: tags }];
+  packageCompiler({ packages, packageDir: dir, packagesRoot: dir, packageTargets: new Map([[dir, ['iphonesimulator', ['-target', triple]]]]),
+    seam: resolve(root, 'host/apple/modules/ExactPackage.swift'), packageCopies: [[resolve(fixtures, 'ScreenPackage.swift'), resolve(fixtures, 'AppearanceTable.swift')]],
+    ios: true, swiftc: read('xcrun', ['swiftc', '--version']).stdout }).place(dir);
+  const composition = resolve(dir, 'ExactComposed.swift');
+  writeFileSync(composition, composedModule(packages, true));
+  env.TEST_RUNNER_EXACT_PACKAGE_SCREEN_MODULE = resolve(dir, 'libexact_modules.dylib');
+  runApple('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-target', triple, '-parse-as-library', '-emit-library', '-swift-version', '5',
+    '-I', dir, resolve(dir, 'ExactPackage.o'), ...moduleSeam(resolve, root), resolve(fixtureDir, 'ExactDataKeys.swift'), composition,
+    resolve(fixtures, 'ScreenModule.swift'), resolve(fixtures, 'AppearanceTable.swift'), ...moduleLibraryLinkArgs(), '-o', env.TEST_RUNNER_EXACT_PACKAGE_SCREEN_MODULE]);
+  const name = '@fixture/screen-probe', pkg = resolve(dir, 'node_modules', name);
+  mkdirSync(pkg, { recursive: true });
+  writeFileSync(resolve(pkg, 'exact.json'), JSON.stringify({ name, version: '1.0.0', kind: 'interface', names: [], views: Object.fromEntries(tags.map(tag => [tag, {}])) }));
+  writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name, version: '1.0.0', exports: './exact.json' }));
+  writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { [name]: '1.0.0' } }));
+  writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: appId, name: 'Package screen' }, modules: ['app-table', 'reusable-table'] }));
+  for (const [file, key] of [['package-screen', 'PACKAGE_SCREEN'], ['package-screen-split', 'PACKAGE_SCREEN_SPLIT']]) {
+    cpSync(resolve(fixtures, `${file}.contract`), resolve(dir, `${file}.contract`));
+    const plan = env[`TEST_RUNNER_EXACT_${key}_PLAN`] = resolve(dir, `${file}.plan`);
+    runApple(env.EXACT_CONTRACT, ['build', resolve(dir, `${file}.contract`), '-o', plan], { env });
+  }
+}
+
 /** Rebuild fixture plans with `env.EXACT_CONTRACT`; write their paths to `<prefix>_<KEY>_PLAN`.
  * Plans embed the current schema digest. App entries need the test app's `appId` to boot. */
 export function compileFixtures(root, run, env, dir, prefix, appId) {

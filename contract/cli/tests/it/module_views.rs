@@ -211,7 +211,7 @@ fn a_package_with_no_module_names_accepts_its_views_agent_words() {
     let interface = r#"{
       "kind": "interface", "name": "@fixture/words", "version": "1.0.0",
       "agent": { "heard": "string", "levels": "number[]", "enabled": "bool" },
-      "views": { "words-panel": {} }, "names": []
+      "views": { "words-panel": {"displayed": true} }, "names": []
     }"#;
     let app = App::new(
         "words-without-sources",
@@ -228,7 +228,7 @@ fn a_package_with_no_module_names_accepts_its_views_agent_words() {
     prefer(&mut r, json!({ "words.heard": "hello" })).unwrap();
     r.bind_extensions(&[], &["words"]);
     assert_eq!(
-        told.lock().unwrap().last().unwrap()["preferred"]["heard"],
+        told.lock().unwrap().first().unwrap()["preferred"]["heard"],
         "hello"
     );
     prefer(

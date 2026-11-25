@@ -83,6 +83,11 @@ pub trait Modules<D: DataSource> {
         Box::new(())
     }
 
+    /// Install the driver’s current substitutes before the first resource reads.
+    fn launch_substitutes(&self, r: &mut Runner<D>) -> Result<(), RunnerError> {
+        Ok(())
+    }
+
     /// Invocation `id`'s held calls end `AbortError` with `message`.
     fn abort_held_of(&self, r: &mut Runner<D>, id: u64, message: &str) {}
 

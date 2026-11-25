@@ -75,6 +75,41 @@ private extension HotKeys {
                 ])
             }
         }
+        for (keys, left, right, leftMask, rightMask, _) in pairs where keys == "Meta+Meta" || keys == "Alt+Alt" {
+            let side = keys == "Meta+Meta" ? "MetaRight" : "AltRight"
+            let registry = HotKeys(), chord = Chord(number: 1)
+            var events: [String] = []
+            let reader = GlobalShortcutsModule(context: ExactPackageContext(agent: false, session: "side",
+                changed: { _ in }, log: { _ in }, now: { 0 }, emit: { name, args in
+                    events.append("\(name) \(args[0])")
+                }))
+            registry.chords[side] = chord
+            registry.add(chord, id: "fade", by: reader)
+            func flags(_ code: UInt16, _ mask: UInt, _ time: Double) {
+                let event = NSEvent.keyEvent(with: .flagsChanged, location: .zero, modifierFlags: .init(rawValue: mask),
+                    timestamp: time, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+                    isARepeat: false, keyCode: code)!
+                registry.flags(event)
+                registry.flags(event)
+            }
+            flags(left, leftMask, 0)
+            flags(left, 0, 1)
+            flags(right, rightMask, 2)
+            flags(left, leftMask | rightMask, 3)
+            flags(left, rightMask, 4)
+            flags(right, 0, 5)
+            if events != ["globalshortcut fade", "globalshortcutup fade"] {
+                failures.append("\(side) edges: \(events)")
+            }
+            flags(right, rightMask, 6)
+            // After a missed release, the next press starts a new hold.
+            flags(right, rightMask, 7)
+            registry.release(side, id: "fade", by: reader)
+            flags(right, 0, 8)
+            if events != Array(repeating: ["globalshortcut fade", "globalshortcutup fade"], count: 3).flatMap({ $0 }) {
+                failures.append("\(side) withdrawal: \(events)")
+            }
+        }
         let registry = HotKeys()
         var events: [String] = []
         func reader(_ session: String) -> GlobalShortcutsModule {

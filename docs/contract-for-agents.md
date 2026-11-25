@@ -2631,6 +2631,18 @@ can take a second argument of type `GlobalShortcutEvent` with `id` and
 macOS delivers both events. Windows supports presses only. Linux currently
 has no global shortcut registration.
 
+On macOS, `keys="MetaRight"` binds Right ⌘ and `keys="AltRight"` binds
+Right ⌥. Each fires on press and release. The monitor sees only modifier
+changes, so Right ⌘ fires as part of ⌘C and Right ⌥ fires when someone types
+a character with it. Windows returns `reason="unsupported"` for both codes.
+Hosts without global shortcuts report `NotSupportedError` for the operation.
+
+Like modifier pairs, these triggers require the Accessibility grant. A missing
+grant gives `reason="not-allowed"`. For a modifier trigger, `registered: true`
+means the permission gate passed and the system accepted the monitor. It is
+not proof of delivery. Modifier triggers depend on the system delivering
+modifier-flag changes to a global monitor, as measured on macOS 27.2.
+
 ## Views, layout, and interaction
 
 For an attachment of any type, use `input type="file"` with no `accept` (or
@@ -3968,9 +3980,13 @@ A package serves a tag by declaring it in its `exact.json` `views` (LLP 1133.001
 app that depends on the package places it with no `app.json` entry. Its implementation
 makes it in each session, the same instance that answers its names: Swift
 `view(_:id:props:events:)` on the `ExactPackage` class, a `roster` of view classes from the
-web implementation, Kotlin `ExactExtension.view`; `id` is the node's. A view declared
-`"displayed": true` is told `displayed(id, shown, origin)` when it shows or hides, and a
-prop marked `"binds": true` `bound(id, prop, origin)` when it changes. Each report carries
+web implementation, Kotlin `ExactExtension.view`; `id` is the node's. On iOS and tvOS a
+Swift view that is a view controller's view returns that controller as `controller`: the
+host makes it a child of the controller its node shows in (a route's) once that
+controller exists, and moves it when the node shows in another (a dialog's sheet), as
+for an app's `ExactNativeScreen`. The package adds it to no parent itself. A view
+declared `"displayed": true` is told `displayed(id, shown, origin)` when it shows or
+hides, and a prop marked `"binds": true` `bound(id, prop, origin)` when it changes. Each report carries
 the origin of the commit that changed it. On Apple, a track view attaches its presentation through
 `context.tracks.present`. The first matching prop and committed binding subscribe under
 the less privileged of the display and binding origins. A replacement native view reads
@@ -4255,10 +4271,21 @@ target. A key typed `env` names the environment variable that holds its value:
 }
 ```
 
-The build reads the values, with each variable's value as the build runs, and
-writes them into the code it generates for the app. The package's code reads
-the declared keys for its target from its context. A key given no value is
-absent.
+For a test key, put an override in the development section of `app.json`:
+
+```json
+"development": {
+  "packages": { "exact-yandex-mapkit": { "ios": { "apiKey": { "env": "MAPKIT_TEST_KEY" } } } }
+}
+```
+
+A development-trust build uses that variable for `apiKey` and keeps the
+base values of other keys. A declared key may appear only in the development
+section. Production reads only the base variables and values, including for
+`"required": "release"`. An unset override variable leaves an optional key absent and
+refuses a build that requires the key. The package reads its target's selected
+values from its context. See the [package context](reference.md#package-configuration)
+for the build's `development` fact.
 
 | Target | What the package reads |
 | --- | --- |
@@ -4290,8 +4317,8 @@ Every build refuses these, naming the key and never its value:
 
 An `app.json` entry for a package that is not installed is a warning.
 
-**`env` keeps a value out of the repository, not out of the app.** Anything in
-`config` ships inside the APK, the IPA or the page, and anyone with the app
+An `env` reference keeps the value out of the repository. Each value selected
+for this build ships inside the APK, the IPA or the page, and anyone with the app
 can read it, as with a setting an app reads through `import.meta.env` (LLP
 1153 D4). A value that must stay secret belongs on a server. Restrict a vendor key to the
 app instead: by package name and signing certificate for Google's keys, or by
@@ -5489,7 +5516,8 @@ and `dragleave` clears otherwise; a `paste`'s `ClipboardEvent` carries `files` t
 [Pointer](contract-grammar.md#pointer) and [Clipboard](contract-grammar.md#clipboard).
 A Paste button can send a mutation that calls `@exact/clipboard`'s `readText()` with the
 `clipboard.read` grant. To insert the result at the caret, call `setRangeText(id, text)`
-when the mutation answers. On Android the window needs input focus and `read()` lists only plain text.
+when the mutation answers. On Android the window needs input focus. A Paste image action uses `read()`
+and `await item.getType("image/png")` to get a sanitized PNG under `app:/tmp/`.
 
 Use `keycapture=shortcut` on a container when its shortcut must run before
 the focused field's `key=` handler. Capture runs outermost first, then the
@@ -7288,7 +7316,14 @@ step inside a test.
 fixture. Other single-value page facts, such as `prefer online false`, follow
 the same launch, override and reload rules and use the drive's parser and name
 aliases. Hosts refuse facts they cannot substitute. Folds (`posture`, `segments`,
-`gap`), mode pins and extension substitutes are drive-only for now.
+`gap`) and mode pins require a drive.
+
+`prefer extension store.outcome="cancel"` sets a package substitute.
+A leading line supplies it before boot. A later step changes subsequent calls,
+and `prefer extension store.outcome=clear` restores the package default.
+A package that reads its substitute only at startup sees a mid-test change
+at the next launch. Reload and verify's relaunch receive the current values.
+Each test and each replay starts again with the package defaults.
 
 Before the first step (and after a `reload`) the driver waits for the app's data
 as `clock data` does: its data module activated and every request launch started

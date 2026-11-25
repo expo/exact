@@ -334,7 +334,7 @@ fn desktop_alerts_focus_cancel_or_ok_on_open_and_replacement() {
 }
 
 /// A presenter whose shell makes windows, and the pictures it recorded.
-fn windowed() -> (Presenter<()>, Rc<RefCell<Vec<Pixmap>>>) {
+pub(super) fn windowed() -> (Presenter<()>, Rc<RefCell<Vec<Pixmap>>>) {
     let mut p = boot();
     let pictures = Rc::new(RefCell::new(Vec::new()));
     p.serve_requests();

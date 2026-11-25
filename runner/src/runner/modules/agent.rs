@@ -211,89 +211,9 @@ impl<D: DataSource> Runner<D> {
         let Some(group) = v.get("extension")?.as_object() else {
             return refuse("prefer extension: an object of `extension.source`".into());
         };
-        for (key, value) in group {
-            if let Some(ty) = self.agent_word(key) {
-                if value != "clear" && !word_fits(&ty, value) {
-                    return refuse(format!("prefer extension: `{key}` is a {ty}"));
-                }
-                if let Some(e) = self.arrival_refusal(key, value, group) {
-                    return refuse(e);
-                }
-                continue;
-            }
-            let Some(row) = self
-                .plan
-                .modules
-                .iter()
-                .find(|m| self.key(m) == *key)
-                .cloned()
-            else {
-                let known: Vec<String> = (self.plan.modules.iter())
-                    .filter(|m| !m.send)
-                    .map(|m| self.key(m))
-                    .collect();
-                return refuse(format!(
-                    "prefer extension: no source `{key}` in this app; its module sources are {}",
-                    if known.is_empty() {
-                        "none".into()
-                    } else {
-                        known.join(", ")
-                    }
-                ));
-            };
-            // A send answered from its own preferred value (`from` itself,
-            // LLP 1133.021 §12's geocoder) takes one; any other is answered.
-            let own = self.substitute(&row)["from"] == self.plan.str(row.declared);
-            if row.send && !own {
-                return refuse(format!(
-                    "prefer extension: `{key}` is a send, which the module answers"
-                ));
-            }
-            let sub = self.substitute(&row);
-            let statuses = self.statuses_of(&row);
-            for permission in &statuses {
-                let field = permission["field"].as_str().unwrap_or_default();
-                if value.get(field).is_some() {
-                    // One authority per fact (§6): the state is the permission's.
-                    let name = permission["name"].as_str().unwrap_or_default();
-                    return refuse(format!(
-                        "prefer extension: `{key}`'s `{field}` is set by `prefer permission.{name}`"
-                    ));
-                }
-            }
-            if value != "clear" && error_code(value).is_none() {
-                // Checked with the state the permission has, which is
-                // in the field's enum where `prompt` may not be (a
-                // permission no platform asks, LLP 1133.017 D14).
-                let mut checked = value.clone();
-                for permission in &statuses {
-                    let (Some(field), Some(name)) =
-                        (permission["field"].as_str(), permission["name"].as_str())
-                    else {
-                        continue;
-                    };
-                    let state = self.permission_state(name);
-                    if let Some(object) = checked.as_object_mut() {
-                        object.insert(field.into(), json!(state));
-                    }
-                }
-                // An implementation's own substitute takes a partial
-                // overlay (LLP 1133.009 D10 item 11), as a `partial` source
-                // does over its default; a declared one, a value. A sampled
-                // source's takes a reading or a track of steps (§9).
-                let checked = if sub["network"] == "browse" {
-                    self.network_checked(value)
-                } else if sub["track"] == true {
-                    self.track_checked(&row, &checked)
-                } else if sub["implementation"] == true || sub["partial"] == true {
-                    self.partial(&row, &checked)
-                } else {
-                    self.typed(&row, &checked.to_string()).map(|_| ())
-                };
-                if let Err(e) = checked {
-                    return refuse(format!("prefer extension: {e}"));
-                }
-            }
+        let literal = v["literal"] == true;
+        if let Err(why) = self.check_substitutes(group, literal, false) {
+            return refuse(why);
         }
         let mut told = std::collections::BTreeSet::new();
         let mut moved = Vec::new();
@@ -304,7 +224,7 @@ impl<D: DataSource> Runner<D> {
                 .find(|m| self.key(m) == *key)
                 .cloned();
             let before = listed.as_ref().and_then(|r| self.changes_value(r));
-            if value == "clear" {
+            if !literal && value == "clear" {
                 self.extensions.preferred.remove(key);
             } else {
                 self.extensions.preferred.insert(key.clone(), value.clone());
@@ -315,7 +235,14 @@ impl<D: DataSource> Runner<D> {
                     self.preferred_changed(&row, before, after);
                 }
             }
-            self.note_track(key, value);
+            self.note_track(
+                key,
+                if !literal && value == "clear" {
+                    &Json::Null
+                } else {
+                    value
+                },
+            );
             self.devices_preferred(key);
             self.log(format!("prefer extension {key}"));
             self.announce(key);
@@ -362,12 +289,72 @@ impl<D: DataSource> Runner<D> {
         Some((receipts, Ok(reply.to_string())))
     }
 
-    /// `value`, a partial overlay of `row`'s answer: each field it writes
-    /// checked against the answer's shape, record by record.
-    fn partial(&self, row: &ModulesRow, value: &Json) -> Result<(), String> {
-        let ty = self.plan.sources[row.source.0 as usize].ty;
-        let shape = exact_js_value::Shape::from_plan(&self.plan, ty)?;
-        partial(&self.key(row), value, &shape)
+    pub(super) fn check_substitutes(
+        &self,
+        group: &Map<String, Json>,
+        literal: bool,
+        restoring: bool,
+    ) -> Result<(), String> {
+        for (key, value) in group {
+            let clear = !literal && value == "clear";
+            if let Some(ty) = self.agent_word(key) {
+                if !clear && !word_fits(&ty, value) {
+                    return Err(format!("prefer extension: `{key}` is a {ty}"));
+                }
+                if !clear && !restoring {
+                    if let Some(e) = self.arrival_refusal(key, value, group) {
+                        return Err(e);
+                    }
+                }
+                continue;
+            }
+            let Some(row) = self
+                .plan
+                .modules
+                .iter()
+                .find(|m| self.key(m) == *key)
+                .cloned()
+            else {
+                let known: Vec<String> = (self.plan.modules.iter())
+                    .filter(|m| !m.send)
+                    .map(|m| self.key(m))
+                    .collect();
+                return Err(format!(
+                    "prefer extension: no source `{key}` in this app; its module sources are {}",
+                    if known.is_empty() {
+                        "none".into()
+                    } else {
+                        known.join(", ")
+                    }
+                ));
+            };
+            let sub = self.substitute(&row);
+            // Interactive drives also accept the numeric shorthand of a declared, ticketed source.
+            if !literal
+                && !row.send
+                && value.is_number()
+                && sub["short"].is_array()
+                && sub["partial"] != true
+                && sub["implementation"] != true
+                && sub["track"] != true
+                && sub["network"] != "browse"
+            {
+                self.typed(&row, &value.to_string())
+                    .map_err(|e| format!("prefer extension: {e}"))?;
+            } else {
+                check_source_substitute(
+                    &self.plan,
+                    &row,
+                    key,
+                    &sub,
+                    (!clear).then_some(value),
+                    self.host_target(),
+                    |name| Some(self.permission_state(name)),
+                )
+                .map_err(|e| format!("prefer extension: {e}"))?;
+            }
+        }
+        Ok(())
     }
 
     /// The type of `key` (`speech-recognition.heard`) where it is one of the
@@ -410,23 +397,39 @@ fn word_fits(ty: &str, value: &Json) -> bool {
     }
 }
 
-fn partial(at: &str, value: &Json, shape: &exact_js_value::Shape) -> Result<(), String> {
-    use exact_js_value::Shape;
-    match (value, shape) {
-        (Json::Object(map), Shape::Record(fields)) => {
+fn check_shape(
+    plan: &exact_plan::Plan,
+    ty: exact_plan::TypesId,
+    at: &str,
+    value: &Json,
+    partial: bool,
+) -> Result<(), String> {
+    let row = plan.type_(ty);
+    if partial {
+        if let (Some(map), exact_plan::TypeKind::Record) = (value.as_object(), row.kind) {
             for (name, v) in map {
-                let Some((_, field)) = fields.iter().find(|(f, _)| f == name) else {
-                    return Err(format!("{at}: field `{name}` is not in the shape"));
-                };
-                partial(&format!("{at}.{name}"), v, field)?;
+                let field = row
+                    .fields
+                    .iter()
+                    .map(|f| plan.field(f))
+                    .find(|f| plan.str(f.name) == name)
+                    .ok_or_else(|| format!("{at}: field `{name}` is not in the shape"))?;
+                check_shape(plan, field.ty, &format!("{at}.{name}"), v, true)?;
             }
-            Ok(())
+            return Ok(());
         }
-        (Json::Null, Shape::Option(_)) => Ok(()),
-        (value, Shape::Option(inner)) => partial(at, value, inner),
-        (value, shape) => exact_js_value::from_json(value, shape)
-            .map(|_| ())
-            .map_err(|e| format!("{at}: {e}")),
+        if row.kind == exact_plan::TypeKind::Option && !value.is_null() {
+            return check_shape(plan, row.elem.unwrap(), at, value, true);
+        }
+    }
+    let shape = exact_js_value::Shape::from_plan(plan, ty)?;
+    let mut full = value.clone();
+    super::absent_is_none(&mut full, &shape);
+    let v = exact_js_value::from_json(&full, &shape).map_err(|why| format!("{at}: {why}"))?;
+    if v.conforms(plan, ty) {
+        Ok(())
+    } else {
+        Err(format!("{at}: {}", crate::conform::mismatch(plan, &v, ty)))
     }
 }
 
@@ -440,28 +443,117 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn fill_all(&self, row: &ModulesRow, value: &mut Json) {
         let sub = self.substitute(row);
         let now = json!(self.time.epoch_at_zero + self.now_ms);
-        let target = self.host_target();
-        let here = |f: &Json| {
-            f["on"]
-                .as_array()
-                .is_none_or(|on| on.iter().any(|t| t == target))
-        };
-        let fills = sub["fill"].as_object().cloned().unwrap_or_default();
-        for tabled in [false, true] {
-            for (path, filler) in fills
-                .iter()
-                .filter(|(_, f)| f["table"].is_string() == tabled && here(f))
-            {
-                let made = |object: &Map<String, Json>| match filler {
-                    f if f == "now" => Some(now.clone()),
-                    f if tabled => {
-                        let by = object.get(f["by"].as_str()?)?.as_str()?;
-                        sub["tables"][f["table"].as_str()?].get(by).cloned()
-                    }
-                    f => Some(f.clone()),
-                };
-                fill_with(value, path, &made);
-            }
+        fill_declared(&sub, self.host_target(), &now, value);
+    }
+}
+
+fn fill_declared(sub: &Json, target: &str, now: &Json, value: &mut Json) {
+    let here = |f: &Json| {
+        f["on"]
+            .as_array()
+            .is_none_or(|on| on.iter().any(|t| t == target))
+    };
+    let fills = sub["fill"].as_object().cloned().unwrap_or_default();
+    for tabled in [false, true] {
+        for (path, filler) in fills
+            .iter()
+            .filter(|(_, f)| f["table"].is_string() == tabled && here(f))
+        {
+            let made = |object: &Map<String, Json>| match filler {
+                f if f == "now" => Some(now.clone()),
+                f if tabled => {
+                    let by = object.get(f["by"].as_str()?)?.as_str()?;
+                    sub["tables"][f["table"].as_str()?].get(by).cloned()
+                }
+                f => Some(f.clone()),
+            };
+            fill_with(value, path, &made);
         }
     }
+}
+
+/// Check the JSON a test or drive supplies for one declared module name.
+/// A source may take a partial answer, a sampled track or a network fixture.
+pub fn check_source_substitute(
+    plan: &exact_plan::Plan,
+    row: &ModulesRow,
+    key: &str,
+    sub: &Json,
+    value: Option<&Json>,
+    target: &str,
+    permission_state: impl Fn(&str) -> Option<String>,
+) -> Result<(), String> {
+    if row.send && sub["from"] != plan.str(row.declared) {
+        return Err(format!("`{key}` is a send, which the module answers"));
+    }
+    let Some(value) = value else { return Ok(()) };
+    let ty = plan.sources[row.source.0 as usize].ty;
+    let mut checked = value.clone();
+    for permission in super::permits::statuses(sub, plan.str(row.declared)) {
+        if permission["targets"]
+            .as_array()
+            .is_some_and(|on| !on.iter().any(|t| t == target))
+        {
+            continue;
+        }
+        let (Some(field), Some(name)) = (permission["field"].as_str(), permission["name"].as_str())
+        else {
+            continue;
+        };
+        if field
+            .split('.')
+            .try_fold(value, |v, part| v.get(part))
+            .is_some()
+        {
+            return Err(format!(
+                "`{key}`'s `{field}` is set by `prefer permission.{name}`"
+            ));
+        }
+        // During compilation any member of the field's enum stands for the host's state.
+        let state = super::permits::fixed_state(sub, target, field)
+            .map(str::to_owned)
+            .or_else(|| permission_state(name))
+            .or_else(|| {
+                let field_ty = field.split('.').try_fold(ty, |ty, part| {
+                    let mut record = plan.type_(ty);
+                    if record.kind == exact_plan::TypeKind::Option {
+                        record = plan.type_(record.elem?);
+                    }
+                    record
+                        .fields
+                        .iter()
+                        .map(|id| plan.field(id))
+                        .find(|f| plan.str(f.name) == part)
+                        .map(|f| f.ty)
+                })?;
+                let case = plan.type_(field_ty).fields.iter().next()?;
+                Some(plan.str(plan.field(case).name).to_owned())
+            })
+            .unwrap_or_else(|| "prompt".into());
+        super::set_path(&mut checked, field, state.into());
+    }
+    if error_code(value).is_some() {
+        return Ok(());
+    }
+    if sub["network"] == "browse" {
+        return super::network::network_checked(value);
+    }
+    let check = |v: &Json| check_shape(plan, ty, key, v, false);
+    if sub["track"] == true {
+        return super::samples::track_checked(
+            sub,
+            key,
+            |reading| {
+                let mut full = reading.clone();
+                fill_declared(sub, target, &json!(0), &mut full);
+                check(&full)
+            },
+            &checked,
+        );
+    }
+    if sub["implementation"] == true || sub["partial"] == true {
+        return check_shape(plan, ty, key, &checked, true);
+    }
+    fill_declared(sub, target, &json!(0), &mut checked);
+    check(&checked)
 }

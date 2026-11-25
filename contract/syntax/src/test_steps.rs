@@ -199,6 +199,15 @@ pub enum Step {
         /// Where.
         span: Span,
     },
+    /// A package substitute, keyed as in a drive. An absent value clears it.
+    PreferExtension {
+        /// The qualified source or agent word.
+        key: String,
+        /// The JSON the package receives.
+        value: Option<String>,
+        /// Where.
+        span: Span,
+    },
     /// `before data` skips the initial `clock data` wait. A native app runs
     /// on real time before the driver connects; the web uses the agent's.
     BeforeData {

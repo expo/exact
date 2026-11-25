@@ -6376,10 +6376,10 @@ A Mac build signed ad hoc leaves out the share extension
 A press can start a data-code clipboard read on macOS, iOS, Android and the web. With
 the `clipboard.read` grant, `await readText()` returns plain text (up to
 1 MiB of UTF-8), or an empty string when there is none. On Apple platforms and Android it takes
-the first item with plain text. Android lists only text items and rejects with
+the first item with plain text. Android rejects with
 `NotAllowedError` if the window lacks input focus. iOS controls permission to paste from another app. `await read()`
 returns clipboard items. Inspect `item.types` and call
-`await item.getType("text/plain")` for text. On Apple platforms and the web,
+`await item.getType("text/plain")` for text. On Apple platforms, Android and the web,
 `await item.getType("image/png")` returns a temporary `app:/tmp/` PNG path. The host sanitizes each image within
 the 64 MiB and 64-million-pixel bounds. File access uses the app's ordinary
 file grants.
@@ -6731,24 +6731,35 @@ A package's interface declares the values it takes from the app in its
 `"metadata": "<name>"` to also fill a vendor SDK's `<meta-data>`, if the name is
 on `CONFIG_METADATA` in `scripts/android-manifest.mjs`.
 
-The app gives them in `app.json` as `"packages": {"<interface>": {"<target>":
-{"<key>": <value>}}}`. An `env` key's value is `{"env": "<VARIABLE>"}`, which
-the build reads from its environment. The package's code reads the values as
-`context.config` in Kotlin and Swift, and as `config` on the web. A build
-refuses a value of another type (`bake-config-type`), an undeclared key
-(`bake-config-unknown`) and a required key with no value (the declared
-`missing` code). It refuses a `"required": "release"` key only in a release
-build.
+The app supplies a base value in `packages.<interface>.<target>.<key>` in
+`app.json`. A development-trust build overlays individual keys from
+`development.packages.<interface>.<target>`. Both sections take the keys and
+types the interface declares. A key supplied only under `development` is
+absent in production. The build selects the value before reading an `env`
+reference (`{"env": "<VARIABLE>"}`). Each selected value ships in the app.
+A production JSON import of `app.json` sees an empty `development.packages`
+map when the app declared that section.
 
-`env` keeps a value out of the repository, not out of the app: everything in
-`config` ships in the APK, the IPA or the page. A changed native value needs
-a new binary. See
-[A package's configuration](contract-for-agents.md#a-packages-configuration).
+The package reads the result through `context.config` in Swift, Kotlin and
+JavaScript. A build refuses a value of another type (`bake-config-type`),
+an undeclared key (`bake-config-unknown`) and a missing required value
+(the declared `missing` code). A release checks `"required": "release"`
+after selection. Production must satisfy it from the base. A changed native
+value needs a new binary.
 
-The web JS target loads a package’s view from its bound web implementation.
-A game’s wasm target can make a view supplied by the app’s own web artifact.
-If only the package supplies the view, the node reports its tag and package
-in the error and the view stays empty.
+**Package context.** The read-only Boolean `context.development` is true
+when the app was built with development trust and false in production.
+Linux and Windows Rust packages read it as `context.development()`.
+It has the same value when the app runs under the agent or launches normally.
+The package's Swift sources also have the `EXACT_DEVELOPMENT` compilation
+condition in a development build. SwiftPM products build in release
+configuration and the APK is non-debuggable in both trusts. A package can
+use the fact to select a vendor SDK's test mode.
+See [A package's configuration](contract-for-agents.md#a-packages-configuration).
+
+Both web targets load a placed package view from its bound web implementation
+after first paint. A game can also supply the tag in its own web module.
+Package sources and sends in a wasm game still use the runner’s substitutes.
 
 ## Access hatches
 
