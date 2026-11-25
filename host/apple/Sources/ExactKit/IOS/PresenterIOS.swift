@@ -226,6 +226,10 @@ package final class Presenter {
     package var keyboardPolicy: String { interactiveWidget ?? "resizes-content" }
     /// The keyboard guide's top in window coordinates for this session's current layout.
     package var keyboardTop: CGFloat?
+    /// A reveal of the focused editor an interactive keyboard drag held (`keyboardDragEnded`).
+    var revealOwed = false
+    /// The first root, as of the last batch.
+    private(set) weak var documentRoot: NodeView?
     /// The safe-area insets the kernel was given (LLP 1008 §9): the
     /// screen's under `viewport-fit=cover`, zero when the viewport is the
     /// safe area itself. Reported to the agent as `env`.
@@ -295,6 +299,9 @@ package final class Presenter {
         collections.rescued = { [unowned self] in paintVisibleText() }
         textRasters.slotFreed = { [unowned self] in scrollPump.textSlotFreed() }
         viewport.keyboardDismissMode = .interactive
+        #if os(iOS)
+        KeyboardDrag.watch(viewport) { [weak self] in self?.documentRoot }
+        #endif
         viewport.contentInsetAdjustmentBehavior = .never
         viewport.backgroundColor = .platformBackground(in: root)
     }
@@ -321,13 +328,6 @@ package final class Presenter {
     }
     #endif
 
-    var interactiveKeyboardDrag: Bool {
-        let drags = { (sv: UIScrollView) in
-            [.interactive, .interactiveWithAccessory].contains(sv.keyboardDismissMode) && (sv.isTracking || sv.isDragging)
-        }
-        return drags(viewport) || scrollers.contains { views[$0]?.scrollView.map(drags) ?? false }
-            || navigation.primaryRouteSurfaces.contains { $0.contentViewport.map(drags) ?? false }
-    }
 
     /// Reconcile through UIKit layout in the keyboard's animation, after batches finish.
     /// Deferred work captures timing only and reads current ownership and geometry.
@@ -1218,7 +1218,8 @@ package final class Presenter {
             pageGeometryOwed = false
             fitDocument(); reachPageEdges(); paintCanvas()
         }
-        let first = root.subviews.first as? NodeView
+        documentRoot = root.subviews.first as? NodeView
+        let first = documentRoot
         let widget = first?.props["interactiveWidget"]
         if widget != interactiveWidget {
             interactiveWidget = widget

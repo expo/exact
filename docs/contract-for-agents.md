@@ -6156,6 +6156,11 @@ toolbarPlacement="keyboard"` at the bottom of the page or of a sheet route sits 
 the keys under every `interactive-widget`: a sheet's layout ends at the keys while
 its field has the focus, whatever the root says; on the page, `overlays-content`
 lifts the toolbar onto them and `resizes-content` ends the page there.
+On iOS a scroller's `-exact-keyboard-dismiss-padding: <length>` starts the keyboard
+following a finger that drags the scroller in an interactive `keyboardDismissMode`
+that far above the keys: give a transcript its composer's height, and the keyboard
+and the composer go down together under the finger. Unsaid it is 0, as in UIKit and
+SwiftUI; Android and the web read no padding.
 
 `exactViewport().pointer` and `.hover` are CSS's `pointer` (`fine`, `coarse`,
 `none`) and `hover` (`hover`, `none`) for the primary input: the web's media

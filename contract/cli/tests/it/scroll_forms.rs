@@ -412,3 +412,18 @@ fn the_list_forms_lower_to_their_rows() {
         "Automatic"
     );
 }
+
+#[test]
+fn the_keyboard_dismiss_padding_lowers_to_its_row() {
+    // D7's padding is a length on a scroller, 0 where unsaid; a negative length is kept as said,
+    // and the host uses 0 for it
+    let source = "component A\n  view\n    column\n      column testId=\"said\" overflow-y=\"scroll\" -exact-keyboard-dismiss-padding=56\n      column testId=\"negative\" overflow-y=\"scroll\" -exact-keyboard-dismiss-padding=-4\n      column testId=\"plain\" overflow-y=\"scroll\"\n";
+    let mut r = boot(source);
+    let [said, negative, plain] = ["said", "negative", "plain"].map(|t| style(&mut r, t));
+    assert_eq!(said.rare.keyboard_dismiss_padding, Dimension::Points(56.0));
+    assert_eq!(
+        negative.rare.keyboard_dismiss_padding,
+        Dimension::Points(-4.0)
+    );
+    assert_eq!(plain.rare.keyboard_dismiss_padding, Dimension::Points(0.0));
+}

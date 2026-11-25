@@ -262,6 +262,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             scroll.contentInsetAdjustmentBehavior = .never
             scroll.keyboardDismissMode = viewportKeyboardDismissal
             #if os(iOS)
+            KeyboardDrag.watch(scroll) { [weak scroll] in scroll?.documentNode }
             scroll.scrollsToTop = false
             #endif
             scroll.delegate = self

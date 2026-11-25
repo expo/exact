@@ -571,6 +571,9 @@ final class RevealKeyboardIOSTests: XCTestCase {
         window.makeKeyAndVisible()
         XCTAssertTrue(field.becomeFirstResponder())
         setKeyboard(p, top: 460)
+        // What the real keyboard's arrival reveals happens first, so that later only the drag's end reveals
+        let until = Date().addingTimeInterval(2)
+        while Date() < until { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
         for dismissal in [UIScrollView.KeyboardDismissMode.interactive, .interactiveWithAccessory] {
             scroll.keyboardDismissMode = dismissal
             for (tracking, dragging) in [(true, false), (false, true)] {
@@ -584,8 +587,9 @@ final class RevealKeyboardIOSTests: XCTestCase {
         }
         scroll.simulatedTracking = false
         scroll.simulatedDragging = false
-        p.revealEditorAsTheKeysMove()
-        XCTAssertGreaterThan(scroll.contentOffset.y, 0, "automatic reveal resumes after the drag")
+        p.keyboardDragEnded()
+        XCTAssertEqual(scroll.contentOffset, .zero, "the reveal the drag held waits for the main queue's next turn")
+        waitFor("the reveal the drag held runs as it ends", cap: 5) { scroll.contentOffset.y > 0 }
         scroll.contentOffset = .zero
         scroll.simulatedTracking = true
         scroll.keyboardDismissMode = .onDrag
