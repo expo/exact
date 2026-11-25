@@ -1313,3 +1313,18 @@ download or capture) asks for POSIX semantics with `FileRenameInformationEx`,
 so a reader that shares deletion keeps the old file and the name takes the new
 one. A filesystem that refuses the class or flag, such as FAT, gets the legacy
 replace, which fails while another handle holds the target open.
+## Local patch 54, staging in a directory per launch
+
+`stdlib/app_fs_staging.rs` gives each app root one `.exact-staging/` directory
+holding a directory per launch, which keeps an exclusive lock on its `.lock` for
+the life of its process (`flock` on Unix, `LockFileEx` on Windows). A staged
+file (local patch 19), `fs.atomicWriteFile` on an app path and the atomic write
+`prepare_atomic` hands out create their temporary file there and rename it into
+place, so a process that ends during a write leaves it only there. A launch's
+first use of a root, or `AppDirectories::claim_staging`, removes the launch
+directories whose lock no live process holds, considering only names of 24 hex
+digits. `.exact-staging` is refused as the first component of an app path, in
+any case, and left out of a root's listing. On Windows an atomic write refuses
+a target that is not a regular file before the staging directory is made.
+Document, native and known-folder writes still stage beside their targets.
+Replay on a refresh (expo/exact#1692).

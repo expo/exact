@@ -70,9 +70,16 @@ fn base_from(value: Option<OsString>, home: Option<OsString>, fallback: &str) ->
 static ROOTS: Mutex<Option<[PathBuf; 3]>> = Mutex::new(None);
 
 /// Record the app's directories, and empty `app:/tmp/picked/` and
-/// `app:/tmp/shared/` ([`empty_landings`]).
+/// `app:/tmp/shared/` ([`empty_landings`]). Each root that exists gets this
+/// launch's staging directory, and loses those of launches that ended with
+/// a download or an atomic write unfinished (ibex2's `claim_staging`).
 pub fn set_roots(data: PathBuf, cache: PathBuf, temporary: PathBuf) {
     empty_landings(&temporary);
+    for root in [&data, &cache, &temporary] {
+        if let Ok(directories) = ibex2::stdlib::app_fs::AppDirectories::new(root, root, root) {
+            directories.claim_staging();
+        }
+    }
     *ROOTS.lock().unwrap_or_else(|e| e.into_inner()) = Some([data, cache, temporary]);
 }
 

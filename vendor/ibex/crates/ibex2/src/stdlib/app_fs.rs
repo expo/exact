@@ -111,6 +111,7 @@ mod implementation {
         pub fn stage(&self, _grants: &GrantSet, _path: &str) -> Result<Staged, HostError> {
             Err(unsupported())
         }
+        pub fn claim_staging(&self) {}
     }
     impl Staged {
         pub fn write_all(&mut self, _bytes: &[u8]) -> Result<(), HostError> {
