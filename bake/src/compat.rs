@@ -527,8 +527,11 @@ pub(crate) fn android_linked(
     ceiling: Option<&str>,
     source: &str,
 ) -> serde_json::Value {
+    let mut uses = android_uses(plan);
+    let core = exact_runner::Uses::ANDROID_CORE.beyond(exact_runner::uses(plan));
+    uses.extend(core.iter().map(|c| c.name()));
     serde_json::json!({
-        "uses": android_uses(plan),
+        "uses": uses,
         "permissions": contract::native::android_permissions(plan, ceiling, source),
         "extensions": plan_extensions(plan),
     })
@@ -1476,6 +1479,10 @@ mod tests;
 #[cfg(test)]
 #[path = "compat_faces_tests.rs"]
 mod faces_tests;
+
+#[cfg(test)]
+#[path = "compat_android_tests.rs"]
+mod android_tests;
 
 #[cfg(test)]
 #[path = "compat_notification_service_tests.rs"]
