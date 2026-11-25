@@ -2282,6 +2282,13 @@ checkout. So commit, pass `--dirty`, and read the list. An app's first build
 for a platform edits `app.json`: commit after it. `push` always publishes the
 working tree.
 
+When the non-base language tables together reach 4 KiB gzipped, the JS web root
+includes a content-named file for each of them. A static host serves
+the files listed in `routes.json`'s `files` with
+`Cache-Control: public, max-age=31536000, immutable`. Keep earlier files while
+pages from those builds can still request them. The shell selects the launch
+language in its head, including on static hosting.
+
 ### When a staged update applies
 
 - `next-launch`: the next cold launch boots it; `deliveryActivate()` applies

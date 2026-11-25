@@ -27,7 +27,7 @@ import { installedFileDependencies } from '../../scripts/file-dependencies.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { sourceProvenance } from '../../scripts/install-page.mjs';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, normalize, posix, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { brotliCompressSync, constants } from 'node:zlib';
@@ -38,7 +38,7 @@ import { writers } from './writers.mjs';
 import { namesStream } from './stream-names.mjs';
 import { bundleHostModule, localImports, stageHostGlue, writeFalse } from './glue.mjs';
 import { gateAgent } from './agent-gate.mjs';
-import { contentName, contentNames } from './content-names.mjs';
+import { contentName, contentNames, languageHead, splitLanguages } from './content-names.mjs';
 import { buildEditor, buildFlow, buildMarkdown, buildModule, buildMotion, moduleSourceDirs, moduleSources, undeclaredRustData, fresh, frameAnswer, frameFixture, frameURL, leafTaken, moduleGrants, webCompiler, inspectHooked, withInspectHooks, withoutDev, withRuntimeStamp, sizeWarning, entrySizeReport } from './module.mjs';
 import { appDigest, developmentStore } from '../../scripts/agent-launch.mjs';
 import { productionManifestImports, settingLines } from '../../js/bake/src/__exact_env.mjs';
@@ -328,8 +328,10 @@ if (ts) for (const line of settingLines(JSON.parse(readFileSync(resolve(tsStage,
 if (ts && unregistered.length && !captured.facts.exported.includes('draw')) {
   compilePlan(unregistered, opt('--plan') ?? resolve(gen, 'app.plan'));
 }
+const plan = readFileSync(resolve(gen, 'app.js'), 'utf8'), contentFiles = {}, languages = splitLanguages(plan, contentFiles, out);
 const runtime = ['rt.js', 'clock.js', 'resources.js', 'tree.js', 'events.js', 'pieces.js', 'mount.js', 'strings.js', 'request-send.js', 'presence-bindings.js', 'rows.js', 'resource-inspection.js', 'rt-link.js', 'generation-reload.js', 'elements.js', 'editor.js', 'live-time.js', 'font-family.js', 'observers.js', 'grid.js', 'overlay.js', 'roster.js', 'router.js', 'route-pattern.js', 'schedule.js', 'each.js', 'timer-waits.js', 'timer-observations.js', 'budget.js', 'shape.js', 'pointer.js', 'document.js', 'media.js', 'links.js', 'commands.js', 'focus.js', 'backdrop.js', 'persist.js', 'chosen.js', 'modes.js', 'follow.js', 'zoom.js', 'portal.js', 'beat.js', 'regions.js', 'declarations.js', 'said.js', 'held.js', 'uploads.js', 'lower.js'];
-for (const f of runtime) cpSync(resolve(here, f === 'timer-observations.js' ? '../web/' + f : f), resolve(gen, f));
+if (languages) runtime.push('language-assets.js', 'chosen-language.js', 'fetch-table.js', 'sha256.js');
+for (const f of runtime) cpSync(resolve(here, (f === 'timer-observations.js' || f === 'sha256.js') ? '../web/' + f : f), resolve(gen, f));
 if (siteBase !== '/') {
   // Specialize the URL boundaries only. Root builds keep the ordinary runtime's bytes.
   writeFileSync(resolve(gen, 'site.js'), readFileSync(resolve(here, 'site.js'), 'utf8').replace('__EXACT_SITE_BASE__', JSON.stringify(siteBase)));
@@ -381,7 +383,6 @@ cpSync(resolve(here, 'picture-in-picture.js'), resolve(gen, 'picture-in-picture.
 // before the app's, as the web host tells the wasm runner (navigation.js).
 // The whole map: its type strings hold braces, so a source sorted before it
 // (`advance`, a nested shape) once hid `exactTime` and its app could not boot.
-const plan = readFileSync(resolve(gen, 'app.js'), 'utf8');
 const sources = JSON.parse(plan.match(/export const sources=(\{.*?\});export const wait=/)?.[1] ?? '{}');
 const time = Object.hasOwn(sources, 'exactTime');
 // A native module's names and extensions (modules.js, LLP 1133.002 D13): each
@@ -597,7 +598,7 @@ const css = readFileSync(resolve(gen, 'app.css'), 'utf8');
 // The build's own files named by their content (LLP 1153.004, content-names.mjs). The launch services first: main.js,
 // below, names them, and a copied file never does (checked where the copies are named). The sheet's name is known
 // only once `cutSheet`, below, has cut it as the entry renders; until then main.js names it `__EXACT_SHEET__`.
-const contentFiles = {}, services = launchWeb.map(m => [`launch/${m.name}/service.js`, readFileSync(m.web)]);
+const services = launchWeb.map(m => [`launch/${m.name}/service.js`, readFileSync(m.web)]);
 for (const [name, bytes] of services) contentFiles[name] = contentName(name, bytes);
 // A source granted `auth.session` signs in through the system browser (auth.js, LLP 1069.006), as
 // `@exact/sign-in` does for one granted `auth.apple` or `auth.google` (LLP 1133.014 D8).
@@ -667,6 +668,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   `globalThis.exact = Object.assign(globalThis.exact ?? {}, { pageModule: ${pageModules}${manifest.hatches && !Array.isArray(manifest.hatches) ? `, hatchWords: ${JSON.stringify(hatchWords(manifest, 'web'))}` : ''} });`,
   // Launch marks install before the app boots; marks.js loads the services after startup.
   ...(launchWeb.length ? ["import { install as launchMarks } from './marks.js';", `const marks = launchMarks(${JSON.stringify(launchWeb.map(m => ({ name: m.name, url: `./${contentFiles[`launch/${m.name}/service.js`]}`, config: { ...(manifest.moduleConfig?.[m.name] ?? {}), 'app.CFBundleIdentifier': manifest.app?.id, 'app.CFBundleName': manifest.app?.name, 'fact.development': !production } })))});`] : []),
+  ...(languages ? [`import {languageTables} from './app.js'; import {prepareLanguages, renderedAnswers} from './language-assets.js'; const inLanguage = prepareLanguages(languageTables, ${args.includes('--inline') ? 'document.baseURI' : 'import.meta.url'});`] : []),
   "const start = () => {",
   "  const state = app();",
   ...(launchWeb.length ? ["  marks.mounted();"] : []),
@@ -676,6 +678,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // else its passive reads, which the dev loop's attach bridge loads once a person allows an agent (LLP 1012.000 D2).
   // The served plan's digest, which a development page's `perf` names (LLP 1079 D2).
   ...(production ? [] : [`  globalThis.exact.plan = ${JSON.stringify(createHash('sha256').update(readFileSync(opt('--plan') ? resolve(opt('--plan')) : resolve(gen, 'app.plan'))).digest('hex'))};`, "  globalThis.exact.goTo = goTo;", "  develop(globalThis.exact).catch(console.error);", "  if (clock.agent) globalThis.exact.ready = import('./agent.js').then(m => m.install(globalThis.exact));", "  else globalThis.exact.attachReads = () => import('./agent.js').then(m => m.install(globalThis.exact, { passive: true }));"]),
+  ...(languages && containerHatches ? ["  requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers())));"] : []),
   "  booted?.();",
   "};",
   // The declared fonts are the stylesheet's `font-display: optional` faces (src/faces.rs): a face first needed while it
@@ -702,14 +705,14 @@ writeFileSync(resolve(gen, 'main.js'), [
   // A waiting page's answers past 1 KB are named, not held (LLP 1048.007 D10): the capture script fetched them as it
   // imported this; the first render waits for them. Ones no longer kept are none: an empty checkpoint at the page's
   // own location, since a page made per request is served where it was made.
-  "const named = typeof document === 'object' && document.querySelector('script[type=\"application/vnd.exact.checkpoint\"][data-src]');",
-  "const answers = named && (globalThis.exact?.answers ?? fetch(named.dataset.src).then(r => r.ok ? r.text() : null, () => null)).then(t => { named.textContent = t ?? JSON.stringify({ location: location.pathname, time: 0, answers: [] }); });"] : ['const sheet = null, answers = null;']),
+  `const named = typeof document === 'object' && document.querySelector('script[type=\"application/vnd.exact.checkpoint\"]${languages ? '' : '[data-src]'}');`,
+  languages ? "const answers = named && renderedAnswers(named);" : "const answers = named && (globalThis.exact?.answers ?? fetch(named.dataset.src).then(r => r.ok ? r.text() : null, () => null)).then(t => { named.textContent = t ?? JSON.stringify({ location: location.pathname, time: 0, answers: [] }); });"] : ['const sheet = null, answers = null;']),
   // Under the driver a TypeScript source draws the launch seed's stream (LLP 1069.005 D2b), from its first answer:
   // the first render waits for the stream's module, which no other page loads before it needs storage.
   ...(ts && !production ? ["const seeded = agentMode() && !globalThis.__exactRender && import('./storage-environment.js').then(env => { const seed = env.agentSeed(); if (seed !== null) answering.entropy = Object.assign(env.agentStream(seed, 'typescript'), { seed }); });"] : ['const seeded = null;']),
-  "const waits = [fonts, sheet, answers, seeded].filter(Boolean);",
-  `if ((sheet || answers || seeded) && !fonts) { (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; });${production ? '' : ' clock.agent = agentMode();'} }`,
-  "const go = f => waits.length ? Promise.all(waits).then(f) : f();",
+  languages ? "const waits = [fonts, sheet && Promise.race([sheet, globalThis.exact.languageLaunch.deadline]), answers, seeded].filter(Boolean);" : "const waits = [fonts, sheet, answers, seeded].filter(Boolean);",
+  `if ((sheet || answers || seeded${languages ? " || inLanguage" : ""}) && !fonts) { (globalThis.exact ??= {}).ready = new Promise(r => { booted = r; });${production ? '' : ' clock.agent = agentMode();'} }`,
+  languages ? "const go = f => Promise.all(waits).then(() => inLanguage(f)).catch(e => { const l = globalThis.exact.languageLaunch; l?.finish(); l?.report('adoption failed: ' + e, document.documentElement.lang); throw e; });" : "const go = f => waits.length ? Promise.all(waits).then(f) : f();",
   // Under the agent, an animation the first renders start (an indeterminate progress's turn) is held at the clock it
   // began at after each commit, before a frame shows it, until agent.js, which loads after the first render, takes it
   // (its `register`): never left on the browser's clock, nor turned on the compositor first (LLP 1069.001: a spinner
@@ -729,7 +732,7 @@ writeFileSync(resolve(gen, 'main.js'), [
     `if (wait || ${mixed}) load().then(() => go(() => { start(); fail(); })); else go(() => { start(); requestAnimationFrame(() => setTimeout(() => load().then(fail))); });`,
   ] : [seamLazy ? "if (typeof document === 'object' && !document.querySelector('script[type=\"application/vnd.exact.checkpoint\"]')) loadSeam().then(() => go(start)); else go(start);" : 'go(start);']),
   // After the first render, which a font wait may defer (`containers()` reads the runtime's `globalThis.exact`).
-  ...(containerHatches ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),
+  ...(containerHatches && !languages ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),
   // The chunks no head preloads run when a piece is first used, which may be offline. The entry prepares them as it
   // starts: a `modulepreload` each, not run, at low priority behind the sheet and the fonts its first render waits
   // for (asked for above). So none competes with the entry for the link, and one the first render needs is already
@@ -1187,6 +1190,11 @@ if (how !== 'none' || markdownReaders) {
   try { shipped.push(...(await b.write({ file: resolve(gen, 'server.js'), format: 'iife', codeSplitting: false })).output.filter(file => file.type === 'chunk')); }
   finally { await b.close(); }
 }
+if (languages) {
+  writeFileSync(resolve(gen, 'app.js'), languages.page);
+  appendFileSync(resolve(gen, 'strings.js'), '\nexport { LocaleSlot };\n');
+  appendFileSync(resolve(gen, 'mount.js'), '\nexport { adoptAll };\n');
+}
 // The page's module and its chunks: Rolldown, the repo's app bundler, whose
 // minifier leaves the entry 6–10% smaller than Bun's after brotli (RealWorld
 // 25.8 → 23.6 KB, the feed bench's 30.9 → 27.9, the grid's 19.3 → 18.1),
@@ -1302,6 +1310,8 @@ writeFileSync(resolve(out, contentFiles['style.css']), sheet);
 writeFileSync(resolve(gen, 'page-style.json'), JSON.stringify(rules.map(rule => rule.slice(0, 3))));
 writeFileSync(resolve(gen, 'sheet-cut.json'), JSON.stringify([...unused].sort()));
 // The app's part of the render server's CSP (LLP 1048.000 D11), which it reads at start.
+const storeKey = production ? "exact.state.#locale" : `exact.state.@${appDigest(selected.variant?.name ? realpathSync(appDir) + "#" + selected.variant.name : realpathSync(appDir))}/#locale`;
+const languageScript = languages ? await languageHead(gen, languages.names, languages.choosesLocale ? storeKey : null, contentFiles['app.js'], !production) : '';
 const cspFile = webCspFile(manifest);
 if (cspFile) writeFileSync(resolve(gen, 'csp.json'), cspFile);
 // app.json's `host.web.head` goes after the sheet, where no search for the shell's places (its sheet, preloads and
@@ -1314,7 +1324,7 @@ ${agentMeta}${schemeMeta}<title>${attr(manifest.name)}</title>
 <meta name="viewport" content="${viewport}">
 ${colorSchemeMeta(interfaceStyle(manifest))}${icon}
 ${preloads}<style>${sheet}${launchBackground(manifest)}</style>
-${webHead(manifest)}<div id="exact-root"${manifest.audio_session ? ` data-audio-session="${manifest.audio_session}"` : ''}></div>
+${languageScript}${webHead(manifest)}<div id="exact-root"${manifest.audio_session ? ` data-audio-session="${manifest.audio_session}"` : ''}></div>
 ${webAudioSession(manifest, contentFiles['audio-session.js'])}${args.includes('--inline')
   // The entry, marked so a renderer finds it (page.rs `js_entry`); an inline one names the external one, which a rendered
   // page's capture script imports.
