@@ -183,7 +183,7 @@ extension WindowToolbarHost {
     /// The item the window's toolbar shows for `node`; nil when it shows none.
     func tipItem(_ node: NodeView) -> NSToolbarItem? {
         guard let toolbar, let item = items[node.id], toolbar.isVisible, window?.toolbar === toolbar,
-              toolbar.items.contains(where: { $0 === item }) else { return nil }
+              toolbar.items.contains(where: { $0 === slot(of: item) }) else { return nil }
         return item
     }
 }

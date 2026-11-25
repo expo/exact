@@ -152,7 +152,7 @@ export async function open({
   // macOS: AppKit's sidebar for a root tab bar, `native: "sidebar-row"` (LLP 1115.002 D3); a `dialog` as its sheet and
   // a popover that is no menu as AppKit's popover, windows of their own that `screenshot <png> window` draws over the
   // window (D7.2, D7.3).
-  if (!['agent', 'platform'].includes(chrome) || (chrome !== 'agent' && !['ios', 'host-ios', 'macos'].includes(host)))
+  if (!['agent', 'platform'].includes(chrome) || (chrome !== 'agent' && !['ios', 'host-ios', 'macos', 'mac'].includes(host)))
     throw new Error(`chrome: ${chrome} is iOS's and macOS's (agent or platform), not ${host}'s`);
   if (chrome === 'platform') env = { ...(env ?? {}), EXACT_AGENT_CHROME: 'platform' };
   if (bind) {

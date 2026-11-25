@@ -24,6 +24,7 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
     private(set) weak var window: NSWindow?
     private(set) var toolbar: NSToolbar?
     private(set) var items: [UInt32: NSToolbarItem] = [:]
+    private var actionGroups: [NSToolbarItem.Identifier: NSToolbarItemGroup] = [:]
     private var symbols: [UInt32: String] = [:]
     /// The authored rendering the toolbar stands for: the declared toolbar,
     /// or the route's header (`header`).
@@ -225,6 +226,7 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
     private func settle(_ adopted: NodeView?) {
         if adopted !== header?.segments { presenter.segments.sync() }
         reportCover()
+        syncSplitListInset()
     }
 
     /// The header's box is the platform's while the bar shows it (LLP
@@ -235,6 +237,17 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
         var covers: [UInt32: HostCover] = projected ? owner.map { [$0.id: .whole] } ?? [:] : [:]
         for part in besideParts { covers[part.node.id] = .whole }
         presenter.covers.report("header", covers)
+    }
+
+    /// The list route stays in the document, where no pane owner clears the toolbar for it.
+    func syncSplitListInset() {
+        let split = presenter.navigation.stackSplit, top = presenter.insets.top
+        guard let window, let toolbar, window.toolbar === toolbar, split.active, split.window === window,
+              top > 0, let list = split.shownSplit?.list, list.props["navigationBar"] != "transparent" else {
+            presenter.covers.report("split list toolbar", [:])
+            return
+        }
+        presenter.covers.report("split list toolbar", [list.id: .edges(.init(top: top, right: 0, bottom: 0, left: 0))])
     }
 
     private func refuse(_ reason: String) {
@@ -274,7 +287,7 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
             if window.title == appliedTitle { window.title = savedTitle }
             if window.subtitle == appliedSubtitle { window.subtitle = savedSubtitle }
         }
-        items.removeAll(); symbols.removeAll(); order.removeAll(); owner = nil; heading = nil
+        items.removeAll(); actionGroups.removeAll(); symbols.removeAll(); order.removeAll(); owner = nil; heading = nil
         header = nil; decide(nil); beside = nil; decideBeside(nil)
         _ = segments.update(nil, enabled: false)
         search.release()
@@ -358,7 +371,7 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
              "items": beside.buttons.map { node -> [String: Any] in
                  let item = items[node.id]
                  return ["id": Int(node.id), "testId": node.props["testId"] ?? NSNull(), "label": item?.label ?? "", "menu": item is NSMenuToolbarItem,
-                         "enabled": available(node), "overflow": item.map { !shown.contains($0.itemIdentifier) } ?? false]
+                         "enabled": available(node), "overflow": item.map { !shown.contains(slot(of: $0).itemIdentifier) } ?? false]
              }]
         } ?? NSNull()
         return ["route": Int(header.route.id), "node": Int(header.header.id), "title": header.title, "back": header.backs.map { Int($0.id) }, "beside": other,
@@ -375,7 +388,7 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
                     if #available(macOS 26.0, *) { prominent = item?.style == .prominent }
                     return ["id": Int(node.id), "testId": node.props["testId"] ?? NSNull(), "label": item?.label ?? "", "menu": item is NSMenuToolbarItem,
                             "place": header.leading.contains { $0 === node } ? "leading" : "trailing", "enabled": available(node),
-                            "prominent": prominent, "overflow": item.map { !shown.contains($0.itemIdentifier) } ?? false]
+                            "prominent": prominent, "overflow": item.map { !shown.contains(slot(of: $0).itemIdentifier) } ?? false]
                 }]
     }
 
@@ -389,6 +402,40 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
 
     private func children(_ node: NodeView) -> [NodeView] {
         node.childNodes
+    }
+
+    /// A subitem uses its group's slot for order and overflow. Its own item holds its action and face.
+    func slot(of item: NSToolbarItem) -> NSToolbarItem {
+        actionGroups.values.first { $0.subitems.contains { $0 === item } } ?? item
+    }
+
+    /// Group consecutive items on one side of the heading. AppKit calls each subitem's action
+    /// and can show a menu item alongside an ordinary command (LLP 1115.002 D2).
+    private func identifiers(for nodes: [NodeView], in header: WindowHeader?,
+                             groups: inout [NSToolbarItem.Identifier: NSToolbarItemGroup]) -> [NSToolbarItem.Identifier] {
+        var order: [NSToolbarItem.Identifier] = []
+        var start = 0
+        while start < nodes.count {
+            let node = nodes[start]
+            start += 1
+            guard let item = items[node.id] else { continue }
+            guard let groupID = header?.buttonGroups[node.id] else { order.append(item.itemIdentifier); continue }
+            var subitems = [item]
+            while start < nodes.count, header?.buttonGroups[nodes[start].id] == groupID {
+                if let subitem = items[nodes[start].id] { subitems.append(subitem) }
+                start += 1
+            }
+            // A membership change replaces the slot so AppKit lays out its new subitems.
+            let members = subitems.map(\.itemIdentifier.rawValue).joined(separator: ".")
+            let identifier = NSToolbarItem.Identifier("exact.group.\(groupID).\(members)")
+            let group = actionGroups[identifier] ?? NSToolbarItemGroup(itemIdentifier: identifier)
+            if group.subitems != subitems { group.subitems = subitems }
+            group.isNavigational = item.isNavigational
+            group.autovalidates = false
+            groups[identifier] = group
+            order.append(identifier)
+        }
+        return order
     }
 
     /// A native button's prominent style is a prominent item, tinted by its
@@ -742,15 +789,18 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
         let centered: Set<NSToolbarItem.Identifier> = group.map { [$0.itemIdentifier] } ?? []
         if toolbar.centeredItemIdentifiers != centered { toolbar.centeredItemIdentifiers = centered }
         let field = search.update(searched, enabled: window.attachedSheet == nil)
-        let identifiers = { (nodes: [NodeView]) in nodes.compactMap { self.items[$0.id]?.itemIdentifier } }
+        var groups: [NSToolbarItem.Identifier: NSToolbarItemGroup] = [:]
         let nextOrder = header != nil || beside != nil
-            ? identifiers(over?.leading ?? []) + (group.map { [$0.itemIdentifier, .flexibleSpace] } ?? []) + identifiers(over?.trailing ?? [])
-                + (columns ? [Self.listSeparatorIdentifier] : []) + identifiers(after?.buttons ?? [])
+            ? identifiers(for: over?.leading ?? [], in: over, groups: &groups) + (group.map { [$0.itemIdentifier, .flexibleSpace] } ?? [])
+                + identifiers(for: over?.trailing ?? [], in: over, groups: &groups) + (columns ? [Self.listSeparatorIdentifier] : [])
+                + identifiers(for: after?.leading ?? [], in: after, groups: &groups)
+                + identifiers(for: after?.trailing ?? [], in: after, groups: &groups)
                 + (field.map { [.flexibleSpace, $0.itemIdentifier] } ?? [])
             : (customizing != nil ? declared.map { children($0.owner) } ?? [] : declarations).compactMap { node -> NSToolbarItem.Identifier? in
                 if node === heading { return .flexibleSpace }
                 return items[node.id]?.itemIdentifier
             }
+        actionGroups = groups
         order = (sidebarItems ? [.toggleSidebar, .sidebarTrackingSeparator] : [])
             + (back ? [showsHistory ? Self.historyIdentifier : Self.backIdentifier] : [])
             + nextOrder + appItems.map(\.itemIdentifier)
@@ -856,6 +906,7 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
         }
         if let group = segments.item, group.itemIdentifier == identifier { return group }
         if let field = search.item, field.itemIdentifier == identifier { return field }
+        if let group = actionGroups[identifier] { return group }
         return items.values.first { $0.itemIdentifier == identifier } ?? appItems.first { $0.itemIdentifier == identifier }
     }
     package func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
@@ -880,8 +931,11 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
     var accessibilityItems: [(object: AnyObject, id: UInt32)] {
         guard let toolbar, let bar = accessibilityRoot else { return [] }
         let spaces: Set<NSToolbarItem.Identifier> = [.space, .flexibleSpace, .sidebarTrackingSeparator, Self.listSeparatorIdentifier]
-        let visible = (toolbar.visibleItems ?? toolbar.items).filter { !spaces.contains($0.itemIdentifier) }
         let children = bar.accessibilityChildren() ?? []
+        var visible = (toolbar.visibleItems ?? toolbar.items).filter { !spaces.contains($0.itemIdentifier) }
+        if children.count != visible.count {
+            visible = visible.flatMap { actionGroups[$0.itemIdentifier]?.subitems ?? [$0] }
+        }
         guard children.count == visible.count else { return [] }
         var joined: [(AnyObject, UInt32)] = []
         if projected, let owner { joined.append((bar, owner.id)) }
@@ -904,6 +958,17 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
                 }
             } else if item === search.item, let node = search.node {
                 joined.append((object, node.id))
+            } else if let group = actionGroups[item.itemIdentifier] {
+                var members: [Any] = [object]
+                for _ in 0..<4 where members.count == 1 {
+                    guard let children = Presenter.axFacts(members[0] as AnyObject)?.children, !children.isEmpty else { break }
+                    members = children
+                }
+                if members.count == group.subitems.count {
+                    for (member, subitem) in zip(members, group.subitems) {
+                        if let id = UInt32(exactly: subitem.tag), items[id] === subitem { joined.append((subitem.view ?? member as AnyObject, id)) }
+                    }
+                }
             } else if let id = items.first(where: { $0.value === item })?.key {
                 // By the item itself: a status readout's item carries no tag. An item with a view (a readout) is
                 // exposed as AppKit's viewer group around that view; the view is the authored element.
@@ -1002,7 +1067,8 @@ package final class WindowToolbarHost: NSObject, NSToolbarItemValidation {
                 result["segment"] = 0
             }
             result["enabled"] = item === backItem ? validateToolbarItem(item) : item === historyItem ? historyItem.subitems.first?.isEnabled == true : available(node)
-            result["overflow"] = !(toolbar.visibleItems ?? []).contains(where: { $0 === item })
+            let slot = slot(of: item)
+            result["overflow"] = !(toolbar.visibleItems ?? []).contains(where: { $0 === slot })
         }
         if let field = search.item, search.node === node {
             result["view"] = "NSSearchToolbarItem"

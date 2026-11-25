@@ -4972,10 +4972,9 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   The software keyboard belongs to the system and is outside the app's drawing.
 - On the Mac a root tablist placed as above (the root column's last child) is the
   window's sidebar: AppKit's source list, one row a tab, with its button in the
-  toolbar and View ▸ Show Sidebar. Under the agent on `macos` the authored tablist
-  paints (on iOS only when `scripts/agent.mjs` runs alone: `exact.mjs` shows UIKit's
-  bars); `--chrome platform` on `macos` shows the sidebar, and a tap naming a tab
-  presses its row (`native: "sidebar-row"`).
+  toolbar and View ▸ Show Sidebar. `bun exact.mjs agent macos` and `test macos`
+  show the sidebar, and a tap naming a tab presses its row (`native: "sidebar-row"`).
+  `--chrome agent` paints the authored tablist.
 - For a footer pinned below the scrolling tabs, put the root tablist and a `footer`
   together as the only children of a `nav` directly inside the navigation root. The Mac,
   iPadOS 18 and later, and the wide web layout show the footer in the sidebar. It can
@@ -5032,18 +5031,20 @@ main navigationKey=`${top(nav).id}` navigationBack="close" navigate=follow displ
   prefer the root tablist above, which an iPad shows as its sidebar.
 - On the Mac a route's `header` is the window's title bar and toolbar: its heading the
   window's title (under a `head title`, over the app's name; there is no large title),
-  the first text after the heading the window's subtitle, its buttons toolbar items, a
+  the first text after the heading the window's subtitle, its buttons toolbar items,
+  adjacent buttons in the same `role="group"` an AppKit toolbar item group, a
   button whose `popovertarget` is a menu a menu item, a tablist of text tabs the
   centred segments, its `input type="search"` the toolbar's search field, and the
   `id="back"` control the bar's own Back, which is the back/forward pair where the
   navigation root offers Forward (its `navigationHistory`, both when it says nothing).
   A header holding anything else (a picture, a text before the heading or a second one
   after the subtitle, a pressable title, a button holding a spinner or a second picture) stays in the page as
-  written, whole, and `logs` says what it was. Under the agent
-  the authored header paints; `--chrome platform` on `macos` shows the bar, `tap` and
-  `type` naming a header's button, tab or search input go through it
+  written, whole, and `logs` says what it was. `bun exact.mjs agent macos` and
+  `test macos` show the toolbar. `tap` and `type` naming a header's button, tab
+  or search input go through it
   (`native: "NSToolbarItem"`), and `state window.toolbar.header` names its title, its
-  items by test id and which are in the overflow menu. Its search field arrives with
+  items by test id and which are in the overflow menu. `--chrome agent` paints the
+  authored header, as `scripts/agent.mjs` does by default. Its search field arrives with
   AppKit's own animation (`clock +1200 real` before a screenshot). In a list beside its
   detail the window's title and subtitle are the detail's, as in System Settings, and
   the list's heading stays over its rows; beside a sidebar (three columns) the list's

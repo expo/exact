@@ -74,6 +74,50 @@ final class HeaderMacTests: XCTestCase {
     private func identifiers() -> [String] { window.toolbar?.items.map(\.itemIdentifier.rawValue) ?? [] }
     private let back = WindowToolbarHost.historyIdentifier.rawValue
 
+    func testGroupedRouteHeaderButtonsAreAppKitSubitemsAndPressTheirNodes() throws {
+        let group = ["accessibilityRole": "group"]
+        let extra = view(26, "view", group) + view(27, "view", group) + view(28, "view", group)
+            + view(31, "control", ["type": "button", "accessibilityRole": "button", "accessibilityLabel": "Favorite", "testId": "favorite"], press: true)
+            + symbolButton(32, "Collections", "book.closed", ["popovertarget": "collections"])
+            + symbolButton(33, "Info", "info", ["disabled": "true"])
+            + view(40, "view", ["id": "collections", "popover": "auto", "accessibilityRole": "menu"])
+            + view(41, "button", ["accessibilityRole": "menuitemcheckbox"], press: true) + view(411, "text", ["text": "Trips"])
+            + [children(41, [411]), children(40, [41]), children(26, [23]), children(27, [31, 32]), children(28, [33]),
+               children(20, [21, 22, 26, 27, 28]), children(3, [20, 25, 40]), ["op": "props", "id": 22, "set": ["text": ""]]]
+        let p = fixture(selected: "b", extra: extra)
+        p.toolbar.headTitle("Serengeti")
+        var face = ButtonFace(); face.symbol = "heart"
+        p.buttonFace = { _ in face }
+        var pressed: [UInt32] = []
+        p.onPress = { pressed.append($0) }
+        XCTAssertTrue(p.toolbar.attach(to: window))
+        defer { p.toolbar.detach() }
+
+        let slots = try XCTUnwrap(window.toolbar).items
+        XCTAssertEqual(slots.first?.itemIdentifier.rawValue, back)
+        let groups = try XCTUnwrap(Array(slots.dropFirst()) as? [NSToolbarItemGroup])
+        XCTAssertEqual(groups.map { $0.subitems.map(\.tag) }, [[23], [31, 32], [33]])
+        XCTAssertEqual(window.title, "Serengeti")
+        XCTAssertTrue(try node(p, 20).isHidden)
+        XCTAssertEqual(p.covers.delivered[20], .whole)
+
+        let favorite = try XCTUnwrap(groups.dropFirst().first?.subitems.first)
+        let menu = try XCTUnwrap(groups.dropFirst().first?.subitems.last as? NSMenuToolbarItem)
+        XCTAssertNotNil(favorite.image)
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(favorite.action), to: favorite.target, from: favorite))
+        XCTAssertEqual(pressed, [31])
+        // Opening the menu presses its button first, as a click on it in the page runs before its menu shows (`MenusMac.fill`)
+        menu.menu.delegate?.menuNeedsUpdate?(menu.menu)
+        XCTAssertEqual(menu.menu.items.map(\.title), ["Trips"])
+        XCTAssertEqual(pressed, [31, 32])
+        XCTAssertFalse(try XCTUnwrap(groups.last?.subitems.first).isEnabled)
+
+        p.apply(wireBatch([["op": "style", "id": 31, "style": ["display": "none"]]]))
+        let remaining = window.toolbar?.items.dropFirst().compactMap { ($0 as? NSToolbarItemGroup)?.subitems.map(\.tag) }
+        XCTAssertEqual(remaining, [[23], [32], [33]])
+        XCTAssertFalse(p.toolbar.validateToolbarItem(favorite))
+    }
+
     func testAuthoredClearInkReachesToolbarAndAbsenceRestoresAppKit() throws {
         let p = fixture(extra: [
             ["op": "style", "id": 13, "style": ["text_color": [0, 0, 0, 0], "written": ["text_color"]]]])

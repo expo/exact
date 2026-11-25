@@ -128,8 +128,8 @@ package final class DialogHost {
     }
     func show(_ dialog: NodeView) {
         guard let presenter, !owns(dialog), live(dialog), let window = presenter.viewport.window,
-              let parent = dialog.superview, parent.isDescendant(of: presenter.root) || parent === presenter.root
-                || entries.contains(where: { parent.isDescendant(of: $0.dialog) || parent === $0.dialog }) else { return }
+              dialog.superview != nil, presenter.logicallyWithin(dialog, presenter.root)
+                || entries.contains(where: { dialog.isDescendant(of: $0.dialog) }) else { return }
         // A confirmation in the alert shape is the platform's alert, a sheet
         // on the window (LLP 1115.000 D7.6, AlertsMac.swift). HTML: showModal
         // on an open modal dialog does nothing.

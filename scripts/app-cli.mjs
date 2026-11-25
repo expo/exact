@@ -678,12 +678,10 @@ if (verb === 'contract') {
     await devicePreflight(app);
   }
   if (own[verb]) { const [command, ...args] = own[verb]; return log(await spawned(bun(command), [...args, ...rest], 'inherit', dir)); }
-  // A drive on iOS shows UIKit's bars, as the app and verify do (`--chrome agent` paints the authored header and
-  // tablist instead), and an Apple drive's screenshots are a pixel a point: a third of an iPhone's pixels each
-  // way, about a third of the tokens an agent reads a picture for (`--scale 3`: the device's). A phone's drive too,
-  // which drivesNative leaves out only because its build is explicit.
+  // App drives use the native bars people see. `--chrome agent` shows the authored header and tablist.
+  // Apple screenshots default to a pixel per point, including on a phone (`--scale 3` for device pixels).
   const drivesApple = (verb === 'test' || verb === 'agent') && ['ios', 'macos', 'mac'].includes(host);
-  if (drivesApple && !rest.includes('--chrome') && host === 'ios') rest.push('--chrome', 'platform');
+  if (drivesApple && !rest.includes('--chrome')) rest.push('--chrome', 'platform');
   if (drivesApple && verb === 'agent' && !rest.includes('--scale')) rest.push('--scale', '1');
   if ((verb === 'test' || verb === 'agent') && host === 'windows' && !rest.includes('--size') && existsSync(manifest)) rest.push('--size', windowsWindow(JSON.parse(readFileSync(manifest, 'utf8'))).join('x'));
   // An Android drive is the APK's (`bun exact.mjs android` installs it), unless it asks for the headless Linux host.

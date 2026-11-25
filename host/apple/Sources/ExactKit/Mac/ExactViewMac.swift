@@ -451,6 +451,7 @@ public final class ExactView: NSView {
         if next.top != prev.top || next.left != prev.left || next.bottom != prev.bottom || next.right != prev.right {
             session.presenter.insets = next
             session.insets(top: next.top, right: next.right, bottom: next.bottom, left: next.left)
+            session.presenter.toolbar.syncSplitListInset()
         }
         session.presenter.insetScrollersFromChrome()
         guard session.booted else { return }

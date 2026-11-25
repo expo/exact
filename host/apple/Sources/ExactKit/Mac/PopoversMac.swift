@@ -261,7 +261,8 @@ extension MenuHost {
         let rect = pointing(margins)
         native.positioning = (at, pointing)
         native.margins = margins
-        if Self.usesToolbarAnchor(pop), pointed() == nil, let item = presenter.toolbar.items[source.id], window.toolbar?.items.contains(where: { $0 === item }) == true {
+        if Self.usesToolbarAnchor(pop), pointed() == nil, let item = presenter.toolbar.items[source.id],
+           window.toolbar?.items.contains(where: { $0 === presenter.toolbar.slot(of: item) }) == true {
             native.positioning = nil // a toolbar item's popover points at the item
             native.popover.show(relativeTo: item)
         } else {

@@ -55,6 +55,7 @@ struct WindowHeader {
     /// The header's buttons before its heading, which lead the bar after
     /// Back as navigational items, and those after it, its trailing items.
     let leading: [NodeView], trailing: [NodeView]
+    let buttonGroups: [UInt32: UInt32]
     /// The stack's Back control in the header, where the bar's own Back
     /// stands for it: no item of its own.
     let backs: [NodeView]
@@ -92,8 +93,9 @@ struct WindowHeader {
         let backs = rule.items.filter { item in !rule.leading.contains { $0 === item } && !rule.trailing.contains { $0 === item } }
         var passedHeading = false
         var subtitle: NodeView?
+        var buttonGroups: [UInt32: UInt32] = [:]
         // Everything the header shows has a place in the bar, or none of it goes.
-        func refusal(in node: NodeView) -> String? {
+        func refusal(in node: NodeView, group: UInt32? = nil) -> String? {
             for child in children(node) where child.style["display"]?.string != "none" {
                 if child === rule.heading { passedHeading = true; continue }
                 if passedHeading, subtitle == nil, child.isParagraph, !items.contains(ObjectIdentifier(child)),
@@ -126,13 +128,15 @@ struct WindowHeader {
                         return "button #\(child.id) opens a popover whose authored placement needs its page box"
                     }
                     if !showable(child) { return "button #\(child.id) has no supported text, symbol, avatar or dot face" }
+                    buttonGroups[child.id] = group
                     continue
                 }
-                // A box that only groups is no part of the bar; what it holds decides.
+                // A semantic group keeps its buttons together (LLP 1127 §5).
                 guard child.kind == "view", child.props["popover"] == nil, child.props["semanticTag"] != "dialog" else {
                     return "it holds #\(child.id) (\(child.isParagraph ? "text that is not its heading" : child.props["popover"] != nil ? "a popover" : child.kind)), which a toolbar has no place for"
                 }
-                if let inner = refusal(in: child) { return inner }
+                let innerGroup = child.props["accessibilityRole"] == "group" ? child.id : group
+                if let inner = refusal(in: child, group: innerGroup) { return inner }
             }
             return nil
         }
@@ -141,7 +145,7 @@ struct WindowHeader {
         // no item of its own.
         let barred = { (node: NodeView) in shown(node) && (items.contains(ObjectIdentifier(node)) || rule.readouts.contains { $0 === node }) }
         var read = WindowHeader(route: route, header: rule.header, heading: rule.heading, title: rule.heading?.accessibleText ?? "",
-                                leading: rule.leading.filter(barred), trailing: rule.trailing.filter(barred), backs: backs)
+                                leading: rule.leading.filter(barred), trailing: rule.trailing.filter(barred), buttonGroups: buttonGroups, backs: backs)
         read.subtitle = subtitle
         if let list = rule.segments, shown(list), let tabs = titleTabs(of: list) { (read.segments, read.tabs) = (list, tabs) }
         if let input = rule.search, shown(input) { read.search = input }
