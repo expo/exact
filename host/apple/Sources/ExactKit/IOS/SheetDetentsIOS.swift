@@ -22,6 +22,18 @@ package enum SheetDetents {
         sheet.selectedDetentIdentifier = opening ?? sheet.detents.first?.identifier
     }
 
+    /// The route holds the sheet at `word`, one of its detents (`navigationSelectedDetent`, LLP 1123 D7). A word that
+    /// names none of them is journaled, and the sheet stays where it is.
+    @MainActor package static func hold(_ sheet: UISheetPresentationController, at word: String, node: NodeView, owner: String) {
+        let value = node.props["navigationDetent"]
+        let words = keptDetents(value, refused: nil).isEmpty ? "large" : value
+        guard let held = identifier(of: word, in: words) else {
+            node.presenter?.session?.log("navigationSelectedDetent \"\(word)\" on \(owner) names none of the detents the sheet kept from navigationDetent \"\(value ?? "")\"; the sheet stays where it is")
+            return
+        }
+        if sheet.selectedDetentIdentifier != held { sheet.selectedDetentIdentifier = held }
+    }
+
     @MainActor package static func updateGrabber(_ value: String?, on sheet: UISheetPresentationController) {
         sheet.prefersGrabberVisible = value == "visible" || value != "hidden" && sheet.detents.count > 1
         sheet.prefersScrollingExpandsWhenScrolledToEdge = sheet.detents.count > 1

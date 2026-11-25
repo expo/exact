@@ -11,7 +11,7 @@ import ExactKit
 extension ModalController: PaintsSheetSurface {}
 #endif
 
-private final class ModalController: UIViewController, UIGestureRecognizerDelegate {
+final class ModalController: UIViewController, UIGestureRecognizerDelegate {
     weak var host: ModalHost?
     let routeID: UInt32
     /// The route a `fit-content` detent measures (LLP 1075.003 §9.11).
@@ -36,10 +36,25 @@ private final class ModalController: UIViewController, UIGestureRecognizerDelega
         // tvOS has no sheets; every modal covers the screen.
         modalPresentationStyle = .overFullScreen
         #else
-        modalPresentationStyle = fullscreen ? .overFullScreen : .pageSheet
+        modalPresentationStyle = fullscreen ? .overFullScreen : ModalController.sheetStyle(route.props["navigationSizing"])
         if !fullscreen { updateSheet(detent: detent, cornerRadius: ModalController.cornerRadius(of: route), grabber: grabber) }
         #endif
     }
+    /// A sheet route's presentation, its `navigationSizing` as it is presented (LLP 1123 D7): a page sheet unsaid, as
+    /// the LLP keeps it; `form` UIKit's form sheet and `automatic` UIKit's choice.
+    static func sheetStyle(_ sizing: String?) -> UIModalPresentationStyle {
+        #if os(tvOS)
+        .overFullScreen
+        #else
+        switch sizing {
+        case "form": .formSheet
+        case "automatic": .automatic
+        default: .pageSheet
+        }
+        #endif
+    }
+    /// Presented as a sheet, at whichever of its sizings
+    private var isSheet: Bool { modalPresentationStyle != .overFullScreen }
     /// A sheet route's authored `border-radius`, its top-left corner's: the
     /// sheet's corner radius. Nil leaves UIKit's, which on iOS 26 and later
     /// follows the display's corners and insets a large sheet from the bottom edge.
@@ -48,24 +63,45 @@ private final class ModalController: UIViewController, UIGestureRecognizerDelega
         return BorderPaint.radii(route.style, in: route.bounds)[0].width
     }
     private var detentValue: String?, cornerRadius: CGFloat?, grabberValue: String?
+    /// The route's other sheet choices as last applied (LLP 1123 D7): the detent it holds the sheet at, its edge
+    /// attachment in a compact height and its scroll expansion.
+    private var choices = SheetChoices()
+    private struct SheetChoices: Equatable {
+        var selected: String?, edgeAttached: String?, scrollExpands: String?
+        init(_ props: [String: String]? = nil) {
+            selected = props?["navigationSelectedDetent"].flatMap { $0.isEmpty ? nil : $0 }
+            edgeAttached = props?["navigationEdgeAttachedInCompactHeight"]
+            scrollExpands = props?["navigationScrollExpands"]
+        }
+    }
     func updateSheet(detent value: String?, cornerRadius radius: CGFloat?, grabber: String?) {
         #if !os(tvOS)
+        let next = SheetChoices(route?.props)
         // No detent selected yet: UIKit's own (`large`), never set here, as
         // when the sheet is made; a selection is set with every detent list.
-        guard modalPresentationStyle == .pageSheet,
-              let sheet = sheetPresentationController,
-              detentValue != value || cornerRadius != radius || grabberValue != grabber || sheet.selectedDetentIdentifier == nil else { return }
+        guard isSheet, let sheet = sheetPresentationController,
+              detentValue != value || cornerRadius != radius || grabberValue != grabber || choices != next
+                || sheet.selectedDetentIdentifier == nil else { return }
         // A grabber or radius alone changes only itself: the detents and the
         // one the person dragged the sheet to stay.
         let newDetents = detentValue != value || sheet.selectedDetentIdentifier == nil
+        // A held detent moves the sheet only as it changes or over new detents; let go, the sheet returns to the
+        // one it opens at, as unsaid
+        let held = next.selected != choices.selected || newDetents ? next.selected : nil
+        let released = choices.selected != nil && next.selected == nil
         detentValue = value
         cornerRadius = radius
         grabberValue = grabber
+        choices = next
         let configure = {
-            if newDetents, let route = self.route {
-                SheetDetents.select(on: sheet, node: route, owner: "route \"\(route.props["navigationKey"] ?? "")\"")
+            if let route = self.route {
+                let owner = "route \"\(route.props["navigationKey"] ?? "")\""
+                if newDetents || released { SheetDetents.select(on: sheet, node: route, owner: owner) }
+                if let held { SheetDetents.hold(sheet, at: held, node: route, owner: owner) }
             }
             SheetDetents.updateGrabber(grabber, on: sheet)
+            if let expands = next.scrollExpands { sheet.prefersScrollingExpandsWhenScrolledToEdge = expands == "true" }
+            sheet.prefersEdgeAttachedInCompactHeight = next.edgeAttached == "true"
             sheet.preferredCornerRadius = radius
             // In `animateChanges`, the surface moves with the sheet.
             self.paintSurface()
@@ -78,7 +114,7 @@ private final class ModalController: UIViewController, UIGestureRecognizerDelega
     /// again, animated as UIKit animates a detent change, in the same sheet.
     func contentChanged() {
         #if !os(tvOS)
-        guard modalPresentationStyle == .pageSheet, let sheet = sheetPresentationController,
+        guard isSheet, let sheet = sheetPresentationController,
               (detentValue ?? "").split(separator: " ").contains("fit-content") else { return }
         if viewIfLoaded?.window != nil { sheet.animateChanges { sheet.invalidateDetents() } }
         else { sheet.invalidateDetents() }
@@ -178,7 +214,7 @@ private final class ModalController: UIViewController, UIGestureRecognizerDelega
     }
     private var glass: Bool {
         // Unspecified until it is presented: an iPhone's, compact.
-        guard modalPresentationStyle == .pageSheet, traitCollection.horizontalSizeClass != .regular,
+        guard isSheet, traitCollection.horizontalSizeClass != .regular,
               let sheet = sheetPresentationController else { return false }
         return (sheet.selectedDetentIdentifier ?? sheet.detents.first?.identifier) != .large
     }
@@ -327,7 +363,7 @@ final class ModalHost: NSObject, UIAdaptivePresentationControllerDelegate {
             guard let view = layer.controller.viewIfLoaded, let window = view.window, view.bounds.width > 0 else { return nil }
             let scale = view.convert(view.bounds, to: window).width / view.bounds.width
             #if os(iOS)
-            let kind = layer.controller.modalPresentationStyle == .pageSheet ? "sheet" : layer.kind
+            let kind = layer.controller.modalPresentationStyle != .overFullScreen ? "sheet" : layer.kind
             #else
             let kind = layer.kind
             #endif

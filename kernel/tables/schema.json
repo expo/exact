@@ -2069,6 +2069,30 @@
       "name": "swipeDirection",
       "kind": "str",
       "_comment": "@ref LLP 1057.001 §8: the one direction, left, right, up or down, of a node's `swipe`, the platform's discrete swipe (UIKit's `UISwipeGestureRecognizer`; no other host has one yet); physical, not mirrored in a right-to-left layout. Any other value leaves the swipe off. No layout effect."
+    },
+    {
+      "id": 323,
+      "name": "navigationSelectedDetent",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: the word of a sheet route's `navigationDetent` the sheet is at, applied whenever its value changes, the opening included, and again when the detents change; an unrelated update leaves the height the person dragged the sheet to. Removed, UIKit's `selectedDetentIdentifier` is nil again: the sheet's shortest detent. UIKit's `selectedDetentIdentifier`, SwiftUI's `presentationDetents(_:selection:)`."
+    },
+    {
+      "id": 324,
+      "name": "navigationEdgeAttachedInCompactHeight",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `true` or `false` (the default, UIKit's): whether a sheet route in a compact-height window attaches to the screen's bottom edge, as in a regular-height one, instead of covering the window's height. UIKit's `prefersEdgeAttachedInCompactHeight`, SwiftUI's `presentationCompactAdaptation`."
+    },
+    {
+      "id": 325,
+      "name": "navigationScrollExpands",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `true` or `false`: whether scrolling a sheet route's content at its top edge expands the sheet to its next detent; unsaid, the platform's, on a sheet with several detents. UIKit's `prefersScrollingExpandsWhenScrolledToEdge`, SwiftUI's `presentationContentInteraction`."
+    },
+    {
+      "id": 326,
+      "name": "navigationSizing",
+      "kind": "str",
+      "_comment": "@ref LLP 1123 D7: `page` (the default), `form` or `automatic`: a sheet route's presentation, read as the sheet is presented. `page` is UIKit's page sheet, `form` its form sheet (a centred sheet of a standard size in a regular-width window), `automatic` UIKit's choice. UIKit's `modalPresentationStyle`, SwiftUI's `presentationSizing`."
     }
   ],
   "_enums": "Wire discriminant is the 0-based index. An unknown discriminant is a typed decode rejection, never a fallback. refused: keywords the wire carries and the compiler refuses an author, because no presenter builds them (LLP 1043.000 §3 D1); `contract vocab` lists the others. No wire reads it, so it is outside the digest.",

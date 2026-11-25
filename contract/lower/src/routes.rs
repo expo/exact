@@ -422,27 +422,42 @@ impl NavPlace {
                 a.span,
             );
         }
-        // A sheet opens at one of its own heights, which its route says; a
-        // list the compiler cannot read is given the benefit of the doubt
-        // (iOS journals a miss).
-        if let Some(a) = attrs
-            .iter()
-            .rev()
-            .find(|a| a.name == "navigationInitialDetent")
-        {
-            if tag != "dialog" && !self.is_route(attrs) {
+        // A sheet opens at, and a route may hold it at, one of its own heights, which its route
+        // says; a list the compiler cannot read is given the benefit of the doubt (iOS journals
+        // a miss).
+        for (name, what, dialogs) in [
+            (
+                "navigationInitialDetent",
+                "the height its sheet opens at",
+                true,
+            ),
+            (
+                "navigationSelectedDetent",
+                "the height its sheet is at",
+                false,
+            ),
+        ] {
+            let Some(a) = attrs.iter().rev().find(|a| a.name == name) else {
+                continue;
+            };
+            if !(self.is_route(attrs) || dialogs && tag == "dialog") {
+                let on = if dialogs {
+                    "a route or a dialog"
+                } else {
+                    "a route"
+                };
                 return err(
                     "lower-attr-value",
-                    "`navigationInitialDetent` is read only on a route or a dialog. A route is an element with a `navigationKey` in the navigation stack. Write both detent attributes on the element that presents the sheet",
+                    format!("`{name}` is read only on {on}. A route is an element with a `navigationKey` in the navigation stack. Write the detent attributes on the element that presents the sheet"),
                     a.span,
                 );
             }
-            // Empty, as `navigationDetent=""` is, it is unsaid: the first.
+            // Empty, as `navigationDetent=""` is, it is unsaid
             if matches!(&a.value, Expr::Str(word, _) if !word.is_empty() && !crate::vocab::detent_word(word))
             {
                 return err(
                     "lower-attr-value",
-                    "`navigationInitialDetent` takes one word of the sheet's `navigationDetent`, the height its sheet opens at",
+                    format!("`{name}` takes one word of the sheet's `navigationDetent`, {what}"),
                     a.span,
                 );
             }
@@ -466,7 +481,7 @@ impl NavPlace {
                     };
                     return err(
                         "lower-attr-value",
-                        format!("`navigationInitialDetent=\"{word}\"` is not one of this sheet's heights, {said}; it names the one of them the sheet opens at"),
+                        format!("`{name}=\"{word}\"` is not one of this sheet's heights, {said}; it names {what}"),
                         a.span,
                     );
                 }

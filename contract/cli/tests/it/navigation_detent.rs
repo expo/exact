@@ -173,3 +173,72 @@ fn the_initial_detent_is_one_of_the_sheets_heights() {
         );
     }
 }
+
+/// A selected detent is one of the sheet's heights, as an initial one is, and only a route says
+/// one (LLP 1123 D7).
+#[test]
+fn the_selected_detent_is_one_of_the_sheets_heights() {
+    let compile = |route: &str| contract::compile(&sheet(route, ""));
+    for route in [
+        "navigationDetent=\"medium large\" navigationSelectedDetent=\"large\"",
+        "navigationDetent=\"medium large\" navigationSelectedDetent=(detents)",
+        "navigationSelectedDetent=\"large\"",
+        "navigationDetent=\"medium large\" navigationInitialDetent=\"medium\" navigationSelectedDetent=\"large\"",
+    ] {
+        compile(route).unwrap_or_else(|e| panic!("{route:?}: {e}"));
+    }
+    let error = compile("navigationDetent=\"medium large\" navigationSelectedDetent=\"300\"")
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("`navigationSelectedDetent=\"300\"` is not one of this sheet's heights"),
+        "{error}"
+    );
+    let error = contract::compile(
+        "component App\n  view\n    dialog id=\"form\" navigationSelectedDetent=\"fit-content\"\n      text \"Form\"\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("`navigationSelectedDetent` is read only on a route."),
+        "{error}"
+    );
+}
+
+/// A sheet's edge attachment, its scroll expansion and its sizing are words of their own; any
+/// other word is refused (LLP 1123 D7).
+#[test]
+fn the_sheet_choices_take_their_words() {
+    let compile = |attr: &str| {
+        contract::compile(&format!(
+            "component App\n  view\n    column navigationKey=\"a\" navigationPresentation=\"modal\" {attr}\n"
+        ))
+    };
+    for (name, good, bad) in [
+        (
+            "navigationEdgeAttachedInCompactHeight",
+            &["true", "false"][..],
+            &["yes", ""][..],
+        ),
+        ("navigationScrollExpands", &["true", "false"], &["auto", ""]),
+        (
+            "navigationSizing",
+            &["page", "form", "automatic"],
+            &["fitted", "full", ""],
+        ),
+    ] {
+        for value in good {
+            compile(&format!("{name}=\"{value}\""))
+                .unwrap_or_else(|e| panic!("{name}={value:?}: {e}"));
+        }
+        for value in bad {
+            let error = compile(&format!("{name}=\"{value}\""))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("lower-attr-value") && error.contains(&format!("`{name}` takes")),
+                "{name}={value:?}: {error}"
+            );
+        }
+    }
+}

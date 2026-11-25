@@ -313,6 +313,9 @@ fn attr_moves(name: &str) -> Option<&'static str> {
         "navigationPresentation",
         "navigationDetent",
         "navigationInitialDetent",
+        "navigationSelectedDetent",
+        "navigationSizing",
+        "navigationEdgeAttachedInCompactHeight",
         "navigationSource",
         "sharedElement",
         "popover",
@@ -347,7 +350,7 @@ fn attr_moves(name: &str) -> Option<&'static str> {
 /// of which acts when the node mounts.
 fn mounted_moves(name: &str) -> Option<&'static str> {
     match name {
-        "navigationGrabber" => None,
+        "navigationGrabber" | "navigationScrollExpands" => None,
         _ if name.starts_with("navigation") => Some(ROUTE),
         "toolbarPlacement" => Some(TOOLBAR),
         "autofocus" => Some(FOCUS),
