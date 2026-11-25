@@ -305,8 +305,10 @@ final class NativeEntry {
     #if os(iOS) || os(tvOS)
     /// A native screen's controller, a child of its route's while it lives.
     var screen: UIViewController?
-    /// What the view declares of its safe area, read as it mounts (LLP 1123 D15).
+    /// What the view declares of its safe area, read as it mounts (LLP 1123 D15), and the scroll
+    /// views it lends, which D14's writer writes.
     var safeArea: NativeSafeArea?
+    var lent: [LentScrollIOS] = []
     #endif
     var intrinsicSize: CGSize?
     var hasIntrinsicReport = false
