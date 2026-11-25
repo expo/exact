@@ -168,14 +168,14 @@ export const classifications = [
     ["painted:host/painted/src/presenter/field.rs", "Presenter::apply_field_edit Presenter::before_input Presenter::drain_field_select_tasks Presenter::field_select Presenter::set_range_text"],
     ["painted:host/painted/src/presenter/hatch.rs", "Presenter::hatch_act"],
     ["painted:host/painted/src/presenter/hosted.rs",
-      "Presenter::field_look Presenter::reader_field_action Presenter::reader_field_composing Presenter::reader_field_edited Presenter::reader_field_focused " +
+      "Presenter::field_inert Presenter::field_look Presenter::reader_field_action Presenter::reader_field_composing Presenter::reader_field_edited Presenter::reader_field_focused " +
       "Presenter::reader_field_input Presenter::reader_field_scrolled Presenter::reader_field_selected"],
     ["painted:host/painted/src/presenter/ime.rs", "Presenter::ime_begin Presenter::ime_commit Presenter::ime_end Presenter::ime_preedit Presenter::ime_target Presenter::ime_unconverted"],
     ["painted:host/painted/src/presenter/links.rs", "Presenter::follow Presenter::open_location"],
     ["painted:host/painted/src/presenter/picker.rs", "Presenter::open_document"],
     ["painted:host/painted/src/presenter/pan_release.rs", "Presenter::release_pan"],
     ["painted:host/painted/src/presenter/file_drop.rs",
-      "Presenter::chain_event Presenter::deliver_drop Presenter::drag_chain Presenter::drag_crossings Presenter::drag_dropped Presenter::drag_left " +
+      "Presenter::deliver_drop Presenter::drag_chain Presenter::drag_crossings Presenter::drag_dropped Presenter::drag_event Presenter::drag_left " +
       "Presenter::drag_over Presenter::drag_renewed Presenter::drop_landed Presenter::drop_owner Presenter::drop_released Presenter::dropped " +
       "Presenter::field_keeps Presenter::field_under"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::pointer_dispatch"],
