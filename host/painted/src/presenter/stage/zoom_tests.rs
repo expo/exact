@@ -679,3 +679,32 @@ fn a_cancelled_zoom_preview_plays_its_entrance_back_from_where_it_was() {
     after(&mut p, 400.0);
     assert!(p.stage.preview.is_none());
 }
+
+#[test]
+fn a_container_whose_route_paints_no_background_shows_the_ground_not_the_route_beneath() {
+    let source = ZOOM
+        .replace("inset=0 background-color=\"#225599\"", "inset=0")
+        .replace(
+            "background-color=\"#ffffff\"",
+            "background-color=\"#00ff00\"",
+        );
+    let mut p = phone_source(&source);
+    tap(&mut p, "card");
+    after(&mut p, 250.0);
+    let pose = poses(&p).1;
+    let middle = (
+        pose.dx + 206. * pose.scale,
+        pose.dy + pose.height.unwrap() * pose.scale / 2.,
+    );
+    let c = p
+        .frame()
+        .pixel(middle.0 as u32, middle.1 as u32)
+        .unwrap()
+        .demultiply();
+    let ground = crate::paint::look::role("Canvas", false);
+    assert_eq!(
+        [c.red(), c.green(), c.blue()],
+        [ground[0], ground[1], ground[2]],
+        "{pose:?}"
+    );
+}

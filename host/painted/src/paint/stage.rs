@@ -469,6 +469,11 @@ impl Painter {
             let height = cross.height.unwrap_or(size.1);
             let shape = Shape::new((0.0, 0.0, size.0, height), [cross.radius; 4]);
             self.backend.push_clip(&shape, posed);
+            // The shrinking page or growing container is a surface: where its
+            // route paints nothing, the page's ground shows, not the route
+            // beneath (Material's containerColor).
+            let ground = look::role("Canvas", self.dark);
+            self.backend.fill(&shape, ground, posed);
         }
         // Material fades the destination in over what it leaves: the route
         // over its source on the way in, the source over the route back.
