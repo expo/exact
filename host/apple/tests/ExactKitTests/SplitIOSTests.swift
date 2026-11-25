@@ -88,10 +88,10 @@ final class SplitIOSTests: XCTestCase {
         return rows.first { ($0["id"] as? NSNumber)?.uint32Value == id }?["inactive"] as? Bool == true
     }
 
-    func testAnExplicitIPadStackCanUseACustomPrimary() throws {
+    /// A stack whose root route asks splits on any device, its primary custom, with no list (LLP 1127 D1, D19).
+    func testAnExplicitStackCanUseACustomPrimary() throws {
         let session = try boot("SPLIT_CUSTOM", size: CGSize(width: 1100, height: 800), width: .regular)
         let nav = session.presenter.navigationHost
-        guard UIDevice.current.userInterfaceIdiom == .pad else { XCTAssertNil(nav.split); return }
         let columns = try split(session)
         XCTAssertNil(columns.listNode)
         try tap(session, "custom-open")

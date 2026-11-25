@@ -136,17 +136,27 @@ fn the_likely_guesses_are_refused_with_why_and_split_asks() {
         assert_eq!(error.id, "lower-attr-value", "{error}");
         assert!(error.message.contains(says), "{attribute}: {error}");
     }
-    // Each ask compiles: "split", a placeholder box, folded or not, and a computed value, read at run time.
-    for (route, inner) in [
-        ("navigationSplit=\"split\"", ""),
-        ("", "navigationSplit=\"placeholder\""),
-        ("", "navigationSplit=`placeholder`"),
-        ("navigationSplit=`${200 + 100}`", ""),
-        ("navigationSplit=(e.name == \"home\" ? \"300\" : \"\")", ""),
-        ("navigationSplit=(e.name == \"home\" ? \"auto\" : \"\")", ""),
-    ] {
-        contract::compile(&stack(route, inner)).unwrap();
-    }
+    // With no list, "split" and a placeholder box in the root route each ask; unsaid, nothing splits.
+    assert_eq!(asked("navigationSplit=\"split\"", ""), Some(true));
+    assert_eq!(asked("", "navigationSplit=\"placeholder\""), Some(true));
+    assert_eq!(asked("", "navigationSplit=`placeholder`"), Some(true));
+    assert_eq!(asked("navigationSplit=`${200 + 100}`", ""), Some(true));
+    // A computed value is read at run time: a word the hosts know asks, and any other says nothing.
+    assert_eq!(
+        asked(
+            "navigationSplit=(e.name == \"home\" ? \"300\" : \"none\")",
+            ""
+        ),
+        Some(true)
+    );
+    assert_eq!(
+        asked(
+            "navigationSplit=(e.name == \"home\" ? \"auto\" : \"none\")",
+            ""
+        ),
+        None
+    );
+    assert_eq!(asked("", ""), None);
 }
 
 #[test]
@@ -190,7 +200,47 @@ fn a_placeholder_a_components_typed_prop_names_is_the_placeholder() {
     // A literal a typed prop passes keeps its type's wrapper, and is still the literal it is (LLP 1127 D1): a placeholder,
     // and a `none` popover, which makes none.
     let source = "routes nav\n  home \"/\"\n    item \"/item\"\ncomponent App\n  view\n    main navigationKey=`${top(nav).id}` navigationBack=\"back\"\n      for e in stack(nav) key=e.id\n        column navigationKey=`${e.id}` testId=`route-${e.name}` position=\"absolute\" inset=0\n          text e.name\n          Pane(mode=\"placeholder\", layer=none)\ncomponent Pane\n  props\n    mode: enum<\"placeholder\", \"none\">\n    layer: option<string>\n  view\n    column navigationSplit=mode popover=layer\n      text \"Pick one\"\n";
-    contract::compile(source).unwrap();
+    let plan = contract::bake(contract::compile(source).unwrap(), boxed(NoData)).unwrap();
+    let r = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let k = r.kernel();
+    let home = k
+        .node_by_key(k.find_by_test_id("route-home")[0])
+        .unwrap()
+        .id;
+    assert_eq!(
+        r.stack_split(home, None).map(|split| split.asked),
+        Some(true)
+    );
+}
+
+/// Whether the stack of `stack(route, inner)` splits because its root route asks; `None` where it pushes.
+fn asked(route: &str, inner: &str) -> Option<bool> {
+    let plan = contract::bake(
+        contract::compile(&stack(route, inner)).unwrap(),
+        boxed(NoData),
+    )
+    .unwrap();
+    let r = Runner::boot(
+        plan,
+        boxed(NoData),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let k = r.kernel();
+    let home = k
+        .node_by_key(k.find_by_test_id("route-home")[0])
+        .unwrap()
+        .id;
+    r.stack_split(home, None).map(|split| split.asked)
 }
 
 #[test]

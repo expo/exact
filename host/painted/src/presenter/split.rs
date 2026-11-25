@@ -320,21 +320,8 @@ impl<D: DataSource> Presenter<D> {
                     base.is_some_and(|id| linked(id).is_some() || actions.contains_key(&id));
                 rule.current.filter(|_| detail.is_some() && !pushed)
             });
-        let placeholder = detail
-            .is_none()
-            .then(|| {
-                kernel
-                    .preorder_where(&[root], |_, p| {
-                        p.str(PropId::NavigationSplit) == Some("placeholder")
-                    })
-                    .into_iter()
-                    .find(|id| {
-                        kernel
-                            .node(*id)
-                            .is_some_and(|n| n.node_type == NodeType::View)
-                    })
-            })
-            .flatten();
+        // The runner's choice, the root route's own box, which asked for the split (LLP 1127 D1)
+        let placeholder = rule.placeholder.filter(|_| detail.is_none());
         let mut chevrons = BTreeSet::new();
         if let Some(list) = rule.list {
             for id in kernel.preorder_where(&[list], |_, p| {

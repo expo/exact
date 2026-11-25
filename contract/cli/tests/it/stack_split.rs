@@ -1,6 +1,7 @@
 //! LLP 1115.002 D4 (the rule is LLP 1116.004 D1.2's): a stack splits when a
 //! row of its root route's list pushes, read from the push and not from a
-//! chevron (`Runner::stack_split`). The Mac's split view reads it; the web's
+//! chevron, or when its root route asks (LLP 1127 D1), which the answer says
+//! (`Runner::stack_split`). The Mac's split view reads it; the web's
 //! projection reads the same plan facts and retained visit URLs.
 
 use crate::source::{boxed, NoData, Source};
@@ -368,6 +369,28 @@ fn navigation_split_on_the_root_route_opts_out_names_the_width_and_opts_in() {
     let text = "              for id in [\"a\", \"b\"] key=id\n                text id";
     let found = split(&boot(&app("navigationSplit=300", "", text))).unwrap();
     assert_eq!((found.list, found.width), (None, Some(300.0)));
+}
+
+#[test]
+fn the_answer_says_whether_the_root_route_asked() {
+    // LLP 1127 D1, D22: found by the rule, a stack is no ask; each host admits it by its own rule.
+    let found = split(&boot(&app("", "", LINKS))).unwrap();
+    assert!(!found.asked);
+    // "split" and a width ask, with the list the rule finds or with none.
+    let r = boot(&app("navigationSplit=\"split\"", "", LINKS));
+    let asked = split(&r).unwrap();
+    assert_eq!(
+        (asked.asked, asked.list, asked.width),
+        (true, Some(view(&r, "rows")), None)
+    );
+    let text = "              for id in [\"a\", \"b\"] key=id\n                text id";
+    let asked = split(&boot(&app("navigationSplit=\"split\"", "", text))).unwrap();
+    assert_eq!((asked.asked, asked.list), (true, None));
+    assert!(
+        split(&boot(&app("navigationSplit=280", "", LINKS)))
+            .unwrap()
+            .asked
+    );
 }
 
 #[test]

@@ -22,7 +22,7 @@ component App
   view
     main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
       for e in stack(nav) key=e.id
-        column navigationKey=`${e.id}` navigationPresentation=(e.name == "sheet" ? "modal" : "push") navigationSplit=(e.name == "home" ? "SPLIT" : "auto") position="absolute" inset=0 testId=`route-${e.name}`
+        column navigationKey=`${e.id}` navigationPresentation=(e.name == "sheet" ? "modal" : "push") navigationSplit=(e.name == "home" ? "SPLIT" : "") position="absolute" inset=0 testId=`route-${e.name}`
           if e.name == "home"
             list testId="rows"
               link href=path("item", "linked") height=48 testId="linked"
@@ -113,7 +113,7 @@ fn back_key(p: &mut Presenter<()>) {
 
 #[test]
 fn root_column_and_authored_placeholder() {
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     let home = id(&p, "route-home");
     assert_eq!(p.host.kernel().host_block(home), None);
     let rows = id(&p, "rows");
@@ -128,7 +128,7 @@ fn root_column_and_authored_placeholder() {
 
 #[test]
 fn action_rows_replace_the_detail_and_stay_live() {
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     tap(&mut p, "a");
     let a = id(&p, "a");
     let item = id(&p, "route-item");
@@ -153,7 +153,7 @@ fn action_rows_replace_the_detail_and_stay_live() {
 
 #[test]
 fn link_location_deeper_back_and_return_to_placeholder() {
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     tap(&mut p, "linked");
     assert_eq!(split(&p).row, Some(id(&p, "linked")));
     let base = id(&p, "route-item");
@@ -171,7 +171,7 @@ fn link_location_deeper_back_and_return_to_placeholder() {
 #[cfg(not(windows))]
 #[test]
 fn resize_releases_blocks_covers_lifts_and_placements() {
-    let mut p = boot(800., "auto");
+    let mut p = boot(800., "");
     assert!(state(&mut p).is_null());
     tap(&mut p, "a");
     let home = id(&p, "route-home");
@@ -199,7 +199,7 @@ fn resize_releases_blocks_covers_lifts_and_placements() {
 
 #[test]
 fn a_list_chevron_takes_no_room_beside_the_detail() {
-    let source = APP.replace("SPLIT", "auto").replace(
+    let source = APP.replace("SPLIT", "").replace(
         "text \"Linked\"",
         "text \"Linked\" flex=1 testId=\"linked-name\"",
     );
@@ -238,7 +238,7 @@ fn author_opt_out_width_and_minimum_detail() {
 #[test]
 fn a_detail_no_row_pushed_marks_the_row_the_app_says_is_current() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace(
             "button press=open(\"b\") height=48 testId=\"b\"",
             // A hidden copy of the row before it is no row of the list.
@@ -259,7 +259,7 @@ fn a_detail_no_row_pushed_marks_the_row_the_app_says_is_current() {
 
 #[test]
 fn modal_keeps_list_visible_inert_and_uses_window() {
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     tap(&mut p, "a");
     let detail = split(&p).detail;
     tap(&mut p, "sheet-item");
@@ -304,7 +304,7 @@ fn selected_fill_and_authored_background_win_over_default_paint() {
     for name in ["linked", "a"] {
         for authored in [false, true] {
             let source = APP
-                .replace("SPLIT", "auto")
+                .replace("SPLIT", "")
                 .replace(
                     "link href=",
                     if authored {
@@ -347,7 +347,7 @@ fn selected_fill_and_authored_background_win_over_default_paint() {
 
 #[test]
 fn native_button_face_omits_the_list_chevron() {
-    let source = APP.replace("SPLIT", "auto").replace(
+    let source = APP.replace("SPLIT", "").replace(
         "text \"Alpha\"",
         "text \"Alpha\"\n                image \"symbol:sf/chevron.right\" -exact-tint-color=\"#ff0000\" testId=\"native-chevron\"",
     );
@@ -378,7 +378,7 @@ fn native_button_face_omits_the_list_chevron() {
 #[test]
 fn pane_perspective_uses_the_navigation_roots_origin() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace("main navigationKey", "main perspective=500 navigationKey")
         .replace(
             "column navigationKey",
@@ -397,7 +397,7 @@ fn pane_perspective_uses_the_navigation_roots_origin() {
 #[test]
 fn list_scrollbar_uses_column_edge_and_detail_scroll_stays_in_pane() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace(
             "position=\"absolute\" inset=0",
             "position=\"absolute\" inset=0 overflow-y=\"auto\"",
@@ -444,7 +444,7 @@ fn list_scrollbar_uses_column_edge_and_detail_scroll_stays_in_pane() {
 
 #[test]
 fn runner_geometry_agent_tree_and_fields_use_the_placed_block() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("  state value", "  state bounds = []\n  state found = \"\"\n  action probe(x: number, y: number)\n    bounds = [frame(\"item\").x, frame(\"item\").y, frame(\"item\").width, frame(\"item\").height]\n    found = match elementFromPoint(x, y) { case some(id) => id, case none => \"none\" }\n  state value")
         .replace("column navigationKey", "column id=e.name navigationKey")
         .replace("input value=", "input id=\"editor\" value=");
@@ -499,7 +499,7 @@ fn runner_geometry_agent_tree_and_fields_use_the_placed_block() {
 
 #[test]
 fn placeholder_restyles_again_and_split_survives_desktop_overlays() {
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     p.serve_overlays();
     assert_eq!(p.after_commit(), None);
     assert_eq!(state(&mut p)["empty"], "placeholder");
@@ -533,7 +533,7 @@ fn the_columns_are_divided_in_the_separators_colour() {
     // The role table's own column here, the neutral one Windows and the
     // Linux desktop paint in the child.
     in_neutral_child();
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     let frame = p.frame();
     let x = (split(&p).pane().0 - DIVIDER) as u32;
     let line = crate::paint::look::role("-exact-separator", false);
@@ -554,7 +554,7 @@ fn the_columns_are_divided_in_the_separators_colour() {
 
 #[test]
 fn empty_pane_without_placeholder_has_platform_default() {
-    let source = APP.replace("SPLIT", "auto").replace("            box navigationSplit=\"placeholder\" testId=\"empty\"\n              text \"Choose an item\"\n", "");
+    let source = APP.replace("SPLIT", "").replace("            box navigationSplit=\"placeholder\" testId=\"empty\"\n              text \"Choose an item\"\n", "");
     let mut p = boot_source(1200., &source);
     assert_eq!(
         state(&mut p)["empty"],
@@ -679,7 +679,7 @@ component App
 #[test]
 fn replacing_from_inside_detail_drops_the_action_row_association() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace("button press=deeper", "button press=open(\"elsewhere\")");
     let mut p = boot_source(1200., &source);
     tap(&mut p, "a");
@@ -691,7 +691,7 @@ fn replacing_from_inside_detail_drops_the_action_row_association() {
 
 #[test]
 fn a_shell_bar_room_takes_back_the_split() {
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     tap(&mut p, "a");
     let item = id(&p, "route-item");
     p.host.set_bar_room(Some((60., 0., 0.))).unwrap();
@@ -768,7 +768,7 @@ fn a_covered_split_clears_only_the_cutout_on_each_panes_outer_edge() {
 
 #[test]
 fn split_cover_and_content_stay_stable_across_sync_and_resize() {
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     let home = id(&p, "route-home");
     for width in [1200., 1400., 1000.] {
         assert_eq!(p.resize(width, 800.), None);

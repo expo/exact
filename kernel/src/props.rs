@@ -11,7 +11,8 @@ use smol_str::SmolStr;
 /// The list column's width a `navigationSplit` value names, in px: a whole
 /// number from 1 to 999999, digits with no leading zero, and nothing else (LLP
 /// 1127 D1), whose values every float type holds exactly; any other word names
-/// no width. The compiler judges a written width by it.
+/// no width. The compiler judges a written width by it, and the runner reads
+/// one by it.
 pub fn split_width(said: &str) -> Option<f32> {
     let width = (1..=6).contains(&said.len())
         && !said.starts_with('0')

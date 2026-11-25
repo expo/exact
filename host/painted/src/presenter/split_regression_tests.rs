@@ -15,7 +15,7 @@ pub(super) fn act(p: &mut Presenter<()>, name: &str, args: Vec<Value>) {
 #[test]
 fn split_refuses_a_content_box_percentage_width_once() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace("position=\"absolute\" inset=0", "width=\"100%\" height=800");
     let mut p = boot_source(1200., &source);
     let home = id(&p, "route-home");
@@ -37,7 +37,7 @@ fn split_refuses_a_content_box_percentage_width_once() {
 
 #[test]
 fn split_parent_scroll_moves_runner_frames_and_point_reads_with_paint() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("main navigationKey", "main overflow=\"auto\" testId=\"parent\" navigationKey")
         .replace("  state value", "  state bounds = []\n  state found = \"\"\n  action probe(x: number, y: number)\n    bounds = [frame(\"editor\").x, frame(\"editor\").y]\n    found = match elementFromPoint(x, y) { case some(id) => id, case none => \"none\" }\n  state value")
         .replace("input value=", "input id=\"editor\" value=") + "      box position=\"absolute\" top=1200 width=1 height=1\n";
@@ -74,7 +74,7 @@ fn split_parent_scroll_moves_runner_frames_and_point_reads_with_paint() {
 
 #[test]
 fn split_parent_scroll_moves_a_detail_lists_reorder_clip() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("main navigationKey", "main overflow=\"auto\" testId=\"parent\" navigationKey")
         .replace(
             "            input value=value change=change testId=`field-${e.name}`",
@@ -113,7 +113,7 @@ fn split_fullscreen_background_keeps_both_panes_visible_and_inert() {
     ] {
         let mut p = boot_source(
             1200.,
-            &APP.replace("SPLIT", "auto")
+            &APP.replace("SPLIT", "")
                 .replace("\"modal\"", &format!("\"{presentation}\""))
                 .replace(
                     "position=\"absolute\"",
@@ -140,7 +140,7 @@ fn split_fullscreen_background_keeps_both_panes_visible_and_inert() {
 
 #[test]
 fn split_scroller_accessibility_stops_at_the_list_column() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("position=\"absolute\" inset=0", "position=\"absolute\" inset=0 overflow=\"auto\"")
         .replace("            box navigationSplit", "            box width=1000 height=1200 flex-shrink=0 aria-label=\"overflow\" role=\"region\"\n            box navigationSplit");
     let mut p = boot_source(1200., &source);
@@ -155,7 +155,7 @@ fn split_scroller_accessibility_stops_at_the_list_column() {
 
 #[test]
 fn split_detail_text_damages_only_the_pane() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("position=\"absolute\" inset=0", "position=\"absolute\" inset=0 overflow-y=\"auto\"")
         .replace("list testId=", "list min-height=1200 flex-shrink=0 testId=")
         .replace(
@@ -199,7 +199,7 @@ fn split_detail_text_damages_only_the_pane() {
 #[test]
 fn split_detail_text_damage_includes_resized_and_removed_scrollbars() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace(
             "position=\"absolute\" inset=0",
             "position=\"absolute\" inset=0 overflow-y=\"auto\"",
@@ -260,7 +260,7 @@ fn split_detail_text_damage_includes_resized_and_removed_scrollbars() {
 #[test]
 fn split_scrollbar_policy_and_hover_changes_repaint_both_panes() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace(
             "position=\"absolute\" inset=0",
             "position=\"absolute\" inset=0 overflow-y=\"auto\"",
@@ -311,7 +311,7 @@ fn split_scrollbar_policy_and_hover_changes_repaint_both_panes() {
 #[test]
 fn text_in_a_sheet_stack_repaints_the_whole_frame_with_a_split_active() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace(
             "    sheet \"/sheet\"",
             "    sheet \"/sheet\"\n      sheetDetail \"/sheet/detail\"",
@@ -405,7 +405,7 @@ fn split_detail_labels_inline_and_overflowing_text_repaint_whole() {
         "text width=250 height=40\n              text \"Value: \"\n              text value font-weight=700",
         "text value width=40 height=20 white-space=\"nowrap\"",
     ] {
-        let source = APP.replace("SPLIT", "auto").replace(
+        let source = APP.replace("SPLIT", "").replace(
             "            input value=value change=change",
             &format!("            {label}"),
         );
@@ -424,7 +424,7 @@ fn split_detail_labels_inline_and_overflowing_text_repaint_whole() {
 
 #[test]
 fn split_back_comes_from_its_own_navigation_ancestor() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("  view\n    main", "  view\n    column navigationBack=\"other-back\"\n      text \"Other navigator\"\n    main")
         .replace("            header", "            button id=\"other-back\" press=back testId=\"wrong-back\"\n              text \"Other Back\"\n            header");
     let source = source
@@ -464,7 +464,7 @@ fn split_recycled_action_row_forgets_the_previous_selection() {
         .map(|n| format!("\"{n}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    let mut source = APP.replace("SPLIT", "auto").replace(
+    let mut source = APP.replace("SPLIT", "").replace(
         "  state value",
         &format!("  state items = [{items}]\n  state value"),
     );
@@ -497,7 +497,7 @@ fn split_row_recycled_by_its_own_press_is_not_selected() {
     // The runner recycles rows as they scroll, so a press whose commits
     // recycle its own row is staged: the press is captured, its row renewed,
     // then the route it pushed is associated.
-    let mut p = boot(1200., "auto");
+    let mut p = boot(1200., "");
     let row = id(&p, "a");
     let press = p.capture_split_row(row);
     assert!(press.is_some());
@@ -515,7 +515,7 @@ fn split_row_recycled_by_its_own_press_is_not_selected() {
 
 #[test]
 fn split_detail_menu_and_alert_anchor_and_block_underlying_presses() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("  state value", "  state presses = 0\n  action poke\n    presses = presses + 1\n  action ask\n    showModal(\"confirm\")\n  state value")
         .replace("            input value=value change=change", "            button popovertarget=\"menu\" testId=\"menu-open\" width=80 height=40\n              text \"Menu\"\n            button press=ask testId=\"ask\" width=80 height=40\n              text \"Ask\"\n            button press=poke testId=\"poke\" width=80 height=40\n              text \"Poke\"\n            input value=value change=change") + r#"      column id="menu" popover="auto" role="menu"
         button press=poke popovertarget="menu" popovertargetaction="hide"
@@ -567,7 +567,7 @@ fn split_detail_menu_and_alert_anchor_and_block_underlying_presses() {
 
 #[test]
 fn split_list_padding_stays_inside_the_column() {
-    let source = APP.replace("SPLIT", "auto").replace(
+    let source = APP.replace("SPLIT", "").replace(
         "testId=`route-${e.name}`",
         "testId=`route-${e.name}` padding=16 border-width=2 border-style=\"solid\"",
     );
@@ -585,7 +585,7 @@ fn split_list_padding_stays_inside_the_column() {
 #[test]
 fn split_base_outlives_its_row() {
     let source = APP
-        .replace("SPLIT", "auto")
+        .replace("SPLIT", "")
         .replace(
             "  state value",
             "  state showB = true\n  action hideB\n    showB = false\n  state value",
@@ -621,7 +621,7 @@ fn split_base_outlives_its_row() {
 
 #[test]
 fn split_column_bounds_runner_hits_and_observations_without_rescaling_frames() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("  state value", r#"  state bounds = []
   state found = ""
   action probe(x: number, y: number)
@@ -714,14 +714,19 @@ fn split_retains_an_empty_list_across_its_remount() {
 "#,
         &source[end..]
     );
-    for width in ["auto", "280"] {
+    for width in ["", "280"] {
+        // Unsaid, only the rule's list splits the stack: a placeholder box would ask for the split (LLP 1127 D1)
+        let source = match width {
+            "" => source.replace("box navigationSplit=\"placeholder\"", "box"),
+            _ => source.clone(),
+        };
         let mut p = boot_source(1200., &source.replace("SPLIT", width));
         let old_list = id(&p, "rows");
         act(&mut p, "empty", vec![]);
         assert_eq!(split(&p).list, Some(old_list));
         act(&mut p, "show", vec![Value::Bool(false)]);
         assert!(p.host.kernel().node(old_list).is_none());
-        if width == "auto" {
+        if width.is_empty() {
             assert!(state(&mut p).is_null());
         } else {
             assert_eq!(split(&p).list, None, "another empty list inherits no split");
@@ -731,7 +736,7 @@ fn split_retains_an_empty_list_across_its_remount() {
         assert_ne!(old_list, new_list);
         assert_eq!(
             state(&mut p)["listWidth"],
-            if width == "auto" { 320. } else { 280. }
+            if width.is_empty() { 320. } else { 280. }
         );
         assert_eq!(split(&p).list, Some(new_list));
     }
@@ -739,7 +744,7 @@ fn split_retains_an_empty_list_across_its_remount() {
 
 #[test]
 fn a_scrollable_split_list_reports_enter_and_leave_across_the_threshold() {
-    let source = APP.replace("SPLIT", "auto")
+    let source = APP.replace("SPLIT", "")
         .replace("position=\"absolute\" inset=0", "position=\"absolute\" inset=0 overflow-y=\"auto\"")
         .replace("  state value", r#"  state inside = false
   state ratio = 0
@@ -788,7 +793,7 @@ style Slides
   ::view-transition-old
     animation="leave 400ms linear both"
 component App"#;
-    APP.replace("SPLIT", "auto")
+    APP.replace("SPLIT", "")
         .replace("component App", motion)
         .replace(
             "testId=`route-${e.name}`",
