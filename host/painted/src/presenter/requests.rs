@@ -592,7 +592,10 @@ impl<D: DataSource> Presenter<D> {
         fn names(v: &[String]) -> Vec<&str> {
             v.iter().map(String::as_str).collect()
         }
-        (self.host.runner_mut()).bind_extensions(&names(&real), &names(&under));
+        let driven = self.agent || std::env::var("EXACT_AGENT").as_deref() == Ok("1");
+        let runner = self.host.runner_mut();
+        runner.set_module_drive(driven);
+        runner.bind_extensions(&names(&real), &names(&under));
         self.requests.bound = Some((real, under));
     }
 

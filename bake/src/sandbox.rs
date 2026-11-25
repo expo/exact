@@ -114,6 +114,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn desktop_accessibility_requires_an_unsandboxed_build_only_on_macos() {
+        let mut c = compat("device.accessibility");
+        derive(Path::new("."), "windows", None, &mut c);
+        assert!(c.reach.is_null());
+        derive(Path::new("."), "macos", None, &mut c);
+        assert!(c.reach["sandboxRefusals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason.as_str().unwrap().contains("unsandboxed macOS app")));
+    }
+
     fn bake(grants: &str, source: &str, manifest: &str) -> Value {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static NEXT: AtomicUsize = AtomicUsize::new(0);

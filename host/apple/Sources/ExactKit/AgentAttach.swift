@@ -53,6 +53,10 @@ public enum AgentAttach {
 
     /// A connection ended: its indicator, approval and grants go with it. Main thread.
     static func ended(_ connection: AttachConnection) {
+        if connection.reads, let session = connection.surface?.session,
+           current === connection || current?.reads != true || current?.surface?.session !== session {
+            session.runtime.scriptDesktopAccessibility(false)
+        }
         connection.reads = false
         connection.input = false
         connection.cancelCalls()
@@ -440,6 +444,7 @@ final class AttachConnection {
         }
         guard inTime else { retire("not approved in the app within \(Int(AgentAttach.approvalTimeout)) s"); return }
         reads = true
+        session.runtime.scriptDesktopAccessibility(true)
         surface.showAttached()
         let info = ExactEnv.appMetadata
         var reply: [String: Any] = ["attached": true, "pid": Int(getpid()), "session": session.label, "window": surface.title,

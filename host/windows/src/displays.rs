@@ -405,6 +405,12 @@ pub(crate) fn screens(
     Screens { screens, current }
 }
 
+/// ScreenToDIPPoint divides once to preserve pixel boundaries on displays
+/// beside the primary. A hit test uses the same rounding as the pointer.
+pub(crate) fn screen_coordinate(origin: f64, scale: f64, at: i32, first: i32) -> f64 {
+    (origin * scale + (f64::from(at) - f64::from(first))) / scale
+}
+
 /// `PointerPosition` for a pointer at the physical position `at`, on the
 /// monitor `on`.
 pub(crate) fn pointer(
@@ -416,13 +422,10 @@ pub(crate) fn pointer(
 ) -> Option<Pointer> {
     let holder = monitors.get(on)?;
     let placed = layout(monitors);
-    // `ScreenToDIPPoint`: from the holder's physical origin to its laid-out one,
-    // divided once, so a point beside the origin is as near as `at / scale`
-    // (-3 px at 125 % is -2.4, not -2048 + 2045.6).
     let scale = f64::from(holder.scale);
     let origin = placed[on].0;
     let from = |axis: usize| {
-        (f64::from(origin[axis]) * scale + f64::from(at[axis] - holder.rect[axis])) / scale
+        screen_coordinate(f64::from(origin[axis]), scale, at[axis], holder.rect[axis])
     };
     let picks = [current_of(monitors, current), on];
     let (screens, [current, on]) = arrange(monitors, &placed, client, picks);

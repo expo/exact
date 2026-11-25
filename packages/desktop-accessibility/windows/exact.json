@@ -1,0 +1,20 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/desktop-accessibility@^1.0",
+  "platform": "windows",
+  "targets": [
+    "windows"
+  ],
+  "shapes": {},
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": {
+    "rust": [
+      "lib.rs"
+    ]
+  },
+  "artifacts": [],
+  "class": "DesktopAccessibility"
+}

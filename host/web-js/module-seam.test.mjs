@@ -830,6 +830,27 @@ test('an input-gated read requires the calling source’s grant in a mixed app',
   } finally { await browser.close(); server.stop(true); }
 });
 
+test('a web implementation cannot handle a desktop input-or-device-event read', async () => {
+  const server = moduleServer(), browser = await suiteBrowser();
+  try {
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const errors = await page.evaluate(async () => {
+      const { clock, Origin } = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      const row = ['guide.hit', true, { origin: 'input-or-device-event', implementation: true }, 's'];
+      modules({ hit: row }, { guide: async () => { throw new Error('desktop read forwarded'); } });
+      const errors = [];
+      for (const agent of [false, true]) {
+        clock.agent = agent;
+        errors.push((await Origin.callData({ extension: 'guide', send: 'hit', args: {} }, () => true, true)).error);
+      }
+      return errors;
+    });
+    expect(errors).toEqual(['NotSupportedError', 'NotSupportedError']);
+  } finally { await browser.close(); server.stop(true); }
+});
+
 test('the agent clock delivers a show posted by a click at the same instant', async () => {
   const server = moduleServer();
   let browser;

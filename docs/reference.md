@@ -5206,6 +5206,18 @@ asks, from a press. [Recipe](recipes/displays.md).
 | Windows | `EnumDisplayMonitors` and `GetMonitorInfoW` (`rcMonitor`, `rcWork` for the work area), each scale `GetDpiForMonitor`'s times the Text size setting, laid out into CSS pixels as Chromium lays monitors out, so the numbers are a page's in Chrome on the same machine; `label` (the EDID name, else empty) and `isInternal` from `QueryDisplayConfig` (an LVDS or DSI panel is internal here and not in Chrome); the pointer from `GetCursorPos`; `clientRect`, `clientX` and `clientY` from physical pixels over the window's own scale, which the Text size setting does not change. A run with no window (an agent's session) reports the buffer it paints as its one display, as the Linux host does |
 | iPadOS, Android | not built: `NotSupportedError` |
 
+### Name the control at a screen point (`@exact/desktop-accessibility`)
+
+With `device.accessibility`, `elementAtPoint({x, y})` returns the control’s
+ARIA role, accessible name, desktop frame and owning app. Use `screenX` and
+`screenY` from the pointer as `x` and `y`. Check `accessibilityStatus()`
+on macOS and call `requestAccessibility()` from a foreground button if it
+reports `prompt`. Windows
+reports `granted` without prompting. Start the lookup from a person’s input,
+a global shortcut or a device event handler. See the
+[package](../packages/desktop-accessibility/README.md) for trust, coordinates
+and supported hosts.
+
 ### Still desktop capture (`@exact/screen-capture`)
 
 `captureScreens({directory, type?, quality?, screen?, rect?, window?, cursor?})` defaults to a still of every

@@ -67,6 +67,11 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
   const here = sub => {
     if (!sub || typeof sub !== "object") return sub;
     const out = { ...sub };
+    // Only the native runner can attest to a delivered device event (LLP 1133.025 D1a).
+    if (out.origin === "input-or-device-event") {
+      out.implementationTargets = [];
+      out.unsupported = ["web"];
+    }
     if (out.permission && !onWeb(out.permission)) delete out.permission;
     if (Array.isArray(out.permissionList)) out.permissionList = out.permissionList.filter(onWeb);
     return out;

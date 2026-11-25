@@ -29,7 +29,7 @@
 //! are part of a commit's checkpoint, and an invocation is superseded only
 //! when the commit that let go of its work stands (`let_go`).
 
-use super::{CommitReceipt, DataSource, Event, Runner, RunnerError, Target};
+use super::{CommitReceipt, ControlValue, DataSource, Event, Runner, RunnerError, Target};
 use exact_plan::Value;
 use std::collections::BTreeMap;
 
@@ -130,6 +130,24 @@ impl PartialEq<CallOrigin> for Folded<'_> {
     }
 }
 
+// A join keeps the less privileged source of the two.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+enum DesktopHit {
+    None,
+    Fixture,
+    System,
+}
+
+impl DesktopHit {
+    fn started(driven: bool) -> Self {
+        if driven {
+            Self::Fixture
+        } else {
+            Self::System
+        }
+    }
+}
+
 /// Who caused a piece of work (LLP 1133.023 D7a): captured when it is
 /// scheduled and installed when it runs.
 ///
@@ -161,6 +179,8 @@ pub struct Cause {
     data: bool,
     /// Every contributor began at an activation-triggering input in the app.
     input: bool,
+    /// Each contributor began at input or at a delivered package event (LLP 1133.025 D1a).
+    desktop_hit: DesktopHit,
 }
 
 impl Cause {
@@ -261,8 +281,15 @@ impl Cause {
 
     /// A module event the host raised with `origin`, its word for who caused
     /// it: `app` only for an activation its platform callback reported.
-    pub(in crate::runner) const fn raised(origin: CallOrigin) -> Cause {
-        Cause::begin(origin, 0, false)
+    pub(in crate::runner) fn raised(origin: CallOrigin, desktop_hit: bool, driven: bool) -> Cause {
+        Cause {
+            desktop_hit: if desktop_hit {
+                DesktopHit::started(driven)
+            } else {
+                DesktopHit::None
+            },
+            ..Cause::begin(origin, 0, false)
+        }
     }
 
     const fn begin(origin: CallOrigin, id: u64, call: bool) -> Cause {
@@ -275,6 +302,7 @@ impl Cause {
             owner: id,
             data: false,
             input: false,
+            desktop_hit: DesktopHit::None,
         }
     }
 
@@ -303,9 +331,28 @@ impl Cause {
         self.input && self.only(CallOrigin::App)
     }
 
+    pub(in crate::runner) fn input_or_event_started(self) -> bool {
+        self.desktop_hit != DesktopHit::None
+            && ![CallOrigin::Tool, CallOrigin::Wake, CallOrigin::Action]
+                .iter()
+                .any(|&origin| self.causes.has(origin))
+    }
+
+    pub(in crate::runner) fn scripted_hit(self) -> bool {
+        self.desktop_hit == DesktopHit::Fixture
+    }
+
+    pub(in crate::runner) fn without_desktop_hit(self) -> Self {
+        Self {
+            desktop_hit: DesktopHit::None,
+            ..self
+        }
+    }
+
     pub(in crate::runner) fn ordinary_app(self) -> bool {
         Cause {
             input: false,
+            desktop_hit: DesktopHit::None,
             ..self
         } == Cause::person()
     }
@@ -313,6 +360,11 @@ impl Cause {
     pub(in crate::runner) fn with_input_from(self, ticket: Cause) -> Cause {
         Cause {
             input: ticket.input_started(),
+            desktop_hit: if ticket.input_or_event_started() {
+                ticket.desktop_hit
+            } else {
+                DesktopHit::None
+            },
             ..self
         }
     }
@@ -380,6 +432,7 @@ impl Cause {
 /// `then`'s, the app's included, so a missing one is no cause.
 #[derive(Default)]
 pub(in crate::runner) struct Origins {
+    pub(in crate::runner) module_drive: bool,
     /// The cause of the commit being made, or of the work running.
     current: Option<Cause>,
     /// Each request in flight's cause, by ticket.
@@ -451,6 +504,20 @@ pub(in crate::runner) const ORIGINS: [CallOrigin; 5] = [
 ];
 
 impl<D: DataSource> Runner<D> {
+    /// A drive takes its desktop accessibility hits from the scripted substitute (LLP 1133.025 D1a).
+    pub fn set_module_drive(&mut self, driven: bool) {
+        if self.origins.module_drive == driven {
+            return;
+        }
+        self.origins.module_drive = driven;
+        if let Some(status) = self.plan.modules.iter().find(|row| {
+            self.plan.str(row.package) == "@exact/desktop-accessibility"
+                && self.plan.str(row.declared) == "accessibilityStatus"
+        }) {
+            self.native_slot().changed(&self.module_key(status));
+        }
+    }
+
     /// [`Runner::act`] as a commit of `origin`: a tool invocation's door
     /// (LLP 1111) or a wake's (LLP 1114.001) runs its action through this.
     pub fn act_from(
@@ -476,11 +543,27 @@ impl<D: DataSource> Runner<D> {
     /// The host delivers `event`, the app's own commit: an activation
     /// triggering one starts the window [`Self::user_activation`] reads.
     pub(in crate::runner) fn note_input(&mut self, event: &Event) {
-        if self.cause().origin == CallOrigin::App && activates(event) {
-            if let Some(cause) = self.origins.current.as_mut() {
+        if self.cause().origin != CallOrigin::App {
+            return;
+        }
+        let activation = activates(event);
+        if activation {
+            self.origins.activated = Some(self.now_ms);
+        }
+        if let Some(cause) = self.origins.current.as_mut() {
+            if activation {
                 cause.input = !matches!(event, Event::Input(_) | Event::Change(_));
             }
-            self.origins.activated = Some(self.now_ms);
+            // Bare change strings also carry command replies. A range replacement is scripted.
+            let desktop_input = match event {
+                Event::Change(ControlValue::Text(_) | ControlValue::Replacement(..))
+                | Event::Input(ControlValue::Replacement(..)) => false,
+                Event::Pointerup(_) | Event::Pointerdown(_) => true,
+                _ => activation,
+            };
+            if desktop_input {
+                cause.desktop_hit = DesktopHit::started(self.origins.module_drive);
+            }
         }
     }
 
@@ -680,6 +763,7 @@ impl<D: DataSource> Runner<D> {
                 }
             }
             cause.input = false;
+            cause.desktop_hit = DesktopHit::None;
         }
         cause
     }
@@ -704,6 +788,7 @@ impl<D: DataSource> Runner<D> {
             background_action: a.background_action || b.background_action,
             data: a.data || b.data,
             input: a.input && b.input,
+            desktop_hit: a.desktop_hit.min(b.desktop_hit),
             owner: if a.owner == b.owner { a.owner } else { 0 },
             ..least
         }

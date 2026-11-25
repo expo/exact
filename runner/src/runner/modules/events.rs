@@ -79,13 +79,16 @@ impl<D: DataSource> Runner<D> {
         }
         // An activation is the host's to raise: a package's own raising of
         // one has the device's origin, the least privileged.
-        let origin = match (self.plan.str(declared.raised), origin) {
-            ("activation", origin) => origin,
-            _ => CallOrigin::Device,
+        let activation = self.plan.str(declared.raised) == "activation";
+        let desktop_hit = origin == CallOrigin::Device || (activation && origin == CallOrigin::App);
+        let origin = if activation {
+            origin
+        } else {
+            CallOrigin::Device
         };
         // Each event's own bound: past it, its own oldest is dropped.
         let hold = declared.hold.max(1) as usize;
-        let raised = Cause::raised(origin);
+        let raised = Cause::raised(origin, desktop_hit, self.origins.module_drive);
         let cause = registered_by
             .filter(|c| c.hidden_show_reason().is_some())
             .map_or(raised, |c| self.join_causes(raised, c));

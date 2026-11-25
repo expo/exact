@@ -67,6 +67,7 @@ pub struct Bridge<D: DataSource> {
     binding_target: Option<(usize, usize)>,
     /// The extensions the app's module binds (`bind_extensions`), as given.
     bound: Option<String>,
+    module_drive: bool,
     /// The pan contact's velocity samples (LLP 1057 §10.6; `crate::pan_velocity`).
     pub(crate) pan: crate::pan_velocity::PanVelocity,
     /// Canvas draws in a turn of their own (LLP 1072 §8.5), in each host booted.
@@ -131,6 +132,7 @@ impl<D: DataSource> Bridge<D> {
             binding_observer: None,
             binding_target: None,
             bound: None,
+            module_drive: false,
             pan: crate::pan_velocity::PanVelocity::new(),
             canvas_deferred: false,
             preferences: exact_runner::Preferences::NONE,

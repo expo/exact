@@ -395,6 +395,17 @@ impl<D: DataSource> Bridge<D> {
     /// <name>` for one bound under the agent.
     pub fn bind_extensions(&mut self, len: usize) {
         let text = std::str::from_utf8(&self.input[..len.min(self.input.len())]).unwrap_or("");
+        // This binding selects only the W3 fixture. An attach never rebinds another package.
+        if matches!(
+            text,
+            "script @exact/desktop-accessibility" | "unscript @exact/desktop-accessibility"
+        ) {
+            self.module_drive = text.starts_with("script ");
+            if let Some(h) = self.host.as_mut() {
+                h.runner_mut().set_module_drive(self.module_drive);
+            }
+            return;
+        }
         let text = text.to_owned();
         if self.watches_view_bindings() && !text.starts_with("view-bindings ") {
             self.clear_view_bindings();
@@ -407,6 +418,9 @@ impl<D: DataSource> Bridge<D> {
     /// (`commit_plan`), since the app's module, made once a session, does not
     /// bind them again.
     pub(super) fn rebind(&mut self) {
+        if let Some(h) = self.host.as_mut() {
+            h.runner_mut().set_module_drive(self.module_drive);
+        }
         let Some(text) = self.bound.as_deref() else {
             return;
         };

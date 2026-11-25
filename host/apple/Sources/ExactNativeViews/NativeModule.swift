@@ -715,6 +715,7 @@ final class NativeViews: NativeModuleHosting {
                 (row["trackProps"] as? [String] ?? []).map { "\(tag).\($0)" }
             }.sorted()
             let header = table.bindings == nil || props.isEmpty ? [] : ["view-bindings " + props.joined(separator: " ")]
+            if ExactEnv.agentCarried { session.runtime.scriptDesktopAccessibility(true) }
             session.runtime.bindExtensions(header + real + agent.map { "agent " + $0 })
         }
     }

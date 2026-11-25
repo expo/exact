@@ -2580,6 +2580,15 @@ can capture one window, one display or a display-local region and include
 the cursor. The capture package identifies the frontmost window and the
 window at a screen point under the existing recording grant (LLP 1178 D3).
 
+**Name the control at a screen point (W3, LLP 1133.025 D1a, #1584).** A guide
+recorder can read one control’s role, accessible name, frame and owning app
+under its own grant. macOS has an Accessibility trust status and request pair.
+Windows uses UI Automation without a prompt. The control’s value, a chain of
+parent names, actions and tree traversal remain deferred. W1 supplies the
+window handle through the capture package.
+Take: none proposed. Charlie directed the team on 2026-11-24 to “ask panel
+about questions then follow recs of panel.” The panel admitted this read 3–1.
+
 **Expanded (Charlie, 2026-11-24, "recs ok").** Float may read its own window's
 `screenX`, `screenY`, `outerWidth` and `outerHeight` on macOS and the web,
 and dock, expand and constrain it on macOS with `setBounds(bounds, animate)`

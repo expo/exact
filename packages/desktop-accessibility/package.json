@@ -1,0 +1,11 @@
+{
+  "name": "@exact/desktop-accessibility",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Name the accessible control at a desktop screen point (LLP 1133.025 D1a).",
+  "exports": {
+    ".": "./exact.json",
+    "./apple": "./apple/exact.json",
+    "./windows": "./windows/exact.json"
+  }
+}

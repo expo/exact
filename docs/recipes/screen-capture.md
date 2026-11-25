@@ -31,6 +31,10 @@ windows. A covered window yields its own pixels. The default cursor is
 A display region starts at its top left. Subtract the display's `left`
 and `top` from a pointer position to place a region there.
 
+For a control’s name and frame, call `elementAtPoint({x, y})` from a press,
+shortcut or device event with `device.accessibility`. See the
+[desktop accessibility package](../../packages/desktop-accessibility/README.md).
+
 For a freeze overlay, set the hidden window's frame and call
 `captureScreens({ directory })` before showing it. Each entry gives
 `{path, width, height, type, screen}`, ordered by display left then top.

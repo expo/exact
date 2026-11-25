@@ -21,6 +21,7 @@
         "@exact/child-process": "workspace:*",
         "@exact/compose": "workspace:*",
         "@exact/contacts": "workspace:*",
+        "@exact/desktop-accessibility": "workspace:*",
         "@exact/device": "workspace:*",
         "@exact/face-detection": "workspace:*",
         "@exact/gamepad": "workspace:*",
@@ -153,6 +154,10 @@
     "packages/convex": {
       "name": "@exact/convex",
       "version": "0.1.0",
+    },
+    "packages/desktop-accessibility": {
+      "name": "@exact/desktop-accessibility",
+      "version": "1.0.0",
     },
     "packages/device": {
       "name": "@exact/device",
@@ -394,6 +399,8 @@
     "@exact/contacts": ["@exact/contacts@workspace:packages/contacts"],
 
     "@exact/convex": ["@exact/convex@workspace:packages/convex"],
+
+    "@exact/desktop-accessibility": ["@exact/desktop-accessibility@workspace:packages/desktop-accessibility"],
 
     "@exact/device": ["@exact/device@workspace:packages/device"],
 

@@ -562,6 +562,7 @@ export const classifications = [
     ["runner:runner/src/runner/device_links.rs", "Runner::device_links Runner::set_device_links"],
     ["runner:runner/src/runner/module_seam/forward.rs", "Runner::extension_agent Runner::extensions_json"],
     ["runner:runner/src/runner/module_seam/forward.rs", "Runner::bind_extensions"],
+    ["runner:runner/src/runner/provenance.rs", "Runner::set_module_drive"],
     ["runner:runner/src/runner/module_seam/forward.rs", "Runner::admit_picture Runner::check_picture Runner::picture_schemes Runner::set_module_target"],
     ["runner:runner/src/runner/module_seam/forward.rs", "Runner::polls_asking"],
     ["runner:runner/src/runner/module_seam/forward.rs", "Runner::report_views Runner::observe_view_bindings"],

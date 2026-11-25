@@ -547,6 +547,16 @@ pub const DEVICES: &[Device] = &[
         tvos: false,
         ..ROW
     },
+    // @ref LLP 1133.025 D1a — one system accessibility hit.
+    Device {
+        name: "accessibility",
+        sandbox: Some(Sandbox::Refused(
+            "cross-app accessibility requires an unsandboxed macOS app",
+        )),
+        purpose: false,
+        tvos: false,
+        ..ROW
+    },
     // @ref LLP 1178 D4 — the displays and the pointer. Only the web asks:
     // the browser's own prompt, which shows no purpose, behind the
     // `window-management` policy feature. Natively nothing asks, and the line

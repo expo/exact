@@ -1,0 +1,43 @@
+{
+  "kind": "interface",
+  "name": "@exact/desktop-accessibility",
+  "version": "1.0.0",
+  "grants": ["device.accessibility"],
+  "permission": {
+    "name": "accessibility", "initial": "granted", "targets": ["macos"], "status": "accessibilityStatus", "field": "state",
+    "denied": "NotAllowedError", "whilePrompt": {"error": "NotAllowedError", "message": "requestAccessibility first"}
+  },
+  "shapes": {
+    "AccessibleApp": {"name": "string", "bundleId": "option<string>", "processName": "option<string>", "pid": "number"},
+    "AccessibleElement": {"role": "string", "name": "string", "frame": "DOMRect", "app": "AccessibleApp"},
+    "AccessibilityStatus": {"available": "bool", "state": "enum<granted|prompt|denied>"}
+  },
+  "names": [
+    {
+      "send": "elementAtPoint", "origin": "input-or-device-event", "grants": ["device.accessibility"],
+      "options": {"x": "number", "y": "number"}, "answers": "AccessibleElement",
+      "substitute": {
+        "from": "elementAtPoint",
+        "default": {"role": "button", "name": "Share", "frame": {"x": 0, "y": 0, "width": 32, "height": 32},
+                    "app": {"name": "Agent", "pid": 1}},
+        "unsupported": ["ios", "android", "tvos", "watchos", "visionos", "terminal", "linux", "web"]
+      }
+    },
+    {
+      "source": "accessibilityStatus", "live": true, "answers": "AccessibilityStatus",
+      "substitute": {
+        "default": {"available": false, "state": "denied"},
+        "targets": {
+          "macos": {"available": true, "state": "granted"},
+          "windows": {"available": true, "state": "granted"}
+        }
+      }
+    },
+    {
+      "send": "requestAccessibility", "origin": "app", "foreground": true, "request": true,
+      "grants": ["device.accessibility"], "answers": "AccessibilityStatus",
+      "substitute": {"answers": "accessibilityStatus", "deniedAnswers": true,
+        "unsupported": ["ios", "android", "tvos", "watchos", "visionos", "terminal", "linux", "web"]}
+    }
+  ]
+}

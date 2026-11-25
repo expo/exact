@@ -293,7 +293,7 @@ impl<D: DataSource> Runner<D> {
             Some((super::super::samples::Reader::Resource(i), _)) => self.resource_site(*i),
             _ => self.plan.resources.len(),
         };
-        let by = by.unowned();
+        let by = by.unowned().without_desktop_hit();
         let sites = &mut self.extensions.declared.shortcut_sites;
         if sites.is_empty() {
             sites.resize_with(self.plan.resources.len() + 1, || None);

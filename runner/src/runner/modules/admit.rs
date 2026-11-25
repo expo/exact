@@ -104,7 +104,10 @@ impl<D: DataSource> Runner<D> {
     /// What answers `row` now (module doc).
     pub(in crate::runner) fn route(&self, row: &ModulesRow) -> Route {
         let extension = self.plan.str(row.extension);
-        if !self.implementation_here(row) {
+        if !self.implementation_here(row)
+            || (self.origins.module_drive
+                && self.plan.str(row.package) == "@exact/desktop-accessibility")
+        {
             return Route::Substitute;
         }
         if self.extensions.bound.contains(extension) && !self.kept_by_runner(row) {
@@ -181,7 +184,15 @@ impl<D: DataSource> Runner<D> {
         if self.route(row) != Route::Substitute && self.substitute(row)["shortcut"] == "register" {
             self.note_shortcut_site(row, args, cause);
         }
-        let decision = match self.route(row) {
+        // An attached driver's delayed send keeps its fixture after the driver disconnects.
+        let route = if cause.scripted_hit()
+            && self.plan.str(row.package) == "@exact/desktop-accessibility"
+        {
+            Route::Substitute
+        } else {
+            self.route(row)
+        };
+        let decision = match route {
             Route::Real => return Decision::Forward,
             // A target's own restriction holds under the agent too (D14 step 2).
             Route::Agent if self.unsupported_here(row) => {
@@ -234,7 +245,7 @@ impl<D: DataSource> Runner<D> {
             _ => true,
         };
         let decision = match decision {
-            Decision::Hold(Waits::Permission) if !asks => match self.route(row) {
+            Decision::Hold(Waits::Permission) if !asks => match route {
                 Route::Agent => Decision::Forward,
                 _ => Decision::Now(json!({ "error": "TypeError" })),
             },
@@ -474,7 +485,7 @@ impl<D: DataSource> Runner<D> {
         Some((name, held.cause))
     }
 
-    /// An input-gated read in a mixed app also requires the requesting source's grant.
+    /// A protected read in a mixed app also requires the requesting source's grant.
     pub(super) fn scoped_input_refusal(
         &self,
         row: &ModulesRow,
@@ -483,7 +494,12 @@ impl<D: DataSource> Runner<D> {
     ) -> Option<Json> {
         let scope = scope?;
         let sub = self.substitute(row);
-        if sub["origin"] != "input" || !cause.input_started() || self.page.hidden {
+        let protected = match sub["origin"].as_str() {
+            Some("input") => cause.input_started() && !self.page.hidden,
+            Some("input-or-device-event") => cause.input_or_event_started(),
+            _ => false,
+        };
+        if !protected {
             return None;
         }
         let names = sub["nameGrants"].as_array()?;
@@ -498,7 +514,11 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn admit(&self, row: &ModulesRow, args: &Json, cause: Cause) -> Result<(), String> {
         let origin = cause.origin();
         let sub = self.substitute(row);
-        if sub["origin"] == "input" && (!cause.input_started() || self.page.hidden) {
+        if (sub["origin"] == "input" && (!cause.input_started() || self.page.hidden))
+            || (sub["origin"] == "input-or-device-event"
+                && !self.unsupported_here(row)
+                && !cause.input_or_event_started())
+        {
             return Err(format!("person-required ({} origin)", origin.word()));
         }
         let lines: Vec<&str> = (self.data.grants().lines())

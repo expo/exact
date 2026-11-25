@@ -46,6 +46,7 @@
     "@exact/sign-in": "workspace:*",
     "@exact/payments": "workspace:*",
     "@exact/contacts": "workspace:*",
+    "@exact/desktop-accessibility": "workspace:*",
     "@exact/calendar": "workspace:*",
     "@exact/background": "workspace:*",
     "@exact/quick-actions": "workspace:*",

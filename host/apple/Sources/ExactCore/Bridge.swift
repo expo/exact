@@ -1028,6 +1028,9 @@ package final class Runtime {
         guard let event = CoreExports.moduleEvent else { return Runtime.noFeedback }
         return on { read(event(rt, write(json))) }
     }
+    package func scriptDesktopAccessibility(_ driven: Bool) {
+        bindExtensions([driven ? "script @exact/desktop-accessibility" : "unscript @exact/desktop-accessibility"])
+    }
     package func bindExtensions(_ names: [String]) { on { exact_bind_extensions(rt, write(names.joined(separator: "\n"))) } }
     /// A package picture's admission (LLP 1133.019 D11 item 1): nil for a
     /// source of no package's scheme.

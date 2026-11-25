@@ -17,6 +17,7 @@ mod clicks;
 pub mod clipboard;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod desktop;
+pub mod desktop_accessibility;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod displays;
 #[cfg(windows)]
