@@ -3220,6 +3220,12 @@ as does a visible background supplied by a native hatch.
 To keep foreground controls below it, use `top="var(--exact-safe-area-inset-top)"`
 or that value as padding on the hero's content. This reads the route's safe area,
 including its bar; `env(safe-area-inset-top)` stays 0 under `viewport-fit="auto"`.
+A box in a scroller that pads by that inset under a large title follows the bar as the
+title collapses, so its content moves twice as far as the finger. Give it
+`-exact-safe-area-track="observed-max"` to hold the largest band the route has had in its
+current bars, title mode, size class, orientation and window size; `exactGeometry` still
+reads the band as it is. Until hosts report the route's configuration (LLP 1123's
+activation) it reads the band as it is too.
 A route that does not scroll (a game's canvas at `inset=0`, `width="100%" height="100%"`) is
 likewise drawn from the screen's top edge, its bar items floating over it. On a pushed iOS
 route under the platform bar, the declared Back control's text becomes the bar's back button title

@@ -39,6 +39,10 @@ pub struct OwnerUpdate {
     /// Its view's map into its window (D6's `"window"` space), from the origin its block's space
     /// starts at; `None` out of a window or where its host reports none.
     pub window_map: Option<WindowMap>,
+    /// Its configuration's identity: its bars, title display mode, size classes, orientation and
+    /// window size, which the largest band an `observed-max` reader reads is kept for (D9);
+    /// `None` where its host reports none.
+    pub configuration: Option<u64>,
 }
 
 /// What an owner's host reports of its chrome (D6's `chrome`, D4, D15), which no layout reads:
@@ -105,6 +109,7 @@ impl Kernel {
         self.set_owner_chrome(view, update.chrome)?;
         let slot = self.arena.slot_of(view);
         self.set_window_map(slot, update.window_map);
+        owed |= slot.is_some_and(|s| self.track_band(Some(s), update.configuration));
         Ok(owed)
     }
 
@@ -208,7 +213,8 @@ impl OwnerUpdate {
     /// and rows (`u8` each) and the `cols × rows` rects, row-major; then each edge's bar region,
     /// top right bottom left, its distance and its two sides (`f32` each); then the chrome, its
     /// vertical bar edge's raw value (`u8`) and its sidebar's availability (a byte, 0 or 1), each
-    /// optional; then the window map after a presence byte, its six terms `f32` each.
+    /// optional; then the window map after a presence byte, its six terms `f32` each, and the
+    /// configuration's identity after one, a `u64`.
     pub fn encode(&self) -> Vec<u8> {
         let mut w = Writer::new();
         optional(&mut w, self.band.as_ref(), |w, b| floats(w, b));
@@ -245,6 +251,7 @@ impl OwnerUpdate {
             optional(w, c.sidebar_available.as_ref(), |w, a| w.u8(u8::from(*a)));
         });
         window_map_out(&mut w, self.window_map.as_ref());
+        optional(&mut w, self.configuration.as_ref(), |w, c| w.u64(*c));
         w.into_vec()
     }
 }
@@ -345,6 +352,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         false => None,
     };
     let window_map = window_map_in(r)?;
+    let configuration = configuration_in(r)?;
     Some(OwnerUpdate {
         band,
         contributions,
@@ -355,6 +363,7 @@ fn read(r: &mut Reader<'_>) -> Option<OwnerUpdate> {
         bar_regions,
         chrome,
         window_map,
+        configuration,
     })
 }
 
@@ -428,6 +437,14 @@ pub(super) fn window_map_in(r: &mut Reader<'_>) -> Option<Option<WindowMap>> {
     })
 }
 
+/// A configuration's identity after a presence byte, a `u64`.
+pub(super) fn configuration_in(r: &mut Reader<'_>) -> Option<Option<u64>> {
+    Some(match present(r)? {
+        true => Some(r.u64().ok()?),
+        false => None,
+    })
+}
+
 /// A presence byte: 0 or 1, else malformed.
 pub(super) fn present(r: &mut Reader<'_>) -> Option<bool> {
     match r.u8().ok()? {
@@ -462,7 +479,7 @@ fn target_in(r: &mut Reader<'_>) -> Option<NativeTarget> {
     })
 }
 
-fn optional<T>(w: &mut Writer, value: Option<&T>, each: impl FnOnce(&mut Writer, &T)) {
+pub(super) fn optional<T>(w: &mut Writer, value: Option<&T>, each: impl FnOnce(&mut Writer, &T)) {
     w.u8(u8::from(value.is_some()));
     if let Some(v) = value {
         each(w, v);

@@ -99,6 +99,12 @@ package struct OwnerUpdateIOS: Equatable {
     /// (D6's `"window"` space): UIKit's conversion of that origin and the points a point right of
     /// and below it, so a sheet UIKit scales back maps scaled; `nil` out of a window.
     package var windowMap: CGAffineTransform?
+    /// The owner's configuration's identity (D9, "Moving edges"): whether its navigation bar, toolbar
+    /// and tab bar are hidden, whether its title can show large, its size classes, its scene's
+    /// orientation and its window's size, which the largest band an `observed-max` reader settles
+    /// against is kept for; not a large title's collapse, which moves the band within one. `nil` out
+    /// of a window.
+    package var configuration: UInt64?
 
     /// What the owner's chrome is: its view's vertical bar edge, as the kernel's
     /// `VerticalBarEdge` takes it, `nil` before iOS 27.1; and whether the sidebar of the tab
@@ -194,7 +200,27 @@ package struct OwnerUpdateIOS: Equatable {
         let right = view.convert(CGPoint(x: origin.x + 1, y: origin.y), to: nil)
         let below = view.convert(CGPoint(x: origin.x, y: origin.y + 1), to: nil)
         update.windowMap = CGAffineTransform(a: right.x - at.x, b: right.y - at.y, c: below.x - at.x, d: below.y - at.y, tx: at.x, ty: at.y)
+        update.configuration = configuration(of: controller, view: view, tabs: tabs)
         return update
+    }
+
+    /// The identity of `controller`'s configuration in `view`'s window, from the values UIKit gives it.
+    private static func configuration(of controller: UIViewController, view: UIView, tabs: UITabBarController?) -> UInt64? {
+        guard let window = view.window else { return nil }
+        var hasher = Hasher()
+        let navigation = controller.navigationController
+        hasher.combine(navigation?.isNavigationBarHidden)
+        hasher.combine(navigation?.isToolbarHidden)
+        hasher.combine(navigation?.navigationBar.prefersLargeTitles)
+        hasher.combine(controller.navigationItem.largeTitleDisplayMode.rawValue)
+        hasher.combine(tabs?.tabBar.isHidden)
+        let traits = view.traitCollection
+        hasher.combine(traits.horizontalSizeClass.rawValue)
+        hasher.combine(traits.verticalSizeClass.rawValue)
+        hasher.combine(window.windowScene?.effectiveGeometry.interfaceOrientation.rawValue)
+        hasher.combine(window.bounds.width)
+        hasher.combine(window.bounds.height)
+        return UInt64(bitPattern: Int64(hasher.finalize()))
     }
 
     /// `view`'s bar layout regions, read after the ledger's writes, so each lies past the owner's own
@@ -241,7 +267,7 @@ package struct OwnerUpdateIOS: Equatable {
     /// x, y, width, height, and a docked byte. Each edge's bar
     /// region, top, right, bottom, left, follows the segments, and the chrome, its vertical bar
     /// edge and its sidebar's availability each optional, follows them, and then the window map, its
-    /// six terms in `CGAffineTransform`'s order.
+    /// six terms in `CGAffineTransform`'s order, and the configuration's identity (`u64`).
     package func encode() -> Data {
         var out = Data()
         func u8(_ v: UInt8) { out.append(v) }
@@ -298,6 +324,7 @@ package struct OwnerUpdateIOS: Equatable {
             optional(c.sidebarAvailable) { u8($0 ? 1 : 0) }
         }
         optional(windowMap) { m in [m.a, m.b, m.c, m.d, m.tx, m.ty].forEach(f32) }
+        optional(configuration, u64)
         return out
     }
 }
