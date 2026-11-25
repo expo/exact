@@ -104,8 +104,9 @@ test('native drives refuse a baked backend that the drive did not select', async
   const saved = { ...process.env };
   try {
     for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) delete process.env[key];
-    const literal = 'http://127.0.0.1:4400', other = 'http://127.0.0.1:4412';
+    const literal = 'http://127.0.0.1:4400', other = 'http://127.0.0.1:4412', hosts = ['macos', 'ios'], checks = {};
     write('app.ts', `// const origin = 'http://comment.invalid';\nexport const origin = \`${literal}/\` as const;\n`);
+    write('.exact/typescript-inputs.json', JSON.stringify({ modules: [['app.ts', resolve(dir, 'app.ts')]] }));
     const app = resolveApp(dir), paths = appleArtifacts(app), receipt = resolve(paths.products, 'receipt.json');
     const bundled = resolve(paths.bundle, 'Contents/Resources/receipt.json');
     const ios = resolve(appleArtifacts(app, { destination: 'ios-simulator' }).bundle, 'receipt.json');
@@ -119,29 +120,28 @@ test('native drives refuse a baked backend that the drive did not select', async
     };
     const check = () => {
       assert.deepEqual(receiptChanges(receipt, app), []);
-      for (const host of ['macos', 'ios']) {
+      for (const host of hosts) {
         const state = nativeBuild(host, app);
         assert.deepEqual(state.changed, []);
         assert.doesNotThrow(() => refuseBuild(host, state, app));
       }
     };
     record(literal); check();
-    const replaced = JSON.parse(readFileSync(bundled, 'utf8'));
-    replaced.build.backendOrigin = other;
-    writeFileSync(bundled, JSON.stringify(replaced));
+    const out = process.env.EXACT_BUILD_CHECK_OUT = resolve(dir, '.exact/check');
+    for (const host of hosts) { assert.equal(await buildFirst(host, app, { wait() {} }), 0); checks[host] = readFileSync(out, 'utf8'); }
+    delete process.env.EXACT_BUILD_CHECK_OUT;
+    const replaced = JSON.parse(readFileSync(bundled, 'utf8')); replaced.build.backendOrigin = other; writeFileSync(bundled, JSON.stringify(replaced));
     assert.deepEqual(nativeBuild('macos', app).changed, [bundled]);
     record(other);
-    for (const checked of [null, createHash('sha256').update(readFileSync(receipt)).digest('hex')]) {
-      assert.deepEqual(receiptChanges(receipt, app, { hashed: !!checked }), []);
-      for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app, { checked: checked && JSON.stringify({ receipt: checked, plan: null }) }), app), /baked backend.*4412.*app.ts origin.*4400/);
+    for (const host of hosts) {
+      assert.throws(() => refuseBuild(host, nativeBuild(host, app), app), /baked backend.*4412.*app.ts origin.*4400/);
+      const state = nativeBuild(host, app, { checked: checks[host] }); assert.equal(state.checked, true);
+      assert.throws(() => refuseBuild(host, state, app), /build is stale/);
     }
     const unexpected = () => assert.fail('a refused backend must neither build nor bake');
     await assert.rejects(buildFirst('macos', app, { wait: () => {}, build: unexpected, bake: unexpected }), /baked backend/);
     const { open } = await import('./agent.mjs');
-    for (const host of ['macos', 'ios']) {
-      await assert.rejects(open({ host, app: dir, plan: resolve(dir, 'replacement.plan'), onProcess: unexpected }), /baked backend/);
-    }
-    // --backend sets this variable; selecting another origin never authorizes the baked one.
+    for (const host of hosts) await assert.rejects(open({ host, app: dir, plan: resolve(dir, 'replacement.plan'), onProcess: unexpected }), /baked backend/);
     process.env.EXACT_BACKEND_ORIGIN = `${other}/`; check();
     process.env.EXACT_BACKEND_ORIGIN = literal;
     assert.throws(() => refuseBuild('macos', nativeBuild('macos', app), app), /baked backend.*EXACT_BACKEND_ORIGIN/);
@@ -165,7 +165,7 @@ test('native drives refuse a baked backend that the drive did not select', async
     write('app.ts', `// const origin = '${literal}';\nconst config = { origin: '${literal}' };\n`);
     check();
   } finally {
-    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'EXACT_BUILD_CHECK_OUT', 'PORT']) {
       if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
     }
     rmSync(dir, { recursive: true, force: true });

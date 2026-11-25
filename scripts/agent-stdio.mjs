@@ -109,7 +109,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
   const childEnv = { ...process.env, ...extra };
   const macBuild = !portable && !device && !process.env.EXACT_MAC_BIN ? nativeBuild('macos', a, { sample, checked: process.env.EXACT_BUILD_CHECKED, launch: childEnv }) : null;
   if (macBuild?.checked) {
-    plan = checkedLaunchPlan('macos', macBuild, a, extra.EXACT_PLAN ?? plan ?? childEnv.EXACT_PLAN);
+    plan = checkedLaunchPlan('macos', macBuild, a, extra.EXACT_PLAN || plan || childEnv.EXACT_PLAN);
   } else if (macBuild) {
     if (!macBuild.missing) refuseBackendOrigin(macBuild, a);
     const macPlan = !plan && !Object.hasOwn(extra, 'EXACT_PLAN') && !sample ? planOverride('macos', a, macBuild) : null;

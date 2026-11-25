@@ -188,7 +188,7 @@ export async function open({
   }
   // @ref LLP 1133.024 D9 — a cold share: the web's location, or the native host's claim before its boot.
   if (url?.startsWith('share:')) {
-    const target = appShareTarget(app),
+    const target = appShareTarget(app, checkedAppleRun(host, app, { device })?.app),
       share = driverShare(url, process.cwd());
     if (host === 'web') url = webShareLocation(target, share);
     else {

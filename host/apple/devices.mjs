@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { constants, homedir, networkInterfaces, tmpdir } from 'node:os';
 import { createServer as createTCPServer } from 'node:net';
 import { basename, dirname, resolve } from 'node:path';
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { decodePng, encodePng, pngDimensions } from '../../scripts/png.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -406,14 +406,21 @@ const recentSimulators = () => (chosenFrom && Date.now() - chosenFrom.at < 5000 
 /** `simulator`'s choice, booting nothing: what a drive locks before it launches (agent.mjs `resolveDevice`).
  * `cached` keeps that choice for the runner's later launches, including a test's reloads. */
 export function chooseSimulator(pick = process.env.EXACT_SIM, { tv = false, hint = 'EXACT_SIM=<udid|name>', app, dir, cached = false, rememberChoice = true } = {}) {
-  const key = pick => JSON.stringify([pick, tv, app, dir]);
+  pick ||= undefined;
+  if (dir) try { dir = realpathSync(dir); } catch { /* use the given directory if it does not exist yet */ }
   const used = dir ? resolve(dir, '.exact', tv ? 'simulator-tv' : 'simulator') : null;
+  const key = pick => JSON.stringify([pick, tv, app, used]);
   const lastUsed = () => { try { return used && readFileSync(used, 'utf8').trim(); } catch { return null; } };
   const remember = (dev, last) => {
-    if (rememberChoice && used && dev.udid !== last) try {
-      mkdirSync(dirname(used), { recursive: true });
-      writeFileSync(used, `${dev.udid}\n`);
-      if (pick) driveSimulators.delete(key(undefined));
+    if (rememberChoice && used) try {
+      if (dev.udid !== last) {
+        mkdirSync(dirname(used), { recursive: true });
+        writeFileSync(used, `${dev.udid}\n`);
+      }
+      if (pick) for (const cached of driveSimulators.keys()) {
+        const [choice, , , file] = JSON.parse(cached);
+        if (choice === null && file === used) driveSimulators.delete(cached);
+      }
     } catch { /* remembered next time, if it can be */ }
   };
   const kept = cached && driveSimulators.get(key(pick));
@@ -568,6 +575,7 @@ const keyboardNotes = new Map();
  *  next drive on that simulator puts the key back first, unless the drive that wrote it is still running. */
 const keyboardArgs = (udid, verb) => ['simctl', 'spawn', udid, 'defaults', verb, 'com.apple.keyboard.preferences', 'AutomaticMinimizationEnabled', ...(verb === 'write' ? ['-bool', 'true'] : [])];
 const minimized = (r) => r.status === 0 && /^\s*1\s*$/.test(r.stdout ?? '');
+const absentKeyboardPreference = text => /Domain 'com\.apple\.keyboard\.preferences' not found\.|Could not find key 'AutomaticMinimizationEnabled' in domain 'com\.apple\.keyboard\.preferences'\.|The domain\/default pair of \(com\.apple\.keyboard\.preferences, AutomaticMinimizationEnabled\) does not exist/.test(text);
 const minimizedNote = (udid) => `this simulator minimizes its software keyboard (AutomaticMinimizationEnabled = 1, kept since the Mac's keyboard was attached), so a focused field shows none in a screenshot, unlike an iPhone; a simulator the drive boots has it cleared for the drive, or clear it here: xcrun simctl spawn ${udid} defaults delete com.apple.keyboard.preferences AutomaticMinimizationEnabled`;
 /** The setting a killed drive left cleared, put back (`softwareKeyboard`): unless the drive that cleared it still runs. */
 function keyboardLeft(udid, record, defaults) {
@@ -600,21 +608,26 @@ export async function withSoftwareKeyboard(dev, open, { records = resolve(homedi
     const record = resolve(records, `${dev.udid}.json`);
     if (existsSync(record)) keyboardNotes.delete(record);
     keyboardLeft(dev.udid, record, (verb) => read('xcrun', keyboardArgs(dev.udid, verb), { timeout: 20000 }));
-    const said = keyboardNotes.get(record) ?? new Promise((done) => {
-      useXcode();
-      let out = '';
-      const child = spawn('xcrun', keyboardArgs(dev.udid, 'read'), { stdio: ['ignore', 'pipe', 'ignore'] });
-      const forget = () => { if (keyboardNotes.get(record) === said) keyboardNotes.delete(record); };
-      const bound = setTimeout(() => { forget(); child.kill('SIGKILL'); }, 20000);
-      child.stdout.on('data', (d) => { out += d; });
-      child.on('error', () => { clearTimeout(bound); forget(); done(); });
-      child.on('close', (status) => {
-        clearTimeout(bound);
-        if (minimized({ status, stdout: out }) && !saidKeyboard.has(dev.udid)) { saidKeyboard.add(dev.udid); console.error(`note: ${minimizedNote(dev.udid)}`); }
-        done();
+    let said = keyboardNotes.get(record);
+    if (!said) {
+      said = new Promise((done) => {
+        useXcode();
+        let out = '', error = '';
+        const child = spawn('xcrun', keyboardArgs(dev.udid, 'read'), { stdio: ['ignore', 'pipe', 'pipe'] });
+        const bound = setTimeout(() => { done(false); child.kill('SIGKILL'); }, 20000);
+        child.stdout.on('data', (d) => { out += d; });
+        child.stderr.on('data', (d) => { error += d; });
+        child.on('error', () => { clearTimeout(bound); done(false); });
+        child.on('close', (status) => {
+          clearTimeout(bound);
+          if (minimized({ status, stdout: out }) && !saidKeyboard.has(dev.udid)) { saidKeyboard.add(dev.udid); console.error(`note: ${minimizedNote(dev.udid)}`); }
+          done(status === 0 || (status === 1 && absentKeyboardPreference(error)));
+        });
+      }).catch(() => false).then(keep => {
+        if (!keep && keyboardNotes.get(record) === said) keyboardNotes.delete(record);
       });
-    });
-    keyboardNotes.set(record, said);
+      keyboardNotes.set(record, said);
+    }
     let carrier;
     try { carrier = await open(); } finally { if (!carrier) await said; }
     const close = carrier.close.bind(carrier);

@@ -66,7 +66,7 @@ export async function openIOS({
   // An app's exact.mjs builds first instead, or bakes a plan-only edit to run on this build (agent-build.mjs,
   // LLP 1116.003).
   if (built.checked) {
-    plan = checkedLaunchPlan('ios', built, a, extra.EXACT_PLAN ?? plan ?? launched.EXACT_PLAN);
+    plan = checkedLaunchPlan('ios', built, a, extra.EXACT_PLAN || plan || launched.EXACT_PLAN);
     if (plan) extra = { ...extra, EXACT_PLAN: plan };
   } else {
     if (!built.missing) refuseBackendOrigin(built, a);

@@ -64,6 +64,10 @@ function uncommented(text, path) {
  * in source order, else the first literal URL. With no HTTP literal, use a socket's origin. Null with none. */
 export function serverUrl(dir, env = process.env) { return serverChoice(dir, env).url; }
 
+export function requestBase(dir, chosen) {
+  return chosen && onThisMachine(chosen) ? chosen.replace(/\/+$/, '') : serverUrl(dir);
+}
+
 /** `serverUrl`'s answer as `{ url, note }`: `note` says which origin it took and why when the code names more than one. */
 export function serverChoice(dir, env = process.env) {
   const { modules, values, reads } = builtSettings(dir, env);
@@ -433,8 +437,7 @@ async function started(dir, server, name, forward, give, takeOwnership) {
  * database as the file's text), and the last drive out stops them; one that did not start the server stops nothing, and the
  * builder's own is never in the list. With database: false, no database is passed, created or cleared; otherwise an entry
  * that does not read `DB` is refused (`appServer`'s `refusal`), as `test` refuses it. */
-export async function driveServer(dir, storage, say = (line) => console.error(line), { fresh = false } = {}) {
-  const server = appServer(dir);
+export async function driveServer(dir, storage, say = (line) => console.error(line), { fresh = false, server = appServer(dir) } = {}) {
   if (!server?.url) return null;
   if (server.refusal) throw new Error(`agent: ${server.refusal}`);
   const lease = resolve(dir, '.exact/agent-server'), mine = resolve(lease, `drive-${process.pid}`), starting = resolve(lease, 'starting');
@@ -544,8 +547,7 @@ export async function driveServer(dir, storage, say = (line) => console.error(li
  * a server entry that needs a database but does not read `DB` is refused whatever the verb (LLP 1116.008 D1);
  * a server an ancestor process runs (an older app's api-test wrapper) stays shared, said in one line.
  * `api-test` is the same call without `optional`: it wants a server, and says why it has none. */
-export async function withAppServer(dir, fn, { verb = 'api-test', optional = false } = {}) {
-  const server = appServer(dir);
+export async function withAppServer(dir, fn, { verb = 'api-test', optional = false, server = appServer(dir) } = {}) {
   const owners = server ? ['api-test', 'test', 'verify'].map((name) => readIn(dir, `.exact/${name}/owner`)?.trim()).filter(Boolean) : [];
   if (owners.length && ancestors().some((pid) => owners.includes(pid))) { console.error(`${verb}: using an ancestor’s server; tests share its data`); return fn(null); }
   let running;

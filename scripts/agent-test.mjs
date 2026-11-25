@@ -18,7 +18,7 @@ import { perfDelta } from './agent-inspect.mjs';
 import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { checkedAppleRun, macSandboxed } from './agent-build.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
-import { onThisMachine, serverUrl } from './app-server.mjs';
+import { requestBase } from './app-server.mjs';
 import { backendOrigin, backendOriginSelection, injectBackendOrigin, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
 import { declaredSettings, settingValues } from '../js/bake/src/__exact_env.mjs';
 import { appSettings } from './app-imports.mjs';
@@ -790,7 +790,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   // Where a `request` line's path is (LLP 1116.006 D8): the backend the build selected when it is on this
   // machine (a checkout's fixture port, LLP 1142 D13), else the address app.ts calls.
   const chosen = checked ? checked.backendOrigin : backendOrigin(selected.dir, launched);
-  const server = chosen && onThisMachine(chosen) ? chosen.replace(/\/+$/, '') : serverUrl(selected.dir);
+  const server = checked ? checked.requestBase : requestBase(selected.dir, chosen);
   let done = false;
   const scope = testScope(host), timing = launched.EXACT_AGENT_TIMING;
   for (const t of tests) {

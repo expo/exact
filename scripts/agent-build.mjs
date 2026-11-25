@@ -9,20 +9,18 @@
 // goes to the app's `.exact/<host>-build.log`, and to stderr, summarised, only
 // when it fails. stdout stays the drive's (`--json`).
 //
-// A build stale only in what its plan is made of — the Contract and what
-// app.ts imports, which nothing native reads — is not rebuilt (LLP 1116.003):
-// the bake alone runs (`exact-js-bake`, the web dev loop's producer, about a
-// second), its plan, module and source map are kept beside the build, and the
-// driver launches the build with them as its launch generation (EXACT_PLAN),
-// the first boot a build that baked them would make.
+// When the drive selects its plan automatically, a plan-only edit runs the
+// bake (`exact-js-bake`) and keeps the plan, module and source map beside the
+// build (LLP 1116.003). The driver launches that generation with EXACT_PLAN.
+// An explicit fixture uses a fresh native build.
 //
 //   bun scripts/agent-build.mjs <ios|macos|windows> --app <name>
 
 import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { closeSync, copyFileSync, createWriteStream, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { closeSync, copyFileSync, createWriteStream, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { slashRelative, within } from './paths.mjs';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
@@ -33,6 +31,8 @@ import { bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName,
 import { bakeTool, linkedBakeDir } from './linked-plan.mjs';
 import { childValue, launchNames } from '../js/bake/src/__exact_env.mjs';
 import { simulatorLaunch } from '../host/apple/devices.mjs';
+import { appServer, requestBase } from './app-server.mjs';
+import { backendOrigin as selectedBackend } from '../js/bake/src/typescript.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const label = host => host === 'ios' ? 'iOS' : host === 'windows' ? 'Windows' : 'macOS';
@@ -46,7 +46,16 @@ function readBuildCheck(checked) {
   if (!checked) return null;
   try {
     const run = JSON.parse(checked);
-    if (run?.app && typeof run.receipt === 'string' && (run.plan === null || typeof run.plan === 'string')) return run;
+    const record = value => !!value && typeof value === 'object' && !Array.isArray(value);
+    const text = value => typeof value === 'string' && value.length > 0;
+    if (!['ios', 'macos'].includes(run?.host) || !text(run.receipt) || typeof run.override !== 'boolean'
+      || !(run.plan === null || text(run.plan)) || !(run.requestedPlan === null || text(run.requestedPlan))
+      || !(run.requestBase === null || text(run.requestBase)) || !(run.server === null || record(run.server))
+      || !Array.isArray(run.planFiles) || !run.planFiles.every(text)) return null;
+    const { app } = run;
+    if (record(app) && record(app.manifest) && typeof app.outside === 'boolean'
+      && [app.dir, app.name, app.id, app.displayName, app.selector, app.target, app.appleCrate].every(text)
+      && isAbsolute(app.dir) && isAbsolute(app.target)) return run;
   } catch { /* a malformed check requires a full check */ }
   return null;
 }
@@ -59,7 +68,13 @@ export function checkedAppleRun(host, selector, { device = false, sample = false
   const run = readBuildCheck(process.env.EXACT_BUILD_CHECKED);
   if (run?.host !== host) return null;
   const { app } = run;
-  if (selector !== app.selector && selector !== app.dir && !(selector == null && process.env.EXACT_APP_DIR === app.dir)) return null;
+  const path = selector && /[\\/]|^\.\.?$/.test(selector) ? selector : process.env.EXACT_APP_DIR;
+  if (path) {
+    try { if (realpathSync(resolve(path)) !== app.dir) return null; } catch { return null; }
+  } else {
+    const name = (selector || 'caltrain').replace(/-(web|apple|ios|macos|linux|windows|gpu)$/, '');
+    if (![app.selector, app.name].includes(name) && selector !== app.appleCrate) return null;
+  }
   return { ...run, app: { ...app, crate: () => app.appleCrate } };
 }
 
@@ -76,8 +91,9 @@ export function nativeBuild(host, app, { sample = false, checked = null, hashed 
   const ios = host === 'ios';
   const built = ios ? appleArtifacts(app, { destination: 'ios-simulator', host: sample }).bundle : appleRunBinary(app, sample);
   if (!existsSync(built)) return { built, missing: true, changed: [] };
-  const receipt = receiptPath(host, app, { sample });
-  const bytes = receipt && readFileSync(receipt);
+  let receipt = receiptPath(host, app, { sample }), bytes;
+  try { if (receipt) bytes = readFileSync(receipt); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; receipt = undefined; }
   const selected = bytes && JSON.parse(bytes);
   const backendOrigin = selected?.build?.backendOrigin ?? null;
   const run = readBuildCheck(checked);
@@ -85,14 +101,14 @@ export function nativeBuild(host, app, { sample = false, checked = null, hashed 
   const digest = bytes ? createHash('sha256').update(bytes).digest('hex') : null;
   const changed = prior
     ? [ ...(prior.receipt !== digest ? [receipt ?? built] : []),
-        ...(prior.plan && !(prior.override ? overrideFilesPresent(prior.plan) : isFile(prior.plan)) ? [prior.plan] : []) ]
+        ...(prior.plan && !checkedPlanPresent(prior) ? [prior.plan] : []) ]
     : receiptChanges(receipt, app, { hashed: !!hashed && hashed === digest, launch });
-  if (!ios && !sample && receipt) {
-    const bundled = resolve(appleArtifacts(app).bundle, 'Contents/Resources/receipt.json');
+  const bundled = ios ? resolve(built, 'receipt.json') : resolve(appleArtifacts(app, { host: sample }).bundle, 'Contents/Resources/receipt.json');
+  if (!sample && receipt && (!ios || bundled !== receipt)) {
     try {
-      const actual = JSON.parse(readFileSync(bundled, 'utf8'));
+      const actual = bundled === receipt ? selected : JSON.parse(readFileSync(bundled, 'utf8'));
       const identity = r => [r.built, r.started, r.target, r.composition, r.compatibilityId, r.build?.trust, r.build?.backendOrigin, r.build?.binary?.sha256];
-      // The shared .app path can have been replaced by a release in another build namespace.
+      // A sidecar can outlive the bundle it describes.
       if (actual.build?.trust !== 'development' || JSON.stringify(identity(selected)) !== JSON.stringify(identity(actual))) changed.push(bundled);
     } catch { changed.push(bundled); }
   }
@@ -156,13 +172,14 @@ export function refuseBuild(host, state, app, { sample = false } = {}) {
   if (state.checked && state.override && !state.changed.length) {
     throw staleError(`${host} build is stale: the checked sources require the baked plan override; run ${command} before supplying another plan`);
   }
-  refuseStale(ios ? 'ios' : sample ? 'sample host' : 'macos', state.receipt, state.changed, command);
+  refuseStale(ios ? 'ios' : sample ? 'sample host' : 'macos', state.receipt ?? state.built, state.changed, command);
 }
 
 /** A checked launch can use only the plan selected at startup. */
 export function checkedLaunchPlan(host, state, app, requested) {
-  if (state.changed.length || (state.override && requested)) refuseBuild(host, state, app);
-  if (requested && resolve(requested) !== state.requestedPlan) {
+  const wanted = requested ? resolve(requested) : null;
+  if (state.changed.length || (state.override && wanted)) refuseBuild(host, state, app);
+  if (!state.override && wanted !== state.requestedPlan) {
     throw staleError(`${host} build is stale: the run checked a different plan; start another run to supply this plan`);
   }
   return state.plan;
@@ -301,6 +318,45 @@ function overrideFilesPresent(plan) {
   try {
     return [plan, resolve(dir, 'app.module.json'), resolve(dir, 'app.hbc')].every(isFile);
   } catch { return false; }
+}
+
+function checkedPlanPresent({ plan, planFiles }) {
+  try { return isFile(plan) && planFiles.every(file => isFile(resolve(dirname(plan), file))); }
+  catch { return false; }
+}
+
+function planContents(plan) {
+  const root = dirname(plan), files = Object.create(null);
+  const read = (name, optional = false) => {
+    const path = resolve(root, name), info = statSync(path, { throwIfNoEntry: false });
+    if (!info && optional) return;
+    if (info?.isDirectory() && (name === 'rust' || name.startsWith(`rust${sep}`))) {
+      for (const child of readdirSync(path).sort()) read(`${name}${sep}${child}`);
+    } else {
+      if (!info?.isFile()) throw new Error(`${path} is not a file`);
+      files[name] = createHash('sha256').update(readFileSync(path)).digest('hex');
+    }
+  };
+  read(basename(plan));
+  for (const name of ['app.module.json', 'app.hbc', 'rust', basename(plan) + '.map.json']) read(name, true);
+  return files;
+}
+
+function stagePlan(source, parent, override) {
+  const stage = mkdtempSync(resolve(parent, 'plan-'));
+  try {
+    const plan = simulatorPlanPath(source, stage);
+    if (existsSync(source + '.map.json')) copyFileSync(source + '.map.json', plan + '.map.json');
+    const files = planContents(plan);
+    if (JSON.stringify(files) !== JSON.stringify(planContents(source)))
+      throw new Error('the original files differ from the staged copy');
+    if ((override || files['app.module.json'] || files['app.hbc']) && !overrideFilesPresent(plan))
+      throw new Error('the plan requires both app.module.json and app.hbc');
+    return { plan, planFiles: Object.keys(files) };
+  } catch (error) {
+    rmSync(stage, { recursive: true, force: true });
+    throw staleError(`plan ${source} changed while staging or could not be staged: ${error.message}; start another run`);
+  }
 }
 
 /** The run's checked plan, or, for an unchecked build, an override whose receipt
@@ -461,10 +517,9 @@ export async function waitForBuild(app, say = line => console.error(line)) {
 
 /** Builds first when the drive would refuse (`nativeBuild`): one line on `say`,
  * the build's output in the app's `.exact/`, its summary when it fails; the
- * exit code. A fresh build runs nothing and says nothing; nor does one whose
- * plan-only edit is already baked beside it. A new plan-only edit is baked
- * instead of built, in one line; what its bake refuses fails the command, as
- * the build would have. A build another process claims first is waited for and the check made again. */
+ * exit code. A fresh build says nothing. With automatic plan selection, a
+ * plan-only edit needs only a bake. A build another process claims first is
+ * waited for and the check made again. */
 export async function buildFirst(host, app, { say = line => console.error(line), build = appleBuild, wait = waitForBuild, bake = bakePlan, retries = 2, plan } = {}) {
   host = host === 'ios' ? 'ios' : 'macos';
   if (host === 'macos' && process.env.EXACT_MAC_BIN) return 0; // the caller's own binary: the driver says it did not check
@@ -472,30 +527,26 @@ export async function buildFirst(host, app, { say = line => console.error(line),
   await reportPrebuild(app, host === 'ios' ? ['--ios'] : [], say);
   const state = nativeBuild(host, app);
   if (!state.missing) refuseBackendOrigin(state, app);
+  const requestedPlan = plan || driveLaunch(host).EXACT_PLAN;
   // Every launch in this run uses the checked build and its selected plan.
   const checked = (overridePlan = null, build = state) => {
     const out = process.env.EXACT_BUILD_CHECK_OUT;
     if (!out || !build.receipt) return 0;
-    const requestedPlan = plan ?? driveLaunch(host).EXACT_PLAN;
+    const { dir, name, id, displayName, selector, target, outside, manifest: { deploy, share_target } } = app;
+    const server = appServer(dir), base = requestBase(dir, selectedBackend(dir));
     const source = overridePlan ?? requestedPlan;
-    let selected = null;
-    if (source) {
-      const stage = mkdtempSync(resolve(dirname(out), 'plan-'));
-      selected = simulatorPlanPath(source, stage);
-      if (existsSync(source + '.map.json')) copyFileSync(source + '.map.json', selected + '.map.json');
-    }
-    const { dir, name, id, displayName, selector, target, outside, manifest: { deploy } } = app;
+    const staged = source ? stagePlan(resolve(source), dirname(out), !!overridePlan) : { plan: null, planFiles: [] };
     writeFileSync(out, JSON.stringify({
-      host, receipt: build.digest, backendOrigin: build.backendOrigin, plan: selected,
+      host, receipt: build.digest, backendOrigin: build.backendOrigin, requestBase: base, server, ...staged,
       override: !!overridePlan, requestedPlan: requestedPlan ? resolve(requestedPlan) : null,
-      app: { dir, name, id, displayName, selector, target, outside, manifest: { deploy }, appleCrate: app.crate('apple') },
+      app: { dir, name, id, displayName, selector, target, outside, manifest: { deploy, share_target }, appleCrate: app.crate('apple') },
     }));
     return 0;
   };
   let reason = buildReason(state, app);
   if (!reason) return checked();
   const graph = graphOf(app);
-  if (!state.missing && state.changed.every(path => planSource(path, app, graph))) {
+  if (!requestedPlan && !state.missing && state.changed.every(path => planSource(path, app, graph))) {
     const override = planOverride(host, app, state, graph);
     if (override) return checked(override.plan);
     const log = resolve(app.dir, '.exact', `${host}-plan.log`), made = await makeOverride(host, app, state, { bake, log }), what = named(app, state.changed);

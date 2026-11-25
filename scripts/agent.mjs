@@ -261,7 +261,7 @@ export async function main(argv, injected = {}) {
         });
         return r.failed ? 1 : 0;
       },
-      { verb: 'test', optional: true },
+      { verb: 'test', optional: true, server: checked?.server },
     );
   }
   // A trace a person's session saved (LLP 1079 D5), read back with no app running.
@@ -405,7 +405,9 @@ export async function main(argv, injected = {}) {
       const server = injected.driveServer ? null : (await import('./verify.mjs')).appServer(resolveApp(flags.app).dir);
       if (server?.url) console.error(`agent: the page at ${flags.url} uses the API its build named; ${server.entry} is not started for this drive`);
     } else if (injected.driveServer) served = await injected.driveServer();
-    else served = await (await import('./verify.mjs')).driveServer(selectedApp().dir, flags.storage, undefined, { fresh: fresh && (compares || !!flags.resetStorage) });
+    else served = await (await import('./verify.mjs')).driveServer(selectedApp().dir, flags.storage, undefined, {
+      fresh: fresh && (compares || !!flags.resetStorage), server: checked?.server,
+    });
     try {
       return await (injected.open ?? open)({
         host,

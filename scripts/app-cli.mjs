@@ -659,8 +659,11 @@ if (verb === 'contract') {
       try { process.env.EXACT_BUILD_CHECKED = buildCheck = readFileSync(checked, 'utf8'); rmSync(checked); } catch {}
     }
     if (built) return log(await withCargoFault(built));
-    const refusal = verb === 'test' ? (await import(resolve(exact2, 'scripts/verify.mjs'))).appServer(dir)?.refusal : null;
-    if (refusal) { console.error(`test: ${refusal}`); return log(1); }
+    if (verb === 'test') {
+      const run = checksApple && (await import(resolve(exact2, 'scripts/agent-build.mjs'))).checkedAppleRun(host, dir);
+      const server = run ? run.server : (await import(resolve(exact2, 'scripts/verify.mjs'))).appServer(dir);
+      if (server?.refusal) { console.error(`test: ${server.refusal}`); return log(1); }
+    }
   }
   // A verb that builds, runs, compiles or checks the app prepares first (`beforeBuild`); a drive prepared above. An
   // app's own command keeps its name (a game's verify, an app's check) and prepares nothing.

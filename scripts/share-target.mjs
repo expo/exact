@@ -90,9 +90,9 @@ export function appleActivationRule(target) {
 export const appleShareMembers = target => (target.params?.files ?? []).map(f => ({ name: f.name, types: [...new Set(list(f.accept).map(acceptUTI))] }));
 
 /** The app's `share_target`, which the driver hands the host with each share. */
-export function appShareTarget(app) {
-  const { dir } = resolveApp(app);
-  const target = JSON.parse(readFileSync(join(dir, 'app.json'), 'utf8')).share_target;
+export function appShareTarget(app, checked) {
+  const { dir } = checked ?? resolveApp(app);
+  const target = checked ? checked.manifest.share_target : JSON.parse(readFileSync(join(dir, 'app.json'), 'utf8')).share_target;
   if (!target) throw new Error(`share: ${join(dir, 'app.json')} declares no share_target (LLP 1133.024 D1)`);
   return target;
 }
