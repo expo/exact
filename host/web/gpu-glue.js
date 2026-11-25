@@ -815,30 +815,34 @@ function listen(entry) {
   // The secondary button and the middle button are the world's (MouseRight, MouseMiddle).
   on("contextmenu", (event) => { if (fallsThrough(event)) event.preventDefault(); });
   on("mousedown", (event) => { if (event.button === 1 && fallsThrough(event)) event.preventDefault(); });
+  // pointerId is a signed long, negative for WebKit's touches on iOS; the world's contact
+  // ids are u32, and >>> 0 maps one onto the other one-to-one.
+  const contactOf = event => event.pointerId >>> 0;
   for (const phase of ["down", "move", "up", "cancel"]) on(`pointer${phase}`, (event) => {
-    const wasControl = controls.has(event.pointerId);
+    const contact = contactOf(event);
+    const wasControl = controls.has(contact);
     cancelRemoved();
-    if (wasControl && !controls.has(event.pointerId)) { event.preventDefault(); return; }
-    let owner = controls.get(event.pointerId);
+    if (wasControl && !controls.has(contact)) { event.preventDefault(); return; }
+    let owner = controls.get(contact);
     const button = phase === "down" ? control(event.target) : null;
     if (button) {
-      owner = binding(button); controls.set(event.pointerId, owner);
+      owner = binding(button); controls.set(contact, owner);
       try { button.setPointerCapture(event.pointerId); } catch {}
       if (!editable(document.activeElement)) button.focus({preventScroll:true});
     }
     if (owner) {
-      sendControl(event, owner, phase, event.pointerId, event.clientX-owner.left, event.clientY-owner.top);
-      if (phase === "up" || phase === "cancel") controls.delete(event.pointerId);
+      sendControl(event, owner, phase, contact, event.clientX-owner.left, event.clientY-owner.top);
+      if (phase === "up" || phase === "cancel") controls.delete(contact);
       event.preventDefault(); return;
     }
     if (!fallsThrough(event)) return;
     if (phase === "down") { if (!editable(document.activeElement)) el.focus({ preventScroll: true }); try { el.setPointerCapture(event.pointerId); } catch {} }
     if (phase === "down" && event.pointerType === "mouse" && lockable() && document.pointerLockElement !== el) Promise.resolve(el.requestPointerLock?.()).catch(() => {});
-    send(event, { t: "pointer", phase, id: event.pointerId, ...pointerAt(event, phase), kind: event.pointerType || "mouse", buttons: event.buttons, ...modifiers(event) });
+    send(event, { t: "pointer", phase, id: contact, ...pointerAt(event, phase), kind: event.pointerType || "mouse", buttons: event.buttons, ...modifiers(event) });
   });
   on("lostpointercapture", event => {
-    const button = controls.get(event.pointerId);
-    if (button) { controls.delete(event.pointerId); sendControl(event, button, "cancel", event.pointerId); }
+    const contact = contactOf(event), button = controls.get(contact);
+    if (button) { controls.delete(contact); sendControl(event, button, "cancel", contact); }
   });
   on("wheel", (event) => {
     if (!fallsThrough(event)) return;

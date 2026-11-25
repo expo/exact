@@ -622,6 +622,15 @@ test('two captured pointers keep CSS coordinates and lost capture cancels just i
   assert.deepEqual(f.events.map(e=>[e.name,e.phase,e.id]),[['jump','down',7],['move','down',8],['move','move',8],['jump','cancel',7],['move','up',8]]);
   assert.equal(f.events[2].x,200);
 });
+test('a negative pointerId, as WebKit gives touches on iOS, reaches the world as one u32 contact',async()=>{
+  const f=await fixture({input:true}), canvas=f.create(1), b=new f.Element('button'); b.parent=canvas;
+  b.closest=s=>s==='[data-gpu-input]'?canvas:s==='button[data-action]'?b:null;
+  b.getAttribute=()=>'jump'; b.getBoundingClientRect=()=>({left:0,top:0}); b.setPointerCapture=()=>{};
+  const touch={target:canvas,pointerId:-1892031251,pointerType:'touch',clientX:10,clientY:20,timeStamp:0,preventDefault(){}};
+  for(const phase of ['down','move','up']) canvas.listeners[`pointer${phase}`](touch);
+  canvas.listeners.pointerdown({...touch,target:b}); canvas.listeners.lostpointercapture(touch);
+  assert.deepEqual(f.events.map(e=>[e.t,e.phase,e.id]),[['pointer','down',2402936045],['pointer','move',2402936045],['pointer','up',2402936045],['control','down',2402936045],['control','cancel',2402936045]]);
+});
 for(const status of ['healthy','no device']) test(`recovery ${status} leaves canvases intact`,async()=>{
  const f=await fixture();f.create(1);f.gpu.gpu_recover=async()=>JSON.stringify({status});
  f.exact.gpu.deviceLost();await new Promise(r=>setTimeout(r,0));
