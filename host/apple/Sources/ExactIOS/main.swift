@@ -325,6 +325,16 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         exactView.onCanvasColor = { [weak w] color in w?.backgroundColor = color; w?.rootViewController?.view.backgroundColor = color }
         // The head's title is the scene's (LLP 1048.003 D1): the app switcher's name for it.
         exactView.onTitle = { [weak ws] title in ws?.title = title }
+        #if os(iOS)
+        // Lay UIKit's containers out at the agent's explicit size (`--size`) by its size classes, as on a device that
+        // size: a split collapses at a phone's width. Compact below an 11-inch iPad's half-screen width and a phone's
+        // landscape height; the page itself is drawn at that size (`ExactView.agentSize`). The window takes them, as
+        // a split ignores the scene's size-class override (iPhone Duo simulator, iOS 27.1)
+        if let size = ExactView.agentSize {
+            w.traitOverrides.horizontalSizeClass = size.width < 640 ? .compact : .regular
+            w.traitOverrides.verticalSizeClass = size.height < 500 ? .compact : .regular
+        }
+        #endif
         watchPlan()
         // EXACT_PLAN=<file> boots that plan instead of the one baked into the
         // library — any compiled contract, no rebuild (smokes, fixtures).
