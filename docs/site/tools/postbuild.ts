@@ -162,7 +162,8 @@ function prerequisites(p: Page): string {
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }
-const llms = `# ${site.name}\n\n> ${site.description}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n${bySection(pages, mdUrl, p => `: ${p.description}`)}\n`;
+const SOURCE = 'The source is the [expo/exact](https://github.com/expo/exact) repository. Its [AGENTS.md](https://github.com/expo/exact/blob/main/AGENTS.md) has the instructions for coding agents.';
+const llms = `# ${site.name}\n\n> ${site.description}\n\n${SOURCE}\n\n[sitemap.md](${ORIGIN}/sitemap.md) lists the same pages with each one's type, last change and prerequisites.\n\n${bySection(pages, mdUrl, p => `: ${p.description}`)}\n`;
 for (const file of ['llms.txt', 'assets/llms.txt']) writeFileSync(join(DIST, file), llms);
 const SITEMAP_SUMMARY = "A page index for agents: each page's Markdown URL, its type, the date it last changed, a summary, and what to read before it.";
 writeFileSync(
