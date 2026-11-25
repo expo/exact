@@ -217,6 +217,17 @@ extension NavigationHost {
             }
             return ["tapped": id, "delivery": "host-activation", "native": "search-button"]
         }
+        // Begin editing in UIKit's field where it is drawn, as a touch on it does
+        if let field = drawnSearch(node) {
+            let point = field.convert(CGPoint(x: field.bounds.midX, y: field.bounds.midY), to: nil)
+            guard before(point), !node.disabled, !node.inert, presenter.views[node.id] === node, drawnSearch(node) === field else {
+                return ["error": "UIKit's search field left the screen during the tap's pointer handlers. Run clock settle and tap it again."]
+            }
+            guard field.isFirstResponder || field.becomeFirstResponder() else {
+                return ["error": "UIKit's search field declined to begin editing. Run clock settle and tap it again."]
+            }
+            return ["tapped": id, "delivery": "host-activation", "native": "search-field"]
+        }
         #endif
         if tabBarShows, let root = container, let tabs = NavigationTabs.of(root, presenter), let index = tabs.tabs.firstIndex(where: { $0 === node }) {
             guard !node.disabled else { return ["error": "tab #\(id) is disabled"] }
