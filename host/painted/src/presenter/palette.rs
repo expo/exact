@@ -427,13 +427,17 @@ impl<D: DataSource> Presenter<D> {
             self.colors.material_contrast = palette.contrast;
             self.dirty = true;
         }
-        self.colors.device = Some(*palette);
+        self.set_device_palette(*palette);
+    }
+
+    fn set_device_palette(&mut self, palette: ReaderPalette) {
+        self.colors.device = Some(palette);
         self.colors.seed = self.accent_seed();
         self.apply_reader_palette();
     }
 
-    /// After a commit: an accent the app now says, changes or drops seeds
-    /// the scheme again, or gives the device's back.
+    /// After a commit: an accent the design now says, changes or drops
+    /// seeds the scheme again, or gives the device's back.
     pub(super) fn sync_accent_seed(&mut self) {
         if self.colors.device.is_none() {
             return;
@@ -445,24 +449,18 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// The app's accent, light and dark, that seeds Material's scheme (LLP
-    /// 1115.001 D4): the root's written `accent-color`, else the navigation
-    /// root's, else the design's `AccentColor`. A role is no seed, since the
-    /// palette maps one to a seeded colour, so a root that writes one leaves
-    /// the choice to the design.
-    pub(super) fn accent_seed(&self) -> Option<[[u8; 3]; 2]> {
+    /// The design's `AccentColor`, light and dark, that seeds Material's
+    /// scheme (LLP 1115.001 D4). A role the palette maps is no seed: it
+    /// would be seeded by its own seeded colour.
+    fn accent_seed(&self) -> Option<[[u8; 3]; 2]> {
         let _roles = self.host.runner().bind_roles();
-        let kernel = self.host.kernel();
-        let written = (self.host.roots().into_iter())
-            .chain(self.host.bars().root)
-            .filter_map(|id| kernel.node(id))
-            .find_map(|node| {
-                let written = node.style.written.has(exact_kernel::StyleId::AccentColor);
-                node.style.accent_color.filter(|_| written)
-            });
-        let no_role = |c: &ColorValue| !matches!(c, ColorValue::Role(_));
-        let accent = (written.filter(no_role))
-            .or_else(|| roles::overridden(roles::accent()).filter(no_role))?;
+        let mapped = |c: &ColorValue| match c {
+            ColorValue::Role(id) => ROLES
+                .iter()
+                .any(|(name, ..)| roles::role(name) == Some(*id)),
+            _ => false,
+        };
+        let accent = roles::overridden(roles::accent()).filter(|c| !mapped(c))?;
         Some([false, true].map(|dark| {
             let [r, g, b, _] = crate::paint::rgba(accent.resolve(dark));
             [r, g, b]
@@ -488,7 +486,11 @@ impl<D: DataSource> Presenter<D> {
     /// in place, a later one transitions, LLP 1095 D6) and nothing kept
     /// from a paint under the old colours stands.
     pub fn set_palette(&mut self, palette: &Palette) {
-        self.apply_palette(palette, &BarSwatches::default());
+        self.set_device_palette(ReaderPalette {
+            roles: *palette,
+            contrast: self.colors.material_contrast,
+            swatches: BarSwatches::default(),
+        });
     }
 
     fn apply_palette(&mut self, palette: &Palette, swatches: &BarSwatches) {
