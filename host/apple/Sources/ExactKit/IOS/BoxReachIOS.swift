@@ -37,13 +37,15 @@ extension NodeView {
     /// LLP 1123 D15: tell an iframe's guest how much of its web view lies in the unsafe area of its
     /// owner's view, `owner`, the view of the nearest controller above it, as UIKit gives that view
     /// (`ScrollInsetsIOS.band`), so WebKit keeps the page's fixed and sticky content clear of the bars
-    /// and band its reach draws it under, as a web view pinned under them does; WebKit gives the page
-    /// its `env()`. Out of a window, or out of `owner`, nothing is written. Activation calls it as
-    /// reach and the band move (stage 5); tests call it directly.
-    package func writeObscured(in owner: UIView) {
+    /// and band its reach draws it under, as a web view pinned under them does, and the range that
+    /// has moved through in the owner's `configuration` (`OwnerUpdateIOS.configuration`), which
+    /// WebKit's small and large viewports take; WebKit gives the page its `env()`. Out of a window, or
+    /// out of `owner`, nothing is written. Activation calls it as reach and the band move (stage 5);
+    /// tests call it directly.
+    package func writeObscured(in owner: UIView, configuration: UInt64?) {
         guard let web, web.window != nil, web.isDescendant(of: owner), let presenter else { return }
         let b = ScrollInsetsIOS.band(of: web, in: owner)
-        presenter.session?.webviews.obscure(self, top: b[0], left: b[3], bottom: b[2], right: b[1])
+        presenter.session?.webviews.obscure(self, top: b[0], left: b[3], bottom: b[2], right: b[1], configuration: configuration)
     }
 
     /// Its frame drawn past `place` by its reach on the grid it is placed on, and the bounds origin
