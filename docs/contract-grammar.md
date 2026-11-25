@@ -2676,7 +2676,10 @@ begins; `dragstart`, `drag` and `dragend` are refused for now
 and journals a refusal (`drag: refused: …`); `expect drag` asserts what a node
 carries ([recipe](recipes/drag-out.md)). On iOS, iPadOS and Android a press
 held on the node lifts it into another app, and on the Mac and the web a mouse
-drags it.
+drags it. In Linux's Wayland window a mouse drags its `text` (UTF-8, as
+`text/plain;charset=utf-8` and `UTF8_STRING`) and its `url` (as
+`text/uri-list` and `text/x-moz-url`), as a copy; a node carrying files
+alone does not lift there.
 
 `beforeunload` is DOM's: the window is about to close or the app to quit
 (macOS: its close button, File ▸ Close Window, ⌘Q; the web: leaving the page).

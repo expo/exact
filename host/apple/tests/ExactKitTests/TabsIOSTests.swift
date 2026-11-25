@@ -358,6 +358,51 @@ final class TabsIOSTests: XCTestCase {
         if #available(iOS 26.0, *) { until("no field, no activation") { !search.automaticallyActivatesSearch } }
     }
 
+    func testTouchingEachTabsLayoutCenterSelectsIt() throws {
+        guard ProcessInfo.processInfo.environment["EXACT_TOUCH_PORT"] != nil else {
+            throw missing("touch", "UIKit selects the tab at the reported center")
+        }
+        let session = try fixture("EXACT_MORE_TABS_PLAN"), agent = Agent(session: session)
+        let window = try XCTUnwrap(window), scene = try XCTUnwrap(window.windowScene)
+        let touch = try TouchRunner(self)
+        defer { touch.connection.cancel() }
+        let controller = try XCTUnwrap(session.presenter.navigationHost.tabController)
+        let stacks = try XCTUnwrap(controller.viewControllers), items = try XCTUnwrap(controller.tabBar.items)
+        let names = ["home", "barless", "three", "four", "five", "six"]
+        guard stacks.count == names.count else { return XCTFail("expected a controller for each tab") }
+        XCTAssertGreaterThan(items.count, 1)
+        let tabs = try names.map { try node(session, "tab-" + $0) }
+        // Start with an unselected tab so a missed touch cannot pass.
+        for index in Array(names.indices.dropFirst()) + [0] {
+            let tab = tabs[index]
+            let detail = try XCTUnwrap(agent.layout(["id": Int(tab.id)])["node"] as? [String: Any])
+            let hidden = try XCTUnwrap((detail["visible"] as? [String: Any])?["hidden"] as? Bool)
+            let space = try XCTUnwrap(detail["space"] as? [String: Any])
+            let box = try XCTUnwrap(space["viewport"] as? [String: Double])
+            let width = try XCTUnwrap(box["w"]), height = try XCTUnwrap(box["h"])
+            if !items.contains(stacks[index].tabBarItem) {
+                XCTAssertTrue(hidden, names[index])
+                XCTAssertEqual(width, 0)
+                XCTAssertEqual(height, 0)
+                continue
+            }
+            XCTAssertFalse(hidden, names[index])
+            XCTAssertGreaterThanOrEqual(width, 20)
+            XCTAssertGreaterThanOrEqual(height, 20)
+            let center = CGPoint(x: try XCTUnwrap(box["x"]) + width / 2, y: try XCTUnwrap(box["y"]) + height / 2)
+            let point = window.convert(agent.windowPoint(center), to: scene.coordinateSpace)
+            let aim = agent.aim(["id": Int(tab.id), "aim": ["press": true]])
+            let named = try XCTUnwrap(aim["aim"] as? [String: Any], "\(aim)")
+            XCTAssertEqual(named["point"] as? [Double], [Agent.r2(point.x), Agent.r2(point.y)])
+            var request = try TouchRunner.aim(point, in: window)
+            request["op"] = "tap"
+            XCTAssertEqual(try touch.ask(request)["done"] as? Bool, true)
+            until("only the touched tab is selected") {
+                tabs.allSatisfy { ($0.props["accessibilitySelected"] == "true") == ($0 === tab) }
+            }
+        }
+    }
+
     /// A tap the agent delivers asks the app's delegate as UIKit asks it on
     /// a bar built from `UITab`s, by tab, and a reselect tells it as a tap
     /// does; a tab the app declines is not selected.

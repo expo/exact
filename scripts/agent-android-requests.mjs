@@ -35,8 +35,19 @@ export function pushDrops(request, base, sh) {
 }
 
 /** The app's reply to [request], after the wait the app asks of a held contact. */
-export async function readerReply(request, ask, wait = Bun.sleep) {
-  const reply = await ask();
+export async function readerReply(request, ask, wait = Bun.sleep, sh) {
+  let reply = await ask();
+  if (request?.op === 'tap' && sh) {
+    for (let edge = 0; edge < 3; edge++) {
+      const {moduleMotion, display, x, y} = JSON.parse(reply);
+      if (!moduleMotion) break;
+      if (!['DOWN', 'MOVE', 'UP', 'CANCEL'].includes(moduleMotion) || !Number.isSafeInteger(display)
+          || display < 0 || !Number.isFinite(x) || !Number.isFinite(y)) throw new Error('invalid Android touch coordinates or action');
+      const result = sh('shell', 'input', 'touchscreen', '-d', String(display), 'motionevent', moduleMotion, String(x), String(y));
+      const error = result.status === 0 ? '' : (result.stderr || result.stdout || 'Android input failed').trim();
+      reply = await ask(JSON.stringify({op:'moduleMotion', error}));
+    }
+  }
   if (request?.op === 'tap' && request.phase === 'hold') {
     // The host owns this decision, including while a capture borrows a seekable drive's clock.
     const { waitMs } = JSON.parse(reply);

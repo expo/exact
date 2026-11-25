@@ -887,3 +887,34 @@ fn the_reader_is_offered_a_frame_under_the_finger_as_a_module_view() {
     assert_eq!(p.reader_module(20., 20., 1.)[0], id as i32);
     assert_eq!(p.reader_module(20., 150., 1.)[0], 0);
 }
+
+#[test]
+fn reader_taps_offer_a_hosted_allocation_only_where_the_addressed_point_hits_it() {
+    let mut p = boot("component App\n  view\n    column\n      box height=24\n      test-view testId=\"pad\" width=240 height=160\n      button \"Ordinary\" testId=\"button\"\n");
+    let pad = id(&p, "pad");
+    let button = id(&p, "button");
+    let tap = |p: &mut Presenter<()>, request| p.reader_agent_tap(&request, 2.);
+    for (args, at) in [
+        (serde_json::json!({"op":"tap", "id":pad}), [120., 104.]),
+        (
+            serde_json::json!({"op":"tap", "id":pad, "at":[30,20]}),
+            [30., 44.],
+        ),
+        (
+            serde_json::json!({"op":"tap", "id":pad, "phase":"down", "x":12,"y":40}),
+            [12., 40.],
+        ),
+    ] {
+        let handoff = tap(&mut p, args).unwrap().unwrap();
+        assert_eq!(handoff["at"], serde_json::json!(at));
+        assert_eq!(handoff["moduleContact"]["id"], pad);
+        assert!(handoff.get("tapped").is_none());
+    }
+    assert!(tap(
+        &mut p,
+        serde_json::json!({"op":"tap","id":pad,"at":[240,10]})
+    )
+    .unwrap()
+    .is_err());
+    assert!(tap(&mut p, serde_json::json!({"op":"tap","id":button})).is_none());
+}

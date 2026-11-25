@@ -70,9 +70,8 @@ export function sessionInput(s, { carrier, host, timing, touch, app }) {
               contact: true,
               hold: true,
               delivery: kind =>
-                ['down', 'move', 'hold', 'up', 'cancel', 'contextmenu', 'mouse'].includes(kind)
-                  ? 'presenter'
-                  : 'platform',
+                host === 'android' && kind === 'press' ? 'activation'
+                : ['down', 'move', 'hold', 'up', 'cancel', 'contextmenu', 'mouse'].includes(kind) ? 'presenter' : 'platform',
             }
           : { contact: true, hold: true, delivery: () => 'platform' },
     /** The contact this session holds, `{x, y}` in the viewport's space, or null. */

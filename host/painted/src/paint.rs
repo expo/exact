@@ -54,6 +54,10 @@ pub(crate) mod inline_frame;
 pub(crate) mod inline_opacity;
 mod layer;
 mod lift;
+mod visibility;
+pub(crate) use visibility::paints;
+#[cfg(test)]
+pub(crate) use visibility::revealed;
 pub(crate) mod look;
 pub use look::page_color;
 pub(crate) mod material;
@@ -307,6 +311,9 @@ pub struct PaintedBox {
     pub scroll: Option<(f32, f32)>,
     /// Generic pointer eligibility of this painted scene, including inheritance.
     pub(crate) pointer_hit: bool,
+    /// Whether the node showed: by its `visibility` or a ghost's reveal, and
+    /// outside any transparent (`opacity: 0`) subtree.
+    pub(crate) visible: bool,
     /// Rounded box or control face in local space, used for scrollbar coverage.
     rounded_border: Option<Rc<exact_kernel::svg::Path>>,
     shape_clips: Vec<shape::HitClip>,
@@ -1013,6 +1020,7 @@ impl Painter {
                 .computed_row(exact_kernel::StyleId::PointerEvents, |s| s.pointer_events)
                 != exact_kernel::PointerEvents::None
                 && visible,
+            visible,
             projective: None,
             affine: Some((ts, (x, y, w, h))),
             hit: walk.hit_space.map(|_| HitGeometry {
@@ -1078,7 +1086,13 @@ impl Painter {
             self.backend.pop_mask(&Shape::rect(rect), mask, ts);
         }
         match drawn {
-            Some(picture) => drop(self.restore_picture_backend(walk.scene.kernel, picture)),
+            Some(picture) => {
+                // Nothing of a transparent subtree shows, though it is hit
+                walk.boxes[hit_start..]
+                    .iter_mut()
+                    .for_each(|b| b.visible = false);
+                drop(self.restore_picture_backend(walk.scene.kernel, picture))
+            }
             None if opacity < 1.0 => self.backend.pop_opacity(),
             None => {}
         }
@@ -1466,35 +1480,3 @@ pub(crate) fn intersect(a: Rect4, b: Rect4) -> Rect4 {
 mod inline_image_tests;
 #[cfg(test)]
 mod paragraph_tests;
-
-/// Whether `id` paints, is hit, and is exposed. In a ghost, [`revealed`];
-/// otherwise the computed `visibility` (inherited). A missing node does not
-/// veto a caller that already has nothing to draw.
-pub(crate) fn paints(kernel: &Kernel, id: ViewId, reveal: Option<ViewId>) -> bool {
-    match reveal {
-        Some(root) => revealed(kernel, id, root),
-        None => kernel.node(id).is_none_or(|n| {
-            n.computed_row(exact_kernel::StyleId::Visibility, |s| s.visibility)
-                == exact_kernel::Visibility::Visible
-        }),
-    }
-}
-
-/// Whether `id` shows in the ghost of `root`: the nearest `visibility` set
-/// on it or an ancestor below the ghost's root decides, as in the web's
-/// clone whose root alone is made visible (`group-glue.js`); none set shows.
-pub(crate) fn revealed(kernel: &Kernel, id: ViewId, root: ViewId) -> bool {
-    let arena = kernel.arena();
-    let mut at = arena.key_of(id).map(|k| k.index);
-    while let Some(slot) = at {
-        if arena.local_id(slot) == root {
-            return true;
-        }
-        let style = arena.style(slot);
-        if style.mask.has(exact_kernel::StyleId::Visibility) {
-            return style.visibility == exact_kernel::Visibility::Visible;
-        }
-        at = arena.parent(slot);
-    }
-    true
-}
