@@ -68,6 +68,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // Give each container a proxy of its own, which holds the app's delegate for that container only
         didSet {
             guard tabController !== oldValue else { return }
+            #if os(iOS)
+            (oldValue as? TabController)?.mark.stop()
+            #endif
             tabProxy?.retire()
             tabProxy = tabController.map { tabs in
                 let proxy = TabDelegateProxy()

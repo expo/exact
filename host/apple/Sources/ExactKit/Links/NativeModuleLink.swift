@@ -44,6 +44,8 @@ package protocol NativeModuleHosting: AnyObject {
     var hatchIncarnation: UInt32 { get }
     var isEmpty: Bool { get }
     var hatchesConnected: Bool { get }
+    /// Whether the app ships a native module, connected or not.
+    var hasAppModule: Bool { get }
     var onHatchesConnected: (() -> Void)? { get set }
     var activationQueued: Bool { get }
     var quitWorkPending: Bool { get }
@@ -139,6 +141,7 @@ final class NoNativeModule: NativeModuleHosting {
     var hatchIncarnation: UInt32 { 0 }
     var isEmpty: Bool { true }
     var hatchesConnected: Bool { false }
+    var hasAppModule: Bool { false }
     var onHatchesConnected: (() -> Void)?
     var activationQueued: Bool { false }
     var quitWorkPending: Bool { false }

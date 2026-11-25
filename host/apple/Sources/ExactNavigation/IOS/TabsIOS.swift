@@ -37,6 +37,9 @@ final class TabController: UITabBarController {
     var moving: [(root: RouteController, pushed: [RouteController])] = [], dropped: [RouteController] = []
     private weak var barGroup: UIView?
     private var hidGroup = false
+    #if os(iOS)
+    let mark = TabMark()
+    #endif
 
     #if os(iOS)
     /// UIKit changes which tabs its bar and More hold within a trait change (LLP 1075.003 §9.16).

@@ -43,10 +43,19 @@ final class TabDelegateProxy: ForwardingDelegate, UITabBarControllerDelegate {
     }
 
     #if os(iOS)
+    func tabBarController(_ tabs: UITabBarController, willBeginCustomizing controllers: [UIViewController]) {
+        app?.tabBarController?(tabs, willBeginCustomizing: controllers)
+        // (An app's native code can have an image of its own come to the bar)
+        (tabs as? TabController)?.mark.watch(tabs) { [weak host, weak tabs] in
+            host?.tabController === tabs && host?.presenter.session?.natives.hasAppModule == false
+        }
+    }
+
     /// More's Edit moved tabs between the bar and More, and UIKit their
     /// routes with them (`syncNextTurn`).
     func tabBarController(_ tabs: UITabBarController, didEndCustomizing controllers: [UIViewController], changed: Bool) {
         let app = self.app
+        (tabs as? TabController)?.mark.stop()
         if changed { host?.syncNextTurn() }
         app?.tabBarController?(tabs, didEndCustomizing: controllers, changed: changed)
     }
