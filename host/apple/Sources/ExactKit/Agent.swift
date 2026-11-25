@@ -786,7 +786,9 @@ public final class Agent {
             case ("display-scale", _) where (Double(value) ?? 0) > 0 && Float(Double(value)!).isFinite: PageFacts.agentDisplayScale = Double(value)!
             #if os(iOS) && targetEnvironment(simulator)
             // Whether UIKit offers Ask Siri in a context menu (LLP 1094.000 D10), which the simulator never does.
-            case ("ask-siri", "available"), ("ask-siri", "unavailable"): askSiri = value == "available"
+            case ("ask-siri", "available"), ("ask-siri", "unavailable"):
+                if let refusal = askSiriRefusal { return ["error": refusal] }
+                askSiri = value == "available"
             #elseif os(iOS)
             case ("ask-siri", "available"), ("ask-siri", "unavailable"): return ["error": "prefer: ask-siri: the device decides whether it offers Ask Siri"]
             #endif

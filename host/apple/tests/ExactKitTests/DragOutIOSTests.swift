@@ -681,28 +681,36 @@ final class DragOutIOSTests: XCTestCase {
         }
         /// What UIKit shows when `id`'s menu opens, read once the popover's row
         /// shows, by when UIKit has added whatever it adds; and how many items
-        /// the card's drag gives while the menu covers the card, asked at a
-        /// point off the card, as Ask Siri asks with no touch at all.
-        func open(_ id: UInt32) throws -> (rows: [String], items: Int) {
+        /// the card's drag gives at a point off the card while the menu shows and
+        /// once it has closed. The test's request stands in for UIKit's, which
+        /// carries no touch on the card.
+        func open(_ id: UInt32) throws -> (rows: [String], shown: Int, lent: Int, closed: Int) {
             let card = try XCTUnwrap(p.views[id])
             let interaction = try XCTUnwrap(card.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
             let present = NSSelectorFromString("_presentMenuAtLocation:")
+            guard interaction.responds(to: present) else { throw missing("UIKit", "this UIKit has no -[UIContextMenuInteraction _presentMenuAtLocation:]") }
             typealias Present = @convention(c) (AnyObject, Selector, CGPoint) -> Void
             unsafeBitCast(interaction.method(for: present), to: Present.self)(interaction, present, CGPoint(x: card.bounds.midX, y: card.bounds.midY))
             waitFor("\(id)'s menu to show its row", facts: { "\(labels())" }) { labels().contains("Pin") }
-            defer {
-                interaction.dismissMenu()
-                waitFor("\(id)'s menu to close") { !labels().contains("Pin") }
+            func items() throws -> Int {
+                guard let drag = drags(card).first else { return 0 }
+                return try sources(p).dragInteraction(drag, itemsForBeginning: PointDragSession(at: .zero, in: window)).count
             }
-            var items = 0
-            if let drag = drags(card).first { items = try sources(p).dragInteraction(drag, itemsForBeginning: PointDragSession(at: .zero, in: window)).count }
-            return (labels(), items)
+            let rows = labels(), shown = try items()
+            // The view lent on to another node, as the pool's rebind does: the menu is not that node's.
+            let incarnation = card.incarnation
+            card.incarnation = NodePool.issue()
+            let lent = try items()
+            card.incarnation = incarnation
+            interaction.dismissMenu()
+            waitFor("\(id)'s menu to close") { !p.menus.showsContextMenu(of: card) && !labels().contains("Pin") }
+            return (rows, shown, lent, try items())
         }
         let draggable = try open(101), plain = try open(102)
         XCTAssertTrue(draggable.rows.contains("Ask Siri"), "the draggable card's menu")
-        XCTAssertEqual(draggable.items, 1, "its drag gives the card's text with the menu over the card")
-        let drag = try XCTUnwrap(drags(try XCTUnwrap(p.views[101])).first)
-        XCTAssertTrue(try sources(p).dragInteraction(drag, itemsForBeginning: PointDragSession(at: .zero, in: window)).isEmpty, "and with the menu closed, only a touch on the card")
+        XCTAssertEqual(draggable.shown, 1, "while its menu shows, its drag gives the card's text with no touch on the card")
+        XCTAssertEqual(draggable.lent, 0, "not once its view is another node's")
+        XCTAssertEqual(draggable.closed, 0, "and once the menu has closed, only to a touch on the card")
         XCTAssertFalse(plain.rows.contains("Ask Siri"), "a plain card's menu")
     }
 }

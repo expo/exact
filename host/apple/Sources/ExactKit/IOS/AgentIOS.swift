@@ -1409,6 +1409,12 @@ extension Agent {
     /// item to a context menu. UIKit reads that from a private scene trait,
     /// which the simulator leaves unavailable, having no Siri to offer.
     private static let askSiriTrait: AnyClass? = NSClassFromString("_UITraitIntelligentAssistantAvailability")
+    /// Why `prefer ask-siri` cannot be set here, when it cannot.
+    var askSiriRefusal: String? {
+        if Self.askSiriTrait == nil { return "prefer: ask-siri: this iOS adds no Ask Siri to menus" }
+        if session.presenter.viewport.window?.windowScene == nil { return "prefer: ask-siri: the app has no window scene yet" }
+        return nil
+    }
     func systemAskSiri(available: Bool) {
         guard let scene = session.presenter.viewport.window?.windowScene, let trait = Self.askSiriTrait else { return }
         let overrides = (scene as NSObject).value(forKey: "traitOverrides") as AnyObject
