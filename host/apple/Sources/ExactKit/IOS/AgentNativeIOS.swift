@@ -136,9 +136,8 @@ extension Agent {
     func drawnBarBoxes() -> [UInt32: BarLayoutBox] {
         let nav = presenter.navigation
         var boxes = nav.headerLayout { node in
-            guard case .success(let place)? = barItem(node) else { return nil }
-            let view = place.control ?? place.bar
-            return BarLayoutBox(view, place.bar.convert(place.item, to: view), "UIBarButtonItem")
+            guard case .success(let place)? = barItem(node), RouteGeometry.shownBar(place.bar) != nil else { return nil }
+            return BarLayoutBox(place.bar, place.item, "UIBarButtonItem")
         }
         #if os(iOS)
         for list in presenter.carrying("role:tablist") {
