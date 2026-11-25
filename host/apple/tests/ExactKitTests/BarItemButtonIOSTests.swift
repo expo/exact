@@ -49,6 +49,61 @@ extension NavigationBarIOSTests {
         XCTAssertEqual(presses, [node.id])
     }
 
+    func testTappingTheCenterOfBacksLayoutPopsItsRoute() throws {
+        let session = try fixture("back-layout", module: false), agent = Agent(session: session)
+        let nav = try XCTUnwrap(session.presenter.navigationHost.primaryNavigation)
+        let push = agent.tap(["id": Int(try node(session, "detail").id)])
+        XCTAssertNil(push["error"], "\(push)")
+        until("the detail route shows") { nav.viewControllers.count == 2 && !agent.nativeInFlight() }
+        let back = try node(session, "back")
+        func layout() throws -> (box: [String: Double], hidden: Bool) {
+            let row = try XCTUnwrap(agent.layout(["id": Int(back.id)])["node"] as? [String: Any])
+            let space = try XCTUnwrap(row["space"] as? [String: Any])
+            return (try XCTUnwrap(space["viewport"] as? [String: Double]),
+                    try XCTUnwrap((row["visible"] as? [String: Any])?["hidden"] as? Bool))
+        }
+        func assertHidden(file: StaticString = #filePath, line: UInt = #line) throws {
+            let l = try layout()
+            XCTAssertTrue(l.hidden, file: file, line: line)
+            XCTAssertEqual(l.box["w"], 0, file: file, line: line)
+            XCTAssertEqual(l.box["h"], 0, file: file, line: line)
+        }
+        let (box, hidden) = try layout()
+        let width = try XCTUnwrap(box["w"]), height = try XCTUnwrap(box["h"])
+        XCTAssertFalse(hidden)
+        XCTAssertGreaterThanOrEqual(width, 20)
+        XCTAssertGreaterThanOrEqual(height, 20)
+        let viewport = agent.presenter.viewport, window = try XCTUnwrap(viewport.window)
+        let center = viewport.convert(CGPoint(x: try XCTUnwrap(box["x"]) + width / 2 + viewport.pageOrigin.x,
+                                              y: try XCTUnwrap(box["y"]) + height / 2 + viewport.pageOrigin.y), to: window)
+        let control = try XCTUnwrap(window.hitTest(center, with: nil) as? UIControl)
+        let parent = try XCTUnwrap(control.superview)
+        let twin = UIButton(type: .system)
+        twin.menu = UIMenu(children: [UIAction(title: "Details") { _ in }])
+        twin.isSpringLoaded = true
+        twin.frame = control.frame
+        parent.insertSubview(twin, belowSubview: control)
+        XCTAssertIdentical(window.hitTest(center, with: nil), control)
+        try assertBarLayout(agent, back, control)
+        twin.removeFromSuperview()
+
+        control.isHidden = true
+        try assertHidden()
+        control.isHidden = false
+        let alpha = control.alpha
+        control.alpha = 0
+        try assertHidden()
+        control.alpha = alpha
+        let index = try XCTUnwrap(parent.subviews.firstIndex(of: control))
+        control.removeFromSuperview()
+        try assertHidden()
+        parent.insertSubview(control, at: index)
+        try assertBarLayout(agent, back, control)
+        let reached = try XCTUnwrap(window.hitTest(center, with: nil) as? UIControl)
+        reached.sendActions(for: reached.allControlEvents.contains(.primaryActionTriggered) ? .primaryActionTriggered : .touchUpInside)
+        until("Back pops the detail route") { nav.viewControllers.count == 1 }
+    }
+
     /// Stand in for the view UIKit vends when the button is hosted outside its bar.
     private final class ProjectedItem: UIBarButtonItem {
         let button = UIControl()

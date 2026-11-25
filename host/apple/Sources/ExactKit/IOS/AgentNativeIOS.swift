@@ -106,11 +106,19 @@ extension UINavigationBar {
         return found
     }
 
-    /// UIKit's default Back has no UIBarButtonItem. In a horizontal bar it is
-    /// the leading control, ahead of every item that supplements it (LLP 1080.000 §13).
+    /// UIKit projects Back's effective item into the rail. In a horizontal bar its default
+    /// Back is the leading control, ahead of the items that supplement it (LLP 1080.000 §13).
     package func drawnBackControl() -> UIControl? {
-        guard !traitCollection.placesVerticalBar, backItem != nil, let item = topItem, !item.hidesBackButton,
+        guard let backItem, let item = topItem, !item.hidesBackButton,
               item.leftBarButtonItems?.isEmpty != false || item.leftItemsSupplementBackButton else { return nil }
+        #if EXACT_INSPECT
+        let key = "_effectiveBackBarButtonItem"
+        let effective = backItem.backBarButtonItem ?? (backItem.responds(to: NSSelectorFromString(key)) ? backItem.value(forKey: key) as? UIBarButtonItem : nil)
+        if let control = effective?.projectedControl(in: window) as? UIControl {
+            return RouteGeometry.shownBar(control) as? UIControl
+        }
+        #endif
+        guard !traitCollection.placesVerticalBar, RouteGeometry.shownBar(self) != nil else { return nil }
         let rtl = effectiveUserInterfaceLayoutDirection == .rightToLeft
         let items = (item.leftBarButtonItems ?? []) + (item.rightBarButtonItems ?? [])
         let custom = items.compactMap(\.customView)

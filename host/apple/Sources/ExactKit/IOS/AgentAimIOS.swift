@@ -37,6 +37,10 @@ extension Agent {
     /// frame, or an empty frame on the Duo. Neither is a touch on the item itself.
     func barItem(_ node: NodeView) -> Result<(bar: UIView, item: CGRect), BarItemMissing>? {
         #if os(iOS)
+        if let bar = presenter.navigation.backButtonBar(node) {
+            guard let control = bar.drawnBackControl() else { return .failure(BarItemMissing()) }
+            return .success((control, control.bounds))
+        }
         if let (bar, item, owner) = presenter.navigation.barButtonItem(node) {
             guard !item.isHidden else { return .failure(BarItemMissing()) }
             if let more = owner.overflowPresentationSource?.frame(in: bar), !more.isEmpty {

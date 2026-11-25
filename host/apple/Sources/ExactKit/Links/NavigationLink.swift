@@ -442,6 +442,7 @@ package protocol NavigationHosting: AnyObject {
     func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]?
     /// The boxes of the headers UIKit draws and the parts it places, in each view's coordinates.
     func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox]
+    func backButtonBar(_ node: NodeView) -> UINavigationBar?
     func drawnSearch(_ node: NodeView) -> UITextField?
     func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)?
     /// The tabs a route's search scope control shows, by segment; nil when
@@ -738,6 +739,7 @@ package final class NoNavigation: NavigationHosting {
     package var splitObservation: [String: Any] { ["installed": false] }
     package func activateChrome(_ node: NodeView, before: (CGPoint?) -> Bool) -> [String: Any]? { nil }
     package func headerLayout(itemBox: (NodeView) -> BarLayoutBox?) -> [UInt32: BarLayoutBox] { [:] }
+    package func backButtonBar(_ node: NodeView) -> UINavigationBar? { nil }
     package func drawnSearch(_ node: NodeView) -> UITextField? { nil }
     package func barButtonItem(_ node: NodeView) -> (bar: UINavigationBar, item: UIBarButtonItem, of: UINavigationItem)? { nil }
     package func searchScopeTabs(of segments: UISegmentedControl) -> [UInt32]? { nil }
