@@ -156,6 +156,10 @@ private final class WebEntry {
     var configuration: Data?
     /// How much of the guest lies under its owner's bars and band, top left bottom right (LLP 1123 D15).
     var obscured: [Double] = [0, 0, 0, 0]
+    /// The least and the most of it on each edge since the owner's configuration or the guest last
+    /// changed, with that configuration's identity: the range its bars move through, which WebKit's
+    /// small and large viewports take (LLP 1123 D15). `nil` where the owner's host gives no configuration.
+    var viewportRange: (configuration: UInt64, least: [Double], most: [Double])?
     var partition: String?
     var navigation: [String: Any]?
     /// A local PDF's page count while the frame shows it in a PDF view (@ref LLP 1020.002 D10).
@@ -335,6 +339,8 @@ final class WebViews: WebHosting {
         if let zoom = owner.style["zoom"]?.number, zoom > 0 { values["zoom"] = zoom }
         // How much of the guest lies under its owner's bars and band, top left bottom right (`obscure`)
         if let obscured = entries[owner.id]?.obscured, obscured.contains(where: { $0 != 0 }) { values["obscured"] = obscured }
+        // And the range it moves through, least then most (`obscure`)
+        if let range = entries[owner.id]?.viewportRange { values["viewportRange"] = range.least + range.most }
         // A local PDF, by its name: the arm shows a PDF's view from the start, and no web view (the file decides).
         // Not a sandboxed or partitioned frame, which stays WebKit's from its mount (D10).
         if owner.props["sandbox"] == nil, owner.props["partition"] == nil, Self.localPDF(owner.props["src"]) { values["pdf"] = true }
@@ -382,11 +388,17 @@ final class WebViews: WebHosting {
         update(owner)
     }
 
-    func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat) {
+    func obscure(_ owner: NodeView, top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat, configuration: UInt64?) {
         guard let entry = entries[owner.id] else { return }
         let insets = [top, left, bottom, right].map(Double.init)
-        guard insets != entry.obscured else { return }
+        let range: (configuration: UInt64, least: [Double], most: [Double])? = configuration.map { c in
+            guard let held = entry.viewportRange, held.configuration == c else { return (c, insets, insets) }
+            return (c, zip(held.least, insets).map { min($0, $1) }, zip(held.most, insets).map { max($0, $1) })
+        }
+        let same = range.map { r in entry.viewportRange.map { $0 == r } ?? false } ?? (entry.viewportRange == nil)
+        guard insets != entry.obscured || !same else { return }
         entry.obscured = insets
+        entry.viewportRange = range
         if let module, let handle = entry.handle { configure(entry, owner, module: module, handle: handle) }
     }
 
@@ -517,6 +529,11 @@ final class WebViews: WebHosting {
         owner.addSubview(view)
         owner.web = view
         entry.platformView = view
+        // Another guest starts its viewport range again from where its bars are now
+        if old != nil, let held = entry.viewportRange {
+            entry.viewportRange = (held.configuration, entry.obscured, entry.obscured)
+            configure(entry, owner, module: module, handle: handle)
+        }
         owner.presenter?.elements.realized(owner)
     }
 

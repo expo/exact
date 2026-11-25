@@ -862,7 +862,7 @@ export function hermesLeanSysRoots(env = process.env) {
  * Apple app through host/apple/build.mjs, the Linux host by `linuxBuild`.
  * What ships is baked at `release`. */
 export const HOST_DEV = 'host-dev';
-export const appleFrameSources = ['FrameAutomation.swift', 'FrameBrowser.swift', 'FrameCapture.swift', 'FrameFiles.swift', 'FrameInspector.swift', 'FramePDF.swift', 'FramePrint.swift', 'FrameWindows.swift', 'ScriptMessageQueue.swift'];
+export const appleFrameSources = ['FrameAutomation.swift', 'FrameBrowser.swift', 'FrameCapture.swift', 'FrameFiles.swift', 'FrameInsets.swift', 'FrameInspector.swift', 'FramePDF.swift', 'FramePrint.swift', 'FrameWindows.swift', 'ScriptMessageQueue.swift'];
 const linuxTarget = app => app.hasGpu || gpuModules(app.manifest, 'linux').length ? bakeTarget('linux') : null;
 /** The Linux host an agent drives: the app's development executable, or
  * another binary of its Linux crate (`<app>-render`). */
