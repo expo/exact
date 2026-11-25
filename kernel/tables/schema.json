@@ -2687,6 +2687,22 @@
       ],
       "default": "false"
     },
+    "ListInsetsContentToSafeArea": {
+      "_comment": "@ref LLP 1123 D15: `-exact-list-insets-content-to-safe-area`, the keywords of the list_insets_content_to_safe_area row, not a wire enum: true, UIKit's default, is 0 and false 1.",
+      "values": [
+        "true",
+        "false"
+      ],
+      "default": "true"
+    },
+    "ListCellMarginsFollowReadableWidth": {
+      "_comment": "@ref LLP 1123 D15: `-exact-list-cell-margins-follow-readable-width`, the keywords of the list_cell_margins_follow_readable_width row, not a wire enum: false, UIKit's default, is 0 and true 1.",
+      "values": [
+        "false",
+        "true"
+      ],
+      "default": "false"
+    },
     "LayoutMarginsFromSafeArea": {
       "_comment": "@ref LLP 1123 D8: `-exact-insets-layout-margins-from-safe-area`, the keywords of the layout_margins_from_safe_area row, not a wire enum: true, UIKit's default, is 0 and false 1.",
       "values": [
@@ -6054,6 +6070,24 @@
       "rare": true,
       "codec": "enum:SafeAreaTrack",
       "_comment": "@ref LLP 1123 D9 (\"Moving edges\"): `-exact-safe-area-track: live | observed-max`, on a reader: under `live`, the initial value, its lengths read the band as it is; under `observed-max`, they read the largest band its owner's host has reported for the owner's current configuration, while its readouts stay live. For a capture, the declaring node's. Not inherited."
+    },
+    {
+      "bit": 316,
+      "field": "list_insets_content_to_safe_area",
+      "codec": "u8",
+      "keywords": "ListInsetsContentToSafeArea",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: `-exact-list-insets-content-to-safe-area: true | false`, a native table's `insetsContentViewsToSafeArea`: whether its cells' and headers' content views are inset from its safe area. For a table a native view lends the host, read from the box whose scroll policy it takes; a box that says nothing leaves the table's own choice. Not layout. Not inherited."
+    },
+    {
+      "bit": 317,
+      "field": "list_cell_margins_follow_readable_width",
+      "codec": "u8",
+      "keywords": "ListCellMarginsFollowReadableWidth",
+      "rare": true,
+      "default": 0,
+      "_comment": "@ref LLP 1123 D15: `-exact-list-cell-margins-follow-readable-width: false | true`, a native table's `cellLayoutMarginsFollowReadableWidth`: whether its cells' margins keep their content within the readable width. For a table a native view lends the host, read from the box whose scroll policy it takes; a box that says nothing leaves the table's own choice. Not layout. Not inherited."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15; 30 is `filter`, LLP 1003.002), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",
