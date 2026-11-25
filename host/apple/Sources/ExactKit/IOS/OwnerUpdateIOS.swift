@@ -105,6 +105,9 @@ package struct OwnerUpdateIOS: Equatable {
     /// against is kept for; not a large title's collapse, which moves the band within one. `nil` out
     /// of a window.
     package var configuration: UInt64?
+    /// The owner view's reserved regions (D16), from its bounds' origin; `nil` out of a window and
+    /// before iOS 27.1.
+    package var regions: [ReservedRegions.Region]?
 
     /// What the owner's chrome is: its view's vertical bar edge, as the kernel's
     /// `VerticalBarEdge` takes it, `nil` before iOS 27.1; and whether the sidebar of the tab
@@ -201,6 +204,7 @@ package struct OwnerUpdateIOS: Equatable {
         let below = view.convert(CGPoint(x: origin.x, y: origin.y + 1), to: nil)
         update.windowMap = CGAffineTransform(a: right.x - at.x, b: right.y - at.y, c: below.x - at.x, d: below.y - at.y, tx: at.x, ty: at.y)
         update.configuration = configuration(of: controller, view: view, tabs: tabs)
+        update.regions = ReservedRegions.all(of: view)
         return update
     }
 
@@ -267,7 +271,8 @@ package struct OwnerUpdateIOS: Equatable {
     /// x, y, width, height, and a docked byte. Each edge's bar
     /// region, top, right, bottom, left, follows the segments, and the chrome, its vertical bar
     /// edge and its sidebar's availability each optional, follows them, and then the window map, its
-    /// six terms in `CGAffineTransform`'s order, and the configuration's identity (`u64`).
+    /// six terms in `CGAffineTransform`'s order, the configuration's identity (`u64`) and the reserved
+    /// regions after their count, each its identity, kind, frame, margins and an active byte.
     package func encode() -> Data {
         var out = Data()
         func u8(_ v: UInt8) { out.append(v) }
@@ -325,6 +330,16 @@ package struct OwnerUpdateIOS: Equatable {
         }
         optional(windowMap) { m in [m.a, m.b, m.c, m.d, m.tx, m.ty].forEach(f32) }
         optional(configuration, u64)
+        optional(regions) { regions in
+            u32(UInt32(regions.count))
+            for r in regions {
+                u64(r.id)
+                u8(r.kind)
+                [r.frame.minX, r.frame.minY, r.frame.width, r.frame.height].forEach(f32)
+                edges(r.margins)
+                u8(r.active ? 1 : 0)
+            }
+        }
         return out
     }
 }

@@ -6208,8 +6208,8 @@ a production build never asks for it:
 `exactGeometry(id[, space[, node[, regions]]])` reads a node's geometry from the layout
 just committed (LLP 1123 D6). `space` is `"owner"` (the default, the document's outside
 every content owner), `"window"`, or `"node"` with the `id` of the node whose border box
-is the space; `regions` is UIKit's region query options, `"inactive"`, `"mirrored"` or
-both. Its declared shape chooses what it reads: `available`, `generation`, `size`,
+is the space; `regions` is `"inactive"` to read the inactive reserved regions too, as
+UIKit's `includeInactive` does, or empty. Its declared shape chooses what it reads: `available`, `generation`, `size`,
 `frame`, `observations` and `margins`. `generation` is the number of the layout the
 answer reads, 0 before the first. `observations` has an inset set (`top`, `right`,
 `bottom`, `left`) per family: `safeArea`, `keyboard`, `keyboardUndocked`,
@@ -6220,7 +6220,11 @@ rectangles (`x`, `y`, `width`, `height`). `chrome` is the owner's: `verticalBarE
 (`unspecified`, `leading` or `trailing`, UIKit's preferred edge for the iPhone Duo's
 vertical bar, shown or not), `sidebarAvailable` (whether the tab controller's sidebar is
 available, not whether it shows), `overscan` and the Mac's `auxiliaryTopLeftArea` and
-`auxiliaryTopRightArea`; it is `none` outside every owner. `keyboard` has the box's
+`auxiliaryTopRightArea`; it is `none` outside every owner. `regions` lists the reserved
+regions of the node's owner, or of the document: each has an `id`, a `kind` (`division`, as
+a fold's, or `occlusion`), a `frame` in the space read that includes its `margins`, the
+margins, and whether it is `active`; it is `[]` where the host reserves none and `none`
+where it has none to report, as before iOS 27.1. `keyboard` has the box's
 `guide` (the keyboard's rectangle while one shows, docked or undocked, and while it is
 dismissed a rectangle of no height along the box's bottom), the owner's `occupancy` (the
 docked keyboard's overlap with the owner, along its bottom), `docked`, and `near` and `away`,

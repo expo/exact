@@ -47,6 +47,18 @@ final class OwnerUpdateIOSTests: XCTestCase {
         let windowTarget = update.relations.first { $0.relation == OwnerUpdateIOS.Relation.window }
         XCTAssertEqual(windowTarget?.target.insets, window.safeAreaInsets)
         XCTAssertEqual(windowTarget?.target.frame, window.bounds)
+        // Its reserved regions from iOS 27.1, each keeping its identity from one sample to the next
+        if #available(iOS 27.1, *) {
+            let regions = try XCTUnwrap(update.regions)
+            let again = OwnerUpdateIOS.sample(controller: route, view: view, session: sessionView).regions
+            XCTAssertEqual(again?.map(\.id), regions.map(\.id))
+            // The divisions among them are the view's division regions, from its bounds' origin
+            let origin = view.bounds.origin
+            let divisions = (ReservedRegions.divisions(of: view) ?? []).map { $0.frame.offsetBy(dx: -origin.x, dy: -origin.y) }
+            XCTAssertEqual(regions.filter { $0.kind == 0 }.map(\.frame), divisions)
+        } else {
+            XCTAssertNil(update.regions)
+        }
         let margins = try XCTUnwrap(update.margins)
         XCTAssertEqual(margins.root, view.layoutMargins)
         XCTAssertEqual(margins.plain, UIView().layoutMargins)
@@ -153,6 +165,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         XCTAssertNil(update.chrome)
         XCTAssertNil(update.windowMap)
         XCTAssertNil(update.configuration)
+        XCTAssertNil(update.regions)
         XCTAssertEqual(update.keyboard, .unreported)
     }
 
@@ -296,6 +309,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         update.chrome = .init(verticalBarEdge: 2, sidebarAvailable: false)
         update.windowMap = CGAffineTransform(a: 0.9, b: 0.1, c: 0.2, d: 0.8, tx: 5, ty: 62)
         update.configuration = 7
+        update.regions = [.init(id: 11, kind: 0, frame: CGRect(x: 175, y: 0, width: 40, height: 844), margins: UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10), active: false)]
         var w = [UInt8]()
         func f(_ values: Float...) { for v in values { w += withUnsafeBytes(of: v.bitPattern.littleEndian, Array.init) } }
         func u32(_ v: UInt32) { w += withUnsafeBytes(of: v.littleEndian, Array.init) }
@@ -311,6 +325,7 @@ final class OwnerUpdateIOSTests: XCTestCase {
         w += [1, 1, 2, 1, 0]
         w.append(1); f(0.9, 0.1, 0.2, 0.8, 5, 62)
         w.append(1); u64(7)
+        w.append(1); u32(1); u64(11); w.append(0); f(175, 0, 40, 844); f(0, 10, 0, 10); w.append(0)
         XCTAssertEqual([UInt8](update.encode()), w)
         // The keyboard's state, after an empty update's band, lists and margins: 0 unreported, 1 dismissed
         XCTAssertEqual([UInt8](OwnerUpdateIOS().encode())[14], 0)
