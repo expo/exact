@@ -8669,7 +8669,7 @@ status bar: of what the bar sits over, the declaration painted on top wins.
 `auto` follows the winner's `color-scheme`, else the page's scheme; without a valid
 declaration iOS follows the page's scheme. Android resolves `navigation-bar-style` for navigation icons in the same scope, independently.
 Without an explicit icon style, each Android system bar follows its projected header’s or root tablist’s ink, then the page’s scheme (LLP 1105 D7).
-The element’s `background-color` fills the bar through the system band. Its `color` supplies the title, Up arrow, action icons and unselected destinations, defaulting to black or white on an authored background and to the device roles otherwise. On Android, the root’s `accent-color` seeds Material’s tonal-spot colours for the indicator, selected symbol and label, and enabled, untinted text actions. With gesture navigation, Android can choose the
+The element’s `background-color` fills the bar through the system band. Its `color` supplies the title, Up arrow, action icons and unselected destinations, defaulting to black or white on an authored background and to the device roles otherwise. On Android, the app’s accent (the root’s written `accent-color`, else the navigation root’s, else the design’s `AccentColor`) seeds Material’s whole tonal-spot scheme in place of the device’s palette (LLP 1115.001 D4), the indicator, selected symbol and label, and enabled, untinted text actions among it. With gesture navigation, Android can choose the
 handle colour from what the page actually paints. Android's modal routes are
 pages that cover the bar; native sheet detents and transition completion are not
 available there (see `host/android/README.md`, Edge to edge). On iOS a flip shows in

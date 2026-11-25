@@ -70,7 +70,7 @@ export const classifications = [
     ["painted:host/painted/src/presenter/field_scroll.rs", "Presenter::set_caret_visible Presenter::set_caret_opacity"],
     ["painted:host/painted/src/presenter/hosted.rs", "Presenter::reader_fields"],
     ["painted:host/painted/src/presenter/links.rs", "Presenter::inline_run_at Presenter::set_url_opener"],
-    ["painted:host/painted/src/presenter/palette.rs", "Presenter::set_palette"],
+    ["painted:host/painted/src/presenter/palette.rs", "Presenter::accent_seed Presenter::set_palette"],
     ["painted:host/painted/src/presenter/pointer.rs", "Presenter::set_pointer_kind"],
     ["painted:host/painted/src/presenter/preferences.rs",
       "Presenter::apply_live Presenter::follow_local_offset Presenter::page_execution Presenter::refresh_place Presenter::refresh_windows_place " +

@@ -181,3 +181,18 @@ fn changing_only_the_seed_keeps_an_icon_only_headers_layout() {
     );
     assert_ne!(nav.data(), pictures.borrow().last().unwrap().data());
 }
+
+/// LLP 1115.001 D4: the app's written accent is the scheme's seed; a role
+/// is none, so the device's palette stays.
+#[test]
+fn the_apps_written_accent_seeds_the_scheme_and_a_role_does_not() {
+    let source = APP.replace(
+        "main navigationKey",
+        r##"main accent-color=(said == "nothing" ? "#245c46" : "AccentColor") navigationKey"##,
+    );
+    let (mut p, _) = barred(&source);
+    assert_eq!(p.accent_seed(), Some([[0x24, 0x5c, 0x46]; 2]));
+    tap(&mut p, "open").unwrap();
+    tap(&mut p, "edit").unwrap();
+    assert_eq!(p.accent_seed(), None);
+}
