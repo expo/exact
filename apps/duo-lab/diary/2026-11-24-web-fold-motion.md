@@ -16,7 +16,7 @@ A bound `position` of `static` on a scroller is refused (`lower-attr-value`); `r
 
 ### Lean in
 
-`-exact-layout-transition` is UIKit's own rule for an arrangement: a pane takes its new size at once and its position springs. Filmed on an iPhone Duo simulator at 60 frames a second, UIKit's panes follow a spring of 0.3 s with no bounce, so one property and one spring match it.
+`-exact-layout-transition` moves a pane where UIKit's arrangement does. Filmed on an iPhone Duo simulator at 60 frames a second, UIKit's panes follow a spring of 0.3 s with no bounce, so one property and one spring match its place. UIKit springs the pane's size, and its rows with it; on the web only the pane's own background springs in size and the rows take their final width at once.
 
 ### Needed
 

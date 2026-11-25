@@ -21,6 +21,8 @@ final class ArrangementPaneController: UIViewController {
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        // Tell the pane's block in this layout, as a route's is, so that its content moves in the animation UIKit lays it out in
+        node.presenter?.owners.publish()
         changed()
     }
     override func viewSafeAreaInsetsDidChange() {
