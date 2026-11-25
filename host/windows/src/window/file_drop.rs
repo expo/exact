@@ -376,6 +376,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<Event> for Window<D> 
             return;
         };
         let hwnd = HWND(raw.hwnd.get() as _);
+        super::session_end::install(hwnd.0, Rc::downgrade(&self.app));
         if self.registration.as_ref().is_some_and(|r| r.0 == hwnd) {
             return;
         }

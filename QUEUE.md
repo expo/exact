@@ -92,7 +92,6 @@
 - An iOS warm-return trace joins a tab press and a request’s settlement to frame batches by epoch. Touch delivery, HTTP wire arrival and first physical presentation still lack timestamps. For the recipe’s component-owned rows, `state.resourceStatus` reported fallback and no pending request while `state.instances` held the rows and `state.pending` listed their refresh ticket (#1549).
 - Build a Contract that projects `exactViewport().devicePosture` as a number and interpolates it into text. The bake accepts the wrong field type (LLP 1078 D2).
 - Android currently shortens the layout viewport for `interactive-widget="resizes-visual"`. Focus a field and compare `exactViewport().height` before and after the keyboard opens. A separate visual viewport would let the layout keep its height (LLP 1078, #1567).
-- Windows has no update store. A manifest declaring `host.windows` without `deploy.store.windows` bakes level A, which the window refuses at launch. Refuse it at bake time and name `deploy.store.windows: "0"`.
 - On Apple, call `native.later({ extension: "absent", op: "ping" })` beside a Swift module. ExactExtensions returns an error record as a successful reply when no package accepts the call.
 - With an app module installed, call `native.call({extension: "missing", sync: "read"})`. The runner returns `{"error":"NotSupportedError"}` as the synchronous answer for a missing package form.
 - Return `{"exact:answer":"true"}` from an Android package. Extensions.call decodes the string as the Boolean `true`.
