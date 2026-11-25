@@ -222,6 +222,10 @@ struct Shift {
     /// Only that route is drawn: the other is a sheet's, drawn as the sheet.
     alone: bool,
     container: Option<zoom::Container>,
+    /// A container's names and where they start: they move on its clock,
+    /// as Compose drives a container and the names in it on one
+    /// transition (LLP 1013.004 D4).
+    names: Option<(Vec<(NodeKey, NodeKey)>, f32)>,
     /// A switch between stacks uses Material's fade through.
     through: bool,
     /// The leaving route's ancestors when the switch began: what of them
@@ -508,9 +512,11 @@ impl<D: DataSource> Presenter<D> {
             !p.live(&keys) || p.returned(now) && !pairs.iter().any(|(_, to)| host.in_flight(*to))
         });
         // A pop whose crossing flies nothing (a fade through) ends a
-        // preview's flights where Back went.
-        if self.stage.preview.is_none() {
-            self.host.release_flights(&bounds_spring(), true);
+        // preview's flights where Back went; a container lets its names go
+        // when it lands.
+        let carries = (self.stage.shift.as_ref()).is_some_and(|s| s.names.is_some());
+        if self.stage.preview.is_none() && !carries {
+            self.host.release_flights(Some(&bounds_spring()), true);
         }
         let tallest = (h - status).max(1.0);
         // What of the page the keyboard covers, where it did not end the
@@ -614,6 +620,15 @@ impl<D: DataSource> Presenter<D> {
             self.stage.shift = None;
             self.stage.preview = None;
         }
+        if let Some((names, seeked)) = (self.stage.shift.as_ref()).and_then(|s| {
+            let (names, from) = s.names.as_ref()?;
+            Some((
+                names.clone(),
+                from + (1.0 - from) * s.progress.at(now).clamp(0.0, 1.0),
+            ))
+        }) {
+            self.host.seek_flights(&names, seeked);
+        }
         // A route that flies in as a whole covers the route beneath only
         // when it lands, so that one is drawn until then.
         let flies_in = |s: &Shift| {
@@ -622,7 +637,10 @@ impl<D: DataSource> Presenter<D> {
                     .is_some_and(|n| self.host.flying(n.id))
         };
         if (self.stage.shift.as_ref()).is_some_and(|s| !s.progress.moving(now) && !flies_in(s)) {
-            self.stage.shift = None;
+            if self.stage.shift.take().is_some_and(|s| s.names.is_some()) {
+                self.host.release_flights(None, true);
+                self.host.land_flights();
+            }
         }
         self.hold_arriving();
         self.place_sheets(&stack, &kinds);
@@ -799,7 +817,9 @@ impl<D: DataSource> Presenter<D> {
             Some(_) => (self.sheet_span().1, self.viewport.1),
             None => self.viewport,
         };
-        let from = (self.stage.preview.take()).and_then(|p| p.pose_for(*old, size));
+        let preview = self.stage.preview.take();
+        let from = preview.and_then(|p| p.pose_for(*old, size));
+        let seeked = (preview.and_then(|p| p.progress_for(*old))).map_or(0.0, zoom::emphasized);
         if still {
             return;
         }
@@ -830,28 +850,37 @@ impl<D: DataSource> Presenter<D> {
             authored: None,
             alone: false,
             container,
+            names: None,
             through,
             left,
         });
         // The names both routes hold fly on the crossing's own timing,
         // whatever their authored curve (LLP 1013.004 D2, D4).
-        if !through {
-            let curve = match container {
-                Some(_) => zoom::clock(forward),
-                None => bounds_spring(),
-            };
-            self.fly_routes(forward, (*old, *new), &curve);
+        match (through, container) {
+            (true, _) => {}
+            (false, Some(_)) => {
+                let pairs = self.pairs(forward, (*old, *new));
+                self.host.seek_flights(&pairs, seeked);
+                if let Some(s) = self.stage.shift.as_mut() {
+                    s.names = Some((pairs, seeked));
+                }
+            }
+            (false, None) => self.fly_routes(forward, (*old, *new), &bounds_spring()),
+        }
+    }
+
+    /// The names a push from `old` to `new`, or a pop of `old`, pairs.
+    fn pairs(&self, forward: bool, (old, new): (NodeKey, NodeKey)) -> Vec<(NodeKey, NodeKey)> {
+        match forward {
+            true => pair_routes(self.host.kernel(), old, new),
+            false if self.stage.pops.1 == Some(old) => self.stage.pops.2.clone(),
+            false => Vec::new(),
         }
     }
 
     /// Fly the names a push from `old` to `new`, or a pop of `old`, pairs.
     fn fly_routes(&mut self, forward: bool, (old, new): (NodeKey, NodeKey), curve: &Transition) {
-        let pairs = match forward {
-            true => pair_routes(self.host.kernel(), old, new),
-            false if self.stage.pops.1 == Some(old) => self.stage.pops.2.clone(),
-            false => Vec::new(),
-        };
-        for (from, to) in pairs {
+        for (from, to) in self.pairs(forward, (old, new)) {
             self.host.fly(from, to, curve, true);
         }
     }

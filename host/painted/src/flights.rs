@@ -158,12 +158,13 @@ impl<D: DataSource> Host<D> {
 
     /// A predictive Back ended: each flight it seeks goes on to its
     /// destination (`on`) or back to land at its source, on `transition`.
-    pub(crate) fn release_flights(&mut self, transition: &Transition, on: bool) {
+    /// With no `transition`, each lands where it is aimed at once.
+    pub(crate) fn release_flights(&mut self, transition: Option<&Transition>, on: bool) {
         let x = if on { END } else { 0.0 };
         for f in self.flights.running.iter_mut().filter(|f| f.seeking) {
             f.seeking = false;
             let node = motion_node(f.frame.to) | FLIGHT;
-            f.lands_after = aim(&mut self.engine, node, Some(transition), x);
+            f.lands_after = aim(&mut self.engine, node, transition, x);
         }
     }
 
@@ -182,7 +183,7 @@ impl<D: DataSource> Host<D> {
         true
     }
 
-    pub(super) fn land_flights(&mut self) -> bool {
+    pub(crate) fn land_flights(&mut self) -> bool {
         let before = self.flights.running.len();
         let engine = &mut self.engine;
         let now = engine.sample_time();

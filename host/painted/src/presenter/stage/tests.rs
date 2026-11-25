@@ -913,6 +913,47 @@ fn back_while_the_push_flight_lands_flies_the_name_once() {
 }
 
 #[test]
+fn a_containers_names_move_on_its_clock() {
+    let plan = PAIRED
+        .replace(
+            "box sharedElement=\"photo\" testId=\"thumb\"",
+            "box id=\"thumb\" sharedElement=\"photo\" testId=\"thumb\"",
+        )
+        .replace(
+            "testId=\"route-detail\"",
+            "navigationSource=\"thumb\" testId=\"route-detail\"",
+        );
+    let mut p = paired_with(&plan);
+    // The names start at the first frame that shows them, the box too.
+    p.presents_pictures(true);
+    p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
+    let t = p.host().now();
+    tap(&mut p, "open");
+    p.reader_clock(t + 16.0, true, true);
+    p.frame();
+    let carried = p.picture_carried();
+    p.picture_presented(carried, t + 50.0);
+    for i in 1..6 {
+        p.reader_clock(t + 50.0 + 60.0 * f64::from(i), true, true);
+        p.frame();
+        let now = p.host().now();
+        let shown = p
+            .stage
+            .shift
+            .as_ref()
+            .expect("a container crossing")
+            .progress
+            .at(now);
+        let name = flight(&p).2;
+        assert!((name - shown).abs() < 0.01, "{name} {shown}");
+    }
+    p.set_live_clock(None);
+    p.presents_pictures(false);
+    after(&mut p, 1000.0);
+    assert!(p.host().flight_frames().is_empty(), "landed with the box");
+}
+
+#[test]
 fn a_cancelled_container_preview_takes_its_names_back_with_the_box() {
     let plan = PAIRED
         .replace(

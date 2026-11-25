@@ -149,6 +149,7 @@ impl<D: DataSource> Presenter<D> {
             authored: Some(part),
             alone,
             container: None,
+            names: None,
             through: false,
             left: Vec::new(),
         });
