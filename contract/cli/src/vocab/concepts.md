@@ -554,7 +554,7 @@ component App
 More: docs/recipes/persisted-setting.md
 
 ## swipe: a list row's swipe actions
-names: delete, swipe-actions, swipeActions, swipe-to-delete, swipeleft, swipeContent, swipeLeading, swipeTrailing, swipe actions
+names: delete, swipe-actions, swipeActions, swipe-to-delete, swipeContent, swipeLeading, swipeTrailing, swipe actions
 
 `delete=action` on a list row is its swipe to delete: a red Delete beside the row, which a
 full swipe performs. On iOS it is UIKit's own swipe action; on the web and the Mac the row
@@ -580,13 +580,14 @@ component App
 - On a row of a grouped list's `section`, or of a `list` whose rows go down the page;
   anywhere else it does nothing (warning `lower-delete-row`). A `list` with sections is a
   grouped list only with `appearance="auto"` (warning `lower-list-section`).
-- `swipeleft=action` and `swiperight=action` are not swipe actions: the node follows the
-  finger and the one action runs when it lifts past 64 points, with no button revealed
-  (a message's swipe to reply; `contract vocab swipeleft`). A row that shows Delete is
-  `delete=`.
-- `swipe=action swipe-direction="down"` is not a swipe action either: the platform's discrete
+- `swipe=action swipe-follow="left"` (or `"right"`) is not a swipe action: the node follows
+  the finger one way and the one action runs when it lifts at or past 64 points, with no
+  button revealed (a message's swipe to reply; `contract vocab swipe-follow`). A row that
+  shows Delete is `delete=`.
+- `swipe=action swipe-flick="down"` is not a swipe action either: the platform's discrete
   swipe, which nothing follows, runs the action once (a flick down on a composer that puts the
-  keys away; `contract vocab swipe-direction`).
+  keys away; `contract vocab swipe-flick`). An element takes one `swipe` and exactly one of
+  the two.
 - Other actions than Delete (Pin, Flag, a leading action, several) are the long form: a
   horizontal snap `scroll` laid out as a row (`display="flex"`), naming its content
   (`swipeContent`) and its actions (`swipeTrailing`, `swipeLeading`: buttons' `id`s, inside

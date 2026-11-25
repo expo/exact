@@ -17,12 +17,10 @@ component App
     rest = match e.targetTop { case some(t) => `${t}`, case none => "none" }
   view
     column width="100%" height=600
-      box testId="left" swipeleft=left touch-action="pan-y" width="100%" height=60
+      box testId="left" swipe=left swipe-follow="left" touch-action="pan-y" width="100%" height=60
         text "left"
-      box testId="right" swiperight=right touch-action="pan-y" width="100%" height=60
+      box testId="right" swipe=right swipe-follow="right" touch-action="pan-y" width="100%" height=60
         text "right"
-      box testId="both" swipeleft=left swiperight=right touch-action="pan-y" width="100%" height=60
-        text "both"
       text `${lefts}:${rights}` testId="swipes"
       text `${starts}:${ends}:${velocity}:${rest}` testId="drags"
       scroll testId="port" height=200 scrolldragstart=began scrolldragend=released

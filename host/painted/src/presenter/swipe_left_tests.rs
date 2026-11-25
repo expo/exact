@@ -1,5 +1,6 @@
-//! `swipeleft`, the mirror of `swiperight` (Charlie, 2026-11-10;
-//! `issues/20261022-no-swipeleft.md`): the same recognizer, the other way.
+//! A swipe the node follows left, the mirror of one it follows right
+//! (Charlie, 2026-11-10; `issues/20261022-no-swipeleft.md`): the same
+//! recognizer, the other way.
 use super::*;
 use exact_motion::Property;
 
@@ -58,7 +59,7 @@ fn swipe(p: &mut Presenter<()>, dx: f32, at: f64) {
 
 #[test]
 fn a_leftward_swipe_past_the_knee_runs_swipeleft_once() {
-    let mut p = boot(&source("swipeleft=left"));
+    let mut p = boot(&source(r#"swipe=left swipe-follow="left""#));
     let row = id(&p, "row");
     let indicator = id(&p, "indicator");
     assert!(p.pointer_down(300., 40., 0.).unwrap());
@@ -80,18 +81,25 @@ fn a_leftward_swipe_past_the_knee_runs_swipeleft_once() {
 
 #[test]
 fn short_of_the_knee_neither_swipe_runs() {
-    for handlers in ["swipeleft=left", "swiperight=right swipeleft=left"] {
+    // Each row dragged its own way, 50 points, short of the 64-point knee
+    for (handlers, dx) in [
+        (r#"swipe=left swipe-follow="left""#, -50.),
+        (r#"swipe=right swipe-follow="right""#, 50.),
+    ] {
         let mut p = boot(&source(handlers));
-        swipe(&mut p, -50., 0.);
+        swipe(&mut p, dx, 0.);
         assert_eq!(count(&p), "0 0", "{handlers}");
     }
 }
 
 #[test]
 fn each_way_refuses_a_start_the_other_way() {
-    // A swiperight-only node refuses a leftward start, and a swipeleft-only
-    // node a rightward one: nothing is held and nothing runs.
-    for (handlers, dx) in [("swiperight=right", -120.), ("swipeleft=left", 120.)] {
+    // A node following right refuses a leftward start, and one following
+    // left a rightward one: nothing is held and nothing runs.
+    for (handlers, dx) in [
+        (r#"swipe=right swipe-follow="right""#, -120.),
+        (r#"swipe=left swipe-follow="left""#, 120.),
+    ] {
         let mut p = boot(&source(handlers));
         let row = id(&p, "row");
         assert!(p.pointer_down(300., 40., 0.).unwrap());
@@ -109,19 +117,25 @@ fn each_way_refuses_a_start_the_other_way() {
     }
 }
 
+/// No source gives a node both ways (LLP 1057.001 §8), but a plan may hold
+/// them, and the host still takes it: each way starts, shows its progress and
+/// completes.
 #[test]
-fn a_node_with_both_runs_the_way_it_went() {
-    let mut p = boot(&source("swiperight=right swipeleft=left"));
-    swipe(&mut p, -120., 0.);
-    assert_eq!(count(&p), "0 1");
-    p.tick(10_000.);
-    swipe(&mut p, 120., 10_000.);
-    assert_eq!(count(&p), "1 1");
+fn ways_with_both_start_progress_and_complete_each_way() {
+    let both = super::swipe::Ways {
+        right: true,
+        left: true,
+    };
+    assert!(both.starts(10., 0.) && both.starts(-10., 0.));
+    assert_eq!((both.progress(32.), both.progress(-32.)), (0.5, 0.5));
+    assert_eq!(both.completes(64.), Some(EventKind::Swiperight));
+    assert_eq!(both.completes(-64.), Some(EventKind::Swipeleft));
+    assert_eq!(both.completes(30.), None);
 }
 
 #[test]
 fn the_direction_is_the_screens_in_a_right_to_left_layout() {
-    let src = source("swipeleft=left").replace(
+    let src = source(r#"swipe=left swipe-follow="left""#).replace(
         "column width=400 height=500",
         "column width=400 height=500 direction=\"rtl\"",
     );
@@ -141,7 +155,7 @@ fn retained_actions_swipe_left_completes_as_the_ordinary_path_does() {
     use super::swipe_tests::retained_actions::{ack, block_body, boot, id, point, selected, Rows};
     let _service = crate::content_region::test_service();
     let src = super::swipe_tests::retained_actions::source()
-        .replace("swiperight=replyTo(m.id)", "swipeleft=replyTo(m.id)");
+        .replace(r#"swipe-follow="right""#, r#"swipe-follow="left""#);
     let mut p = boot(&src, true, Rows::default());
     let mut ordinary = boot(&src, false, Rows::default());
     ack(&mut p);

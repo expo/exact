@@ -533,6 +533,9 @@ impl Lowerer<'_> {
     /// `display: block`, a transition, the button's context), as it decides
     /// for that instance ([`Lowerer::bare_control`]).
     pub(crate) fn check_anatomy(&mut self, file: &File) {
+        // The written views' swipe rules, judged in every declaration as a part is (LLP 1057.001 §8)
+        self.errors
+            .extend(crate::handlers::swipe::judge_written(file));
         for e in platform(file) {
             self.push(e);
         }
