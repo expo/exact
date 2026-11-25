@@ -415,13 +415,11 @@ impl<D: exact_runner::DataSource> Presenter<D> {
         let id = self.host.kernel().node_by_key(source)?.id;
         let drag = self.drag_of(id, origin.0, origin.1, false)?;
         let rect = self.shown_box(id)?;
-        if rect.2 <= 0. || rect.3 <= 0. {
-            return None;
-        }
-        // The box, its scale and its pixels are one acknowledged frame's
-        let cut = self
-            .shown
-            .as_ref()
+        // The box, its scale and its pixels are one acknowledged frame's, and
+        // a frame that hid the source shows none of it
+        let shown = self.box_of(id).is_some_and(|b| b.visible);
+        let cut = (self.shown.as_ref())
+            .filter(|_| shown)
             .and_then(|(pixels, scale)| crop(pixels, *scale, rect));
         let corner = cut.as_ref().map_or((rect.0, rect.1), |(_, corner)| *corner);
         let picture = cut.map(|(picture, _)| picture);

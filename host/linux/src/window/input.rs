@@ -45,11 +45,13 @@ pub(super) struct Input {
 }
 
 /// A seat's pointer over the window: where it is, the buttons it holds by
-/// Linux code, and the buttons whose press the window heard.
+/// Linux code, the serial of the press that began its grab, and the
+/// buttons whose press the window heard.
 #[derive(Default)]
 struct SeatPointer {
     point: Option<(f32, f32)>,
     held: Vec<u32>,
+    grab: Option<u32>,
     heard: u32,
 }
 
@@ -100,10 +102,23 @@ impl Input {
         if !self.admit(seat, &pointed) {
             return Ok(());
         }
-        if let Some(mask) = modifiers {
-            sync_modifiers(presenter, modifiers_of(mask));
-        }
-        let result = match pointed {
+        // The event's own modifiers, a seat with no keyboard holding none
+        let modifiers = key_modifiers(modifiers.unwrap_or(0));
+        let result = presenter.with_pointer_modifiers(modifiers, |presenter| {
+            self.deliver(presenter, window, pointed, now_ms)
+        });
+        self.sync_held();
+        result
+    }
+
+    fn deliver<D: DataSource>(
+        &mut self,
+        presenter: &mut Presenter<D>,
+        window: &Window,
+        pointed: Pointed,
+        now_ms: f64,
+    ) -> Result<(), String> {
+        match pointed {
             Pointed::Entered(point) | Pointed::Moved(point) => {
                 self.moved(presenter, window, point, now_ms)
             }
@@ -117,9 +132,7 @@ impl Input {
                 Ok(())
             }
             Pointed::Lost => presenter.pointer_lost(now_ms),
-        };
-        self.sync_held();
-        result
+        }
     }
 
     /// Keep what seat `seat`'s pointer did, and whether the presenter hears
@@ -133,11 +146,19 @@ impl Input {
             Pointed::Entered(point) | Pointed::Moved(point) => state.point = Some(*point),
             Pointed::Left => state.point = None,
             Pointed::Button {
-                button, pressed, ..
+                serial,
+                button,
+                pressed,
             } => {
                 state.held.retain(|b| b != button);
+                // The grab is the first press's, as the compositor's
                 if *pressed {
+                    if state.held.is_empty() {
+                        state.grab = Some(*serial);
+                    }
                     state.held.push(*button);
+                } else if state.held.is_empty() {
+                    state.grab = None;
                 }
             }
             Pointed::Wheel { .. } | Pointed::Lost => {}
@@ -187,20 +208,28 @@ impl Input {
                 return true;
             }
         }
+        // Another seat's pointer is the window's from here: its place, and a
+        // click history of its own
         if !followed {
             self.seat = Some(seat);
-            self.pointer = point.or(self.pointer);
+            self.pointer = point;
+            self.inside = point.is_some();
+            self.previous_click = None;
         }
         true
     }
 
     /// Keep the left press a lift may name: the followed seat's, while the
-    /// left button is the one button it holds.
+    /// left button is the one button it holds and its press began the grab.
     fn sync_held(&self) {
-        let alone = |seat: &u32| self.seats.get(seat).is_some_and(|s| s.held == [LEFT]);
+        let grab = |press: &Press| {
+            self.seats
+                .get(&press.seat)
+                .is_some_and(|s| s.held == [LEFT] && s.grab == Some(press.serial))
+        };
         let held = self
             .left
-            .filter(|press| self.seat == Some(press.seat) && alone(&press.seat));
+            .filter(|press| self.seat == Some(press.seat) && grab(press));
         self.held.set(held);
     }
 
@@ -232,6 +261,9 @@ impl Input {
         if let Some(state) = self.seats.get_mut(&press.seat) {
             state.held.retain(|&b| b != LEFT);
             state.heard &= !1;
+            if state.held.is_empty() {
+                state.grab = None;
+            }
         }
         self.sync_held();
         presenter.pointer_released();
@@ -585,19 +617,15 @@ fn bit_of(code: u32) -> u32 {
 }
 
 /// The modifiers an effective xkb mask holds, by its real modifiers' fixed
-/// indices, as winit names them: Shift 0, Control 2, Mod1 (Alt) 3 and Mod4
-/// (Super) 6.
-fn modifiers_of(mask: u32) -> ModifiersState {
-    let mut modifiers = ModifiersState::empty();
-    for (bit, modifier) in [
-        (0, ModifiersState::SHIFT),
-        (2, ModifiersState::CONTROL),
-        (3, ModifiersState::ALT),
-        (6, ModifiersState::SUPER),
-    ] {
-        modifiers.set(modifier, mask & 1 << bit != 0);
+/// indices, as winit reads them: Shift 0, Control 2, Mod1 (Alt) 3 and Mod4
+/// (Super, the meta key) 6.
+fn key_modifiers(mask: u32) -> exact_runner::KeyModifiers {
+    exact_runner::KeyModifiers {
+        shift: mask & 1 != 0,
+        ctrl: mask & 1 << 2 != 0,
+        alt: mask & 1 << 3 != 0,
+        meta: mask & 1 << 6 != 0,
     }
-    modifiers
 }
 
 fn sync_modifiers<D: DataSource>(presenter: &mut Presenter<D>, modifiers: ModifiersState) {
@@ -652,14 +680,36 @@ mod tests {
         assert!(hear(&mut input, 1, Pointed::Entered((10., 10.))));
         assert!(hear(&mut input, 2, Pointed::Moved((100., 100.))));
         assert!(hear(&mut input, 1, button(5, LEFT, true)));
-        assert_eq!(input.pointer, Some((10., 10.)), "the press is at its seat's point");
-        assert!(!hear(&mut input, 2, Pointed::Moved((200., 200.))), "the other seat waits");
+        assert_eq!(
+            input.pointer,
+            Some((10., 10.)),
+            "the press is at its seat's point"
+        );
+        assert!(
+            !hear(&mut input, 2, Pointed::Moved((200., 200.))),
+            "the other seat waits"
+        );
         assert!(!hear(&mut input, 2, button(9, LEFT, true)));
-        assert!(!hear(&mut input, 2, Pointed::Wheel { lines: true, x: 0., y: 1. }));
+        assert!(!hear(
+            &mut input,
+            2,
+            Pointed::Wheel {
+                lines: true,
+                x: 0.,
+                y: 1.
+            }
+        ));
         assert!(hear(&mut input, 1, button(6, LEFT, false)));
-        assert!(!hear(&mut input, 2, button(10, LEFT, false)), "its press was not heard");
+        assert!(
+            !hear(&mut input, 2, button(10, LEFT, false)),
+            "its press was not heard"
+        );
         assert!(hear(&mut input, 2, button(11, LEFT, true)));
-        assert_eq!(input.pointer, Some((200., 200.)), "where that seat moved meanwhile");
+        assert_eq!(
+            input.pointer,
+            Some((200., 200.)),
+            "where that seat moved meanwhile"
+        );
     }
 
     #[test]
@@ -675,7 +725,10 @@ mod tests {
         assert_eq!(held.get(), None, "a chord lifts nothing");
         hear(&mut input, 1, button(7, 0x111, false));
         assert_eq!(held.get(), press, "the left press is still the grab");
-        assert!(!hear(&mut input, 1, button(8, 0x118, true)), "a button the presenter has no bit for");
+        assert!(
+            !hear(&mut input, 1, button(8, 0x118, true)),
+            "a button the presenter has no bit for"
+        );
         assert_eq!(held.get(), None, "still counts");
         hear(&mut input, 1, button(9, 0x118, false));
         assert_eq!(held.get(), press);
@@ -683,9 +736,51 @@ mod tests {
 
     #[test]
     fn an_effective_mask_holds_the_modifiers_winit_reads() {
-        assert_eq!(modifiers_of(0b101), ModifiersState::SHIFT | ModifiersState::CONTROL);
-        assert_eq!(modifiers_of(1 << 3 | 1 << 6), ModifiersState::ALT | ModifiersState::SUPER);
-        assert_eq!(modifiers_of(1 << 1 | 1 << 4), ModifiersState::empty(), "Lock and Mod2 are none of them");
+        let held = |shift, ctrl, alt, meta| exact_runner::KeyModifiers {
+            shift,
+            ctrl,
+            alt,
+            meta,
+        };
+        assert_eq!(key_modifiers(0b101), held(true, true, false, false));
+        assert_eq!(
+            key_modifiers(1 << 3 | 1 << 6),
+            held(false, false, true, true)
+        );
+        assert_eq!(
+            key_modifiers(1 << 1 | 1 << 4),
+            held(false, false, false, false),
+            "Lock and Mod2 are none of them"
+        );
+    }
+
+    #[test]
+    fn a_pointer_event_holds_its_own_modifiers_and_the_keyboard_keeps_its_own() {
+        let mut presenter = editor();
+        presenter.hold_modifier("ControlLeft", true);
+        let shift = key_modifiers(1);
+        let during = presenter.with_pointer_modifiers(shift, |p| p.modifiers());
+        assert!(
+            during.shift && !during.ctrl,
+            "the pointer event's seat held Shift alone"
+        );
+        let after = presenter.modifiers();
+        assert!(after.ctrl && !after.shift, "the keyboard's Control is back");
+    }
+
+    #[test]
+    fn a_chord_begun_by_another_button_names_no_left_press() {
+        let held = Rc::new(Cell::new(None));
+        let mut input = Input::default();
+        input.listen(held.clone());
+        hear(&mut input, 1, Pointed::Entered((10., 10.)));
+        hear(&mut input, 1, button(5, 0x111, true));
+        hear(&mut input, 1, button(6, LEFT, true));
+        hear(&mut input, 1, button(7, 0x111, false));
+        assert_eq!(held.get(), None, "the right press began the grab");
+        hear(&mut input, 1, button(8, LEFT, false));
+        hear(&mut input, 1, button(9, LEFT, true));
+        assert_eq!(held.get(), Some(Press { seat: 1, serial: 9 }));
     }
     use exact_painted::presenter::PainterChoice;
     use winit::keyboard::{KeyCode, NamedKey};

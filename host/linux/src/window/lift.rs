@@ -439,7 +439,9 @@ impl Listener {
             .width
             .checked_mul(4)
             .and_then(|stride| stride.checked_mul(icon.height))
-            .filter(|&length| icon.width > 0 && icon.height > 0 && length as usize == icon.argb.len());
+            .filter(|&length| {
+                icon.width > 0 && icon.height > 0 && length as usize == icon.argb.len()
+            });
         let Some(length) = length else {
             surface.destroy();
             return None;

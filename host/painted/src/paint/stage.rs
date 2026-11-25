@@ -754,6 +754,7 @@ impl Painter {
                     shape_clips: Vec::new(),
                     id: *id,
                     pointer_hit: true,
+                    visible: true,
                     projective: None,
                     affine: Some((Transform::identity(), *rect)),
                     unpress: Transform::identity(),

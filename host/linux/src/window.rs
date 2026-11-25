@@ -280,7 +280,8 @@ impl<D: DataSource + Default> ApplicationHandler<Event> for App<'_, D> {
                             warn(live.presenter.advance(now));
                             let now = live.presenter.host().now();
                             let p = &mut live.presenter;
-                            live.input.pointed(p, &live.window, seat, pointed, modifiers, now)
+                            live.input
+                                .pointed(p, &live.window, seat, pointed, modifiers, now)
                         }
                         drop::Heard::Gone => {
                             live.presenter.set_lifter(None);

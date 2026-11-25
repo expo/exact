@@ -37,6 +37,8 @@ const APP: &str = r##"component App
         text "Press"
       box testId="changing" draggable=true dataTransfer=DataTransfer(text=label) pointerdown=rename width=300 height=60
       box testId="hiding" draggable=true dataTransfer=DataTransfer(text="hiding") visibility=(hidden ? "hidden" : "visible") pointerdown=hide width=300 height=40
+      box testId="hidden-source" draggable=true dataTransfer=DataTransfer(text="hidden") visibility="hidden" width=300 height=40
+        box testId="shown-child" visibility="visible" width=300 height=40
       box testId="wide" draggable=true dataTransfer=DataTransfer(text="wide") width=500 height=20
       box testId="files" draggable=true dataTransfer=DataTransfer(files=["assets/a.png"]) width=300 height=40
       box testId="around-files" draggable=true dataTransfer=DataTransfer(text="around") width=300 height=60
@@ -262,10 +264,18 @@ fn a_lift_the_host_declines_leaves_the_contact_as_if_nothing_armed() {
 }
 
 #[test]
-fn a_source_hidden_at_the_press_lifts_nothing() {
+fn a_source_hidden_at_the_press_or_by_the_lift_lifts_nothing() {
     let (mut p, lifts) = boot();
     drag(&mut p, "hiding", 40., 0.);
-    assert!(texts(&lifts).is_empty(), "its pointerdown hid it");
+    assert!(
+        texts(&lifts).is_empty(),
+        "its pointerdown hid it after it armed"
+    );
+    drag(&mut p, "shown-child", 40., 0.);
+    assert!(
+        texts(&lifts).is_empty(),
+        "a child shown inside a hidden source arms nothing"
+    );
 }
 
 #[test]
