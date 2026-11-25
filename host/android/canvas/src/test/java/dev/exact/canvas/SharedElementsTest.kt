@@ -497,6 +497,20 @@ class SharedElementsTest {
         pixels.recycle()
     }
 
+    @Test fun aChildOfAParentSprungPastNothingIsNotDrawn() {
+        // An underdamped spring from 300 to 10 overshoots: at 1.15 the parent is 33.5 points less than nothing.
+        val t = Fixture()
+        t.shared.begin(state(listOf(1, 3)))
+        t.define(definition(1, RectF(0f, 0f, 300f, 300f))); t.define(definition(3, RectF(0f, 0f, 20f, 20f), parents = listOf(1)))
+        t.shared.finish()
+        t.shared.begin(state(listOf(2, 4), listOf(Triple(1, 2, 1.15f), Triple(3, 4, 0.5f))))
+        t.define(definition(2, RectF(0f, 0f, 10f, 10f))); t.define(definition(4, RectF(0f, 0f, 5f, 5f), parents = listOf(2)))
+        t.shared.finish()
+        val pixels = t.pixels()
+        assertEquals(Color.WHITE, pixels.getPixel(2, 2))
+        pixels.recycle()
+    }
+
     @Test fun aLiveSubtreeKeepsItsRotationInFlight() {
         // A 40 point square turned 45 degrees: a diamond in a box 40 * sqrt(2) on a side.
         val side = 40f * kotlin.math.sqrt(2f)

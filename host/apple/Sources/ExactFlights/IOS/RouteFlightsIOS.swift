@@ -22,6 +22,8 @@ extension Presenter {
         guard !DisplayPreferences.reducedMotion, zoom == nil else { return }
         let pairs = Self.routePairs(leaving: named(in: leaving), arriving: named(in: arriving))
         for pair in pairs { holds[ObjectIdentifier(pair.from)] = (pair.from, flightSource(pair.from), pair.from.flightLines) }
+        // An unanimated pop takes its route out of the window at once and flies nothing: let its holds go.
+        DispatchQueue.main.async { [weak self] in self?.holds = self?.holds.filter { $0.value.view.window != nil } ?? [:] }
     }
 
     /// The pairs a route change flies: each name `leaving` holds once and
@@ -58,11 +60,13 @@ extension Presenter {
         // hand-built screen.
         guard coordinator.isAnimated, !DisplayPreferences.reducedMotion, zoom == nil else { holds = [:]; return false }
         let pairs = Self.routePairs(leaving: named(in: leaving), arriving: named(in: arriving))
-            .filter { $0.from.window != nil && flights[$0.to.id] == nil }
+            .filter { $0.from.window != nil }
         let sources = holds
         // A hold lasts until the transition that flies it, or until its route leaves the window.
         holds = holds.filter { held in held.value.view.window != nil && !pairs.contains { $0.from === held.value.view } }
         guard !pairs.isEmpty else { return false }
+        // An in-commit handoff of a name the routes pair yields to the pair: the name flies once (LLP 1013.004 D1).
+        for pair in pairs { if let f = flights[pair.to.id] { landFlight(f) } }
         // Hidden now, and cut out of a picture of the route taken before: the flight draws it.
         let held = pairs.map {
             (flight: Flight(id: $0.to.id, source: sources[ObjectIdentifier($0.from)]?.source ?? flightSource($0.from)), leaver: $0.from, alpha: $0.from.alpha)
@@ -80,16 +84,14 @@ extension Presenter {
         UIView.performWithoutAnimation { for h in held { h.leaver.alpha = 0 } }
         if let picture {
             let cut = CAShapeLayer()
-            let path = UIBezierPath(rect: picture.bounds)
-            let holes = held.map { picture.convert($0.flight.source.rect, from: nil) }
-            // A hole inside another (a named photo in a named card) would fill again under even-odd.
-            for (i, hole) in holes.enumerated() where !holes.indices.contains(where: { $0 != i && holes[$0].contains(hole) && (holes[$0] != hole || $0 < i) }) {
-                path.append(UIBezierPath(rect: hole))
-            }
-            cut.path = path.cgPath
-            cut.fillRule = .evenOdd
+            // Their union: a name in another, or two that overlap, leave nothing in between.
+            let holes = CGMutablePath()
+            for h in held { holes.addRect(picture.convert(h.flight.source.rect, from: nil)) }
+            cut.path = CGPath(rect: picture.bounds, transform: nil).subtracting(holes)
             picture.layer.mask = cut
         }
+        // What the leaver shows when it lands: its own alpha, or one a batch set while it flew.
+        var alphas = held.map(\.alpha)
         // Starts at 0, and the block animates it to 1.
         let probe = UIView()
         probe.isUserInteractionEnabled = false
@@ -114,7 +116,12 @@ extension Presenter {
                     .first { $0.keyPath == "opacity" && $0.speed == 0 }
                 let p = min(1, max(0, driven.map { CGFloat($0.timeOffset / max($0.duration, 0.001)) } ?? CGFloat(probe.layer.presentation()?.opacity ?? 0)))
                 // Hidden each frame: a batch that applies the leaver's style shows it again.
-                for h in held where flights[h.flight.id] === h.flight { h.leaver.alpha = 0; h.flight.progress = p; showFlight(h.flight) }
+                for (i, h) in held.enumerated() where flights[h.flight.id] === h.flight {
+                    if h.leaver.alpha != 0 { alphas[i] = h.leaver.alpha }
+                    h.leaver.alpha = 0
+                    h.flight.progress = p
+                    showFlight(h.flight)
+                }
                 // Text paints where it shows: what flies, as it flies.
                 paintVisibleText()
             }
@@ -136,9 +143,10 @@ extension Presenter {
         }, completion: { [weak self] _ in
             stop()
             probe.removeFromSuperview()
-            for h in held {
+            for (h, alpha) in zip(held, alphas) {
                 if let self, flights[h.flight.id] === h.flight { landFlight(h.flight) }
-                h.leaver.alpha = h.alpha
+                // Not 0: a batch set it since the last frame.
+                h.leaver.alpha = h.leaver.alpha != 0 ? h.leaver.alpha : alpha
             }
             self?.paintVisibleText()
         })

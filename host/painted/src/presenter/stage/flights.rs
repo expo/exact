@@ -44,10 +44,11 @@ impl<D: DataSource> Presenter<D> {
 
     /// Take the crossing's pose off each flight's destination, so the
     /// reader aims at its rest, as Compose aims at the lookahead bounds
-    /// (LLP 1013.004 D4). A container's elements keep its pose: on its
-    /// clock, they move with the box as one transform.
+    /// (LLP 1013.004 D4). On a container's clock, from the source to the
+    /// rest, they move with its box as one transform: aimed at their pose
+    /// in it, they would move with it twice.
     pub(crate) fn unpose_flights(&mut self) {
-        let crossing = |s: &&Shift| !s.through && s.container.is_none();
+        let crossing = |s: &&Shift| !s.through;
         let Some(shift) = self.stage.shift.as_ref().filter(crossing) else {
             return;
         };

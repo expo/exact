@@ -162,6 +162,32 @@ impl<D: DataSource> Host<D> {
         });
     }
 
+    /// A route change ends each route flight but those landing in `route`,
+    /// the one it shows: one into a route now covered or leaving would draw
+    /// over it.
+    pub(crate) fn end_route_flights_outside(&mut self, route: NodeKey) {
+        let kernel = self.runner.kernel();
+        let inside = |key| {
+            let mut next = kernel.node_by_key(key);
+            while let Some(node) = next {
+                if node.key == route {
+                    return true;
+                }
+                next = node.parent.and_then(|id| kernel.node(id));
+            }
+            false
+        };
+        let ended: Vec<NodeKey> = (self.flights.running.iter())
+            .filter(|f| f.frame.dissolve && !inside(f.frame.to))
+            .map(|f| f.frame.to)
+            .collect();
+        for to in ended {
+            self.drop_flight_to(to);
+            self.row_dirty.node(to);
+            self.flights.landed = true;
+        }
+    }
+
     /// A predictive Back ended: each flight it seeks goes on to its
     /// destination (`on`) or back to land at its source, on `transition`.
     pub(crate) fn release_flights(&mut self, transition: &Transition, on: bool) {

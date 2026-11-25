@@ -64,19 +64,21 @@ final class RouteFlightsIOSTests: XCTestCase {
         XCTAssertEqual(p.flights.keys.sorted(), [6, 9])
         XCTAssertEqual(leaver.alpha, 0, "the leaver is hidden before UIKit draws the transition")
         let cut = try XCTUnwrap(picture.layer.mask as? CAShapeLayer)
-        XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 132), using: .evenOdd) ?? true, "and cut out of the route's picture")
-        XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 120), using: .evenOdd) ?? true, "a name inside it too")
-        XCTAssertTrue(cut.path?.contains(CGPoint(x: 200, y: 400), using: .evenOdd) ?? false)
+        XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 132)) ?? true, "and cut out of the route's picture")
+        XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 120)) ?? true, "a name inside it too")
+        XCTAssertTrue(cut.path?.contains(CGPoint(x: 200, y: 400)) ?? false)
         let lifted = Date().addingTimeInterval(1)
         while !(arriver.superview is FlightClip), nav.transitionCoordinator != nil, Date() < lifted { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
         XCTAssertTrue(arriver.superview is FlightClip, "the arriver flies above both routes")
         XCTAssertTrue(p.flights[6]?.fade?.view.superview === arriver.superview, "the leaver's picture dissolves into it in its clip")
         XCTAssertTrue(arriver.window != nil && !arriver.isDescendant(of: detail.view))
+        // A batch's opacity while it flies is the one it lands with.
+        leaver.alpha = 0.5
         let deadline = Date().addingTimeInterval(3)
         while nav.transitionCoordinator != nil || !p.flights.isEmpty, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
         XCTAssertTrue(arriver.superview === place, "it lands in its place")
         XCTAssertEqual(arriver.convert(arriver.bounds, to: nil).minY, detail.view.convert(CGRect(x: 0, y: 0, width: 1, height: 1), to: nil).minY, accuracy: 0.5)
-        XCTAssertEqual(leaver.alpha, 1, "and the leaver shows again")
+        XCTAssertEqual(leaver.alpha, 0.5, "and the leaver shows again, at the opacity set in flight")
         XCTAssertEqual(arriver.alpha, 1, "the arriver, faded in, at its own opacity")
         // A zoom holds nothing: its names ride its card.
         p.holdFlights(leaving: detail.view, arriving: list.view, zoom: "photo")

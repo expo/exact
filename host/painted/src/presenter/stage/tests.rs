@@ -1095,10 +1095,67 @@ fn a_containers_names_move_on_its_clock() {
         // As painted, not as the host holds it after the frame.
         let name = p.brush.shared.frames[0].progress;
         assert!((name - shown).abs() < 0.01, "{name} {shown}");
+        // Aimed at its rest, not at its pose in the growing box.
+        let unpose = p.brush.shared.frames[0].unpose[0];
+        assert!(shown > 0.9 || unpose > 1.01, "{unpose} at {shown}");
     }
     p.set_live_clock(None);
     after(&mut p, 1000.0);
     assert!(p.host().flight_frames().is_empty(), "landed with the box");
+}
+
+#[test]
+fn a_route_change_ends_the_flights_into_the_route_it_covers() {
+    let plan = PAIRED
+        .replace(
+            "    detail \"/detail\"\n",
+            "    detail \"/detail\"\n    more \"/more\"\n",
+        )
+        .replace(
+            "  action back\n",
+            "  action more\n    nav = push(nav, \"/more\")\n  action back\n",
+        )
+        .replace(
+            "            box sharedElement=\"photo\" testId=\"hero\"",
+            "            button press=more testId=\"more\" height=40\n              text \"More\"\n            box sharedElement=\"photo\" testId=\"hero\"",
+        )
+        + "        if e.name == \"more\"\n          column navigationKey=`${e.id}` testId=\"route-more\" position=\"absolute\" inset=0 background-color=\"#ffffff\"\n";
+    let mut p = paired_with(&plan);
+    tap(&mut p, "open");
+    after(&mut p, 50.0);
+    assert!(
+        !p.host().flight_frames().is_empty(),
+        "the photo flies to the detail"
+    );
+    tap(&mut p, "more");
+    after(&mut p, 16.0);
+    assert!(
+        p.host().flight_frames().is_empty(),
+        "not over the route that covers it"
+    );
+}
+
+#[test]
+fn a_container_whose_arriving_root_is_named_lands() {
+    let plan = PAIRED
+        .replace(
+            "box sharedElement=\"photo\" testId=\"thumb\"",
+            "box id=\"thumb\" sharedElement=\"photo\" testId=\"thumb\"",
+        )
+        .replace(
+            "testId=\"route-detail\"",
+            "navigationSource=\"thumb\" sharedElement=\"photo\" testId=\"route-detail\"",
+        )
+        .replace(
+            " sharedElement=\"photo\" testId=\"hero\"",
+            " testId=\"hero\"",
+        );
+    let mut p = paired_with(&plan);
+    tap(&mut p, "open");
+    assert!(!p.host().flight_frames().is_empty(), "the root flies");
+    after(&mut p, 1000.0);
+    assert!(p.stage.shift.is_none(), "the crossing ends");
+    assert!(p.host().flight_frames().is_empty(), "and its name lands");
 }
 
 #[test]

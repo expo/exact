@@ -648,9 +648,11 @@ impl<D: DataSource> Presenter<D> {
             self.host.seek_flights(&names, seeked);
         }
         // A route that flies in as a whole covers the route beneath only
-        // when it lands, so that one is drawn until then.
+        // when it lands, so that one is drawn until then. A container's own
+        // names land with it, below.
         let flies_in = |s: &Shift| {
             s.forward
+                && s.names.is_none()
                 && (self.host.kernel().node_by_key(s.incoming))
                     .is_some_and(|n| self.host.flying(n.id))
         };
@@ -767,6 +769,7 @@ impl<D: DataSource> Presenter<D> {
         // A second route change ends the first transition (LLP 1013.001 D6):
         // whatever this one chooses, a cut included, starts from rest.
         self.stage.shift = None;
+        self.host.end_route_flights_outside(*new);
         let left = (top_was.as_ref().filter(|t| t.key == *old))
             .map_or_else(Vec::new, |t| t.ancestors.clone());
         let pushed = now_keys.len() > before.len() && now_keys.starts_with(before);

@@ -234,6 +234,8 @@ internal class SharedElements(
             val pose = interpolate(flight.from, to, flight.progress)
             flight.shown = pose
             if (pose.box.width() <= 0f || pose.box.height() <= 0f) continue
+            // Inside a parent sprung past nothing it shows nothing (and its clip's radius has no range).
+            if (element.parents.any { flights[it]?.shown?.box?.let { b -> b.width() <= 0f || b.height() <= 0f } == true }) continue
             val save = canvas.save()
             canvas.setMatrix(Matrix())
             // A child flies inside its flying parent, as Compose clips a shared
