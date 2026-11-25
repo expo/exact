@@ -601,6 +601,53 @@ fn back_history_warns_only_where_a_stack_holds_two_routes() {
 }
 
 #[test]
+fn a_head_takes_no_place_among_a_routes_children() {
+    let src = r#"routes nav
+  home "/"
+
+component App
+  view
+    main navigationBack="back" navigationKey=`${top(nav).id}`
+      for entry in stack(nav) key=entry.id
+        column navigationKey="before"
+          head title="Sections"
+          header
+            text "" role="heading"
+        column navigationKey="after"
+          header
+            text "" role="heading"
+          head title="Sections"
+        column navigationKey="alone"
+          head title="Items"
+          text "Page"
+        column navigationKey="listed" display="flex" flex-direction="column"
+          header
+            text "" role="heading"
+          head title="Sections"
+          list flex=1 min-height=0
+            text "Row"
+"#;
+    let (built, warnings) = contract::compile_warned(src);
+    built.unwrap();
+    // A `head` takes no space, so it is no box held fixed above the list
+    assert!(
+        warnings.iter().all(|w| w.id != "lower-list-beside-fixed"),
+        "{warnings:?}"
+    );
+    let lines = warnings
+        .iter()
+        .filter(|w| w.id == "lower-head-before-header")
+        .map(|w| src.lines().nth(w.span.line as usize - 1).unwrap().trim())
+        .collect::<Vec<_>>();
+    assert_eq!(lines, ["head title=\"Sections\""]);
+    let before = warnings
+        .iter()
+        .find(|w| w.id == "lower-head-before-header")
+        .unwrap();
+    assert!(before.message.contains("Move `head` after the `header`"));
+}
+
+#[test]
 fn head_none_omits_only_its_title_and_route_heads_keep_their_scope() {
     let src = r#"routes nav
   home "/"

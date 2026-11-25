@@ -1,7 +1,7 @@
 //! Route-local Back history diagnostics (LLP 1075.003 §9.10).
 use super::{computed, has, header_bar, literal};
 use crate::LowerError;
-use contract_checking::Visit;
+use contract_checking::{Structure, Visit};
 use contract_syntax::{Expr, RoutesDecl, Span};
 use exact_kernel::bars::blank_history_label;
 
@@ -27,6 +27,25 @@ pub(super) fn presented(attrs: &[contract_syntax::Attr]) -> bool {
     matches!(literal(attrs, "role"), Some("dialog" | "alertdialog"))
         || has(attrs, "navigationPresentation")
             && !matches!(literal(attrs, "navigationPresentation"), Some("push"))
+}
+
+/// A route's `head` before its `header`: the rule makes a bar only of a route's first child, so the header is
+/// drawn in the page. The warning names the `head`, the line to move.
+pub(super) fn head_before_header(children: Structure<'_>, out: &mut Vec<LowerError>) {
+    let mut roots = children.roots();
+    let Some(first) = roots
+        .next()
+        .filter(|first| matches!(first.element(), Some(("head", _, _))))
+    else {
+        return;
+    };
+    if roots.any(|root| matches!(root.element(), Some(("header", _, _)))) {
+        out.push(LowerError {
+            id: "lower-head-before-header",
+            message: "This `head` comes before the route's `header`, so the header is not the route's first child: it is drawn in the page instead of making the route's navigation bar. Move `head` after the `header`.".into(),
+            span: first.span(),
+        });
+    }
 }
 
 pub(super) fn check(route: Visit<'_>, no_bar: bool) -> bool {
