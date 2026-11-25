@@ -188,9 +188,10 @@ impl Linked {
         // does its own I/O and plays CSS's transitions (LLP 1047.001 D2); its
         // numerals roll in the runtime's text (LLP 1077 D15), its date
         // and time controls are its own pickers (LLP 1115.001.000 D2), and
-        // it shows no tips (LLP 1035.006.000 D4); a drag out of the page and
-        // a drop into it are the browser's own, their data the page's glue
-        // (LLP 1094.000 D6, LLP 1094.001 D3): nothing to link for any of them.
+        // it shows no tips (LLP 1035.006.000 D4); the browser supplies a
+        // drag's events and data, out of the page and into it, and the page's
+        // glue delivers them (LLP 1094.000 D6, LLP 1094.001 D3): nothing to
+        // link for any of them.
         let mut uses = Uses::NONE
             .with(Capability::GroupedLists)
             .with(Capability::Io)
