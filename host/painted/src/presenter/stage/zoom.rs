@@ -44,14 +44,6 @@ pub(super) fn progress(forward: bool, now: f64) -> Glide {
     )
 }
 
-/// The container's clock as a flight's curve: its emphasized path sampled
-/// into `linear()`, so the elements in the box move as the box does
-/// (LLP 1013.004 D4).
-#[cfg(test)]
-pub(super) fn clock(forward: bool) -> exact_motion::Transition {
-    sampled(if forward { ENTER } else { RETURN }, emphasized)
-}
-
 /// A cancelled preview's return from `from` as a flight's curve: the
 /// container plays its entrance back on the standard curve (`go_back`) and
 /// shows `emphasized` of it, so the flights, held at `emphasized(from)`,

@@ -30,11 +30,12 @@ final class RouteFlightsIOSTests: XCTestCase {
         }
         func frame(_ id: Int, _ y: Double, _ h: Double) -> [String: Any] { ["op": "frame", "id": id, "x": 0.0, "y": y, "w": 400.0, "h": h] }
         p.apply(wireBatch([
-            node(1, nil), node(2, "photo"), node(3, "dup"), node(4, "dup"),
-            node(5, nil), node(6, "photo"), node(7, "dup"),
-            ["op": "children", "id": 1, "ids": [2, 3, 4]], ["op": "children", "id": 5, "ids": [6, 7]], ["op": "roots", "ids": [1, 5]],
-            frame(1, 0, 800), frame(2, 100, 64), frame(3, 200, 20), frame(4, 240, 20),
-            frame(5, 0, 800), frame(6, 0, 300), frame(7, 320, 20)]))
+            node(1, nil), node(2, "photo"), node(3, "dup"), node(4, "dup"), node(8, "badge"),
+            node(5, nil), node(6, "photo"), node(7, "dup"), node(9, "badge"),
+            ["op": "children", "id": 1, "ids": [2, 3, 4]], ["op": "children", "id": 2, "ids": [8]],
+            ["op": "children", "id": 5, "ids": [6, 7]], ["op": "children", "id": 6, "ids": [9]], ["op": "roots", "ids": [1, 5]],
+            frame(1, 0, 800), frame(2, 100, 64), frame(3, 200, 20), frame(4, 240, 20), frame(8, 10, 20),
+            frame(5, 0, 800), frame(6, 0, 300), frame(7, 320, 20), frame(9, 10, 20)]))
         let list = UIViewController(), detail = UIViewController()
         list.view.addSubview(try XCTUnwrap(p.views[1]))
         detail.view.addSubview(try XCTUnwrap(p.views[5]))
@@ -60,10 +61,11 @@ final class RouteFlightsIOSTests: XCTestCase {
         let asked = Date().addingTimeInterval(1)
         while !crossed, Date() < asked { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
         XCTAssertTrue(crossed, "the photo pairs; the name the list holds twice does not")
-        XCTAssertEqual(p.flights.keys.sorted(), [6])
+        XCTAssertEqual(p.flights.keys.sorted(), [6, 9])
         XCTAssertEqual(leaver.alpha, 0, "the leaver is hidden before UIKit draws the transition")
         let cut = try XCTUnwrap(picture.layer.mask as? CAShapeLayer)
         XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 132), using: .evenOdd) ?? true, "and cut out of the route's picture")
+        XCTAssertFalse(cut.path?.contains(CGPoint(x: 200, y: 120), using: .evenOdd) ?? true, "a name inside it too")
         XCTAssertTrue(cut.path?.contains(CGPoint(x: 200, y: 400), using: .evenOdd) ?? false)
         let lifted = Date().addingTimeInterval(1)
         while !(arriver.superview is FlightClip), nav.transitionCoordinator != nil, Date() < lifted { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
@@ -91,7 +93,7 @@ final class RouteFlightsIOSTests: XCTestCase {
         let popped = Date().addingTimeInterval(1)
         while !crossed, Date() < popped { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
         XCTAssertTrue(crossed, "the destroyed route's held name flies home")
-        XCTAssertEqual(p.flights.keys.sorted(), [2])
+        XCTAssertEqual(p.flights.keys.sorted(), [2, 8])
     }
 
     func testOnlyANameEachRouteHoldsOncePairs() {

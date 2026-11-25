@@ -619,21 +619,6 @@ fn a_computed_zoom_wins_over_the_routes_authored_parts_both_ways() {
 }
 
 #[test]
-fn route_flights_run_on_the_containers_clock() {
-    for (forward, seconds) in [(true, 0.4), (false, 0.35)] {
-        let clock = super::super::zoom::clock(forward);
-        assert!((clock.duration - seconds).abs() < 1e-9);
-        let exact_motion::TimingFunction::Easing(easing) = &clock.timing else {
-            panic!("{clock:?}");
-        };
-        for t in [0.1f32, 0.3, 0.7] {
-            let off = easing.progress(f64::from(t)) - f64::from(super::super::zoom::emphasized(t));
-            assert!(off.abs() < 0.01, "{t}: {off}");
-        }
-    }
-}
-
-#[test]
 fn a_container_draws_its_source_under_it_in_and_over_it_back_masked_to_its_height() {
     let mut p = phone_source(ZOOM);
     let card = rect(&mut p, "card");

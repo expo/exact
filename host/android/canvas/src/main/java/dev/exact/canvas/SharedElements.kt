@@ -92,8 +92,9 @@ internal class SharedElements(
         // A dissolve's source drawing outlives its element only while its flight does.
         val held = next.values.mapNotNullTo(HashSet()) { it.content } + elements.values.map { it.content }
         for (gone in flights.values) gone.content?.takeIf { it !in held }?.discardDisplayList()
-        // Landed: its content is drawn in its slot again, as itself.
+        // Landed: its content, and a source still mounted, are drawn in their slots again, as themselves.
         for (key in flights.keys - next.keys) elements[key]?.content?.setUseCompositingLayer(false, null)
+        for (gone in flights.values - next.values.toSet()) gone.content?.setUseCompositingLayer(false, null)
         flights.clear(); flights.putAll(next)
         val live = 4 + b.get(3) * 10
         alive.clear()

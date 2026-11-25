@@ -4,10 +4,10 @@
 // The names each route holds once fly as in-page flights do (FlightsIOS):
 // the arriver, live, lifted into a layer in the transition's container, the
 // leaver hidden. The progress is the transition's own: a probe view whose
-// opacity animates alongside it, read each frame from its presentation layer,
-// so a flight takes UIKit's curve, follows a swipe's finger and reverses with
-// its cancel. The destination is read from the model, which UIKit has already
-// moved to where the transition ends. The flights land in its completion.
+// opacity animates alongside it, read before each Core Animation commit, so a
+// flight takes UIKit's curve, follows a swipe's finger and reverses with its
+// cancel. The destination is where its slot is drawn in that frame, so a
+// flight lands with its page. The flights land in the transition's completion.
 #if os(iOS)
 import UIKit
 import ExactKit
@@ -81,7 +81,11 @@ extension Presenter {
         if let picture {
             let cut = CAShapeLayer()
             let path = UIBezierPath(rect: picture.bounds)
-            for h in held { path.append(UIBezierPath(rect: picture.convert(h.flight.source.rect, from: nil))) }
+            let holes = held.map { picture.convert($0.flight.source.rect, from: nil) }
+            // A hole inside another (a named photo in a named card) would fill again under even-odd.
+            for (i, hole) in holes.enumerated() where !holes.indices.contains(where: { $0 != i && holes[$0].contains(hole) && (holes[$0] != hole || $0 < i) }) {
+                path.append(UIBezierPath(rect: hole))
+            }
             cut.path = path.cgPath
             cut.fillRule = .evenOdd
             picture.layer.mask = cut

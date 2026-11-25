@@ -74,7 +74,7 @@ final class BuiltInFlights: FlightHosting {
     func forget(_ id: UInt32) { presenter?.forgetFlight(id) }
     func batchApplied() { presenter?.flightsBatchApplied() }
     func landInside(_ view: UIView) { presenter?.landFlights(inside: view) }
-    func reset() { presenter?.resetFlights() }
+    func reset() { holds = [:]; presenter?.resetFlights() }
     func isFlying(_ view: NodeView) -> Bool { presenter?.isFlying(view) ?? false }
     func regridSlots() { presenter?.regridSlots() }
     func slot(of view: NodeView) -> UIView? { flights[view.id].flatMap { $0.view === view ? $0.slot : nil } }

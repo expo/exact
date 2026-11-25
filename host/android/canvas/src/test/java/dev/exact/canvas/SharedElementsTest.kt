@@ -413,6 +413,20 @@ class SharedElementsTest {
         assertFalse(content.hasDisplayList())
     }
 
+    @Test fun aSourceStillMountedIsItselfAgainWhenItsFlightLeaves() {
+        val t = Fixture()
+        t.shared.begin(state(listOf(1))); t.define(definition(1, RectF(0f, 0f, 80f, 20f))); t.shared.finish()
+        t.shared.begin(state(listOf(1, 2), listOf(Triple(1, 2, 0.5f)), dissolve = true))
+        t.define(definition(2, RectF(0f, 40f, 100f, 80f))); t.shared.finish()
+        t.draw()
+        val flights = SharedElements::class.java.getDeclaredField("flights").apply { isAccessible = true }
+        val flight = (flights.get(t.shared) as Map<*, *>).values.single()!!
+        val source = flight.javaClass.getDeclaredField("content").apply { isAccessible = true }.get(flight) as RenderNode
+        assertTrue(source.useCompositingLayer)
+        t.shared.begin(state(listOf(1, 2))); t.shared.finish()
+        assertFalse(source.useCompositingLayer)
+    }
+
     @Test fun aScrollersRowsInANamedBoxAreShiftedOnce() {
         // A box from 20 points down, its scroller's rows filling the page from 24 to 44.
         val t = Fixture()

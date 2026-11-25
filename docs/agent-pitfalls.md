@@ -490,8 +490,8 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 - **A name across a push flies with nothing else written (LLP 1013.004).** On iOS a
   `sharedElement` name the leaving and the arriving route each hold once flies alongside
-  UIKit's push, pop, back swipe and full-screen presentation, a drag to dismiss included; no
-  `-exact-layout-transition` is needed. A name held twice in a route, or in a sheet, stays
+  UIKit's push, pop, back swipe and full-screen presentation; no `-exact-layout-transition` is
+  needed. A name held twice in a route, or in a sheet, stays
   put. The zoom's own element is `navigationSource=`'s `id` (`ZoomPushIOS.swift`, iOS 18 and
   later); beside a zoom no name flies, and the destination's ride the zoomed card. Film on the agent's clock skips
   UIKit's transitions, which run on their own: film them under `--timing platform`, whose

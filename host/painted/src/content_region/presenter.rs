@@ -155,7 +155,6 @@ impl<D: DataSource> Presenter<D> {
         canvas_frame: bool,
         reveal_probe: bool,
     ) -> Option<Arc<Pixmap>> {
-        self.brush.shared.update(&self.host);
         self.brush.composition = self.ime_paint();
         self.alert_sync();
         self.prepare_overlay();
@@ -205,6 +204,8 @@ impl<D: DataSource> Presenter<D> {
         // A geometry paint records no layer, and leaves a played ripple played.
         self.brush.ripples.reader = self.host.lowering && target != FrameTarget::Geometry;
         self.sync_stage();
+        // After the stage seeks this frame's flights: a container's names move with its box.
+        self.brush.shared.update(&self.host);
         let stage = self.stage_paint();
         // A container's source is drawn in the container: its row records
         // again without it.

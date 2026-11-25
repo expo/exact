@@ -1092,7 +1092,8 @@ fn a_containers_names_move_on_its_clock() {
             .expect("a container crossing")
             .progress
             .at(now);
-        let name = flight(&p).2;
+        // As painted, not as the host holds it after the frame.
+        let name = p.brush.shared.frames[0].progress;
         assert!((name - shown).abs() < 0.01, "{name} {shown}");
     }
     p.set_live_clock(None);
