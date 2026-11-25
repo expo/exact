@@ -234,13 +234,18 @@ impl<D: DataSource + Default + 'static> App<D> {
 
     /// Drains background storage and in-flight effects after `begin_end`.
     pub(super) fn finish_end(&mut self) {
+        let bound = self.exit_bound();
         if let Some(p) = &mut self.presenter {
-            let bound = if self.config.agent {
-                exact_painted::teardown::AGENT_EXIT_BOUND
-            } else {
-                exact_painted::teardown::EXIT_BOUND
-            };
             exact_painted::teardown::finish(p, bound);
+        }
+    }
+
+    /// How long the end waits for work in flight: a second for an agent's quit.
+    pub(super) fn exit_bound(&self) -> Duration {
+        if self.config.agent {
+            exact_painted::teardown::AGENT_EXIT_BOUND
+        } else {
+            exact_painted::teardown::EXIT_BOUND
         }
     }
 
